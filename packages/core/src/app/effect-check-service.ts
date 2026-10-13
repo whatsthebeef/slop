@@ -20,6 +20,7 @@ import {
   learningEffectCheck,
   learningFacts,
   learningOutcome,
+  learningStatement,
   learningStatus,
   learningTarget,
 } from '../domain/learning.js';
@@ -198,7 +199,7 @@ export class EffectCheckService {
         id,
         boardId: board.id,
         type: learningFacts(glob).kind,
-        statement: effectStatement({ id: glob.id, statement: glob.summary }, check),
+        statement: effectStatement({ id: glob.id, statement: learningStatement(glob, original.artifacts) }, check),
         evidence: effectEvidence({ id: glob.id, decidedAt }, check),
         suggestedTarget: targetOf(original),
         sourceGlobIds: [

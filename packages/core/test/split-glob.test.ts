@@ -23,7 +23,7 @@ describe('split a glob into parts', () => {
   let boardId: number;
   let original: Glob;
 
-  const part = (patch: Partial<SplitPart> = {}): SplitPart => ({ title: 'Part', summary: 's', plan: 'Do it', ...patch });
+  const part = (patch: Partial<SplitPart> = {}): SplitPart => ({ title: 'Part', plan: 'Do it', ...patch });
   const input = (parts: readonly SplitPart[], key: string | null = null): SplitInput => ({ parts, idempotencyKey: key });
   const planOf = async (id: string): Promise<string> => (await store.transaction((tx) => tx.listArtifacts(id, 'plan')))[0]?.content ?? '';
   const current = async (id: string): Promise<Glob> => {
@@ -55,7 +55,6 @@ describe('split a glob into parts', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Big',
-        summary: 'Everything',
         type: 'same',
         category: 'task',
         group: 'grp',
@@ -77,9 +76,9 @@ describe('split a glob into parts', () => {
         original.id,
         original.version,
         input([
-          part({ title: 'First', summary: 'one', plan: 'First, then {part:1} and {part:2}' }),
-          part({ title: 'Second', summary: 'after {part:0}', plan: 'Second, needs {part:0}', after: [0], category: 'feature', attachments: ['Data'] }),
-          part({ title: 'Third', summary: 'three', plan: 'Third', after: [0, 1] }),
+          part({ title: 'First', plan: 'First, then {part:1} and {part:2}' }),
+          part({ title: 'Second', plan: 'Second, needs {part:0}', after: [0], category: 'feature', attachments: ['Data'] }),
+          part({ title: 'Third', plan: 'Third', after: [0, 1] }),
         ]),
       ),
     );
@@ -93,7 +92,6 @@ describe('split a glob into parts', () => {
     expect(second.group).toBe('grp');
     expect(second.after).toEqual([first.id]);
     expect(third.after).toEqual([first.id, second.id]);
-    expect(second.summary).toBe(`after ${first.id}`);
     expect(await planOf(first.id)).toContain(`First, then ${second.id} and ${third.id}`);
     expect(await planOf(second.id)).toContain(`Second, needs ${first.id}`);
     expect(await planOf(second.id)).toContain(`Split from ${first.id} on 2026-10-09`);
@@ -165,7 +163,6 @@ describe('split a glob into parts', () => {
         await globs.create(DEV, {
           boardId,
           title: 'Sub',
-          summary: 'x',
           type: 'sub',
           after: [original.id],
           category: 'task',

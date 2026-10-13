@@ -68,7 +68,7 @@ describe('overlap rechecks: webhooks queue one delayed job per board', () => {
   it('a burst of pushes and a merge share one pending job, a redelivery adds none, and the job runs the recheck', async () => {
     const made = unwrap(
       await globs.create(DEV, {
-        boardId: 1, title: 'A same', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null,
+        boardId: 1, title: 'A same', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null,
       }),
     );
     const picked = unwrap(await globs.pickUp(DEV, made.id, made.version, false));

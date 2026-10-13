@@ -77,7 +77,6 @@ export interface IntakeInput {
   /** Fields the person (or the MCP caller) set explicitly; they always win. */
   readonly explicit: Partial<{
     title: string;
-    summary: string;
     type: SlopType;
     category: WorkCategory;
     group: string;
@@ -87,8 +86,6 @@ export interface IntakeInput {
 
 export interface IntakeProposal {
   readonly title: string;
-  /** One or two sentences for the card. Never the spec: that is `plan`. */
-  readonly summary: string;
   /** The full write-up, with "Done when:" lines: stored as plan.md v1. */
   readonly plan: string;
   readonly type: SlopType;
@@ -133,10 +130,9 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "summary": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "category": "feature" | "task" | "bug", "group": string | null, "categoryConfidence": "high" | "medium" | "low", "categoryReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
+{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "category": "feature" | "task" | "bug", "group": string | null, "categoryConfidence": "high" | "medium" | "low", "categoryReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
 
 - title: a short imperative title, at most 70 characters.
-- summary: one or two plain sentences saying what is wanted, for a card on the board. Not the spec.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
 - type: choose by WHEN A PERSON IS NEEDED, not by how big the work is.
   - "sub" (the default; be optimistic): the plan is settled and has no open questions. One routine can implement it and merge it; a person at most spot-checks it afterwards. Whatever its area, and whether or not it overlaps work in progress (merge order is handled elsewhere).
@@ -296,7 +292,6 @@ export class IntakeService {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
     const plan = text(field(answer, 'plan')) ?? request;
-    const summary = input.explicit.summary ?? text(field(answer, 'summary')) ?? plan.split('\n')[0]?.slice(0, 300) ?? request;
 
     let category = input.explicit.category ?? oneOf(WORK_CATEGORIES, field(answer, 'category')) ?? 'task';
     // Optimistic: an unclear type is a sub.
@@ -331,7 +326,6 @@ export class IntakeService {
 
     return {
       title: title.slice(0, 120),
-      summary,
       plan,
       type,
       typeReason,

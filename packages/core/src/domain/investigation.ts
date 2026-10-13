@@ -21,13 +21,12 @@ export interface InvestigationFile {
 }
 
 /**
- * A part that could ship on its own; `needs` names the other parts (by `name`) it builds on. `title`, `summary` and `plan`
+ * A part that could ship on its own; `needs` names the other parts (by `name`) it builds on. `title` and `plan`
  * (the part's own share of the original plan) are optional: older investigations lack them and fall back to the name.
  */
 export interface InvestigationPart {
   readonly name: string;
   readonly title?: string;
-  readonly summary?: string;
   readonly plan?: string;
   readonly files: readonly string[];
   readonly needs: readonly string[];
@@ -121,7 +120,7 @@ export const parseInvestigation = (content: string): InvestigationParse => {
         errors.push(`parts[${String(i)}] needs a name, files and needs (lists of strings)`);
       } else {
         names.add(p.name);
-        const text = (key: 'title' | 'summary' | 'plan'): string | undefined => {
+        const text = (key: 'title' | 'plan'): string | undefined => {
           const v = p[key];
           if (v === undefined || v === null) return undefined;
           if (typeof v !== 'string') {
@@ -131,14 +130,12 @@ export const parseInvestigation = (content: string): InvestigationParse => {
           return v.trim() === '' ? undefined : v.trim();
         };
         const title = text('title');
-        const summary = text('summary');
         const partPlan = text('plan');
         parts.push({
           name: p.name,
           files: p.files,
           needs: p.needs,
           ...(title !== undefined ? { title } : {}),
-          ...(summary !== undefined ? { summary } : {}),
           ...(partPlan !== undefined ? { plan: partPlan } : {}),
         });
       }
@@ -253,9 +250,9 @@ const partTitle = (
 
 /**
  * A split proposal from the investigation's parts, in split_glob's shape; null when they can't be cut into 2 to 10 parts.
- * Each part's title is the original glob's title with its position and the part's own title; its summary and plan are its
+ * Each part's title is the original glob's title with its position and the part's own title; its plan is its
  * own, with the plan's context sections it lacks carried in (as `buildProposal` does). A part without them (an older
- * investigation) gets the name-based title and summary and the whole original plan.
+ * investigation) gets the name-based title and the whole original plan.
  */
 export const proposalFromParts = (
   parts: readonly InvestigationPart[],
@@ -275,9 +272,6 @@ export const proposalFromParts = (
     ].join('\n\n');
     return {
       title: partTitle(original, index, sorted.length, part),
-      summary:
-        part.summary?.trim() ??
-        `${part.name.trim()} part of ${title.trim() === '' ? 'the original glob' : title.trim()}. Files: ${part.files.join(', ')}`,
       plan:
         own === ''
           ? `${index === 0 ? 'This part stays the original glob.' : 'A part split out of the original glob.'} Scope: ${part.name}\n\nFiles:\n${bullets(part.files)}\n\nOriginal plan (keep only this part's share of its tasks and "Done when" lines):\n\n${plan.trim()}`

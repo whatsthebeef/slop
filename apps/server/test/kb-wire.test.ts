@@ -189,7 +189,6 @@ describe('the KB wire contract', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Source',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

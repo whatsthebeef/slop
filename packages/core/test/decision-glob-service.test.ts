@@ -104,7 +104,6 @@ describe('decision globs', () => {
       await globs.create(ADMIN, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,
@@ -243,7 +242,6 @@ describe('decision globs', () => {
           boardId,
           actor: { email: DEV, role: 'dev' },
           title: 'x',
-          summary: 'x',
           payload: 'x',
           attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'submitted' }, channel: 'agent', outcome: null },
           creationKey: `kb:${made.id}`,
@@ -260,7 +258,6 @@ describe('decision globs', () => {
           boardId,
           actor: { email: DEV, role: 'dev' },
           title: 'x',
-          summary: 'x',
           payload: 'x',
           attributes: { scope: { kind: 'glob', ref: 's9t9' }, origin: { kind: 'manual' }, channel: 'human', outcome: null },
           creationKey: 'manual:1',
@@ -276,7 +273,6 @@ describe('decision globs', () => {
             boardId,
             actor: { email: DEV, role: 'dev' },
             title: 'x',
-            summary: 'x',
             payload: 'x',
             attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'human', outcome: null },
             id,
@@ -293,7 +289,6 @@ describe('decision globs', () => {
       const result = await globs.create(ADMIN, {
         boardId,
         title: 'Sneaky',
-        summary: '',
         type: 'same',
         category: 'decision',
         group: null,
@@ -814,7 +809,6 @@ describe('decision globs', () => {
           boardId,
           actor: { email: ADMIN, role: 'admin' },
           title: 'A person\'s decision',
-          summary: 'x',
           payload: 'x',
           attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'human', outcome: null },
           creationKey: 'manual:delete',
@@ -852,7 +846,7 @@ describe('decision globs', () => {
       const added = unwrap(await inbox.add(DEV, boardId, { text, title: 'Sync standup' }));
       const result = unwrap(await inbox.promote(DEV, boardId, added.id, { statement: 'Sync jobs use a websocket' }));
       const g = result.glob;
-      expect(g).toMatchObject({ id: 's1k1', category: 'decision', status: 'planning', title: 'Sync standup', summary: 'Sync jobs use a websocket' });
+      expect(g).toMatchObject({ id: 's1k1', category: 'decision', status: 'planning', title: 'Sync standup' });
       expect(g.attributes).toEqual({ scope: { kind: 'future_work', ref: null }, origin: { kind: 'inbox', id: added.id }, channel: 'inbox', outcome: null });
       const [plan] = await artifactsOf(g.id, 'plan');
       expect(plan?.content).toContain('Sync jobs use a websocket');

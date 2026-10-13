@@ -257,7 +257,6 @@ export interface Glob {
   readonly id: string;
   readonly boardId: number;
   readonly title: string;
-  readonly summary: string;
   readonly type: SlopType;
   readonly category: Category;
   /** Per-category fields (a decision's scope and outcome); absent on legacy globs. */

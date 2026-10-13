@@ -22,7 +22,6 @@ const createInput = (patch: Partial<m.CreateInput> = {}): m.CreateInput => ({
   id: 's1t1',
   boardId: 1,
   title: 'Fix login timeout',
-  summary: '',
   type: 'same',
   category: 'task',
   group: null,

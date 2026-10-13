@@ -29,7 +29,6 @@ describe('ReportService', () => {
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
     title: 'Work',
-    summary: '',
     type: 'same',
     category: 'task',
     group: null,

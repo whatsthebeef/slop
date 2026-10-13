@@ -4,16 +4,15 @@ import type { Glob, MergeConflict } from '@slop/core';
 export const conflictCommentMarker = (glob: Pick<Glob, 'id'>, requestedAt: string): string =>
   `<!-- slop:resolve-conflict ${glob.id} ${requestedAt} -->`;
 
-const describe = (glob: Pick<Glob, 'id' | 'title' | 'summary'>): string =>
-  `- ${glob.id}: ${glob.title}\n${glob.summary.trim() === '' ? '' : `\n${glob.summary.trim().replace(/^/gm, '  ')}\n`}`;
+const describe = (glob: Pick<Glob, 'id' | 'title'>): string => `- ${glob.id}: ${glob.title}\n`;
 
 /**
- * The PR comment that asks the Claude GitHub App to resolve a conflict: both globs' intent, the files, and what to do.
+ * The PR comment that asks the Claude GitHub App to resolve a conflict: both globs' titles, the files, and what to do.
  * `merged` is the glob whose merge caused the conflict, when slop knows it.
  */
 export const conflictCommentBody = (
-  glob: Pick<Glob, 'id' | 'title' | 'summary'>,
-  merged: Pick<Glob, 'id' | 'title' | 'summary'> | null,
+  glob: Pick<Glob, 'id' | 'title'>,
+  merged: Pick<Glob, 'id' | 'title'> | null,
   conflict: MergeConflict,
   marker: string,
 ): string =>

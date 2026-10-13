@@ -36,7 +36,7 @@ export class InvestigationService implements InvestigationReactor {
       const read = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null) return null;
-        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? glob.summary;
+        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
         return { glob, plan, threshold: await tx.getSizeThreshold(glob.boardId), check: await tx.getSizeCheck(globId) };
       });
       if (read === null) return;

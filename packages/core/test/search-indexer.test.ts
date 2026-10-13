@@ -97,8 +97,8 @@ describe('SearchIndexer', () => {
 
   /** One of every source on the board. */
   const populate = async () => {
-    const task = await addGlob({ id: 's1t1', title: 'Sync retries', summary: 'Retry failed syncs three times.', group: 'sync' });
-    const sup = await addGlob({ id: 's1f2', title: 'Billing rework', type: 'super', category: 'feature', summary: 'Rework billing.' });
+    const task = await addGlob({ id: 's1t1', title: 'Sync retries', group: 'sync' });
+    const sup = await addGlob({ id: 's1f2', title: 'Billing rework', type: 'super', category: 'feature' });
     await addArtifact(task.id, 'plan', '## Approach\n\nRetry with backoff.');
     await addArtifact(task.id, 'implementation_plan', 'Change the job runner.');
     await addArtifact(sup.id, 'implementation_plan', 'Decision: use invoices.');
@@ -152,11 +152,10 @@ describe('SearchIndexer', () => {
   it('indexes every kind of source with its facts and citations', async () => {
     await populate();
     const result = await indexer.syncBoard(boardId);
-    expect(result).toEqual({ written: 10, removed: 0, queued: 1 });
+    expect(result).toEqual({ written: 8, removed: 0, queued: 1 });
     const types = new Map<SourceType, number>();
     for (const item of items()) types.set(item.sourceType, (types.get(item.sourceType) ?? 0) + 1);
     expect(Object.fromEntries(types)).toEqual({
-      glob_summary: 2,
       glob_plan: 1,
       implementation_plan: 2,
       postplan: 1,
@@ -187,10 +186,10 @@ describe('SearchIndexer', () => {
 
   it('leaves decision globs and their artifacts out of the index (work listings exclude them by default)', async () => {
     await populate();
-    const decision = await addGlob({ id: 's1k1', category: 'decision', title: 'Never edit generated files', summary: 'Never edit src/gen/.', pr: null, provisioning: 'none' });
+    const decision = await addGlob({ id: 's1k1', category: 'decision', title: 'Never edit generated files', pr: null, provisioning: 'none' });
     await addArtifact(decision.id, 'plan', 'The proposal.');
     await addArtifact(decision.id, 'assessment', '## Assessment');
-    expect(await indexer.syncBoard(boardId)).toEqual({ written: 10, removed: 0, queued: 1 });
+    expect(await indexer.syncBoard(boardId)).toEqual({ written: 8, removed: 0, queued: 1 });
     expect(items().filter((i) => i.globIds.includes('s1k1'))).toEqual([]);
   });
 
@@ -249,22 +248,35 @@ describe('SearchIndexer', () => {
     expect(await indexer.syncBoard(boardId)).toEqual({ written: 0, removed: 0, queued: 0 });
   });
 
-  it('does not index empty text or another board', async () => {
-    await addGlob({ id: 's1t1', summary: '   ' });
+  it('does not index another board', async () => {
+    const first = await addGlob({ id: 's1t1' });
+    await addArtifact(first.id, 'plan', 'Retry failed syncs.');
     const other = (
       await store.transaction((tx) =>
         tx.insertBoard({ name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }),
       )
     ).id;
-    await store.transaction((tx) => tx.insertGlob(makeGlob({ id: 's2t1', boardId: other, summary: 'Other board.' }), null));
+    await store.transaction(async (tx) => {
+      await tx.insertGlob(makeGlob({ id: 's2t1', boardId: other }), null);
+      await tx.insertArtifact({
+        globId: 's2t1',
+        kind: 'plan',
+        label: '',
+        content: 'Other board.',
+        link: null,
+        commitSha: null,
+        provenance: { by: 'human', actor: 'dev@example.com', runId: null, agentSetVersion: null },
+        createdAt: START,
+      });
+    });
     await indexer.syncBoard(boardId);
-    expect(items()).toEqual([]);
+    expect(new Set(items().map((i) => i.boardId))).toEqual(new Set([boardId]));
     await indexer.syncAll();
-    expect(items().map((i) => i.boardId)).toEqual([other]);
+    expect(new Set(items().map((i) => i.boardId))).toEqual(new Set([boardId, other]));
   });
 
   it('indexes only approved learnings that are not documents or decisions, with the fields the adapter reads (s15t72)', async () => {
-    await addGlob({ id: 's1t1', title: 'Sync retries', summary: 'Retry failed syncs three times.' });
+    await addGlob({ id: 's1t1', title: 'Sync retries' });
     const decided = { decidedBy: 'admin@example.com', decidedAt: at(5_000), processing: 'none' as const, version: 2 };
     const learning = (id: string, patch: Partial<LearningWire>): LearningWire => ({
       id,
@@ -342,20 +354,21 @@ describe('SearchIndexer', () => {
 
   describe('embedding', () => {
     it('embeds chunks in batches, header and text together', async () => {
-      const g = await addGlob({ id: 's1t1', summary: 'One.' });
+      const g = await addGlob({ id: 's1t1' });
       for (let i = 0; i < EMBED_BATCH + 3; i++) await addArtifact(g.id, 'attachment', `Notes ${String(i)}.`, `a${String(i)}`);
       await indexer.syncBoard(boardId);
       expect(await indexer.processNext()).toBe('embed');
       expect(embedder.calls[0]).toHaveLength(EMBED_BATCH);
-      expect(embedder.calls[0]?.[0]).toContain('[Summary');
-      expect(store.state.searchChunks.filter((c) => c.embedding === null)).toHaveLength(4);
+      expect(embedder.calls[0]?.[0]).toContain('[Attachment');
+      expect(store.state.searchChunks.filter((c) => c.embedding === null)).toHaveLength(3);
       expect(await indexer.processNext()).toBe('embed');
       expect(await indexer.processNext()).toBeNull();
       expect(store.state.searchChunks.every((c) => c.embedding?.length === 1024)).toBe(true);
     });
 
     it('leaves chunks pending, without any attempt count, while the embedder is unavailable, then recovers', async () => {
-      await addGlob({ id: 's1t1', summary: 'Retry failed syncs.' });
+      const g = await addGlob({ id: 's1t1' });
+      await addArtifact(g.id, 'plan', 'Retry failed syncs.');
       await indexer.syncBoard(boardId);
       embedder.unavailable = new LlmUnavailable('AWS sign-in expired', 'Sign in again');
 
@@ -374,7 +387,8 @@ describe('SearchIndexer', () => {
     });
 
     it('rethrows other embedding errors and rests before trying again', async () => {
-      await addGlob({ id: 's1t1', summary: 'Retry failed syncs.' });
+      const g = await addGlob({ id: 's1t1' });
+      await addArtifact(g.id, 'plan', 'Retry failed syncs.');
       await indexer.syncBoard(boardId);
       const failing = { model: 'x', dimensions: 1024 as const, embed: () => Promise.reject(new Error('throttled')) };
       const flaky = new SearchIndexer({ store, clock: { now: () => now }, embedder: failing, changes, llm });
@@ -385,7 +399,7 @@ describe('SearchIndexer', () => {
 
   describe('change summaries', () => {
     const queue = async () => {
-      const g = await addGlob({ id: 's1t1', title: 'Sync retries', summary: '' });
+      const g = await addGlob({ id: 's1t1', title: 'Sync retries' });
       await addArtifact(g.id, 'plan', 'Retry failed syncs because the queue stalled.');
       await merge(g.id);
       await indexer.syncBoard(boardId);

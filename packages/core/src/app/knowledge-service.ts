@@ -27,6 +27,7 @@ import {
   learningLinks,
   learningOutcome,
   learningStaleness,
+  learningStatement,
   learningStatus,
   learningTarget,
   pipelineState,
@@ -1075,7 +1076,7 @@ export class KnowledgeService {
             return {
               id: l.glob.id,
               type: facts.kind,
-              statement: l.glob.summary,
+              statement: learningStatement(l.glob, l.artifacts),
               sourceGlobIds: facts.sourceGlobIds,
               approvedAt: learningDecision(l.glob, l.artifacts).at ?? l.glob.createdAt,
             };
@@ -1214,10 +1215,10 @@ export class KnowledgeService {
       if (!document.ok) return document;
       const { name, content } = document.value;
       const outcome = await this.apply(tx, email, item, 'doc', name, renderFrontmatter(document.value) + content);
-      return outcome.ok ? ok({ statement: learning.glob.summary, outcome: outcome.value }) : outcome;
+      return outcome.ok ? ok({ statement: learningStatement(learning.glob, learning.artifacts), outcome: outcome.value }) : outcome;
     }
     if (proposed !== null) return invalidInput(`${item.id} proposes a document; approve it as that document`);
-    const statement = approval.statement?.trim() ?? learning.glob.summary;
+    const statement = approval.statement?.trim() ?? learningStatement(learning.glob, learning.artifacts);
     if (statement === '') return invalidInput('A learning needs a statement');
     if (approval.as === 'learning') return ok({ statement, outcome: { kind: 'learning' } });
     if (approval.as === 'draft') {

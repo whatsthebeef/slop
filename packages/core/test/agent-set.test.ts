@@ -144,7 +144,6 @@ describe('layered agent set on a board', () => {
       await globs.create(ADMIN, {
         boardId,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,

@@ -290,7 +290,7 @@ export const KeepAsLearning = ({
   const client = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [statement, setStatement] = useState(glob.summary);
+  const [statement, setStatement] = useState(glob.title);
   const [watch, setWatch] = useState('');
   const keep = useMutation({
     mutationFn: () => api.keepAsLearning(glob.id, glob.version, statement, watch === '' ? undefined : watch),

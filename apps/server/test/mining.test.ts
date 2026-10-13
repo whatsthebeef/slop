@@ -36,7 +36,6 @@ describe('Mining reads and board jobs in Postgres', () => {
       await globs.create(DEV, {
         boardId: board,
         title: 'Work',
-        summary: '',
         type: 'same',
         category: 'task',
         group: null,
@@ -345,7 +344,7 @@ describe('Learning jobs on two servers at once (s15f8)', () => {
     const ended: DomainEvent[] = [];
     for (let i = 0; i < 4; i++) {
       const globId = unwrap(
-        await globs.create(DEV, { boardId, title: 'Work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+        await globs.create(DEV, { boardId, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
       ).id;
       ended.push({ type: 'RunEnded', globId, actor: null, at: ago(2), data: { runId: `r${String(i)}`, outcome: i < 3 ? 'superseded' : 'completed', cause: 'start_again' } });
     }
@@ -419,7 +418,7 @@ describe('Mining runs at once without a lease (s15f8)', () => {
     const ended: DomainEvent[] = [];
     for (let i = 0; i < 4; i++) {
       const globId = unwrap(
-        await globs.create(DEV, { boardId, title: 'Work', summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+        await globs.create(DEV, { boardId, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
       ).id;
       ended.push({ type: 'RunEnded', globId, actor: null, at: ago(2), data: { runId: `r${String(i)}`, outcome: i < 3 ? 'superseded' : 'completed', cause: 'take_over' } });
     }

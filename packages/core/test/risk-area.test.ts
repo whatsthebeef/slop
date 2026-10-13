@@ -224,7 +224,7 @@ describe('RiskAreaService', () => {
     addGlobs(
       sub('s1t1'),
       sub('s1t2'),
-      glob({ id: 's1b3', boardId, category: 'bug', type: 'same', title: 'Broken by s1t1', summary: '', createdAt: new Date(Date.parse(MERGED) + DAY).toISOString() }),
+      glob({ id: 's1b3', boardId, category: 'bug', type: 'same', title: 'Broken by s1t1', createdAt: new Date(Date.parse(MERGED) + DAY).toISOString() }),
     );
     addEvents(event('Merged', 's1t1', MERGED, { sha: 'm1' }), event('Merged', 's1t2', MERGED, { sha: 'm2' }));
     await store.transaction((tx) =>
@@ -243,7 +243,6 @@ describe('RiskAreaService', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Change charge',
-        summary: 'Change charge',
         plan: 'Change apps/billing/src/charge.ts.\n\nDone when: it works.',
         type: 'sub',
         category: 'feature',

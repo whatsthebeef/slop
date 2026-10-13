@@ -1,7 +1,7 @@
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
 import type { KbTarget, LearningStatus } from './kb.js';
-import { learningDecision, learningDraft, learningFacts, learningStatus, learningTarget } from './learning.js';
+import { learningDecision, learningDraft, learningFacts, learningStatement, learningStatus, learningTarget } from './learning.js';
 import type { LearningRead } from './learning.js';
 import type { Glob } from './types.js';
 
@@ -76,7 +76,6 @@ export interface SuggestSibling {
 export interface SuggestMerge {
   readonly id: string;
   readonly title: string;
-  readonly summary: string;
 }
 
 export interface SuggestOutcome {
@@ -88,7 +87,7 @@ export interface SuggestOutcome {
 
 /** Everything the model reads, already bounded. `learning` is null for a decision with no knowledge item. */
 export interface SuggestInputs {
-  readonly glob: { readonly id: string; readonly title: string; readonly summary: string };
+  readonly glob: { readonly id: string; readonly title: string };
   readonly learning: {
     readonly statement: string;
     readonly type: string;
@@ -109,8 +108,8 @@ export interface SuggestInputs {
 
 const sameTarget = (a: KbTarget | null, b: KbTarget | null): boolean => a !== null && b !== null && a.kind === b.kind && a.name === b.name;
 
-/** The statement of a learning glob: its title when the summary is empty. */
-const statementOf = (glob: Glob): string => cut(glob.summary.trim() === '' ? glob.title : glob.summary, SUGGEST_STATEMENT_MAX);
+/** The statement of a learning glob, read from its plan.md. */
+const statementOf = (l: LearningRead): string => cut(learningStatement(l.glob, l.artifacts), SUGGEST_STATEMENT_MAX);
 
 /**
  * The other open learnings aimed at the same file as `self`, oldest first, with their drafts: candidates to consolidate
@@ -125,7 +124,7 @@ export const siblingLearnings = (self: LearningRead, learnings: readonly Learnin
     .slice(0, SUGGEST_SIBLINGS_MAX)
     .map((l) => {
       const draft = learningDraft(l.artifacts)?.draft ?? null;
-      return { id: l.glob.id, statement: statementOf(l.glob), section: draft?.section ?? null, draft: draft === null ? null : cut(draft.content, SUGGEST_DRAFT_MAX) };
+      return { id: l.glob.id, statement: statementOf(l), section: draft?.section ?? null, draft: draft === null ? null : cut(draft.content, SUGGEST_DRAFT_MAX) };
     });
 };
 
@@ -138,14 +137,14 @@ export const recentOutcomes = (self: LearningRead, learnings: readonly LearningR
     .map((l) => ({ l, decision: learningDecision(l.glob, l.artifacts) }))
     .sort((a, b) => (b.decision.at ?? b.l.glob.updatedAt).localeCompare(a.decision.at ?? a.l.glob.updatedAt))
     .slice(0, SUGGEST_OUTCOMES_MAX)
-    .map(({ l, decision }) => ({ id: l.glob.id, statement: statementOf(l.glob), status: learningStatus(l.glob, l.artifacts), reason: decision.reason === null ? null : cut(decision.reason, SUGGEST_REASON_MAX) }));
+    .map(({ l, decision }) => ({ id: l.glob.id, statement: statementOf(l), status: learningStatus(l.glob, l.artifacts), reason: decision.reason === null ? null : cut(decision.reason, SUGGEST_REASON_MAX) }));
 };
 
 const WORD = /[a-z0-9_.-]{4,}/g;
 const words = (text: string): Set<string> => new Set(text.toLowerCase().match(WORD) ?? []);
 
 /**
- * Work globs merged since the learning was submitted whose title or summary shares words with its area (target file and
+ * Work globs merged since the learning was submitted whose title shares words with its area (target file and
  * section, statement): the changes that may have made it moot, or changed what it should say. Titles and summaries only,
  * best overlap first.
  */
@@ -155,7 +154,7 @@ export const overlappingMerges = (self: Glob, area: readonly string[], merged: r
   return merged
     .filter((g) => g.id !== self.id && g.category !== 'decision' && g.updatedAt > self.createdAt)
     .map((g) => {
-      const have = words(`${g.title} ${g.summary}`);
+      const have = words(g.title);
       let score = 0;
       for (const w of have) if (wanted.has(w)) score++;
       return { g, score };
@@ -163,7 +162,7 @@ export const overlappingMerges = (self: Glob, area: readonly string[], merged: r
     .filter((m) => m.score > 0)
     .sort((a, b) => b.score - a.score || b.g.updatedAt.localeCompare(a.g.updatedAt) || a.g.id.localeCompare(b.g.id))
     .slice(0, SUGGEST_MERGES_MAX)
-    .map(({ g }) => ({ id: g.id, title: g.title, summary: cut(g.summary, 400) }));
+    .map(({ g }) => ({ id: g.id, title: g.title }));
 };
 
 export const suggestSystem = (learning: boolean): string => `You advise a board's admin on one open decision about the project's knowledge base. You are given the proposal and what surrounds it, and you recommend what to do with it.
@@ -186,7 +185,7 @@ Rules:
 
 /** The user prompt: the inputs as labelled sections the model can cite. */
 export const suggestPrompt = (inputs: SuggestInputs): string => {
-  const out: string[] = [`Decision ${inputs.glob.id}: ${inputs.glob.title}`, inputs.glob.summary];
+  const out: string[] = [`Decision ${inputs.glob.id}: ${inputs.glob.title}`];
   const l = inputs.learning;
   if (l !== null) {
     out.push(
@@ -212,7 +211,7 @@ export const suggestPrompt = (inputs: SuggestInputs): string => {
   out.push('', '## Siblings: other open learnings aimed at the same file');
   out.push(...(inputs.siblings.length === 0 ? ['None.'] : inputs.siblings.map((s) => `- ${s.id} (${s.section === null ? 'whole document' : `section "${s.section}"`}): ${s.statement}${s.draft === null ? '' : `\n  Draft: ${s.draft}`}`)));
   out.push('', '## Changes merged since it was submitted that overlap its area');
-  out.push(...(inputs.merges.length === 0 ? ['None.'] : inputs.merges.map((m) => `- ${m.id}: ${m.title}. ${m.summary}`)));
+  out.push(...(inputs.merges.length === 0 ? ['None.'] : inputs.merges.map((m) => `- ${m.id}: ${m.title}`)));
   out.push('', '## Recent outcomes on this file');
   out.push(...(inputs.outcomes.length === 0 ? ['None.'] : inputs.outcomes.map((o) => `- ${o.id} ${o.status}: ${o.statement}${o.reason === null ? '' : ` (reason: ${o.reason})`}`)));
   out.push('', '## Automatic flags', `Rule-based outcome: ${inputs.flags.suggestedOutcome ?? 'none'}`, ...(inputs.flags.flags.length === 0 ? ['No flags.'] : inputs.flags.flags.map((f) => `- ${f}`)));

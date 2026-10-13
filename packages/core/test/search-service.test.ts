@@ -213,7 +213,7 @@ describe('ArtifactService.context related', () => {
         await tx.insertBoard({ name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] })
       ).id;
       await tx.upsertMember({ boardId, email: DEV, role: 'dev' });
-      await tx.insertGlob(makeGlob({ id: 's1t1', boardId, title: 'Sync retries', summary: 'Retry failed syncs with backoff.' }), null);
+      await tx.insertGlob(makeGlob({ id: 's1t1', boardId, title: 'Sync retries' }), null);
       const put = async (ref: string, text: string, globIds: string[]) => {
         await tx.replaceItem(
           { boardId, sourceType: 'glob_plan', externalRef: ref, title: ref, occurredAt: NOW, authority: 'approved_plan', status: 'active', supersededBy: null, globIds, globGroup: null, externalUrl: `/x/${ref}`, contentHash: ref, state: 'ready' },

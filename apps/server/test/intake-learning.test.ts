@@ -33,7 +33,6 @@ describe('Learned task categorisation in Postgres', () => {
       await globs.create(DEV, {
         boardId,
         title: request.slice(0, 30),
-        summary: request,
         plan: `${request}\n\nDone when: it works.`,
         type: 'same',
         category: 'feature',
@@ -103,7 +102,7 @@ describe('Learned task categorisation in Postgres', () => {
   });
 
   it('orders the nearest snapshots by distance, corrected ones first', async () => {
-    const vector = (await embedder.embed(['Add a login page for guests']))[0] ?? [];
+    const vector = (await embedder.embed(['Add a login page for guests\n\nDone when: it works.']))[0] ?? [];
     const near = await store.transaction((tx) => tx.nearestIntakeSnapshots(boardId, vector, 10));
     expect(near[0]?.distance).toBeCloseTo(0, 1);
     expect(near.map((n) => n.distance)).toEqual([...near.map((n) => n.distance)].sort((a, b) => a - b));

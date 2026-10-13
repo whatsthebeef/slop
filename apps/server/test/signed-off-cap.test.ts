@@ -15,7 +15,6 @@ import { createTestDatabase } from './support/database.js';
 
 const globOf = (patch: Partial<Glob> & Pick<Glob, 'id' | 'boardId'>): Glob => ({
   title: `Change ${patch.id}`,
-  summary: '',
   type: 'sub',
   category: 'task',
   group: null,

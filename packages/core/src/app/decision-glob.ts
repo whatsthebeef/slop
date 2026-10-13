@@ -46,8 +46,6 @@ export interface NewDecisionGlob {
   /** The person creating it, or the synthetic actor of a system channel. */
   readonly actor: Actor;
   readonly title: string;
-  /** The statement: becomes the glob's summary. */
-  readonly summary: string;
   /** plan.md v1: the proposal text (statement and evidence, Markdown). */
   readonly payload: string;
   readonly attributes: DecisionAttributes;
@@ -95,7 +93,6 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
       id,
       boardId: board.id,
       title: input.title,
-      summary: input.summary,
       type: 'same',
       category: 'decision',
       attributes: input.attributes,
@@ -154,7 +151,6 @@ export const createDecisionForInbox = async (
     boardId: item.boardId,
     actor,
     title: decisionGlobTitle(title),
-    summary: statement,
     payload: `${statement}\n\n## Source\n\n${inboxTitle(item)} (${inboxLink(item.boardId, item.id)})\n\n> ${excerpt.replace(/\n/g, '\n> ')}\n`,
     attributes: {
       scope: input.scope ?? { kind: 'future_work', ref: null },
@@ -182,7 +178,6 @@ export const createDecisionForExtracted = async (
     boardId: decision.boardId,
     actor,
     title: decisionGlobTitle(decision.statement),
-    summary: decision.statement,
     payload: `${decision.statement.trim()}\n\n## Source\n\n${decision.sourceLabel}\n\n> ${decision.quote.replace(/\n/g, '\n> ')}\n`,
     attributes: {
       scope: decision.globId === null ? { kind: 'project', ref: null } : { kind: 'glob', ref: decision.globId },

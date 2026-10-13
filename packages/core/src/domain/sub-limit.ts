@@ -253,7 +253,7 @@ export type SubLimitCandidate =
       readonly at: string;
       readonly changedLines: number | null;
       readonly mergeSha: string;
-      readonly bug: { readonly id: string; readonly title: string; readonly summary: string };
+      readonly bug: { readonly id: string; readonly title: string; readonly plan: string };
     };
 
 export interface SubLimitFacts {
@@ -261,6 +261,8 @@ export interface SubLimitFacts {
   readonly events: readonly DomainEvent[];
   /** The board's globs: the subs and any bugs naming them. */
   readonly globs: readonly Glob[];
+  /** The bugs' plan.md text by glob ID: what a bug says beyond its title. */
+  readonly plans: ReadonlyMap<string, string>;
   /** Outcomes already recorded, as `outcomeKey`s: each sub's outcome is learned from once. */
   readonly recorded: ReadonlySet<string>;
   /** Only subs merged at or after this are considered. */
@@ -298,7 +300,7 @@ const labelAdded = (event: DomainEvent): string | null => {
  * - converted for its size, then merged with no commit after the conversion (pushes from superseded runs aside) and no
  *   sign-off label moved to `added`, once it is signed off or its window has passed: `merged_unchanged`;
  * - passed, and within the window after its merge a sign-off label moved to `added`: `needed_fixes`;
- * - passed, and a bug created within the window names it in its title or summary: a `bug_reference`, which counts only
+ * - passed, and a bug created within the window names it in its title or plan.md: a `bug_reference`, which counts only
  *   when the model confirms it with a verified quote (the service asks). A sub with a label outcome isn't asked about.
  */
 export const subLimitCandidates = (facts: SubLimitFacts): SubLimitCandidate[] => {
@@ -378,7 +380,8 @@ export const subLimitCandidates = (facts: SubLimitFacts): SubLimitCandidate[] =>
     for (const bug of bugs) {
       if (bug.id === globId || bug.createdAt <= mergedAt || Date.parse(bug.createdAt) > end)
         continue;
-      if (!namesGlob(`${bug.title}\n${bug.summary}`, globId)) continue;
+      const plan = facts.plans.get(bug.id) ?? '';
+      if (!namesGlob(`${bug.title}\n${plan}`, globId)) continue;
       candidates.push({
         kind: 'bug_reference',
         globId,
@@ -386,7 +389,7 @@ export const subLimitCandidates = (facts: SubLimitFacts): SubLimitCandidate[] =>
         at: bug.createdAt,
         changedLines: gate.changedLines,
         mergeSha,
-        bug: { id: bug.id, title: bug.title, summary: bug.summary },
+        bug: { id: bug.id, title: bug.title, plan },
       });
     }
   }
@@ -394,5 +397,4 @@ export const subLimitCandidates = (facts: SubLimitFacts): SubLimitCandidate[] =>
 };
 
 /** A bug's text as the model sees it and its quote is checked against. */
-export const bugText = (bug: { readonly title: string; readonly summary: string }): string =>
-  `${bug.title}\n\n${bug.summary}`;
+export const bugText = (bug: { readonly title: string; readonly plan: string }): string => `${bug.title}\n\n${bug.plan}`;

@@ -18,6 +18,7 @@ import {
   learningMergeNote,
   learningOutcome,
   learningStaleness,
+  learningStatement,
   learningStatus,
   learningTarget,
 } from './learning.js';
@@ -100,7 +101,7 @@ export const learningWireFrom = (glob: Glob, a: LearningArtifacts): LearningWire
     boardId: glob.boardId,
     status: learningStatus(glob, a),
     type: facts.kind,
-    statement: glob.summary,
+    statement: learningStatement(glob, a),
     evidence: learningEvidence(glob, a),
     suggestedTarget: target.suggested,
     sourceGlobIds: facts.sourceGlobIds,

@@ -172,9 +172,9 @@ describe('artifact roles and payload', () => {
     expect(isSpecialKind('attachment')).toBe(false);
   });
 
-  it('takes the payload from plan.md, else the summary, else nothing', () => {
-    expect(payloadOf([{ kind: 'plan', version: 2, content: '# Plan' }], { summary: 'sum' })).toEqual({ version: 2, content: '# Plan' });
-    expect(payloadOf([{ kind: 'attachment', version: 1, content: 'x' }], { summary: 'sum' })).toEqual({ version: 0, content: 'sum' });
-    expect(payloadOf([], { summary: '  ' })).toBeNull();
+  it('takes the payload from plan.md, else nothing', () => {
+    expect(payloadOf([{ kind: 'plan', version: 2, content: '# Plan' }])).toEqual({ version: 2, content: '# Plan' });
+    expect(payloadOf([{ kind: 'attachment', version: 1, content: 'x' }])).toBeNull();
+    expect(payloadOf([])).toBeNull();
   });
 });

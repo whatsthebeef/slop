@@ -61,7 +61,6 @@ describe('KB items in Postgres', () => {
       await globs.create(DEV, {
         boardId,
         title: 'Source',
-        summary: '',
         type: 'super',
         category: 'feature',
         group: null,

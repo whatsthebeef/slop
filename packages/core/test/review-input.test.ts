@@ -56,18 +56,18 @@ describe('filterDiff', () => {
 });
 
 describe('planSummary', () => {
-  it('holds the title, summary and the Done when lines, not the rest of the plan', () => {
+  it('holds the title and the Done when lines, not the rest of the plan', () => {
     const plan =
       '- [ ] T4: Input assembly. Done when: only changed code is sent.\n\n## Goal\n\nLong prose.\n\nDone when: the guide is included.';
-    const out = planSummary({ title: 'Part 1', summary: 'Prepare inputs.' }, plan);
+    const out = planSummary({ title: 'Part 1' }, plan);
     expect(out).toBe(
-      'Part 1\n\nPrepare inputs.\n\nDone when:\n- T4: Input assembly. Done when: only changed code is sent.\n- Done when: the guide is included.',
+      'Part 1\n\nDone when:\n- T4: Input assembly. Done when: only changed code is sent.\n- Done when: the guide is included.',
     );
     expect(out).not.toContain('Long prose');
   });
 
-  it('is just the title and summary when the plan has no Done when line', () => {
-    expect(planSummary({ title: 'T', summary: '' }, null)).toBe('T');
+  it('is just the title when the plan has no Done when line', () => {
+    expect(planSummary({ title: 'T' }, null)).toBe('T');
   });
 });
 
@@ -115,8 +115,8 @@ describe('ReviewInputService', () => {
   let service: ReviewInputService;
   let boardId: number;
 
-  const addGlob = (id: string, title: string, summary = '') =>
-    store.transaction((tx) => tx.insertGlob(makeGlob({ id, boardId, title, summary }), null));
+  const addGlob = (id: string, title: string) =>
+    store.transaction((tx) => tx.insertGlob(makeGlob({ id, boardId, title }), null));
   const addChange = (sha: string, globId: string, text: string, occurredAt: string) => {
     const item: NewKnowledgeItem = {
       boardId,
@@ -156,7 +156,7 @@ describe('ReviewInputService', () => {
   });
 
   it('assembles changed code with the plan summary, the review guide and no lockfiles', async () => {
-    await addGlob('s1t1', 'Retry jobs', 'Retry failed jobs.');
+    await addGlob('s1t1', 'Retry jobs');
     await store.transaction(async (tx) => {
       await tx.insertArtifact({
         globId: 's1t1',

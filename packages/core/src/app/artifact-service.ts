@@ -24,10 +24,21 @@ import type { SizeAssessor } from './size-check-service.js';
 import type { SizeCheck } from '../domain/size-check.js';
 import type { SizeForecast } from '../domain/size-forecast.js';
 
+/** The accepted decisions that govern a work glob, each with its one-line statement read from its plan.md. */
+export const governingDecisions = async (tx: Tx, glob: Glob): Promise<ScopedDecision[]> => {
+  const decisions = applicableDecisions(await tx.listGlobs(glob.boardId, { include: 'decisions' }), glob);
+  const scoped: ScopedDecision[] = [];
+  for (const decision of decisions) {
+    const entry = scopedDecision(decision, (await tx.listArtifacts(decision.id, 'plan'))[0]?.content);
+    if (entry !== null) scoped.push(entry);
+  }
+  return scoped;
+};
+
 export interface GlobContext {
-  readonly glob: Pick<Glob, 'id' | 'title' | 'summary' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
+  readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
-  /** plan.md: the latest version, or the summary when no plan has been written yet. */
+  /** plan.md: the latest version. */
   readonly plan: { readonly version: number; readonly content: string } | null;
   /** What the glob is about: plan.md for work, the proposal text for a decision. The same as `plan`, which older agent sets read. */
   readonly payload: Payload | null;
@@ -57,7 +68,7 @@ export interface GlobContext {
   /** Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. */
   readonly available: readonly ArtifactListing[];
   /**
-   * What the board already knows about this glob's title and summary (current mode, top 5, cited, the glob's own
+   * What the board already knows about this glob's title and plan (current mode, top 5, cited, the glob's own
    * items left out). Absent when no search is configured.
    */
   readonly related?: readonly SearchHit[];
@@ -479,9 +490,7 @@ export class ArtifactService {
         .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
         .slice(0, CONTEXT_DECISIONS);
       const sizeCheck = await tx.getSizeCheck(globId);
-      const scopedDecisions = applicableDecisions(await tx.listGlobs(glob.boardId, { include: 'decisions' }), glob)
-        .map(scopedDecision)
-        .filter((d): d is ScopedDecision => d !== null);
+      const scopedDecisions = await governingDecisions(tx, glob);
       const inbox = (await tx.listInboxForGlob(globId)).map((i) => ({
         id: i.id,
         title: inboxTitle(i),
@@ -496,7 +505,6 @@ export class ArtifactService {
         glob: {
           id: glob.id,
           title: glob.title,
-          summary: glob.summary,
           type: glob.type,
           category: glob.category,
           group: glob.group,
@@ -504,13 +512,8 @@ export class ArtifactService {
           status: glob.status,
         },
         board: { id: board.id, repo: board.repo, baseBranch: board.baseBranch },
-        plan:
-          plan !== null
-            ? { version: plan.version, content: plan.content }
-            : glob.summary.trim() === ''
-              ? null
-              : { version: 0, content: glob.summary },
-        payload: payloadOf(artifacts, glob),
+        plan: plan === null ? null : { version: plan.version, content: plan.content },
+        payload: payloadOf(artifacts),
         ...(glob.attributes === undefined ? {} : { attributes: glob.attributes }),
         scopedDecisions,
         implementationRecord:

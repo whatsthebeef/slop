@@ -51,7 +51,6 @@ export const glob = (patch: Partial<Glob> = {}): Glob => ({
   id: 's1t1',
   boardId: 1,
   title: 'Fix login timeout',
-  summary: '',
   type: 'same',
   category: 'task',
   group: null,

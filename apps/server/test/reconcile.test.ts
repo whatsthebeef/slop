@@ -64,7 +64,7 @@ describe('reconcile: catching up on webhooks slop missed', () => {
 
   /** A same in review whose recorded state is what a lost webhook left behind. */
   const newOpenGlob = async (title: string, pr: { state: 'draft' | 'ready'; headSha: string }, status: 'in_progress' | 'pr_open' = 'pr_open') => {
-    const created = unwrap(await globs.create(DEV, { boardId: 1, title, summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+    const created = unwrap(await globs.create(DEV, { boardId: 1, title, type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
     await store.transaction(async (tx) => {
       const g = await tx.getGlob(created.id);
       if (g === null) throw new Error('missing');

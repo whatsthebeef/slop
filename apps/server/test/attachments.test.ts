@@ -59,7 +59,7 @@ describe('file attachments on Postgres', () => {
       return board.id;
     });
     globId = unwrap(
-      await globs.create(DEV, { boardId, title: 'Sub', summary: 'x', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId, title: 'Sub', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     ).id;
     app = new Hono<Env>();
     app.use('*', async (c, next) => {
@@ -151,7 +151,7 @@ describe('file attachments on Postgres', () => {
 
   it('removes the objects of a deleted glob', async () => {
     const other = unwrap(
-      await globs.create(DEV, { boardId, title: 'Gone', summary: 'x', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId, title: 'Gone', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
     const made = unwrap(await attachments.createUpload(DEV, other.id, { fileName: 'bye.png' }));
     unwrap(await globs.delete(DEV, other.id, other.version));

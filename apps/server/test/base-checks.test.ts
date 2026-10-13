@@ -113,7 +113,7 @@ describe('a red base branch', () => {
 
   const newOpenGlob = async (title: string) => {
     const created = unwrap(
-      await globs.create(DEV, { boardId: 1, title, summary: '', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(DEV, { boardId: 1, title, type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
     await globs.applyEvent(created.id, (g, ctx) => machine.provisioned(g, { branch: g.id, pr: { number: 7, headSha: host.headSha } }, ctx));
     await store.transaction(async (tx) => {

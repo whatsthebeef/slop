@@ -261,7 +261,6 @@ export const inboxView = (
 export interface InboxCandidate {
   readonly globId: string;
   readonly title: string;
-  readonly summary: string;
   /** The best matching chunk's text. */
   readonly evidence: string;
 }
