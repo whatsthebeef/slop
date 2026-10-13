@@ -13,6 +13,7 @@ import { labelToOpen, parseGlobTarget } from '@/lib/glob-section';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { useSstorCopy } from '@/components/sstor-notice';
+import { mergeOutcomeText } from '@/lib/card-pending';
 import { useToast } from '@/toast';
 
 /** How often the glob is read again; the board's live hints refresh the cards, not this page's glob. */
@@ -93,6 +94,9 @@ export const GlobPage = () => {
         // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.
         const finish = copyCommand(action, open.id);
         return change(() => api.action(open.id, path, open.version, anyway)).then(async (ok) => {
+          const after = client.getQueryData<GlobView>(globKey(open.id));
+          const said = ok && after !== undefined ? mergeOutcomeText(action, after) : null;
+          if (said !== null) toast(said);
           if (ok) await finish();
           return ok;
         });

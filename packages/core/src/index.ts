@@ -74,6 +74,7 @@ export * from './app/learning-writes.js';
 export * from './app/artifact-service.js';
 export * from './app/investigation-service.js';
 export * from './app/intake-service.js';
+export * from './app/group-backfill-service.js';
 export * from './app/kb-pipeline.js';
 export * from './app/knowledge-page-service.js';
 export * from './app/kb-consolidation.js';

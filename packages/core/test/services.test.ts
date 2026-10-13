@@ -156,14 +156,12 @@ describe('services', () => {
     expect(runId).toBe('run-1');
   });
 
-  it('merge (row 14) needs the current version and passed checks, then queues the squash merge', async () => {
+  it('merge (row 14) needs the current version, then queues the squash merge', async () => {
     const glob = unwrap(await globs.create(DEV, input()));
     const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false));
     const ready = unwrap(
       await globs.applyEvent(picked.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: 'abc' }, ctx)),
     );
-    const early = await globs.merge(DEV, ready.id, ready.version);
-    expect(!early.ok && early.error.code).toBe('invalid_transition');
     const passing = unwrap(
       await globs.applyEvent(ready.id, (g, ctx) => machine.checksCompleted(g, { sha: 'abc', passed: true }, ctx)),
     );

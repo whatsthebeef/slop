@@ -118,6 +118,13 @@ export const actionPresentation = (action: Action, glob: Subject): ActionPresent
         tip: `Squash-merges ${prRef(glob)}`,
         placement: 'main',
       };
+    case 'cancel_merge':
+      return {
+        label: 'Cancel merge',
+        icon: null,
+        tip: 'Stops waiting for the checks; the PR stays open and Merge comes back',
+        placement: 'more',
+      };
     case 'merge_continue':
       return {
         label: 'Merge & keep working',

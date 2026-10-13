@@ -60,6 +60,11 @@ describe('derived steps', () => {
     expect(kinds(ready({ runs: [run({ state: 'active' })] }))).toEqual([]);
   });
 
+  it('merge: done once Merge was pressed and slop merges when the checks pass', () => {
+    expect(kinds(ready({ mergeMode: 'when_green' }))).toEqual([]);
+    expect(kinds(ready({ mergeMode: 'when_green', headChecks: { sha: head, state: 'pending' } }))).toEqual([]);
+  });
+
   it('resolve conflict: only when a person implements the glob', () => {
     const conflict = { base: 'main', files: ['a.ts'], since: null, at: NOW };
     expect(kinds(ready({ implementer: 'dev@example.com', conflict }))).toEqual(['resolve_conflict']);

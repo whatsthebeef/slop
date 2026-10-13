@@ -101,10 +101,14 @@ export interface HumanStepViewer {
   readonly role: Role;
 }
 
-/** Whether a merge is open to a person: a same or super whose PR head has passed checks and has no conflict. */
+/**
+ * Whether merging is a person's turn: a same or super whose PR head has passed checks and has no conflict. Once Merge
+ * was pressed ("merge when checks pass" is armed) the step is done and slop holds the ball.
+ */
 export const canMerge = (glob: Glob): boolean =>
   glob.status === 'pr_open' &&
   glob.type !== 'sub' &&
+  glob.mergeMode !== 'when_green' &&
   glob.conflict == null &&
   glob.pr?.headSha != null &&
   glob.headChecks?.sha === glob.pr.headSha &&

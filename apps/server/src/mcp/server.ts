@@ -18,7 +18,7 @@ import { requestOrigin } from '../http/origin.js';
 import { isDate, parseBound, toRequest } from '../search-request.js';
 import { errorBody, globView, globViewOf, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
-import type { ReadyGate } from '../ready-gate.js';
+import type { MergeGate, ReadyGate } from '../ready-gate.js';
 
 export interface McpDeps {
   readonly auth: Auth;
@@ -40,6 +40,8 @@ export interface McpDeps {
   readonly sizeCheck?: Pick<SizeCheckService, 'keepWhole'>;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
+  /** Refuses `merge` on an agent-set PR whose diff is empty. */
+  readonly mergeGate?: MergeGate;
   readonly publicUrl: string;
   /** Other origins that reach this server (`PUBLIC_URL_ALIASES`); a client on one is served metadata and redirects on it. */
   readonly publicUrlAliases?: readonly string[];
@@ -517,7 +519,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'merge',
     {
       description:
-        "Merge a same or super whose PR is ready and whose required checks passed on the current head, as the glob's Merge button does: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
+        "Merge a same or super whose PR is ready, as the glob's Merge button does. With the required checks passed on the head it merges now; with them still pending it arms \"merge when checks pass\" (slop merges when they pass, and disarms if they fail or the PR conflicts). Merging: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -528,6 +530,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       // A failed merge (GitHub hadn't decided mergeability) is retried by the same tool: Retry merge on the board.
       const before = await globs.get(email, id);
       const retry = before.ok && before.value.glob.status === 'failed' && before.value.glob.failure?.kind === 'merge';
+      const gate = retry ? undefined : await deps.mergeGate?.(email, id);
+      if (gate !== undefined && !gate.ok) return reply(gate);
       const result = retry ? await globs.retryMerge(email, id, version) : await globs.merge(email, id, version, continueAfter ?? false);
       if (!result.ok) return reply(result);
       // Run the squash_merge job now and answer with the glob as it then is, as the REST action does.

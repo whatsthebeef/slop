@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -22,7 +22,7 @@ import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { suggestExecutors } from './suggest-executors.js';
 import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
-import { readyGate } from './ready-gate.js';
+import { mergeGate, readyGate } from './ready-gate.js';
 import { GitHub } from './github/client.js';
 import { AppCredentialsStore, fileSlot } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
@@ -319,6 +319,7 @@ const intake = new IntakeService({
   embedder,
   model: config.INTAKE_MODEL,
 });
+const groupBackfill = new GroupBackfillService({ store, globs, intake });
 // Haiku, for the index's change summaries and for decisions.
 const searchLlm = trackLlm(
   new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, recordUsage),
@@ -442,8 +443,10 @@ if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
 const app = createApp({
   auth,
   intake,
+  groupBackfill,
   decisions: decisionGlobs,
   readyGate: readyGate(github, globs, boards),
+  mergeGate: mergeGate(github, globs, boards),
   links,
   boards,
   globs,
@@ -530,6 +533,7 @@ mountMcp(app, {
   auth,
   suggest: suggestService,
   readyGate: readyGate(github, globs, boards),
+  mergeGate: mergeGate(github, globs, boards),
   boards,
   globs,
   deploys,
