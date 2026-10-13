@@ -19,6 +19,9 @@ export const CONTEXT_SETTING_KEYS = [
   'promotion_min_returns',
   'promotion_discussion_min_returns',
   'promotion_min_globs',
+  'hotspot_window_days',
+  'hotspot_min_globs',
+  'hotspot_min_real',
 ] as const;
 export type ContextSettingKey = (typeof CONTEXT_SETTING_KEYS)[number];
 
@@ -184,6 +187,39 @@ export const CONTEXT_SETTING_SPECS: Readonly<Record<ContextSettingKey, ContextSe
     step: 0,
     learned: false,
   },
+  hotspot_window_days: {
+    key: 'hotspot_window_days',
+    label: 'Hotspot window',
+    unit: 'days',
+    effect: 'How far back conflicts count when a file is checked for being a conflict hotspot; a file with none inside it stops being hot.',
+    default: 7,
+    min: 7,
+    max: 7,
+    step: 0,
+    learned: false,
+  },
+  hotspot_min_globs: {
+    key: 'hotspot_min_globs',
+    label: 'Globs to make a hotspot',
+    unit: 'count',
+    effect: 'How many different globs must have conflicted on a file inside the window for it to be a hotspot.',
+    default: 3,
+    min: 3,
+    max: 3,
+    step: 0,
+    learned: false,
+  },
+  hotspot_min_real: {
+    key: 'hotspot_min_real',
+    label: 'Real conflicts to make a hotspot',
+    unit: 'count',
+    effect: 'How many real (not purely additive) conflicts inside the window make a file a hotspot, whatever the number of globs.',
+    default: 2,
+    min: 2,
+    max: 2,
+    step: 0,
+    learned: false,
+  },
 };
 
 /** Every setting's value. */
@@ -204,6 +240,9 @@ const build = (value: (key: ContextSettingKey) => number): ContextSettings => ({
   promotion_min_returns: value('promotion_min_returns'),
   promotion_discussion_min_returns: value('promotion_discussion_min_returns'),
   promotion_min_globs: value('promotion_min_globs'),
+  hotspot_window_days: value('hotspot_window_days'),
+  hotspot_min_globs: value('hotspot_min_globs'),
+  hotspot_min_real: value('hotspot_min_real'),
 });
 
 export const DEFAULT_CONTEXT_SETTINGS: ContextSettings = build((key) => CONTEXT_SETTING_SPECS[key].default);

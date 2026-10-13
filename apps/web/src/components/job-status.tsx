@@ -42,6 +42,8 @@ export const jobSummary = (result: BoardJobResult): string => {
     }
     case 'context_tuning':
       return `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved, ${result.held} left as they were`;
+    case 'hotspots':
+      return `${result.hot} conflict ${result.hot === 1 ? 'hotspot' : 'hotspots'}`;
     case 'intake_outcome':
       return `${result.recorded} outcomes recorded, ${result.refreshed} refreshed${result.backfilled > 0 ? `, ${result.backfilled} snapshots backfilled` : ''}`;
     case 'effect_check':
@@ -56,7 +58,7 @@ export const jobSummary = (result: BoardJobResult): string => {
   }
 };
 
-export type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit' | 'intake_outcome' | 'size_threshold' | 'context_tuning';
+export type JobName = 'mining' | 'consolidation' | 'effect_check' | 'sub_limit' | 'intake_outcome' | 'size_threshold' | 'context_tuning' | 'hotspots';
 
 export const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   mining: { title: 'Mined weekly', name: 'Mining' },
@@ -66,6 +68,7 @@ export const JOB_LABELS: Record<JobName, { title: string; name: string }> = {
   intake_outcome: { title: 'Recorded hourly', name: 'Intake outcomes' },
   size_threshold: { title: 'Learned hourly', name: 'Size-threshold learning' },
   context_tuning: { title: 'Tuned weekly', name: 'Context tuning' },
+  hotspots: { title: 'Checked hourly', name: 'Hotspot detection' },
 };
 
 /**

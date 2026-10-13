@@ -1027,7 +1027,7 @@ export const SIGNAL_QUIET_MS = 12 * 7 * 24 * 60 * 60 * 1000;
 export const SIGNAL_RERAISE_FACTOR = 1.5;
 
 /** Per-board background jobs of the self-improvement pipeline (`board_jobs`). */
-export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold', 'context_tuning'] as const;
+export const BOARD_JOBS = ['mining', 'consolidation', 'effect_check', 'sub_limit', 'intake_outcome', 'size_threshold', 'context_tuning', 'hotspots'] as const;
 export type BoardJobName = (typeof BOARD_JOBS)[number];
 
 export type BoardJobResult =
@@ -1111,6 +1111,12 @@ export type BoardJobResult =
       readonly moves: readonly { readonly key: ContextSettingKey; readonly before: number; readonly after: number; readonly outcome: string }[];
       /** Settings checked and left as they were (a short sample, a recent change, a bound). */
       readonly held: number;
+    }
+  | {
+      readonly kind: 'hotspots';
+      /** Files that are conflict hotspots after the run, and the hottest of them (most conflicts first, at most 10). */
+      readonly hot: number;
+      readonly files: readonly { readonly path: string; readonly conflicts: number; readonly globs: number }[];
     }
   /**
    * The job didn't run because its AI was unavailable; the last run stands and the next hourly check tries again.
