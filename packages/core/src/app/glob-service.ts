@@ -8,9 +8,10 @@ import { listOf } from '../domain/matrix.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
-import type { Actor, Board, Category, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
+import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect } from '../domain/events.js';
+import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
 import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
 import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
 import type { InboxItem } from '../domain/inbox.js';
@@ -130,6 +131,57 @@ export interface SplitPart {
 }
 
 export const MAX_SPLIT_PARTS = 10;
+
+/** What a split decided about one part's escalation; `change` is null when the part had none before and has none now. */
+interface PartEscalation {
+  readonly type: SlopType;
+  readonly escalation: Escalation | null;
+  readonly change: { readonly kind: 'Escalated' | 'Deescalated'; readonly data: Record<string, string> } | null;
+}
+
+const escalatedAs = (escalation: Escalation, type: SlopType): PartEscalation => ({
+  type,
+  escalation,
+  change: {
+    kind: 'Escalated',
+    data: { reason: escalation.reason, ...(escalation.criterion === undefined ? {} : { criterion: escalation.criterion }), evidence: escalation.evidence ?? '' },
+  },
+});
+
+/**
+ * Re-checks the escalation of every part of a split against the board's risk areas (the matcher intake uses), in part order.
+ * A part that matches is a same with the matched areas as the reason and its own files as the evidence; one that doesn't
+ * loses any escalation (its type stays what the proposal decided). If the original was escalated and no part matches, part
+ * 0 keeps the original's escalation with a note, so the split never escalates less than the original did. Supers are left alone.
+ */
+export const splitEscalations = (
+  original: Glob,
+  parts: readonly { readonly plan: string; readonly type: SlopType }[],
+  areas: Parameters<typeof matchRiskAreas>[0],
+  actor: string,
+  now: string,
+): PartEscalation[] => {
+  const before = original.escalation ?? null;
+  const matches = parts.map((p) => (p.type === 'super' ? null : matchRiskAreas(areas, p.plan)));
+  const anyMatch = matches.some((m) => m !== null && m.areas.length > 0);
+  return parts.map((part, index): PartEscalation => {
+    const match = matches[index];
+    const had = index === 0 ? before : null;
+    if (match === null || match === undefined) return { type: part.type, escalation: had, change: null };
+    if (match.areas.length > 0) {
+      const reason = `Touches the board's risk areas: ${match.areas.map((a) => a.name).join(', ')}`;
+      return escalatedAs({ reason, criterion: before?.criterion ?? 'risk_area', evidence: splitEvidence(original.id, match), by: actor, at: now }, 'same');
+    }
+    if (index === 0 && before !== null && !anyMatch) {
+      const evidence = `carried from ${original.id}; no part matched on its own`;
+      return escalatedAs({ reason: before.reason, ...(before.criterion === undefined ? {} : { criterion: before.criterion }), evidence, by: actor, at: now }, part.type);
+    }
+    return { type: part.type, escalation: null, change: had === null ? null : { kind: 'Deescalated', data: { reason: had.reason } } };
+  });
+};
+
+const escalationEvent = (globId: string, actor: string, at: string, change: NonNullable<PartEscalation['change']>) =>
+  ({ type: change.kind, globId, actor, at, data: change.data }) as const;
 
 /** Where a glob came from in a split: the glob that was cut, its own place and every part's ID in order. */
 export interface SplitInfo {
@@ -544,24 +596,39 @@ export class GlobService {
         return `${fillPartIds(part?.plan ?? '', ids).trimEnd()}\n\n---\n${note}\n`;
       };
 
+      // Each part's own risk: the board's risk areas against that part's plan, not the whole feature's.
+      const areas = await tx.listRiskAreas(board.id);
+      const escalations = splitEscalations(
+        original,
+        wanted.map((part) => ({ plan: fillPartIds(part.plan, ids), type: part.type ?? original.type })),
+        areas.length > 0 ? areas : defaultAreas(board.id, ctx.now),
+        email,
+        ctx.now,
+      );
+
       // Part 0: the original keeps its ID and gets the new fields.
       const first = wanted[0];
       if (first === undefined) return invalidInput('A split needs at least 2 parts');
+      const firstEscalation = escalations[0];
+      const firstType = firstEscalation?.type ?? first.type;
       const changes: FieldChanges = {
         title: first.title,
         summary: fillPartIds(first.summary, ids),
         ...(first.category === undefined ? {} : { category: first.category }),
-        ...(first.type === undefined ? {} : { type: first.type }),
+        ...(firstType === undefined || (first.type === undefined && firstType === original.type) ? {} : { type: firstType }),
       };
       const changed = machine.changeFields(original, changes, board, ctx, new Map());
       if (!changed.ok) return changed;
-      const updated = changed.value.changed ? { ...changed.value.glob, version: original.version + 1 } : original;
-      if (changed.value.changed && !(await tx.updateGlob(updated, original.version))) {
+      const escalationChanged = firstEscalation?.change != null;
+      const moved = escalationChanged ? { ...changed.value.glob, escalation: firstEscalation.escalation } : changed.value.glob;
+      const updated = changed.value.changed || escalationChanged ? { ...moved, version: original.version + 1 } : original;
+      if (updated !== original && !(await tx.updateGlob(updated, original.version))) {
         const current = await tx.getGlob(id);
         return current === null ? notFound(`No glob ${id}`) : err({ code: 'version_conflict', message: 'The glob has changed', current });
       }
       await tx.appendEvents(changed.value.events);
       await tx.enqueueEffects(changed.value.effects);
+      if (firstEscalation?.change != null) await tx.appendEvents([escalationEvent(id, email, ctx.now, firstEscalation.change)]);
 
       const attachments = await tx.listArtifacts(original.id, 'attachment');
       const inherited = [...(original.after ?? [])];
@@ -587,7 +654,7 @@ export class GlobService {
             boardId: board.id,
             title: part.title,
             summary: fillPartIds(part.summary, ids),
-            type: part.type ?? original.type,
+            type: escalations[index]?.type ?? part.type ?? original.type,
             category: part.category ?? original.category,
             group: original.group,
             environment: original.environment,
@@ -602,9 +669,11 @@ export class GlobService {
           await this.dependencyStates(tx, checked.value),
         );
         if (!created.ok) return created;
-        const glob = { ...created.value.glob, version: 1 };
+        const partEscalation = escalations[index];
+        const glob = { ...created.value.glob, version: 1, ...(partEscalation?.escalation == null ? {} : { escalation: partEscalation.escalation }) };
         if (!(await tx.insertGlob(glob, key(index)))) throw new Error(`Glob ID collision for ${glob.id}`);
         await tx.appendEvents(created.value.events);
+        if (partEscalation?.change != null) await tx.appendEvents([escalationEvent(partId, email, ctx.now, partEscalation.change)]);
         await tx.enqueueEffects(created.value.effects);
         globs.push(glob);
         withArtifacts.push(glob.id);
