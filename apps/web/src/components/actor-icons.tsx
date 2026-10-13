@@ -1,4 +1,4 @@
-import { Bot, Brain } from 'lucide-react';
+import { Bot, UserRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ActorIconProps {
@@ -14,16 +14,16 @@ export const MachineIcon = ({ className, decorative = false }: ActorIconProps) =
   <Bot
     className={cn(SIZE, className)}
     strokeWidth={2}
-    {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'machine' })}
+    {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'machine', role: 'img' })}
   />
 );
 
-/** The work or the judgement happens in a person's session. */
+/** A person: the work or the judgement happens in a person's session (lucide UserRound, s15t104). */
 export const HumanIcon = ({ className, decorative = false }: ActorIconProps) => (
-  <Brain
+  <UserRound
     className={cn(SIZE, className)}
     strokeWidth={2}
-    {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'human' })}
+    {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'human', role: 'img' })}
   />
 );
 

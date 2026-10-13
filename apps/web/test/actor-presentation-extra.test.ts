@@ -151,7 +151,7 @@ describe('status-line activity icons (s15f88)', () => {
 });
 
 describe('escalation chip (s15f88)', () => {
-  it('reads "Needs a person: <reason>" to screen readers and hides the brain and visual words', () => {
+  it('reads "Needs a person: <reason>" to screen readers and hides the person icon and visual words', () => {
     const html = card(
       view({
         status: 'planning',
@@ -197,7 +197,7 @@ describe('card moves (s15f88)', () => {
       /data-testid="move-start"[^>]*><svg[^>]*lucide-bot[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Start ▸/,
     );
     expect(html).toMatch(
-      /data-testid="move-pick_up"[^>]*><svg[^>]*lucide-brain[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Pick up ▸/,
+      /data-testid="move-pick_up"[^>]*><svg[^>]*lucide-user-round[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Pick up ▸/,
     );
   });
 });

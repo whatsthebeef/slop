@@ -968,7 +968,7 @@ export const GlobDetail = ({
             />
           )
         ) : (
-          <ReviewFindings globId={glob.id} />
+          <ReviewFindings globId={glob.id} startOpen={new URLSearchParams(window.location.search).get('section') === 'findings'} />
         )}
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">

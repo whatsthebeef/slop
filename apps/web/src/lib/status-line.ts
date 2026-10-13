@@ -320,7 +320,7 @@ export interface Activity {
     | 'picked_up'
     | 'agent_set';
   readonly text: string;
-  /** Who is acting, shown as an icon before the text: the machine (Bot) or a person (Brain). */
+  /** Who is acting, shown as an icon before the text: the machine (Bot) or a person (UserRound). */
   readonly icon?: 'machine' | 'human';
   /** The detail: session link, owner, who triggered it, the queued notice. */
   readonly tip: string;
