@@ -40,6 +40,7 @@ import { Topic } from 'aws-cdk-lib/aws-sns';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Tags } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
+import { AttachmentsBucket } from './attachments-bucket.js';
 import type { SlopSecrets } from './secrets.js';
 
 export interface HostStackProps extends StackProps {
@@ -232,6 +233,13 @@ export class HostStack extends Stack {
     });
     const cloudFrontUrl = `https://${distribution.distributionDomainName}`;
     const publicUrl = props.customDomain === undefined ? cloudFrontUrl : `https://${props.customDomain.domainName}`;
+
+    // Glob attachments: uploads go straight to S3 from the viewer's origin; the server learns of them from the queue.
+    new AttachmentsBucket(this, 'Attachments', {
+      stage,
+      appOrigins: [...new Set([publicUrl, cloudFrontUrl])],
+      serverRole: role,
+    });
 
     const [owner, repo] = props.repo.split('/');
     if (owner === undefined || repo === undefined) throw new Error(`repo must be owner/name, not ${props.repo}`);
