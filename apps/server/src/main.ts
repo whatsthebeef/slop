@@ -125,7 +125,7 @@ const globs = new GlobService({
   // Embeds a new glob's request for its intake snapshot; `embedder` exists by the time the first glob is created.
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
   // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
-  sizeCheck: { assess: (boardId, plan): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
+  sizeCheck: { assess: (boardId, plan, title): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan, title), refresh: (globId) => sizeCheck.refresh(globId) },
   // Infers a new glob's relations (needs and decisions) from its plan; `dependencyInference` exists by the time the first glob is created.
   inference: { infer: (input) => dependencyInference.infer(input) },
 });
