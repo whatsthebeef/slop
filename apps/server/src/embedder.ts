@@ -2,6 +2,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { EMBEDDING_DIMENSIONS } from '@slop/core';
 import type { Embedder } from '@slop/core';
 import { BEDROCK_CLIENT_RETRY, classifyBedrockError } from './llm.js';
+import { requestMetrics } from './request-metrics.js';
 import type { BedrockModel } from './llm.js';
 
 /** Titan embeddings take one text per call, so a batch runs a few calls at a time. */
@@ -44,7 +45,7 @@ export class BedrockEmbedder implements Embedder {
   private async embedOne(text: string, signal: AbortSignal | undefined): Promise<number[]> {
     let body: Uint8Array;
     try {
-      const response = await this.client.send(
+      const response = await requestMetrics.llm(() => this.client.send(
         new InvokeModelCommand({
           modelId: this.model,
           contentType: 'application/json',
@@ -52,7 +53,7 @@ export class BedrockEmbedder implements Embedder {
           body: JSON.stringify({ inputText: text, dimensions: this.dimensions, normalize: true }),
         }),
         signal === undefined ? {} : { abortSignal: signal },
-      );
+      ));
       body = response.body;
     } catch (error) {
       throw classifyBedrockError(error, { model: this.bedrockModel, region: this.region, profile: process.env.AWS_PROFILE }) ?? error;

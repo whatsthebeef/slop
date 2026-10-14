@@ -97,6 +97,7 @@ describe('card rows', () => {
     expect(status?.className).toContain('shrink');
     expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-0');
+    expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('gap-[3px]');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('task');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
     expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
@@ -126,7 +127,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1, s1t2 +2', 'Waits for: s1t1 (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1 +3', 'Waits for, in order: s1t1 (Doing)'],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Waiting'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -191,7 +192,11 @@ describe('card rows', () => {
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
     expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
-    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('card-status');
+    const separator = corner?.lastElementChild?.previousElementSibling;
+    expect(separator?.getAttribute('data-testid')).toBe('card-corner-separator');
+    expect(separator?.textContent).toBe('·');
+    expect(separator?.getAttribute('aria-hidden')).toBe('true');
+    expect(separator?.previousElementSibling?.getAttribute('data-testid')).toBe('card-status');
     expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
     expect(header?.firstElementChild?.className).toContain('shrink-0');
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
@@ -291,12 +296,12 @@ describe('card rows', () => {
     const html = markup(waitingOn());
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
-    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1, s1t2 +2');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1 +3');
     expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
     expect(html).not.toContain('after-chip');
-    expect(html).toContain('Waits for: s1t1 (Doing)');
+    expect(html).toContain('Waits for, in order: s1t1 (Doing)');
   });
 
   it('puts the split chip in the chips row as a pill with the branch icon, not in the title or status line', () => {
@@ -325,7 +330,7 @@ describe('card rows', () => {
   });
 });
 
-describe('independent review icon', () => {
+describe('independent review on the card', () => {
   const reviewed = (findings: number, headSha: string | null = head) =>
     view({
       pr: { state: 'draft', number: 1, headSha: head },
@@ -344,22 +349,10 @@ describe('independent review icon', () => {
       ],
     });
 
-  it('shows no icon or text for a review with zero findings', () => {
-    const root = dom(markup(reviewed(0)));
-    expect(root.querySelector('[data-testid="artifact-icon-independent_review"]')).toBeNull();
-    expect(root.querySelector('[data-testid="review-status"]')).toBeNull();
-    expect(root.innerHTML).not.toContain('No findings');
-  });
-
-  it('shows the icon with the count when there are findings', () => {
+  it('shows no artifact icons or review status on the card', () => {
     const root = dom(markup(reviewed(2)));
-    expect(root.querySelector('[data-testid="artifact-icon-independent_review"]')).not.toBeNull();
-    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toBe('2 findings');
-  });
-
-  it('says outdated when a later push left the review behind', () => {
-    const root = dom(markup(reviewed(1, 'old0000')));
-    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toContain('(outdated)');
+    expect(root.querySelector('[data-testid^="artifact-icon-"]')).toBeNull();
+    expect(root.querySelector('[data-testid="review-status"]')).toBeNull();
   });
 });
 
@@ -455,5 +448,22 @@ describe('card interaction', () => {
     expect(onOpenSection).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
     expect(onAct).not.toHaveBeenCalled();
+  });
+
+  it('shows a move tag in the status slot in place of the status, with no separate line', () => {
+    const g = conflicting();
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={g} repo='a/b' tag={{ text: 'picked up by JB', icon: 'human', n: 1 }} />
+      </MemoryRouter>,
+    );
+    const root = dom(html);
+    const statuses = root.querySelectorAll('[data-testid="card-status"]');
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.getAttribute('data-kind')).toBe('move-tag');
+    expect(statuses[0]?.textContent).toBe('picked up by JB');
+    expect(root.querySelectorAll('.move-tag')).toHaveLength(1);
+    expect(root.querySelector('[data-testid="card-corner"] .move-tag')).not.toBeNull();
+    expect(markup(g)).not.toContain('move-tag');
   });
 });

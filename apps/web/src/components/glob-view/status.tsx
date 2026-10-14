@@ -101,7 +101,7 @@ export type NowState = ReturnType<typeof useNowState>;
 
 /**
  * The status in the header's top right, one line and truncated: the machine's or the person's position, else the problem,
- * else the lifecycle text. Clicking it scrolls to the Activity log, where its details are.
+ * else the lifecycle text. Clicking it opens a live run's session, else scrolls to the Activity log, where its details are.
  */
 export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decision: boolean; state: NowState }) => {
   const { position, move, turn, problem, seen, turnDismissed, now, viewer } = state;
@@ -122,16 +122,20 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
   const text = corner !== null ? rawText : plainText(rawText);
   const icon = corner?.icon ?? (turn !== null || rollout?.turn != null ? 'human' : null);
   const tone = corner !== null ? corner.tone : turn !== null ? undefined : seen?.dismissed === true ? 'text-muted-foreground' : problem?.tone;
+  // A live run's status opens that run's session; the activity log has no session link of its own beyond its run entries.
+  const live = position?.holder === 'machine' ? position.sessionUrl : null;
   return (
     <span className="ml-auto inline-flex min-w-0 items-center gap-2" data-testid="header-corner">
       <button
         type="button"
         className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', tone)}
         aria-label={corner?.kind === 'needs-human' ? corner.label : undefined}
-        title={corner?.tip ?? rollout?.tip ?? position?.tip ?? problem?.full ?? text}
+        title={live !== null ? "Open the machine's session" : (corner?.tip ?? rollout?.tip ?? position?.tip ?? problem?.full ?? text)}
         data-testid="header-status"
         data-holder={move?.holder ?? 'none'}
-        onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
+        onClick={() =>
+          live !== null ? window.open(live, '_blank', 'noreferrer') : document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })
+        }
       >
         {/* The text gives way (ellipsis) only when the row is full; the ID before it never shrinks. */}
         <span className="truncate" data-testid="header-status-text">

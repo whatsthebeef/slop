@@ -11,6 +11,13 @@ export const labelCommandSchema = z.discriminatedUnion('kind', [
       .min(1)
       .max(machine.MAX_CHECKLIST_ITEMS),
   }),
+  z.object({
+    kind: z.literal('save_draft_item'),
+    text: z.string().max(machine.MAX_CHECKLIST_ITEM_LENGTH),
+    itemId: z.string().min(1).optional(),
+  }),
+  z.object({ kind: z.literal('remove_draft_item'), itemId: z.string().min(1) }),
+  z.object({ kind: z.literal('send_items') }),
   z.object({ kind: z.literal('approve') }),
   z.object({ kind: z.literal('tick'), itemId: z.string().min(1), done: z.boolean() }),
   z.object({ kind: z.literal('resubmit') }),
@@ -19,6 +26,9 @@ export const labelCommandSchema = z.discriminatedUnion('kind', [
 
 export const LABEL_COMMAND_KINDS = [
   'submit_items',
+  'save_draft_item',
+  'remove_draft_item',
+  'send_items',
   'approve',
   'tick',
   'resubmit',

@@ -72,7 +72,17 @@ const shortProblem = (status: StatusLine, glob: GlobView): string => {
   }
 };
 
-const waitingText = (parts: BlockedParts): string => `waiting on ${parts.ids.join(', ')}${parts.more > 0 ? ` +${String(parts.more)}` : ''}`;
+/** "waiting on s15f82 +2": the nearest prerequisite and how many more; the chain and the next glob are in the tooltip. */
+const waitingText = (parts: BlockedParts): string => {
+  const more = parts.ids.length - 1 + parts.more;
+  return `waiting on ${parts.ids[0] ?? ''}${more > 0 ? ` +${String(more)}` : ''}`;
+};
+
+/** Why a Planning glob waits, from what slop learned of its needs, for the tooltip. */
+const learnedReasons = (glob: GlobView): string[] =>
+  (glob.impliedAfter ?? [])
+    .filter((i) => i.overridden !== true && i.kind === 'needs')
+    .map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`);
 
 /**
  * The status without details: no elapsed times ("run failed · 18 min", "queued 3 min", "queued · 3 min") and no commit SHAs
@@ -90,6 +100,16 @@ export const plainText = (text: string): string =>
 /** Whether the glob is merged and waits for a person's sign-off: a label is still to be approved. */
 const awaitingSignOff = (glob: GlobView): boolean =>
   glob.status === 'reviewing' && Object.values(glob.labels).some((state) => state !== 'approved');
+
+/**
+ * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
+ * sign-off, an escalation in Planning). A decision glob has no corner status, so its turn is the status line's.
+ */
+export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
+  if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
+  const icon = cornerStatus(glob, now, viewer)?.icon;
+  return icon === 'human' || icon === 'needs-human';
+};
 
 /**
  * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
@@ -110,7 +130,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(status === null ? [] : [status.tip]),
       ...(position === null ? [] : [position.tip]),
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
-      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for: ${chainTip(glob)}`]),
+      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`]),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
     ];
     const hint =
@@ -151,7 +171,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make('machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
   if (status !== null) {
-    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : 'alert';
+    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : status.kind === 'rollout' ? 'human' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
   if (awaitingSignOff(glob) && position === null) {
@@ -166,7 +186,8 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   }
   if (blocked !== null) {
     return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [
-      `Waits for: ${chainTip(glob)}`,
+      `Waits for, in order: ${chainTip(glob)}`,
+      ...learnedReasons(glob),
     ]);
   }
   if (position !== null) {

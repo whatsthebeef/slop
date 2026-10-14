@@ -12,6 +12,8 @@ import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
 import { mountKnowledge } from './http/knowledge.js';
 import { OutboxRunner } from './jobs/outbox.js';
+import { requestMetrics } from './request-metrics.js';
+import { eq, sql } from 'drizzle-orm';
 import { AttachmentEventsJob } from './jobs/attachment-events.js';
 import { mountAttachments } from './http/attachments.js';
 import { mountSkillZip } from './http/skill-zip.js';
@@ -529,7 +531,22 @@ const capabilities = new CapabilityReader({
   codeIndexRuns: config.SLOP_JOBS.has('code'),
   deployResultsConfigured: config.AWS_WEBHOOK_KEY.length > 0,
 });
-mountHealth(app, { llm: llmHealth, boards, integrations, signIn: awsSignIn, capabilities });
+mountHealth(app, {
+  llm: llmHealth,
+  boards,
+  integrations,
+  signIn: awsSignIn,
+  capabilities,
+  metrics: requestMetrics,
+  outboxBacklog: async () => {
+    const rows = await db
+      .select({ lane: schema.outbox.lane, n: sql<number>`count(*)::int` })
+      .from(schema.outbox)
+      .where(eq(schema.outbox.state, 'pending'))
+      .groupBy(schema.outbox.lane);
+    return Object.fromEntries(rows.map((r) => [r.lane, r.n]));
+  },
+});
 mountSearch(app, { search });
 mountCode(app, { code });
 mountChat(app, { chat });

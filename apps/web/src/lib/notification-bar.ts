@@ -51,6 +51,3 @@ export const linkTarget = (href: string): { readonly target?: '_blank' } => (hre
 
 /** Poll slowly while one is showing (hints can be lost while the tab is hidden), more slowly still otherwise. */
 export const pollInterval = (active: boolean): number => (active ? 15_000 : 60_000);
-
-/** The control that brings dismissed notifications back: "dismissed (2)". */
-export const dismissedLabel = (count: number): string => `dismissed (${String(count)})`;

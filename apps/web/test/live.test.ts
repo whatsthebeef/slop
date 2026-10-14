@@ -1,6 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connectBoardStream, reconnectDelay, SILENCE_MS } from '../src/lib/live';
+import { connectBoardStream, reconnectDelay, SILENCE_MS, trailing } from '../src/lib/live';
 import type { LiveState } from '../src/lib/live';
+
+describe('trailing', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('runs once after a burst, a delay after the last call', () => {
+    const work = vi.fn();
+    const { call } = trailing(work, 2_000);
+    call();
+    vi.advanceTimersByTime(1_500);
+    call();
+    vi.advanceTimersByTime(1_500);
+    expect(work).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(600);
+    expect(work).toHaveBeenCalledTimes(1);
+    call();
+    vi.advanceTimersByTime(2_000);
+    expect(work).toHaveBeenCalledTimes(2);
+  });
+
+  it('does nothing once cancelled', () => {
+    const work = vi.fn();
+    const { call, cancel } = trailing(work, 2_000);
+    call();
+    cancel();
+    vi.advanceTimersByTime(5_000);
+    expect(work).not.toHaveBeenCalled();
+  });
+});
 
 describe('reconnectDelay', () => {
   it('doubles from one second', () => {

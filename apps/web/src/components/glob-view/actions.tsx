@@ -1,6 +1,7 @@
 import { decisionOf, machine } from '@slop/core';
 import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
-import { mainAction } from '@/lib/main-action';
+import { mainAction, promotedAction } from '@/lib/main-action';
 import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
 import { api } from '@/lib/api';
 import { copyOrSelect } from '@/lib/plan-text';
@@ -111,7 +112,8 @@ export const useGlobActions = ({
     setBriefOpen(false);
   }, [glob.id]);
   // Dismissing a message is stored per person on the server; the page reloads the glob afterwards.
-  const dismiss = (key: string, on: boolean) => run(async () => {
+  const dismiss = (key: string, on: boolean) =>
+    run(async () => {
       await onDismiss(key, on);
     });
 
@@ -128,8 +130,11 @@ export const useGlobActions = ({
   const [stepsSignal, setStepsSignal] = useState(0);
   // A stalled glob's step names the one action to lead with and one alternative to follow it.
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
-  const leading = stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
-  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  const leading =
+    stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+  // With no natural main (and no due step) a menu item is promoted, so the ▾ never stands alone.
+  const natural = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  const main = natural ?? (stepTurn === null ? promotedAction(allActions) : null);
   const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -169,7 +174,8 @@ export const useGlobActions = ({
       return;
     }
     // Resume reopens your own session: nothing starts, so there is nothing to confirm.
-    const resuming = action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
+    const resuming =
+      action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
     if (
       !resuming &&
       ((oversized &&
@@ -177,8 +183,8 @@ export const useGlobActions = ({
           action === 'start_anyway' ||
           action === 'pick_up' ||
           action === 'take_over')) ||
-      (brief !== null &&
-        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
+        (brief !== null &&
+          (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
     ) {
       setConfirmingOversized(action);
       return;
@@ -284,7 +290,12 @@ const Clamped = ({ text }: { text: string }) => {
   return (
     <>
       {more ? text : `${text.slice(0, CLAMP_AT).trimEnd()}…`}{' '}
-      <button type="button" className="cursor-pointer text-xs underline" data-testid="clamp-toggle" onClick={() => setMore(!more)}>
+      <button
+        type="button"
+        className="cursor-pointer text-xs underline"
+        data-testid="clamp-toggle"
+        onClick={() => setMore(!more)}
+      >
         {more ? 'show less' : 'show more'}
       </button>
     </>
@@ -372,18 +383,33 @@ const StepMainButton = ({
   glob,
   busy,
   onComplete,
+  menu,
 }: {
   step: NonNullable<ReturnType<typeof mainStep>>['step'];
   glob: GlobViewContext['glob'];
   busy: boolean;
   onComplete: ((stepId: string) => Promise<boolean>) | undefined;
+  /** The ▾ of the split button, joined to the button. */
+  menu?: ReactNode;
 }) => {
   const main = stepMain(step);
   const [copied, setCopied] = useState(false);
   useEffect(() => setCopied(false), [step.id]);
   const copy = async () => {
-    const text = await scriptCopyText(glob.boardId, glob.id, step.script ?? { path: '' }, api.rolloutScript, window.location.origin);
-    setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
+    const text = await scriptCopyText(
+      glob.boardId,
+      glob.id,
+      step.script ?? { path: '' },
+      api.rolloutScript,
+      window.location.origin,
+    );
+    setCopied(
+      await copyOrSelect(
+        text,
+        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
+        () => undefined,
+      ),
+    );
   };
   const tick = () => void onComplete?.(step.id);
   const asCopy = main.kind === 'copy' && !copied;
@@ -391,23 +417,31 @@ const StepMainButton = ({
   const unavailable = main.kind === 'wait' || (!asCopy && onComplete === undefined);
   return (
     <>
-      <Tip text={main.kind === 'wait' ? main.reason : step.title}>
-        <span>
-          <Button
-            size="sm"
-            data-testid="main-action"
-            data-step={step.id}
-            data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
-            disabled={busy || unavailable}
-            onClick={asCopy ? () => void copy() : tick}
-          >
-            <HumanIcon decorative />
-            {label}
-          </Button>
-        </span>
-      </Tip>
+      <div className="inline-flex">
+        <Tip text={main.kind === 'wait' ? main.reason : step.title}>
+          <span>
+            <Button
+              size="sm"
+              className={menu === undefined ? undefined : 'rounded-r-none'}
+              data-testid="main-action"
+              data-step={step.id}
+              data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
+              disabled={busy || unavailable}
+              onClick={asCopy ? () => void copy() : tick}
+            >
+              <HumanIcon decorative />
+              {label}
+            </Button>
+          </span>
+        </Tip>
+        {menu}
+      </div>
       <span className="text-xs text-muted-foreground" data-testid="main-action-note">
-        {main.kind === 'wait' ? `${step.title}: ${main.reason}` : main.kind === 'done' && main.text !== null ? `${step.title}: ${main.text}` : step.title}
+        {main.kind === 'wait'
+          ? `${step.title}: ${main.reason}`
+          : main.kind === 'done' && main.text !== null
+            ? `${step.title}: ${main.text}`
+            : step.title}
       </span>
     </>
   );
@@ -416,87 +450,92 @@ const StepMainButton = ({
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
 export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
   const { glob } = ctx;
-  const {
-    busy,
-    pending,
-    main,
-    stepTurn,
-    actions,
-    tiers,
-    disabled,
-    brief,
-    oversized,
-  } = state;
+  const { busy, pending, main, stepTurn, actions, tiers, disabled, brief, oversized } = state;
   const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
   // The menu closes on select, so the More button shows the action it started while it runs.
   const moreRunning =
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
+  // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
+  const hasMain = main !== null || stepTurn !== null;
+  const hasMenu = hasMain && moreActions.length + disabled.length > 0;
+  const menu = hasMenu ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          className="rounded-l-none border-l-primary-foreground/40 px-1.5"
+          disabled={busy}
+          aria-label="More actions"
+          data-testid="more-actions"
+        >
+          {moreRunning === null ? (
+            <ChevronDown className="size-3.5" aria-hidden />
+          ) : (
+            <Loader2 className="size-3.5 animate-spin" aria-label={workingLabel(moreRunning)} />
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-testid="more-menu">
+        {moreActions.map((action) => {
+          const shown = actionPresentation(action, glob, false, state.viewer?.email);
+          return (
+            <DropdownMenuItem
+              key={action}
+              data-testid={`more-${action}`}
+              onSelect={() => state.begin(action)}
+            >
+              <span className="flex items-center gap-1.5 font-medium">
+                <ActorIcon actor={shown.icon} decorative />
+                {shown.label}
+              </span>
+              <span className="whitespace-pre-line text-xs text-muted-foreground">
+                {tipOf(action, glob, state.viewer?.email)}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+        {disabled.map(({ action, label, icon, tip }) => (
+          <DropdownMenuItem key={action} disabled>
+            <span className="flex items-center gap-1.5 font-medium">
+              <ActorIcon actor={icon} decorative />
+              {label}
+            </span>
+            <span className="text-xs text-muted-foreground">{tip}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : undefined;
   return (
     <>
-      {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
+      {hasMain && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
-            {main === null && stepTurn !== null && <StepMainButton step={stepTurn.step} glob={glob} busy={busy} onComplete={state.completeStep} />}
-            {main !== null && (
-              <Tip text={tipOf(main, glob, state.viewer?.email)}>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  data-testid="main-action"
-                  onClick={() => state.begin(main)}
-                >
-                  <ActionContent action={main} ctx={ctx} state={state} />
-                </Button>
-              </Tip>
+            {main === null && stepTurn !== null && (
+              <StepMainButton
+                step={stepTurn.step}
+                glob={glob}
+                busy={busy}
+                onComplete={state.completeStep}
+                menu={menu}
+              />
             )}
-            {moreActions.length + disabled.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" disabled={busy} data-testid="more-actions">
-                    {moreRunning === null ? (
-                      <>
-                        More
-                        <ChevronDown className="size-3.5" aria-hidden />
-                      </>
-                    ) : (
-                      <>
-                        <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                        {workingLabel(moreRunning)}
-                      </>
-                    )}
+            {main !== null && (
+              <div className="inline-flex" data-testid="split-button">
+                <Tip text={tipOf(main, glob, state.viewer?.email)}>
+                  <Button
+                    size="sm"
+                    className={hasMenu ? 'rounded-r-none' : undefined}
+                    disabled={busy}
+                    data-testid="main-action"
+                    onClick={() => state.begin(main)}
+                  >
+                    <ActionContent action={main} ctx={ctx} state={state} />
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent data-testid="more-menu">
-                  {moreActions.map((action) => {
-                    const shown = actionPresentation(action, glob, false, state.viewer?.email);
-                    return (
-                      <DropdownMenuItem
-                        key={action}
-                        data-testid={`more-${action}`}
-                        onSelect={() => state.begin(action)}
-                      >
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <ActorIcon actor={shown.icon} decorative />
-                          {shown.label}
-                        </span>
-                        <span className="whitespace-pre-line text-xs text-muted-foreground">
-                          {tipOf(action, glob, state.viewer?.email)}
-                        </span>
-                      </DropdownMenuItem>
-                    );
-                  })}
-                  {disabled.map(({ action, label, icon, tip }) => (
-                    <DropdownMenuItem key={action} disabled>
-                      <span className="flex items-center gap-1.5 font-medium">
-                        <ActorIcon actor={icon} decorative />
-                        {label}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{tip}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                </Tip>
+                {menu}
+              </div>
             )}
           </div>
           {state.confirmingReady && (

@@ -1,6 +1,6 @@
 import type { Action, PullRequest } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { mainAction } from '../src/lib/main-action';
+import { failedRepeatedly, mainAction, promotedAction } from '../src/lib/main-action';
 
 const glob = (over: Partial<Parameters<typeof mainAction>[1]> = {}) => ({
   type: 'same' as const,
@@ -68,5 +68,58 @@ describe('mainAction', () => {
     expect(mainAction(['merge', 'resolve_conflict'], glob({ status: 'pr_open', pr: pr('ready') }), false, true)).toBe('resolve_conflict');
     expect(mainAction(['merge'], glob({ status: 'pr_open', pr: pr('ready') }), false, true)).toBeNull();
     expect(mainAction(['merge'], glob({ status: 'pr_open', pr: pr('ready') }))).toBe('merge');
+  });
+});
+
+describe('mainAction after repeated failures', () => {
+  const run = (outcome: 'failed' | 'completed' | 'superseded' | null, purpose?: 'resolve_conflict', state: 'ended' | 'active' = 'ended') =>
+    ({ id: 'r', state, outcome, purpose }) as NonNullable<Parameters<typeof failedRepeatedly>[0]['runs']>[number];
+  const failed = glob({ status: 'in_progress', runs: [run('failed'), run('failed')] });
+
+  it('keeps Retry as main after the first failure', () => {
+    expect(pick(['retrigger', 'pick_up'], glob({ status: 'in_progress', runs: [run('failed')] }))).toBe('retrigger');
+  });
+
+  it('makes Pick up main once a retry failed again', () => {
+    expect(pick(['retrigger', 'pick_up'], failed)).toBe('pick_up');
+    expect(pick(['resolve_conflict', 'pick_up'], glob({ status: 'in_progress', runs: [run('failed', 'resolve_conflict'), run('failed', 'resolve_conflict')] }))).toBe('pick_up');
+  });
+
+  it('uses take_over while it is the only way in, and keeps Retry when no one can pick it up', () => {
+    expect(pick(['retrigger', 'take_over'], failed)).toBe('take_over');
+    expect(pick(['retrigger'], failed)).toBe('retrigger');
+  });
+
+  it('counts failures of any cause since the last success', () => {
+    expect(failedRepeatedly({ runs: [run('failed', 'resolve_conflict'), run('failed')] })).toBe(true);
+    expect(failedRepeatedly({ runs: [run('failed'), run('completed'), run('failed')] })).toBe(false);
+    expect(failedRepeatedly({ runs: [run('failed'), run('superseded'), run('failed')] })).toBe(true);
+  });
+
+  it('leaves a due blocking step as the main button, even after repeated failures', () => {
+    expect(mainAction(['retrigger', 'pick_up'], failed, false, true)).toBe('retrigger');
+    expect(mainAction(['pick_up'], failed, false, true)).toBeNull();
+  });
+
+  it('does not count while a run is in progress', () => {
+    expect(failedRepeatedly({ runs: [run('failed'), run('failed'), run(null, undefined, 'active')] })).toBe(false);
+  });
+});
+
+describe('promotedAction', () => {
+  it('leads with Cancel merge, then Review code, then Pick up', () => {
+    expect(promotedAction(['review_now', 'take_over', 'cancel_merge'])).toBe('cancel_merge');
+    expect(promotedAction(['take_over', 'investigate', 'review_now'])).toBe('review_now');
+    expect(promotedAction(['investigate', 'pick_up'])).toBe('pick_up');
+  });
+
+  it('falls back to the first remaining item', () => {
+    expect(promotedAction(['investigate', 'merge_continue'])).toBe('investigate');
+  });
+
+  it('never promotes a Reset action, and is null when nothing is left', () => {
+    expect(promotedAction(['start_again', 'delete', 'start_anyway'])).toBeNull();
+    expect(promotedAction([])).toBeNull();
+    expect(promotedAction(['review_now', 'delete'])).toBe('review_now');
   });
 });

@@ -1277,7 +1277,13 @@ const removeGlob = (glob: Glob, ctx: Context): Result<Transition> =>
 export type LabelCommand =
   /** Reviewer: ask for changes on a required label. */
   | { readonly kind: 'submit_items'; readonly items: readonly string[] }
-  /** Reviewer: satisfied, with or without items. */
+  /** Reviewer: keep an item as an unsent draft (a new one, or the text of the draft `itemId`) while the label is required. */
+  | { readonly kind: 'save_draft_item'; readonly text: string; readonly itemId?: string }
+  /** Reviewer: drop one unsent draft. */
+  | { readonly kind: 'remove_draft_item'; readonly itemId: string }
+  /** Reviewer: send the drafts as items (label required → added). */
+  | { readonly kind: 'send_items' }
+  /** Reviewer: satisfied, with or without items. Unsent drafts are discarded. */
   | { readonly kind: 'approve' }
   /** Developer: tick or untick an item while the label has items added. */
   | { readonly kind: 'tick'; readonly itemId: string; readonly done: boolean }
@@ -1289,7 +1295,18 @@ export type LabelCommand =
 export const MAX_CHECKLIST_ITEMS = 100;
 export const MAX_CHECKLIST_ITEM_LENGTH = 2000;
 
-const openItems = (items: readonly ChecklistItem[]): number => items.filter((i) => !i.done).length;
+const isDraft = (item: ChecklistItem): boolean => item.draft === true;
+/** Unticked sent items: drafts are not part of the review yet. */
+const openItems = (items: readonly ChecklistItem[]): number => items.filter((i) => !i.done && !isDraft(i)).length;
+/** Drafts can be removed, so the next id follows the highest one rather than the count. */
+const nextItemId = (items: readonly ChecklistItem[]): number =>
+  items.reduce((max, i) => Math.max(max, Number(i.id) || 0), 0) + 1;
+/** The drafts as sent items. */
+const sent = (items: readonly ChecklistItem[]): ChecklistItem[] =>
+  items.map((i) => {
+    const { draft, ...rest } = i;
+    return draft === true ? rest : i;
+  });
 
 /**
  * Rows 21, 22 and 27–30: sign-off labels and their review checklists. Who may act is not
@@ -1341,16 +1358,17 @@ export const reviewLabel = (
         );
       }
       const texts = command.items.map((t) => t.trim()).filter((t) => t !== '');
-      if (texts.length === 0) return invalidInput('Add at least one item');
+      const drafts = items.filter(isDraft);
+      if (texts.length === 0 && drafts.length === 0) return invalidInput('Add at least one item');
       if (texts.some((t) => t.length > MAX_CHECKLIST_ITEM_LENGTH)) {
         return invalidInput(`Items are limited to ${MAX_CHECKLIST_ITEM_LENGTH} characters`);
       }
       if (items.length + texts.length > MAX_CHECKLIST_ITEMS) {
         return invalidInput(`A label holds at most ${MAX_CHECKLIST_ITEMS} items`);
       }
-      // Items are never removed, so a running number is unique within the label.
+      const first = nextItemId(items);
       const added: ChecklistItem[] = texts.map((text, i) => ({
-        id: String(items.length + i + 1),
+        id: String(first + i),
         text,
         done: false,
         addedBy: actor.email,
@@ -1358,15 +1376,78 @@ export const reviewLabel = (
         doneBy: null,
         doneAt: null,
       }));
-      return setState('added', { items: texts })
-        .set({ checklists: { ...glob.checklists, [name]: [...items, ...added] } })
+      return setState('added', { items: [...drafts.map((d) => d.text), ...texts] })
+        .set({ checklists: { ...glob.checklists, [name]: [...sent(items), ...added] } })
+        .done();
+    }
+    case 'save_draft_item': {
+      // Drafts change no label state and raise no event: the version bump alone refreshes open boards.
+      if (from !== 'required') {
+        return invalidTransition(glob, actor, `Draft items can only be saved while ${name} waits for its reviewer`);
+      }
+      const text = command.text.trim();
+      if (text === '') return invalidInput('Add some text to the item');
+      if (text.length > MAX_CHECKLIST_ITEM_LENGTH) {
+        return invalidInput(`Items are limited to ${MAX_CHECKLIST_ITEM_LENGTH} characters`);
+      }
+      if (command.itemId !== undefined) {
+        const draft = items.find((i) => i.id === command.itemId && isDraft(i));
+        if (draft === undefined) return invalidInput(`No draft item ${command.itemId} on ${name}`);
+        if (draft.text === text) return unchanged(glob);
+        return new Builder(glob, ctx)
+          .set({ checklists: { ...glob.checklists, [name]: items.map((i) => (i === draft ? { ...draft, text } : i)) } })
+          .done();
+      }
+      if (items.length >= MAX_CHECKLIST_ITEMS) {
+        return invalidInput(`A label holds at most ${MAX_CHECKLIST_ITEMS} items`);
+      }
+      const created: ChecklistItem = {
+        id: String(nextItemId(items)),
+        text,
+        done: false,
+        addedBy: actor.email,
+        addedAt: ctx.now,
+        doneBy: null,
+        doneAt: null,
+        draft: true,
+      };
+      return new Builder(glob, ctx)
+        .set({ checklists: { ...glob.checklists, [name]: [...items, created] } })
+        .done();
+    }
+    case 'remove_draft_item': {
+      if (from !== 'required') {
+        return invalidTransition(glob, actor, `Draft items can only be removed while ${name} waits for its reviewer`);
+      }
+      if (!items.some((i) => i.id === command.itemId && isDraft(i))) {
+        return invalidInput(`No draft item ${command.itemId} on ${name}`);
+      }
+      return new Builder(glob, ctx)
+        .set({ checklists: { ...glob.checklists, [name]: items.filter((i) => i.id !== command.itemId) } })
+        .done();
+    }
+    case 'send_items': {
+      if (from !== 'required') {
+        return invalidTransition(glob, actor, `Items can only be sent while ${name} waits for its reviewer`);
+      }
+      const drafts = items.filter(isDraft);
+      if (drafts.length === 0) return invalidInput('Add at least one item');
+      return setState('added', { items: drafts.map((d) => d.text) })
+        .set({ checklists: { ...glob.checklists, [name]: sent(items) } })
         .done();
     }
     case 'approve':
       // Row 28 (and row 21 when it is the last label).
       if (from === 'approved') return unchanged(glob);
       if (glob.status === 'reviewing' && rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
-      return setState('approved', { open: openItems(items) }).done();
+      {
+        const b = setState('approved', { open: openItems(items) });
+        // Unsent drafts never became part of the review.
+        if (items.some(isDraft)) {
+          b.set({ checklists: { ...glob.checklists, [name]: items.filter((i) => !isDraft(i)) } });
+        }
+        return b.done();
+      }
     case 'tick': {
       // Row 29.
       if (from !== 'added') {
@@ -2317,9 +2398,8 @@ export const readyRequested = (
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
     return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
   }
-  // Already ready (a conflict fixed, a second call): GitHub raises no event, so go straight to pr_open.
-  if (glob.pr.state === 'ready')
-    return prReadyForReview(glob, { number: glob.pr.number, headSha: glob.pr.headSha ?? '' }, ctx);
+  // Already ready (a conflict fixed, a second call): GitHub raises no ready event, and slop's stored head may be stale
+  // (a missed push webhook), so the executor reads the PR's real head and records pr_open with it.
   return new Builder(glob, ctx)
     .effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation })
     .done();

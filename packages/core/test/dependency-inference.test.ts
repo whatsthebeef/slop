@@ -37,8 +37,17 @@ describe('dependency inference', () => {
       return Promise.resolve(answer());
     },
   };
-  const edges = (...items: { id: string; kind: string; reason?: string }[]): (() => string) => () =>
-    JSON.stringify({ edges: items.map((i) => ({ reason: 'uses humanSteps() from it', files: ['a.ts'], ...i })) });
+  const edges = (
+    ...items: { id: string; kind: string; reason?: string; files?: string[]; symbol?: string; addedBy?: string; confidence?: number }[]
+  ): (() => string) => () =>
+    JSON.stringify({
+      edges: items.map((i) => ({
+        reason: 'uses humanSteps() from it',
+        files: ['a.ts'],
+        ...(i.kind === 'needs' ? { symbol: 'humanSteps', addedBy: i.id, confidence: 0.9 } : {}),
+        ...i,
+      })),
+    });
 
   const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
     boardId,
@@ -392,5 +401,52 @@ describe('dependency inference', () => {
     expect(edgesOf(await current(made.id)).map((e) => e.id)).toEqual([old.id]);
     expect((await current(made.id)).status).toBe('planning');
     expect(unwrap(await globs.get(DEV, made.id)).waitingFor.map((w) => w.id)).toEqual([old.id]);
+  });
+
+  describe('a need requires evidence that this glob uses what the other adds', () => {
+    const MACHINE = 'Add LabelCommand to machine.ts and types.ts so labels can be changed, and show them on the board card.';
+    const LOG = 'Show a flat activity log in the glob view. It reads the same machine.ts and types.ts events as before.';
+
+    it('rejects a need whose only link is shared files (no symbol)', async () => {
+      const relations = await create({ type: 'same', plan: MACHINE });
+      answer = edges({
+        id: relations.id,
+        kind: 'needs',
+        reason: 'adds LabelCommand... machine.ts changes',
+        files: ['machine.ts', 'types.ts'],
+        symbol: undefined,
+        addedBy: undefined,
+        confidence: undefined,
+      });
+      expect(edgesOf(await create({ plan: LOG }))).toEqual([]);
+      answer = edges({ id: relations.id, kind: 'needs', symbol: 'machine.ts', files: ['machine.ts'] });
+      expect(edgesOf(await create({ plan: LOG }))).toEqual([]);
+    });
+
+    it('rejects a reversed direction, a symbol the other glob does not add and a low confidence', async () => {
+      const other = await create({ type: 'same', plan: MACHINE });
+      const mine = (): Promise<Glob> => create({ plan: `${LOG} It calls LabelCommand when a label changes.` });
+      answer = edges({ id: other.id, kind: 'needs', symbol: 'LabelCommand', addedBy: 's15f999' });
+      expect(edgesOf(await mine())).toEqual([]);
+      answer = edges({ id: other.id, kind: 'needs', symbol: 'ActivityFeed' });
+      expect(edgesOf(await mine())).toEqual([]);
+      answer = edges({ id: other.id, kind: 'needs', symbol: 'LabelCommand', confidence: 0.5 });
+      expect(edgesOf(await mine())).toEqual([]);
+    });
+
+    it('accepts a real symbol dependency: the other glob adds it and this one uses it', async () => {
+      const other = await create({ type: 'same', plan: MACHINE });
+      answer = edges({ id: other.id, kind: 'needs', symbol: 'LabelCommand', reason: 'uses LabelCommand from it', files: ['machine.ts'] });
+      const made = await create({ plan: `${LOG} It calls LabelCommand when a label changes.` });
+      expect(edgesOf(made)[0]).toMatchObject({ id: other.id, kind: 'needs', source: 'inferred', evidence: 'uses LabelCommand from it' });
+    });
+
+    it('tells the model the rules and the bad examples', async () => {
+      await create({ type: 'same', plan: MACHINE });
+      await create({ plan: LOG });
+      const system = prompts.at(-1)?.system ?? '';
+      expect(system).toContain('NEVER a need');
+      expect(system).toContain('Activity log displays relations');
+    });
   });
 });

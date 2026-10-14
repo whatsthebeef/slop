@@ -2,7 +2,10 @@ import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, rece
 import type { AgentKbApproval, DependencyCause, DeployIntegration, Environment, RiskAreaCause, Role, SizeOutcome, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { createPortal } from 'react-dom';
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
+import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/components/board-filter-pane';
+import type { BoardShellContext } from '@/components/board-shell';
 import { GroupChip } from '@/components/glob-card';
 import { ContextSection } from '@/components/context-report';
 import { JobStatus } from '@/components/job-status';
@@ -10,6 +13,7 @@ import { ReadinessChecklist } from '@/components/readiness';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, healthKey, RequestError } from '@/lib/api';
+import { matchesFilters } from '@/lib/board-filters';
 import { capabilityRows } from '@/lib/capabilities';
 import { MAX_REVIEW_TOOL_CAP, REVIEW_SEVERITY_CHOICES, reviewFormOf, reviewSettingsOfForm, toolCapInvalid } from '@/lib/review-settings';
 import type { ReviewForm } from '@/lib/review-settings';
@@ -1287,7 +1291,15 @@ export const SignedOffPage = () => {
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next,
   });
-  const globs = pages.data?.pages.flatMap((p) => p.globs) ?? [];
+  // The same filter pane and matching as the board; they apply to the globs loaded so far.
+  const { headerActions } = useOutletContext<BoardShellContext>();
+  const { filters, filtering, setFilters, filterOpen, setFilterOpen } = useBoardFilters(boardId);
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchInterval: 30_000 });
+  const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
+  const viewer = me.data === undefined || board.data === undefined ? undefined : { email: me.data.email, role: board.data.role };
+  const loaded = pages.data?.pages.flatMap((p) => p.globs) ?? [];
+  const now = new Date().toISOString();
+  const globs = loaded.filter((g) => matchesFilters(g, filters, { now, viewer }));
   const navigate = useNavigate();
   // A link to one glob (`?glob=<id>`) opens its page; the board page sends links here for globs no longer on it.
   const [searchParams] = useSearchParams();
@@ -1298,7 +1310,22 @@ export const SignedOffPage = () => {
 
   return (
     <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
-      {globs.length === 0 && !pages.isLoading && <p className='text-sm text-muted-foreground'>Nothing signed off yet.</p>}
+      {headerActions !== null &&
+        createPortal(<FilterToggle open={filterOpen} active={filtering} onClick={() => setFilterOpen(!filterOpen)} />, headerActions)}
+      <FilterPane
+        open={filterOpen}
+        values={filters}
+        onChange={setFilters}
+        onClose={() => {
+          setFilterOpen(false);
+          document.getElementById(FILTER_TOGGLE_ID)?.focus();
+        }}
+      />
+      {globs.length === 0 && !pages.isLoading && (
+        <p className='text-sm text-muted-foreground' data-testid='no-match'>
+          {loaded.length === 0 ? 'Nothing signed off yet.' : 'No globs match the filter'}
+        </p>
+      )}
       {globs.map((g) => (
         <button
           key={g.id}

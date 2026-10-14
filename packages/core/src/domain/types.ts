@@ -53,6 +53,8 @@ export interface ChecklistItem {
   /** Who last ticked the item, and when; null while unticked. */
   readonly doneBy: string | null;
   readonly doneAt: string | null;
+  /** True while the reviewer has saved the item but not sent it (label `required`); absent on sent items. */
+  readonly draft?: boolean;
 }
 export type Checklists = Partial<Record<LabelName, readonly ChecklistItem[]>>;
 

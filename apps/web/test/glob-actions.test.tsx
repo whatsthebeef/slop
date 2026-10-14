@@ -52,6 +52,23 @@ const renderGlob = (glob: GlobView) => {
   return cb;
 };
 
+const run = (patch: Partial<NonNullable<GlobView['currentRun']>> = {}): NonNullable<GlobView['currentRun']> => ({
+  id: 'r1',
+  state: 'ended',
+  outcome: null,
+  generation: 1,
+  triggeredBy: 'a@b.c',
+  routineOwner: 'a@b.c',
+  queuedAt: '2026-10-14T00:00:00Z',
+  startedAt: null,
+  lastProgressAt: null,
+  endedAt: null,
+  failureReason: null,
+  sessionId: null,
+  sessionUrl: null,
+  ...patch,
+});
+
 const mainButton = () => screen.queryByTestId('main-action');
 
 /** The main button shows the machine icon (lucide Bot) and not the human one. */
@@ -151,10 +168,95 @@ describe('glob view: main button', () => {
     expectMachineIcon(main);
   });
 
-  it('is absent when no allowed action qualifies, leaving More', () => {
-    renderGlob(view({ allowedActions: ['investigate', 'delete'] }));
+  it('promotes Review code to main, with no ▾, when it is the only action left', () => {
+    renderGlob(view({ allowedActions: ['review_now', 'delete'] }));
+    expect(mainButton()?.textContent).toBe('Review code');
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+  });
+
+  it('renders no actions when only Reset actions are allowed', () => {
+    renderGlob(view({ allowedActions: ['delete'] }));
     expect(mainButton()).toBeNull();
-    expect(screen.getByTestId('more-actions')).toBeTruthy();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+    expect(screen.queryByTestId('glob-actions')).toBeNull();
+  });
+
+  it('while merging, Cancel merge leads and the ▾ holds Review code and Pick up', async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'pr_open',
+        list: 'doing',
+        allowedActions: ['cancel_merge', 'review_now', 'take_over', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toBe('Cancel merge');
+    await user.click(screen.getByTestId('more-actions'));
+    expect(await screen.findByTestId('more-review_now')).toBeTruthy();
+    expect(screen.getByTestId('more-take_over')).toBeTruthy();
+    expect(screen.queryByTestId('more-cancel_merge')).toBeNull();
+  });
+
+  it('is a split button: the main action with an icon-only ▾ joined to it', () => {
+    renderGlob(view({ allowedActions: ['start', 'investigate', 'delete'] }));
+    const split = screen.getByTestId('split-button');
+    const trigger = within(split).getByTestId('more-actions');
+    expect(within(split).getByTestId('main-action').textContent).toBe('Start');
+    expect(trigger.getAttribute('aria-label')).toBe('More actions');
+    expect(trigger.textContent).toBe('');
+    expect(screen.queryByText('More')).toBeNull();
+  });
+
+  it('has no ▾ when the main action is the only one', () => {
+    renderGlob(view({ allowedActions: ['start', 'delete'] }));
+    expect(mainButton()).toBeTruthy();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+  });
+
+  it('keeps Pick up reachable while the machine works: Review code leads, Pick up is in the ▾', async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'in_progress',
+        list: 'doing',
+        currentRun: run({ state: 'active' }),
+        runs: [run({ state: 'ended', outcome: 'failed' }), run({ state: 'active' })],
+        allowedActions: ['review_now', 'take_over', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toBe('Review code');
+    await user.click(screen.getByTestId('more-actions'));
+    expect((await screen.findByTestId('more-take_over')).textContent).toContain('Pick up');
+  });
+
+  it('keeps Retry as main after the first failure', () => {
+    renderGlob(
+      view({
+        status: 'in_progress',
+        list: 'doing',
+        runs: [run({ state: 'ended', outcome: 'failed' })],
+        allowedActions: ['retrigger', 'pick_up', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toBe('Retry');
+  });
+
+  it('makes Pick up the main action after a retry fails again, with Retry in the menu', async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'in_progress',
+        list: 'doing',
+        runs: [run({ state: 'ended', outcome: 'failed' }), run({ state: 'ended', outcome: 'failed' })],
+        allowedActions: ['retrigger', 'pick_up', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toBe('Pick up');
+    await user.click(screen.getByTestId('more-actions'));
+    const menu = await screen.findByTestId('more-menu');
+    expect(within(menu).getByTestId('more-retrigger').textContent).toContain('Retry');
+    expect(within(menu).queryByTestId('more-pick_up')).toBeNull();
+    expect(within(menu).queryByTestId('more-start_again')).toBeNull();
   });
 
   it('calls onAction with the action when clicked', async () => {
@@ -165,7 +267,7 @@ describe('glob view: main button', () => {
   });
 });
 
-describe('glob view: More ▾', () => {
+describe('glob view: ▾ menu', () => {
   const planning = () => view({ allowedActions: ['start', 'investigate', 'pick_up', 'delete'] });
 
   it('lists the other allowed actions with their descriptions, not the main one', async () => {

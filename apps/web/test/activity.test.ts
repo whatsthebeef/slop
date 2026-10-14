@@ -38,10 +38,14 @@ describe('activityOf', () => {
     expect(texts[0]).toBe('PR #7 ready for review · s1t1');
     expect(texts).toContain('Conflict with main after s1t9');
     expect(texts).toContain('Checks failed on abcdef1');
-    expect(texts).toContain('Run failed');
+    expect(texts).toContain('Run failed: boom');
     expect(entries.find((e) => e.id === 'pr:7:ready')?.link).toBe('https://github.com/o/r/pull/7');
-    expect(entries.find((e) => e.text === 'Checks failed on abcdef1')?.more).toEqual(['Lint · eslint', 'err']);
-    expect(entries.find((e) => e.text === 'Run failed')?.more).toEqual(['boom', 'second line']);
+    const checks = entries.find((e) => e.text === 'Checks failed on abcdef1');
+    expect(checks).toMatchObject({ link: 'https://ci/1', linkLabel: 'CI run' });
+    expect(checks?.title).toContain('Lint · eslint');
+    const failed = entries.find((e) => e.text === 'Run failed: boom');
+    expect(failed?.title).toBe('Run failed: boom\nsecond line');
+    expect(failed).toMatchObject({ link: 'https://claude.ai/code/x', linkLabel: 'session' });
     expect(entries.map((e) => e.at)).toEqual([...entries.map((e) => e.at)].sort().reverse());
   });
 
@@ -55,11 +59,29 @@ describe('activityOf', () => {
     expect(collapsedStart.find((e) => e.text === 'Run started')?.count).toBe(2);
   });
 
-  it('is longer than the shown limit when many runs piled up, and keeps expandable lines to five', () => {
+  it('is longer than the shown limit when many runs piled up, and cuts a long reason to one line', () => {
     const many = Array.from({ length: 6 }, (_, i) => run(`r${String(i)}`, { outcome: 'failed', failureReason: 'x\n'.repeat(9), startedAt: T(i * 2), endedAt: T(i * 2 + 1) }));
     const entries = activityOf(view({ runs: many }), null);
     expect(entries.length).toBeGreaterThan(ACTIVITY_SHOWN);
-    expect(Math.max(...entries.map((e) => e.more.length))).toBeLessThanOrEqual(5);
+    expect(entries.every((e) => !e.text.includes('\n') && e.text.length <= 100)).toBe(true);
+    const long = activityOf(view({ runs: [run('l', { outcome: 'failed', failureReason: 'y'.repeat(300) })] }), null);
+    expect(long.find((e) => e.id === 'run:l:end')?.title).toContain('y'.repeat(300));
+  });
+
+  it('lists machine steps as ordinary one-line entries with their link, and drops finished ones', () => {
+    const at = T(10);
+    const entries = activityOf(
+      view(),
+      null,
+      [
+        { id: 'a', kind: 'resolve_conflict', state: 'running', startedAt: at, lastProgressAt: at, detail: 'https://claude.ai/code/s', holdsBall: true },
+        { id: 'b', kind: 'fix_checks', state: 'failed', startedAt: T(11), lastProgressAt: null, detail: 'merge conflict', holdsBall: true },
+        { id: 'c', kind: 'merge', state: 'done', startedAt: T(12), lastProgressAt: null, detail: null, holdsBall: false },
+      ],
+    );
+    expect(entries.find((e) => e.id === 'step:a')).toMatchObject({ text: 'fixing the conflict · running', actor: 'machine', link: 'https://claude.ai/code/s', linkLabel: 'session' });
+    expect(entries.find((e) => e.id === 'step:b')).toMatchObject({ text: 'fixing CI · failed: merge conflict', link: null });
+    expect(entries.some((e) => e.id === 'step:c')).toBe(false);
   });
 
   it('leaves out the failure and the escalation, which are pinned or have their own chip', () => {

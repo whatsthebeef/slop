@@ -59,7 +59,7 @@ export const GlobHeader = ({
       <div ref={topRef} aria-hidden className="h-0" />
       <div
         ref={barRef}
-        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex items-center gap-3 py-1 leading-5 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
+        className={`sticky top-0 z-10 -mx-5 -mt-5 flex items-center gap-3 py-1 leading-5 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
         data-testid="glob-header"
       >
         <Tip text="Back to the board (Esc)">

@@ -1,4 +1,4 @@
-import { blockProgress, dueText, isMerged, isOpenStep, rolloutPending, yourTurn } from '@slop/core';
+import { blockProgress, dueText, isMerged, isOpenStep, yourTurn } from '@slop/core';
 import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer } from '@slop/core';
 import type { ListedHumanStep } from './api';
 import { globPath } from './glob-section';
@@ -48,8 +48,8 @@ export const stepMain = (step: Pick<ListedHumanStep, 'title' | 'detail' | 'scrip
 };
 
 /**
- * The status line for a merged glob whose rollout still holds back its sign-off: "Merged; rollout 1/3 (Your turn)",
- * counting done against all steps that aren't dismissed. Null when nothing is open or the change isn't merged yet.
+ * The status line for a merged glob whose rollout still holds back its sign-off: "rollout" (the icon says whose turn); the
+ * tooltip has the count and the first open step. Null when nothing is open or the change isn't merged yet.
  */
 export const rolloutLine = (
   glob: Glob,
@@ -60,9 +60,10 @@ export const rolloutLine = (
   const progress = blockProgress(steps, 'sign_off');
   if (progress.open === 0) return null;
   const turn = blockingTurn(steps, glob, viewer);
+  const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
   return {
-    text: `Merged; rollout ${String(progress.total - progress.open)}/${String(progress.total)}${turn === null ? '' : ' (Your turn)'}`,
-    tip: rolloutPending(progress),
+    text: 'rollout',
+    tip: `Merged; ${String(progress.total - progress.open)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${first.title}`}`,
     turn,
   };
 };

@@ -51,6 +51,7 @@ describe('GlobHeader', () => {
     expect(cls).toContain('leading-5');
     expect(cls).toContain('items-center');
     expect(cls).not.toMatch(/\b(h-\d+|min-h-\S+)\b/);
+    expect(cls).not.toMatch(/(^|\s)mb-/);
     expect(getByTestId('glob-back').className).toContain('p-1.5');
   });
 
@@ -64,6 +65,34 @@ describe('GlobHeader', () => {
     getByTestId('header-status').click();
     expect(scrollIntoView).toHaveBeenCalled();
     target.remove();
+  });
+
+  describe('a live run', () => {
+    const live = (sessionUrl: string | null): GlobView =>
+      view({
+        status: 'implementing',
+        currentRun: { ...run(), state: 'active', outcome: null, endedAt: null, sessionUrl },
+        machineSteps: [{ id: 'm1', kind: 'implement', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: null, holdsBall: true }],
+        move: { holder: 'machine', reason: 'implementing', since: NOW },
+      });
+
+    it("opens the run's session from the status, with the tooltip saying so", () => {
+      const open = vi.fn();
+      vi.stubGlobal('open', open);
+      const { getByTestId } = renderBar(live('https://claude.ai/code/s'));
+      expect(getByTestId('header-status').getAttribute('title')).toBe("Open the machine's session");
+      getByTestId('header-status').click();
+      expect(open).toHaveBeenCalledWith('https://claude.ai/code/s', '_blank', 'noreferrer');
+    });
+
+    it('scrolls to the Activity log when the run has no session yet', () => {
+      const open = vi.fn();
+      vi.stubGlobal('open', open);
+      const { getByTestId } = renderBar(live(null));
+      expect(getByTestId('header-status').getAttribute('title')).not.toBe("Open the machine's session");
+      getByTestId('header-status').click();
+      expect(open).not.toHaveBeenCalled();
+    });
   });
 
   it("publishes the bar's measured height on the page", () => {
@@ -166,8 +195,8 @@ describe('GlobHeader', () => {
           <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
-      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('Merged; rollout 1/2 (Your turn)');
-      expect(header).toBe('Merged; rollout 1/2 (Your turn)');
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');
+      expect(header).toBe('rollout');
     });
 
     it('keeps the lifecycle text only where the shared status has nothing to say', () => {

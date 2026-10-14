@@ -520,7 +520,6 @@ export const healthKey = ['health'] as const;
 
 /** The board's notifications; invalidated by `board.notifications` hints and on reconnect. */
 export const notificationsKey = (boardId: number) => ['notifications', boardId] as const;
-export const dismissedNotificationsKey = (boardId: number) => ['notifications', boardId, 'dismissed'] as const;
 
 /** One agent or skill in the generated knowledge page. Every field after `name` may be missing from an older API. */
 export interface KnowledgePageAgent {
@@ -597,10 +596,6 @@ export const api = {
     request<{ value: BoardNotification[] }>('GET', `/api/boards/${boardId}/notifications`).then((r) => r.value),
   dismissNotification: (boardId: number, id: string) =>
     request<object>('POST', `/api/boards/${boardId}/notifications/dismiss`, { id }),
-  dismissedNotifications: (boardId: number) =>
-    request<{ value: BoardNotification[] }>('GET', `/api/boards/${boardId}/notifications/dismissed`).then((r) => r.value),
-  restoreNotification: (boardId: number, id: string) =>
-    request<object>('POST', `/api/boards/${boardId}/notifications/restore`, { id }),
   startAwsSignIn: () => request<object>('POST', '/api/aws-sign-in'),
   authConfig: () => request<{ mode: 'dev' | 'cognito' }>('GET', '/auth/config'),
   devLogin: (email: string, returnTo?: string) =>

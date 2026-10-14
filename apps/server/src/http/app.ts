@@ -13,6 +13,7 @@ import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
 import { addRelationSchema, relationInput, relationInputs, relationListSchema } from './relation-schemas.js';
+import { requestTiming } from '../request-metrics.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
 import { errorBody, globView, globViewFor, globViewOf, statusOf } from './views.js';
@@ -218,6 +219,8 @@ const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z
 export const createApp = (deps: AppDeps) => {
   const { auth, boards, globs, hub } = deps;
   const app = new Hono<Env>();
+  // First, so it times (and bounds) every route registered after it, the MCP endpoint's included.
+  app.use('*', requestTiming());
 
   // ---------------------------------------------------------------------------
   // Auth
