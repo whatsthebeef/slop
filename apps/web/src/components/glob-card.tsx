@@ -67,7 +67,7 @@ const initials = (email: string): string => {
   return (second === '' ? first.slice(0, 2) : `${first.slice(0, 1)}${second.slice(0, 1)}`).toUpperCase();
 };
 
-/** The implementer, or the planner (dashed) while no person implements (unassigned, or the machine implementing). */
+/** The implementer, or the planner (dashed) while no person implements; slop as planner shows the robot head. */
 const Avatar = ({ email, planner }: { email: string; planner: boolean }) =>
   planner && email === 'slop' ? (
     <Tip text='Planner: slop (machine)'>
