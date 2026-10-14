@@ -673,6 +673,16 @@ if (runs('llm') || runs('kb')) {
       }
     })
     .catch((error: unknown) => logError('rollout', error instanceof Error ? error.message : String(error)));
+  // Backfill: open decision globs get a group by the rule new ones follow. Idempotent: only group-less ones are written.
+  void store
+    .transaction((tx) => tx.listAllBoards())
+    .then(async (all) => {
+      for (const b of all) {
+        const written = await groupBackfill.backfillDecisionGroups(b.id);
+        if (written > 0) console.log(`[groups] gave ${String(written)} open decision glob(s) on board ${String(b.id)} a group`);
+      }
+    })
+    .catch((error: unknown) => logError('groups', error instanceof Error ? error.message : String(error)));
 }
 const runWatch = new RunWatch(store, globs, logError);
 if (runs('runs')) runWatch.start();

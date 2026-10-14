@@ -1,6 +1,7 @@
 import { ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { proposeSplitGroups } from '../domain/group.js';
+import { decisionOf } from '../domain/decision-glob.js';
+import { decisionGroup, proposeSplitGroups } from '../domain/group.js';
 import type { Glob, Relation } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { adminOf } from './access.js';
@@ -43,6 +44,28 @@ export class GroupBackfillService {
       readonly intake: Pick<IntakeService, 'suggestGroup'>;
     },
   ) {}
+
+  /**
+   * One-off, at start-up: open decision globs with no group get the one a new decision would (`decisionGroup`): the target's name
+   * for a learning, `hotspots`, else the group of the work glob its scope names. Idempotent: only group-less ones are written,
+   * and a person's own group stays. Returns how many it wrote.
+   */
+  async backfillDecisionGroups(boardId: number): Promise<number> {
+    return this.deps.store.transaction(async (tx) => {
+      const globs = await tx.listGlobs(boardId, { include: 'all' });
+      const byId = new Map(globs.map((g) => [g.id, g]));
+      let written = 0;
+      for (const glob of globs) {
+        const attributes = decisionOf(glob);
+        if (attributes === null || glob.group !== null || glob.status === 'signed_off') continue;
+        const scoped = attributes.scope.kind === 'glob' ? byId.get(attributes.scope.ref) : undefined;
+        const group = decisionGroup(attributes, scoped?.category === 'decision' ? null : (scoped?.group ?? null));
+        if (group === null) continue;
+        if (await tx.updateGlob({ ...glob, group, version: glob.version + 1 }, glob.version)) written += 1;
+      }
+      return written;
+    });
+  }
 
   async run(email: string, boardId: number, apply: boolean): Promise<Result<GroupBackfillResult>> {
     const read = await this.deps.store.transaction(async (tx) => {

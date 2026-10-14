@@ -3,6 +3,7 @@ import { hotspotWindowFrom } from '../domain/hotspots.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { Actor, Glob } from '../domain/types.js';
 import type { Hint, Notifier, Store } from '../ports.js';
+import { decisionGroup } from '../domain/group.js';
 import { createDecisionInTx, DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import type { CodeView } from './code-view.js';
 import type { Llm } from './intake-service.js';
@@ -74,6 +75,7 @@ export class HotspotDecisions {
           payload: `${headline}\n\n${proposal}\n\n## Conflicts\n\nGlobs that conflicted on it: ${hotspot.globs.join(', ')}.\n`,
           attributes: { scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: hotspot.path }, channel: 'mined', outcome: null },
           creationKey: hotspotKey(hotspot.path, now),
+          group: decisionGroup({ scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: hotspot.path }, channel: 'mined', outcome: null }, null),
         });
         if (!result.ok) throw new Error(result.error.message);
         hints.push(...result.value.hints);

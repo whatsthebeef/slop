@@ -22,3 +22,26 @@ export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
   'assessment',
   'findings',
 ];
+
+/**
+ * A decision glob's order: the Decide block first (the way work globs lead with sign-off), the Human steps after the
+ * assessments.
+ */
+export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
+  'decision',
+  'conflict',
+  'escalation',
+  'labels',
+  'related',
+  'size',
+  'actions',
+  'plan',
+  'deploys',
+  'environments',
+  'tests',
+  'artifacts',
+  'choices',
+  'assessment',
+  'findings',
+  'human-steps',
+];

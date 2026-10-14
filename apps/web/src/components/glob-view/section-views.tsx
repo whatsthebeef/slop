@@ -1,4 +1,4 @@
-import type { LabelName, SuggestionPrefill } from '@slop/core';
+import type { LabelName } from '@slop/core';
 import type { ReactNode } from 'react';
 import type { AddRelationInput, DecideInput } from '@/lib/api';
 import type { GlobSection } from '@/lib/glob-section';
@@ -39,9 +39,6 @@ export interface SectionProps {
   openLabel: LabelName | null;
   artifact: ArtifactRef | null;
   onSelectArtifact: (artifact: ArtifactRef | null) => void;
-  /** Suggest's Apply: the decision form opens pre-filled. */
-  applied: SuggestionPrefill | null;
-  onApply: (prefill: SuggestionPrefill | null) => void;
   /** The size check's moves (Split as proposed, Keep whole, …), shared by the size panel and the actions menu. */
   size: OversizedState;
   splitting: boolean;
@@ -95,9 +92,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     <GlobActions ctx={ctx} state={actions} size={size} onSplitting={onSplitting} />
   ),
   plan: ({ ctx }) => <PlanSection ctx={ctx} />,
-  decision: ({ ctx, onDecide, applied }) => (
-    <DecisionPanel ctx={ctx} onDecide={onDecide} applied={applied} />
-  ),
+  decision: ({ ctx, onDecide }) => <DecisionPanel ctx={ctx} onDecide={onDecide} />,
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
   environments: ({ ctx }) => <EnvironmentsPanel ctx={ctx} />,
   tests: ({ ctx }) => <TestsPanel ctx={ctx} />,
@@ -107,6 +102,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       {...(actions.viewer === undefined ? {} : { viewer: actions.viewer })}
       canAdd
       startOpen={section === 'human-steps'}
+      collapsed={actions.decision}
       openSignal={actions.stepsSignal}
       onAdd={onAddStep}
       onComplete={onCompleteStep}
@@ -117,7 +113,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     <ArtifactsPanel ctx={ctx} selected={artifact} onSelect={onSelectArtifact} />
   ),
   choices: ({ ctx }) => <ChoicesPanel ctx={ctx} />,
-  assessment: ({ ctx, onApply }) => <DecisionAssessmentPanel ctx={ctx} onApply={onApply} />,
+  assessment: ({ ctx }) => <DecisionAssessmentPanel ctx={ctx} />,
   findings: ({ ctx }) => <FindingsPanel ctx={ctx} />,
 };
 
