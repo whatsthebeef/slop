@@ -24,6 +24,10 @@ const view = (over: Partial<GlobView> = {}): GlobView =>
   ({ ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, updatedAt: T(30), createdAt: T(0), ...over });
 
 describe('activityOf', () => {
+  it('shows who planned the glob with the creation date', () => {
+    const created = activityOf(view({ planner: 'p@b.c', creator: 'c@b.c' }), 'o/r').find((e) => e.id === 'created');
+    expect(created?.text).toBe(`Planned by p@b.c · ${new Date(T(0)).toLocaleString()}`);
+  });
   it('lists runs, the PR, checks and a conflict newest first, each with its link', () => {
     const entries = activityOf(
       view({
