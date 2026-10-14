@@ -1,11 +1,13 @@
 import type { Holding, RelationGate, RelationSource, RelationUntil } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
+import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { AddRelationInput, GlobView } from '@/lib/api';
 import { globsKey } from '@/lib/live';
 import { HumanIcon, MachineIcon } from '../actor-icons';
+import { SectionToggle } from '../section-toggle';
 import { Button } from '../ui/button';
 import { Input, Select } from '../ui/input';
 import type { GlobViewContext } from './context';
@@ -153,27 +155,27 @@ const Group = ({ name, testId, children }: { name: string; testId: string; child
 );
 
 /**
- * The form behind "Add relation…" and a decision's "Holds back…": pick a glob (or type its ID), a gate, and Add. A glob adds a
- * relation it is held back by (`to`); a decision adds one for another glob that it holds back (`holdsBack`).
+ * The form behind "+ Add relation" and a decision's "+ Holds back": pick a glob (or type its ID), a gate, and Add. A glob adds a
+ * relation it is held back by (`to`); a decision adds one for another glob that it holds back (`holdsBack`). The section's header
+ * button opens and closes it.
  */
-export const AddRelation = ({
+export const AddRelationForm = ({
   ctx: { glob, busy },
-  label,
   gates,
   onAdd,
+  onClose,
 }: {
   ctx: GlobViewContext;
-  label: string;
   gates: readonly RelationGate[];
   onAdd: (input: AddRelationInput) => Promise<boolean>;
+  onClose: () => void;
 }) => {
   const decision = glob.category === 'decision';
-  const [open, setOpen] = useState(false);
   const [other, setOther] = useState('');
   const [gate, setGate] = useState<RelationGate>('start');
   const [reason, setReason] = useState('');
   const [working, setWorking] = useState(false);
-  const globs = useQuery({ queryKey: globsKey(glob.boardId), queryFn: () => api.globs(glob.boardId), enabled: open });
+  const globs = useQuery({ queryKey: globsKey(glob.boardId), queryFn: () => api.globs(glob.boardId) });
   // A decision holds work globs back; a glob is held back by other work globs and by decisions.
   const candidates = (globs.data ?? []).filter((g) => g.id !== glob.id && (!decision || g.category !== 'decision'));
   const id = other.trim();
@@ -187,18 +189,9 @@ export const AddRelation = ({
     if (ok) {
       setOther('');
       setReason('');
-      setOpen(false);
+      onClose();
     }
   };
-  if (!open) {
-    return (
-      <div>
-        <Button type="button" size="sm" variant="outline" data-testid="add-relation" onClick={() => setOpen(true)}>
-          {label}
-        </Button>
-      </div>
-    );
-  }
   const listId = `relation-candidates-${glob.id}`;
   return (
     <form
@@ -228,12 +221,51 @@ export const AddRelation = ({
       <Button type="submit" size="sm" disabled={busy || working || id === ''} data-testid="add-relation-submit">
         Add
       </Button>
-      <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
+      <Button type="button" size="sm" variant="ghost" onClick={onClose}>
         Cancel
       </Button>
     </form>
   );
 };
+
+/**
+ * The header of Related and of a decision's Holds back, as Human steps has it: a collapsible subheading with a count (and, while
+ * collapsed, how many hold the glob back) and a ghost "+ Add …" button that opens the add form below.
+ */
+export const RelationsHeader = ({
+  open,
+  onToggle,
+  title,
+  count,
+  holding,
+  addLabel,
+  onAdd,
+  toggleTestId,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  title: string;
+  count: number;
+  holding: number;
+  addLabel: string;
+  onAdd: () => void;
+  toggleTestId: string;
+}) => (
+  <div className="flex items-center gap-2">
+    <SectionToggle open={open} onToggle={onToggle} testId={toggleTestId}>
+      {title} ({count})
+      {!open && holding > 0 && (
+        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground" data-testid="related-holding-count">
+          {holding} holding
+        </span>
+      )}
+    </SectionToggle>
+    <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5 text-xs" data-testid="add-relation" onClick={onAdd}>
+      <Plus className="h-3.5 w-3.5" />
+      {addLabel}
+    </Button>
+  </div>
+);
 
 /**
  * The Related section of a work glob: what holds it back (with the gate in words, why and who said so), the decisions it waits
@@ -254,9 +286,29 @@ export const RelatedSection = ({
   const groups = relatedGroups(glob);
   const boardId = glob.boardId;
   const splitFrom = glob.split !== undefined && glob.split.part > 0 ? glob.split.source : null;
+  const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length + groups.parts.length;
+  const count = groups === null ? 0 : holding + groups.holdsBack.length + groups.done.length;
+  // Starts open while something holds the glob back, until the viewer toggles it.
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const [adding, setAdding] = useState(false);
+  const open = toggled ?? holding > 0;
   return (
-    <div className="grid gap-2 rounded border p-2 text-sm" data-testid="related">
-      <span className="font-medium">Related</span>
+    <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-sm" aria-label="Related" data-testid="related">
+      <RelationsHeader
+        open={open}
+        onToggle={() => setToggled(!open)}
+        title="Related"
+        count={count}
+        holding={holding}
+        addLabel="Add relation"
+        onAdd={() => {
+          setAdding(!(adding && open));
+          setToggled(true);
+        }}
+        toggleTestId="related-toggle"
+      />
+      {open && (
+        <>
       {groups !== null && groups.holding.length > 0 && (
         <Group name="Holding this back" testId="related-holding">
           {groups.holding.map((r) => (
@@ -306,7 +358,9 @@ export const RelatedSection = ({
           </ul>
         </details>
       )}
-      <AddRelation ctx={ctx} label="Add relation…" gates={['start', 'merge', 'sign_off']} onAdd={onAddRelation} />
-    </div>
+          {adding && <AddRelationForm ctx={ctx} gates={['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={() => setAdding(false)} />}
+        </>
+      )}
+    </section>
   );
 };
