@@ -985,7 +985,7 @@ export class GlobService {
     const planText = planOf(input);
     const [embedding, size, inferred] = await Promise.all([
       embedRequest(this.deps.embedder, input.intake?.request ?? planText),
-      this.deps.sizeCheck === undefined ? null : this.deps.sizeCheck.assess(input.boardId, planText),
+      this.deps.sizeCheck === undefined ? null : this.deps.sizeCheck.assess(input.boardId, planText, input.title),
       this.deps.inference === undefined || input.type === 'super'
         ? []
         : this.deps.inference.infer({ boardId: input.boardId, plan: planText, selfId: null, title: input.title, ...(input.files === undefined ? {} : { files: input.files }) }),

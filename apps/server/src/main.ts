@@ -125,7 +125,7 @@ const globs = new GlobService({
   // Embeds a new glob's request for its intake snapshot; `embedder` exists by the time the first glob is created.
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
   // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
-  sizeCheck: { assess: (boardId, plan): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
+  sizeCheck: { assess: (boardId, plan, title): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan, title), refresh: (globId) => sizeCheck.refresh(globId) },
   // Infers a new glob's relations (needs and decisions) from its plan; `dependencyInference` exists by the time the first glob is created.
   inference: { infer: (input) => dependencyInference.infer(input) },
 });
@@ -342,6 +342,7 @@ const dependencyInference = new DependencyInferenceService({
   store,
   llm: intakeLlm,
   apply: (globId, edges, planHash): Promise<void> => globs.applyInferred(globId, edges, planHash),
+  release: (globId): Promise<unknown> => globs.release(globId),
   log: logError,
 });
 const intake = new IntakeService({
@@ -678,6 +679,16 @@ if (runs('llm') || runs('kb')) {
       }
     })
     .catch((error: unknown) => logError('rollout', error instanceof Error ? error.message : String(error)));
+  // Cleanup: inferred relations that hold a glob behind a KB learning are dismissed. Idempotent.
+  void store
+    .transaction((tx) => tx.listAllBoards())
+    .then(async (all) => {
+      for (const b of all) {
+        const dismissed = await dependencyInference.dismissLearningHolds(b.id);
+        if (dismissed > 0) console.log(`[relations] dismissed ${String(dismissed)} inferred relation(s) to KB learnings on board ${String(b.id)}`);
+      }
+    })
+    .catch((error: unknown) => logError('relations', error instanceof Error ? error.message : String(error)));
   // Backfill: open decision globs get a group by the rule new ones follow. Idempotent: only group-less ones are written.
   void store
     .transaction((tx) => tx.listAllBoards())
