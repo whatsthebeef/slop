@@ -120,6 +120,11 @@ export const OversizedGlob = ({ glob, size }: { glob: GlobView; size: OversizedS
             <li key={index} className='list-decimal'>
               <span className='font-semibold'>{w.name}</span>
               {w.needs.length > 0 && <span className='text-muted-foreground'>, needs {w.needs.map((n) => `workstream ${n + 1}`).join(', ')}</span>}
+              {w.files.length > 0 && (
+                <span className='block break-all text-muted-foreground' data-testid='oversized-part-files'>
+                  {w.files.join(', ')}
+                </span>
+              )}
             </li>
           ))}
         </ol>
