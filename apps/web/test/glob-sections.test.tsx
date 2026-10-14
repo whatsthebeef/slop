@@ -280,7 +280,7 @@ describe('glob view: dismissable status messages', () => {
     expect(cb.onDismiss).toHaveBeenCalledWith(`failure:${AT}`, true);
   });
 
-  it('collapses a dismissed failure to the short label, keeps the main action, and expands on demand', async () => {
+  it('collapses a dismissed failure to the short label and keeps the main action; no expander', () => {
     renderGlob(failed());
     const before = buttons().filter((b) => b !== '' && !/Got it/.test(b));
     cleanup();
@@ -290,9 +290,8 @@ describe('glob view: dismissable status messages', () => {
     expect(line.textContent).toContain('Run failed');
     expect(document.body.textContent).not.toContain('whole paragraph');
     expect(before.length).toBeGreaterThan(0);
-    expect(buttons().filter((b) => b !== '' && b !== 'Show again' && b !== 'show details')).toEqual(before);
-    await userEvent.click(screen.getByTestId('show-details'));
-    expect(document.body.textContent).toContain('whole paragraph');
+    expect(buttons().filter((b) => b !== '' && b !== 'Show again')).toEqual(before);
+    expect(screen.queryByTestId('show-details')).toBeNull();
   });
 
   it('shows a new failure again, undismissed', () => {
@@ -408,18 +407,26 @@ describe('glob view: Activity log', () => {
     const actions = document.getElementById('section-actions');
     expect(actions?.compareDocumentPosition(log)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(within(log).getByText(/PR #7 ready for review/)).toBeTruthy();
-    expect(within(log).getAllByRole('link', { name: 'open' }).length).toBeGreaterThan(0);
+    expect(within(log).getAllByRole('link', { name: 'session' }).length).toBeGreaterThan(0);
   });
 
-  it('shows the last 8 with Show all, and expands a failure in place', async () => {
+  it('shows the last 8 with Show all, the only control: no expanders, a failure is one line with the full reason in its tooltip', async () => {
     const user = userEvent.setup();
     renderGlob(withRuns(6));
     expect(screen.getAllByTestId('activity-entry')).toHaveLength(8);
     await user.click(screen.getByTestId('activity-show-all'));
     expect(screen.getAllByTestId('activity-entry').length).toBeGreaterThan(8);
     expect(screen.queryByTestId('activity-more')).toBeNull();
-    await user.click(screen.getAllByTestId('activity-expand')[0] as HTMLElement);
-    expect(screen.getByTestId('activity-more').textContent).toContain('line two');
+    expect(screen.queryByTestId('activity-expand')).toBeNull();
+    expect(screen.queryByTestId('machine-steps')).toBeNull();
+    expect(screen.queryByText('Open session')).toBeNull();
+    const failure = screen.getAllByTestId('activity-entry').find((e) => /Run failed/.test(e.textContent));
+    expect(failure?.textContent).toContain('reason');
+    expect(failure?.textContent).not.toContain('line two');
+    expect(failure?.getAttribute('title')).toContain('line two');
+    expect(screen.getByTestId('activity-show-all').textContent).toBe('Show less');
+    await user.click(screen.getByTestId('activity-show-all'));
+    expect(screen.getAllByTestId('activity-entry')).toHaveLength(8);
   });
 });
 

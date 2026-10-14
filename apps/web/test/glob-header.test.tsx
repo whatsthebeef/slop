@@ -66,6 +66,34 @@ describe('GlobHeader', () => {
     target.remove();
   });
 
+  describe('a live run', () => {
+    const live = (sessionUrl: string | null): GlobView =>
+      view({
+        status: 'implementing',
+        currentRun: { ...run(), state: 'active', outcome: null, endedAt: null, sessionUrl },
+        machineSteps: [{ id: 'm1', kind: 'implement', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: null, holdsBall: true }],
+        move: { holder: 'machine', reason: 'implementing', since: NOW },
+      });
+
+    it("opens the run's session from the status, with the tooltip saying so", () => {
+      const open = vi.fn();
+      vi.stubGlobal('open', open);
+      const { getByTestId } = renderBar(live('https://claude.ai/code/s'));
+      expect(getByTestId('header-status').getAttribute('title')).toBe("Open the machine's session");
+      getByTestId('header-status').click();
+      expect(open).toHaveBeenCalledWith('https://claude.ai/code/s', '_blank', 'noreferrer');
+    });
+
+    it('scrolls to the Activity log when the run has no session yet', () => {
+      const open = vi.fn();
+      vi.stubGlobal('open', open);
+      const { getByTestId } = renderBar(live(null));
+      expect(getByTestId('header-status').getAttribute('title')).not.toBe("Open the machine's session");
+      getByTestId('header-status').click();
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
   it("publishes the bar's measured height on the page", () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => 40);

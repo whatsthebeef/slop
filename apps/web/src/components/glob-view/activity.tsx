@@ -5,7 +5,6 @@ import { HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { ACTIVITY_SHOWN, activityOf } from '@/lib/activity';
 import type { ActivityEntry } from '@/lib/activity';
 import { turnKey } from '@/lib/dismissals';
-import { stepLabel, stepWords } from '@/lib/position';
 import { cn } from '@/lib/utils';
 import { HandoverBrief } from './actions';
 import type { GlobActionsState } from './actions';
@@ -34,46 +33,33 @@ const ActorMark = ({ actor }: { actor: ActivityEntry['actor'] }) =>
   );
 
 const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
-  const [open, setOpen] = useState(false);
   const external = entry.link !== null && /^https?:\/\//.test(entry.link);
   return (
-    <li className="grid gap-0.5" data-testid="activity-entry" data-actor={entry.actor}>
-      <div className="flex items-center gap-2">
-        <ActorMark actor={entry.actor} />
-        <span className="min-w-0 flex-1 truncate" title={entry.text}>
-          {entry.text}
-          {entry.count > 1 && ` ×${String(entry.count)}`}
-        </span>
-        {entry.link !== null &&
-          (external ? (
-            <a className="shrink-0 underline" href={entry.link} target="_blank" rel="noreferrer">
-              open
-            </a>
-          ) : (
-            <RouterLink className="shrink-0 underline" to={entry.link}>
-              open
-            </RouterLink>
-          ))}
-        {entry.more.length > 0 && (
-          <LinkButton testId="activity-expand" disabled={false} onClick={() => setOpen(!open)}>
-            {open ? 'less' : 'more'}
-          </LinkButton>
-        )}
-        <span className="w-16 shrink-0 text-right text-muted-foreground">{relative(entry.at, now)}</span>
-      </div>
-      {open && (
-        <pre className="ml-6 whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground" data-testid="activity-more">
-          {entry.more.join('\n')}
-        </pre>
-      )}
+    <li className="flex items-center gap-2" data-testid="activity-entry" data-actor={entry.actor} title={entry.title}>
+      <ActorMark actor={entry.actor} />
+      <span className="min-w-0 flex-1 truncate">
+        {entry.text}
+        {entry.count > 1 && ` ×${String(entry.count)}`}
+      </span>
+      {entry.link !== null &&
+        (external ? (
+          <a className="shrink-0 underline" href={entry.link} target="_blank" rel="noreferrer">
+            {entry.linkLabel}
+          </a>
+        ) : (
+          <RouterLink className="shrink-0 underline" to={entry.link}>
+            {entry.linkLabel}
+          </RouterLink>
+        ))}
+      <span className="w-16 shrink-0 text-right text-muted-foreground">{relative(entry.at, now)}</span>
     </li>
   );
 };
 
 /**
  * The glob's Activity log, right under the action button: the pinned entries that need the viewer (the status's full text,
- * the handover brief, the machine steps) and a short feed of what happened (runs, PR, checks, conflicts, human actions),
- * the last few lines with "Show all".
+ * the handover brief) and a flat feed of what happened (machine steps, runs, PR, checks, conflicts, human actions), one line each: the last
+ * few with "Show all", the only control in it.
  */
 export const ActivityLog = ({
   ctx: { board, glob },
@@ -84,17 +70,13 @@ export const ActivityLog = ({
   state: NowState;
   actions: GlobActionsState;
 }) => {
-  const { move, turn, steps, brief, problem, seen, turnDismissed, position } = state;
-  const [expanded, setExpanded] = useState(false);
+  const { move, turn, steps, brief, problem, seen, turnDismissed } = state;
   const [all, setAll] = useState(false);
   useEffect(() => {
-    setExpanded(false);
     setAll(false);
   }, [glob.id, seen?.key]);
-  const feed = activityOf(glob, board.repo);
+  const feed = activityOf(glob, board.repo, steps);
   const shown = all ? feed : feed.slice(0, ACTIVITY_SHOWN);
-  const session = position?.sessionUrl ?? problem?.sessionUrl ?? null;
-  const listed = steps.length > 1;
   const now = Date.now();
   return (
     <section id={ACTIVITY_ID} className="grid scroll-mt-[calc(var(--glob-header-height,2.25rem)+0.5rem)] gap-1.5 text-sm" data-testid="activity" data-holder={move?.holder ?? 'none'}>
@@ -115,25 +97,16 @@ export const ActivityLog = ({
             )}
           </p>
         )}
-        {session !== null && (
-          <p className="text-xs">
-            <Link href={session}>Open session</Link>
-          </p>
-        )}
         {problem !== null && seen !== null && seen.dismissed && (
           <p className="text-muted-foreground" data-testid="status-line" data-kind={problem.kind} data-dismissed="true">
             {capitalised(seen.label)}
-            {' · '}
-            <LinkButton testId="show-details" disabled={false} onClick={() => setExpanded(!expanded)}>
-              {expanded ? 'hide details' : 'show details'}
-            </LinkButton>
             {' · '}
             <LinkButton testId="show-again" disabled={actions.busy} onClick={() => void actions.dismiss(seen.key, false)}>
               Show again
             </LinkButton>
           </p>
         )}
-        {problem !== null && seen !== null && (!seen.dismissed || expanded) && (
+        {problem !== null && seen !== null && !seen.dismissed && (
           <p className={cn(problem.tone)} data-testid="status-line" data-kind={problem.kind}>
             {problem.full}
             {problem.doing !== null && (
@@ -149,30 +122,12 @@ export const ActivityLog = ({
                 {glob.pr?.headSha != null && !problem.full.includes(glob.pr.headSha.slice(0, 7)) && `, ${glob.pr.headSha.slice(0, 7)}`})
               </>
             )}
-            {!seen.dismissed && problem.kind !== 'rollout' && (
+            {problem.kind !== 'rollout' && (
               <GotIt disabled={actions.busy} onClick={() => void actions.dismiss(seen.key, true)} />
             )}
           </p>
         )}
         {brief !== null && <HandoverBrief state={actions} brief={brief} omit={shownElsewhere(glob, problem)} />}
-        {listed && (
-          <details data-testid="machine-steps">
-            <summary className="cursor-pointer text-xs text-muted-foreground">Machine steps ({steps.length})</summary>
-            <ul className="mt-1 space-y-0.5 text-xs">
-              {steps.map((step) => (
-                <li key={step.id} data-kind={step.kind} data-state={step.state}>
-                  {stepLabel(step)} <span className="text-muted-foreground">{stepWords(step, state.now)}</span>
-                  {step.detail !== null && /^https?:\/\//.test(step.detail) && (
-                    <>
-                      {' '}
-                      <Link href={step.detail}>open</Link>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
       </div>
       <ul className="grid gap-1 text-xs" data-testid="activity-feed">
         {shown.map((entry) => (
@@ -181,7 +136,7 @@ export const ActivityLog = ({
       </ul>
       {feed.length > ACTIVITY_SHOWN && (
         <LinkButton testId="activity-show-all" disabled={false} onClick={() => setAll(!all)}>
-          {all ? 'Show fewer' : `Show all (${String(feed.length)})`}
+          {all ? 'Show less' : `Show all (${String(feed.length)})`}
         </LinkButton>
       )}
     </section>
