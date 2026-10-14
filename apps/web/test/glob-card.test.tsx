@@ -78,6 +78,12 @@ const visible = (html: string) => (dom(html).querySelector('[data-glob-id]')?.cl
 const withoutTips = (html: string) => visible(html.replace(/<span id="[^"]+" class="sr-only">[\s\S]*?<\/span>/g, ''));
 
 describe('card rows', () => {
+  it('shows no Oversized chip on a flagged glob', () => {
+    const root = dom(markup(view({ oversized: true })));
+    expect(root.querySelector('[data-testid="oversized-chip"]')).toBeNull();
+    expect(withoutTips(markup(view({ oversized: true })))).not.toContain('Oversized');
+  });
+
   it('renders the header, title, chips and actions in that order, with no status row under the title', () => {
     const g = prOpen({ allowedActions: ['merge'] });
     const root = dom(markup(g, [move('start', g)]));

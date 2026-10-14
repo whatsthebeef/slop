@@ -447,16 +447,6 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   );
 };
 
-/** The size check's flag: the glob looks like more than one PR's worth of work and nobody has answered it yet. */
-export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) =>
-  glob.oversized === true ? (
-    <Tip text='Intake judged this more than one PR of work. It is advice only: open it to see the size workstreams, or cut its scope with a split'>
-      <ChipButton onOpen={onOpen} className='font-mono text-[11px] font-semibold text-required' testId='oversized-chip'>
-        Oversized
-      </ChipButton>
-    </Tip>
-  ) : null;
-
 /**
  * The branch icon and the source glob's ID on a part after the first; the ID links to the source. The tooltip and the link's
  * accessible name say "Split from <source>", with the part number and the other parts in the tooltip. A small pill (muted
@@ -703,7 +693,6 @@ export const GlobCard = ({
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
             <SplitChip glob={glob} />
-            <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
             <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
             {glob.clash != null && (
               <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>

@@ -672,6 +672,14 @@ describe('glob view: split moves in the action ▾', () => {
     expect(screen.queryByTestId('more-propose-split')).toBeNull();
   });
 
+  it('starts an oversized glob with a plain Start: no confirmation', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(oversizedGlob(true));
+    await user.click(mainButton() as HTMLElement);
+    expect(screen.queryByTestId('confirm-start-oversized')).toBeNull();
+    await waitFor(() => expect(cb.onAction).toHaveBeenCalledWith('start'));
+  });
+
   it('keeps the explanation and the proposed workstreams in the panel, without buttons', () => {
     renderGlob(oversizedGlob(true));
     const panel = screen.getByTestId('oversized-proposal');

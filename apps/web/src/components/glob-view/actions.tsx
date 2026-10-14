@@ -28,12 +28,10 @@ import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
-import { isOversized } from '../oversized-glob';
 import { Tip } from '../ui/tip';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
 import { splittable } from './size';
-import { canSplit } from '../split-glob';
 
 /**
  * The state the actions, the type chip and the reset area share: what is running, which confirmation is
@@ -95,8 +93,7 @@ export const useGlobActions = ({
       setTypeFailure({ message: `Could not make it a ${option.to}`, conflict: false });
     }
   };
-  const oversized = isOversized(glob);
-  // Starting a flagged glob asks first: it is likely more than one PR's worth of work.
+  // Taking over from a handover asks first.
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
@@ -190,8 +187,8 @@ export const useGlobActions = ({
       action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
     if (
       !resuming &&
-      ((oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up')) ||
-        (brief !== null && (action === 'start_anyway' || action === 'pick_up')))
+      brief !== null &&
+      (action === 'start_anyway' || action === 'pick_up')
     ) {
       setConfirmingOversized(action);
       return;
@@ -224,7 +221,6 @@ export const useGlobActions = ({
     typeChoices,
     typeFailure,
     changeType,
-    oversized,
     brief,
     briefRead,
     dismiss,
@@ -484,11 +480,6 @@ const TakeOverConfirmation = ({
     >
       <strong>{says.title}</strong>
       <p data-testid="take-over-happens">{says.happens}</p>
-      {state.oversized && (
-        <p data-testid="take-over-oversized">
-          This glob is flagged oversized: it is probably more than one PR&apos;s worth of work.
-        </p>
-      )}
       {state.brief !== null && (
         <p data-testid="handover-confirmation">{handoverConfirmation('take_over', state.brief)}</p>
       )}
@@ -548,8 +539,7 @@ const splitMoves = (
   const { glob } = ctx;
   if (state.decision) return { lead: null, menu: [] };
   const move: SplitMove = { id: 'split', label: 'Split…', tip: SPLIT_TIP, run: () => onSplitting(true) };
-  // An oversized glob only has advice (it is never held), so it can be split like any other.
-  return { lead: null, menu: splittable(glob, state.decision) || (state.oversized && canSplit(glob)) ? [move] : [] };
+  return { lead: null, menu: splittable(glob, state.decision) ? [move] : [] };
 };
 
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
@@ -563,7 +553,7 @@ export const GlobActions = ({
   onSplitting: (splitting: boolean) => void;
 }) => {
   const { glob } = ctx;
-  const { pending, stepTurn, actions, tiers, disabled, brief, oversized } = state;
+  const { pending, stepTurn, actions, tiers, disabled, brief } = state;
   const busy = state.busy;
   const moves = splitMoves(ctx, state, onSplitting);
   // A due step still leads.
@@ -725,8 +715,6 @@ export const GlobActions = ({
               className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
             >
               <span className="flex-1" data-testid="oversized-start-says">
-                {oversized &&
-                  "This glob is flagged oversized: it is probably more than one PR's worth of work. Split it, or start it as it is?"}
                 {brief !== null && (
                   <span data-testid="handover-confirmation">
                     {' '}
@@ -749,7 +737,7 @@ export const GlobActions = ({
                   })
                 }
               >
-                {oversized ? 'Start as it is' : 'Continue'}
+                Continue
               </Button>
             </div>
           )}
