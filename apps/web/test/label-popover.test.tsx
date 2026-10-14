@@ -49,3 +49,30 @@ describe('card label popover', () => {
     expect(onOpenReview).toHaveBeenCalledWith();
   });
 });
+
+describe('card label popover width', () => {
+  it('reserves the same room after each label whether required or approved', async () => {
+    const collect = async (state: 'required' | 'approved') => {
+      const g = {
+        ...glob(),
+        labels: { CR: state, FR: state, QA: state },
+        checklists: { CR: [], FR: [], QA: [] },
+      } as unknown as GlobView;
+      render(<LabelPopover glob={g} onReview={vi.fn()} onOpenReview={vi.fn()} />);
+      await userEvent.setup().click(screen.getByLabelText('Sign-off labels'));
+      const reserved = [...document.querySelectorAll('[data-reserved-action]')].map(
+        (e) => e.textContent,
+      );
+      const states = [...document.querySelectorAll('[data-reserved-state="approved"]')].map(
+        (e) => e.textContent,
+      );
+      cleanup();
+      return { reserved, states };
+    };
+    const required = await collect('required');
+    const approved = await collect('approved');
+    expect(required.reserved).toEqual(['Approve anyway', 'Approve anyway', 'Approve anyway']);
+    expect(required).toEqual(approved);
+    expect(required.states).toEqual(['Approved', 'Approved', 'Approved']);
+  });
+});
