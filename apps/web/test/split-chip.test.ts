@@ -17,4 +17,9 @@ describe('splitChip', () => {
     expect(chip?.source).toBe('s15f78');
     expect(chip?.tip).toBe('Split from s15f78; part 3 of 3; the other parts: s15f78, s15f82');
   });
+
+  it('still shows the source on a middle part of an older split', () => {
+    const chip = splitChip({ id: 's15f82', split: { source: 's15f78', part: 1, parts } });
+    expect(chip?.tip).toBe('Split from s15f78; part 2 of 3; the other parts: s15f78, s15f83');
+  });
 });

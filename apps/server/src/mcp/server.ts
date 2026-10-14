@@ -1,4 +1,4 @@
-import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
+import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, StoredHumanStep } from '@slop/core';
 import { cleanFileName, invalidInput, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -50,6 +50,8 @@ export interface McpDeps {
   readonly links: SignedLinks;
   /** Time reports (`get_report`). */
   readonly reports: Pick<ReportService, 'report'>;
+  /** A board's groups (`get_group`). */
+  readonly groups?: Pick<GroupService, 'view'>;
   /** Suggest on decision globs (`suggest_decision`). */
   readonly suggest?: Pick<SuggestService, 'request' | 'view'>;
 }
@@ -408,6 +410,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             version: g.version,
           })),
       );
+    },
+  );
+
+  server.registerTool(
+    'get_group',
+    {
+      description:
+        "A group of a board: its globs (status, type, whose move, what holds each), progress (merged of total; decisions and deleted globs aren't counted), the relations between its globs (holding ones first; `crosses` marks one to a glob outside the group) and the open decisions that hold any of them. A group is only the name on its globs: it has no status of its own. Use list_globs with `group` for a plain list.",
+      inputSchema: { board: z.number().int(), name: z.string() },
+    },
+    async ({ board, name }) => {
+      if (deps.groups === undefined) return json({ code: 'not_found', message: 'Groups are not available' });
+      return reply(await deps.groups.view(email, board, name));
     },
   );
 

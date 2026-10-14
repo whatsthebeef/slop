@@ -658,7 +658,10 @@ describe('glob view: split moves in the action ▾', () => {
     expect(mainButton()?.textContent).toBe('Start');
     await user.click(screen.getByTestId('more-actions'));
     await user.click(await screen.findByTestId('more-split'));
-    expect(await screen.findByTestId('split-editor')).toBeTruthy();
+    const editor = await screen.findByTestId('split-editor');
+    expect(editor.textContent).toContain('each piece ships on its own');
+    expect(editor.textContent).toContain('Starts after');
+    expect(editor.textContent).not.toContain('Waits for');
   });
 
   it('never holds an oversized glob: Start still leads, and Split… is a scope cut in the ▾', async () => {
