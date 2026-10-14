@@ -115,3 +115,39 @@ export const onBoard = (glob: Glob, now: number): boolean =>
   glob.status !== 'signed_off' ||
   glob.signedOffAt === null ||
   now - Date.parse(glob.signedOffAt) < SIGNED_OFF_VISIBLE_MS;
+
+/** A part's plan is the whole plan again plus its share; an agent that reads a glob needs the part's title and shape, not 10 KB of repeats. */
+const PART_SUMMARY_CHARS = 200;
+
+/**
+ * The glob view with the size check's proposed split trimmed for MCP reads: each part keeps its title and needs, and its plan
+ * becomes a short summary with its length. `get_glob` with `include: ['size_proposal']` returns the plans in full (split_glob's input).
+ */
+export const compactSizeProposal = <V extends { sizeCheck?: SizeCheck | null }>(view: V): V => {
+  const proposal = view.sizeCheck?.proposal;
+  if (proposal == null || view.sizeCheck == null) return view;
+  const parts = proposal.parts.map(({ plan, ...rest }) => ({ ...rest, planSummary: plan.replace(/\s+/g, ' ').slice(0, PART_SUMMARY_CHARS), planChars: plan.length }));
+  return { ...view, sizeCheck: { ...view.sizeCheck, proposal: { ...proposal, parts } } };
+};
+
+const KB_TEXT_CHARS = 400;
+const clip = (text: string): string => (text.length <= KB_TEXT_CHARS ? text : `${text.slice(0, KB_TEXT_CHARS)}…`);
+
+/**
+ * A KB item as `list_kb_items` lists it by default: what an admin needs to pick one to decide on. Long text is clipped with its
+ * full length alongside, and the preview and the extra evidence are left out; `detail: 'full'` returns an item whole.
+ */
+export const compactKbItem = (item: Record<string, unknown>) => {
+  const { extraEvidence, draft, document, evidence, ...rest } = item;
+  delete rest.preview;
+  const draftOf = draft as { section: string | null; content: string } | null | undefined;
+  const documentOf = document as { content: string } | null | undefined;
+  return {
+    ...rest,
+    evidence: typeof evidence === 'string' ? clip(evidence) : evidence,
+    ...(typeof evidence === 'string' && evidence.length > KB_TEXT_CHARS ? { evidenceChars: evidence.length } : {}),
+    extraEvidenceCount: Array.isArray(extraEvidence) ? extraEvidence.length : 0,
+    draft: draftOf == null ? null : { section: draftOf.section, content: clip(draftOf.content), contentChars: draftOf.content.length },
+    ...(documentOf == null ? { document: null } : { document: { ...documentOf, content: clip(documentOf.content), contentChars: documentOf.content.length } }),
+  };
+};

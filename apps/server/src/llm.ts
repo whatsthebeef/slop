@@ -1,6 +1,7 @@
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { LlmBusy, LlmUnavailable } from '@slop/core';
 import type { Llm, LlmRequest, LlmSpendTag, SpendService } from '@slop/core';
+import { requestMetrics } from './request-metrics.js';
 
 /** One call's token usage as Bedrock reports it. */
 export interface LlmUsage {
@@ -184,7 +185,7 @@ export class BedrockLlm implements Llm {
   async complete(request: LlmRequest): Promise<string> {
     let response;
     try {
-      response = await this.client.send(
+      response = await requestMetrics.llm(() => this.client.send(
         new ConverseCommand({
           modelId: this.modelId,
           system: [{ text: request.system }],
@@ -196,7 +197,7 @@ export class BedrockLlm implements Llm {
         }),
         // The SDK has no request timeout by default; the caller's deadline ends a stalled call.
         request.signal === undefined ? {} : { abortSignal: request.signal },
-      );
+      ));
     } catch (error) {
       throw classifyBedrockError(error, this.site) ?? error;
     }

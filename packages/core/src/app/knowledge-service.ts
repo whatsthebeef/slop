@@ -1158,9 +1158,10 @@ export class KnowledgeService {
 
   /**
    * The board's KB items with the given status (open by default), for an admin's agent: the open queue in the page's
-   * order, others newest decision first. Admins only, like deciding.
+   * order, others newest decision first. Admins only, like deciding. `preview: false` leaves out each open item's diff (it
+   * reads the target's text per item): for callers that only need the list.
    */
-  async listItems(email: string, boardId: number, status: LearningStatus = 'open'): Promise<Result<LearningWireView[]>> {
+  async listItems(email: string, boardId: number, status: LearningStatus = 'open', options: { preview?: boolean } = {}): Promise<Result<LearningWireView[]>> {
     const catalog = await this.deps.catalog.agentSet();
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
@@ -1168,7 +1169,7 @@ export class KnowledgeService {
       const learnings = (await boardLearnings(tx, boardId)).filter((l) => learningStatus(l.glob, l.artifacts) === status);
       if (status !== 'open') return ok(learnings.map((l) => learningWireView(l, null)));
       const views: LearningWireView[] = [];
-      for (const learning of byEvidenceOrder(learnings)) views.push(learningWireView(learning, await this.preview(tx, catalog, learning)));
+      for (const learning of byEvidenceOrder(learnings)) views.push(learningWireView(learning, options.preview === false ? null : await this.preview(tx, catalog, learning)));
       return ok(views);
     });
   }

@@ -68,6 +68,33 @@ export const invalidateKnowledge = (client: QueryClient, boardId: number) => {
   }
 };
 
+/**
+ * Runs `work` once, `delayMs` after the last call: a burst of hints refetches the board's glob list (hundreds of KB) once, not once
+ * per hint.
+ */
+export const trailing = (work: () => void, delayMs: number): { call: () => void; cancel: () => void } => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const cancel = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+  return {
+    call: () => {
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        work();
+      }, delayMs);
+    },
+    cancel,
+  };
+};
+
+/** How long `board.kb` hints settle before the glob list is read again. */
+export const KB_REFETCH_MS = 2_000;
+/** After a reconnect each tab waits a random part of this before reloading the board, so a server restart isn't followed by every open tab reloading it at once. */
+export const RECONNECT_SPREAD_MS = 4_000;
+
 /** Delay before reopening a stream the browser closed for good: 1s, doubling to a 30s ceiling. */
 export const reconnectDelay = (attempt: number): number => Math.min(1000 * 2 ** attempt, 30_000);
 
@@ -257,6 +284,20 @@ export const useLiveBoard = (boardId: number): LiveState => {
     if (glob?.list === 'signed_off' || was?.list === 'signed_off') void client.invalidateQueries({ queryKey: signedOffCountKey(boardId) });
   };
 
+  // One per board, so a burst of hints shares one refetch; pending timers end with the board or the page.
+  const kbRefetch = useRef<ReturnType<typeof trailing> | null>(null);
+  const reloads = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => {
+    const refetch = trailing(() => void client.invalidateQueries({ queryKey: globsKey(boardId) }), KB_REFETCH_MS);
+    kbRefetch.current = refetch;
+    return () => {
+      refetch.cancel();
+      kbRefetch.current = null;
+      reloads.current.forEach(clearTimeout);
+      reloads.current = [];
+    };
+  }, [client, boardId]);
+
   const onHint = (hint: Hint) => {
     if (hint.kind === 'board.changed') {
       void client.invalidateQueries({ queryKey: ['board', boardId] });
@@ -265,7 +306,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
     // The Knowledge page follows these itself; the board only needs them for decision globs, which the pipeline and mining
     // create and draft without a glob hint of their own (the board list has no KB data otherwise).
     if (hint.kind === 'board.kb') {
-      void client.invalidateQueries({ queryKey: globsKey(boardId) });
+      kbRefetch.current?.call();
       void client.invalidateQueries({ queryKey: ['glob-diff'] });
       return;
     }
@@ -334,10 +375,14 @@ export const useLiveBoard = (boardId: number): LiveState => {
       });
   };
 
-  // Hints may have been missed while disconnected or hidden: reload the board.
+  // Hints may have been missed while disconnected or hidden: reload the board (the glob list first, spread over a few seconds).
   const onReconnect = () => {
-    void client.invalidateQueries({ queryKey: globsKey(boardId) });
-    void client.invalidateQueries({ queryKey: signedOffCountKey(boardId) });
+    reloads.current.push(
+      setTimeout(() => {
+        void client.invalidateQueries({ queryKey: globsKey(boardId) });
+        void client.invalidateQueries({ queryKey: signedOffCountKey(boardId) });
+      }, Math.random() * RECONNECT_SPREAD_MS),
+    );
     // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });

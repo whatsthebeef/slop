@@ -13,6 +13,7 @@ import { AwsSignIn } from '../src/aws-sso.js';
 import type { SsoOidc } from '../src/aws-sso.js';
 import { IntegrationRegistry } from '../src/integration-health.js';
 import { LlmHealth } from '../src/llm-health.js';
+import { RequestMetrics } from '../src/request-metrics.js';
 import { HintHub } from '../src/notifier.js';
 import { SignedLinks } from '../src/signed-links.js';
 import { createTestDatabase } from './support/database.js';
@@ -23,6 +24,7 @@ describe('GET /api/health', () => {
   let app: Hono<Env>;
   let boards: BoardService;
   let boardId = 0;
+  const metrics = new RequestMetrics();
   const health = new LlmHealth(undefined, () => '2026-10-07T09:00:00.000Z');
   const registry = new IntegrationRegistry(undefined, () => '2026-10-07T09:00:00.000Z');
   const oidc: SsoOidc = {
@@ -63,7 +65,7 @@ describe('GET /api/health', () => {
       outbox: new OutboxRunner(db, { globs }, {}, () => undefined),
       onBoardCreated: () => Promise.resolve(),
     });
-    mountHealth(app, { llm: health, boards, integrations: registry, signIn, capabilities: { read: () => Promise.resolve({ fileAttachments: true, attachmentEvents: false, slack: false }), reasons: () => Promise.resolve({ slack: 'not set' }) } });
+    mountHealth(app, { metrics, outboxBacklog: () => Promise.resolve({ default: 2, llm: 0 }), llm: health, boards, integrations: registry, signIn, capabilities: { read: () => Promise.resolve({ fileAttachments: true, attachmentEvents: false, slack: false }), reasons: () => Promise.resolve({ slack: 'not set' }) } });
     await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
     const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
@@ -142,5 +144,19 @@ describe('GET /api/health', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ state: 'waiting', userCode: 'CODE-1234', verificationUri: 'https://v?c=1' });
     });
+  });
+
+  it('gives an admin the request timings and load, and nobody else', async () => {
+    metrics.record('GET /api/boards/:b', 12, 200);
+    const admin = (await (await get({ authorization: 'Bearer dev:member@example.com' })).json()) as { requests: Record<string, unknown> };
+    expect(admin.requests).toMatchObject({
+      windowMinutes: 60,
+      outboxBacklog: { default: 2, llm: 0 },
+      routes: [{ route: 'GET /api/boards/:b', count: 1, p50Ms: 12 }],
+    });
+    expect(admin.requests).toHaveProperty('eventLoopLagMs');
+    // `viewer` was made a developer above.
+    const dev = (await (await get({ authorization: 'Bearer dev:viewer@example.com' })).json()) as Record<string, unknown>;
+    expect(dev).not.toHaveProperty('requests');
   });
 });
