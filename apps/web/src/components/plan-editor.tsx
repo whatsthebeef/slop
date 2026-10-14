@@ -1,33 +1,76 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
+import type { ArtifactView } from '@/lib/api';
 import { copyOrSelect, planBaseline, planText, planVersionLabel, planVersionLine } from '@/lib/plan-text';
 import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { useToast } from '@/toast';
 
-/** plan.md for a glob: what the implementer works from. Every save is a new version. */
-export const PlanEditor = ({
+export type DocKind = 'plan' | 'test_plan';
+
+/** What differs between the documents the editor handles. */
+const DOCS = {
+  plan: {
+    queryKey: 'plan',
+    file: 'plan.md',
+    noun: 'plan',
+    saveLabel: 'Save plan',
+    placeholder: 'What to build, and "Done when:" lines…',
+    read: (id: string) => api.plan(id),
+  },
+  test_plan: {
+    queryKey: 'test-plan',
+    file: 'test-plan.md',
+    noun: 'test plan',
+    saveLabel: 'Save test plan',
+    placeholder: 'A Name | Status | Location | Description table and an atf-specs block…',
+    read: (id: string) => api.testPlan(id),
+  },
+} as const;
+
+/** What a custom preview gets: the text on screen and the saved version it is (null for a draft). */
+export interface DocPreviewProps {
+  content: string;
+  artifact: ArtifactView | null;
+  startExpanded: boolean;
+}
+
+/** A glob's plan.md or test plan: edit, preview, versions and copy. Every save is a new version. */
+export const DocEditor = ({
   globId,
+  kind,
   startExpanded = false,
+  preview,
+  empty,
+  template,
 }: {
   globId: string;
-  /** A deep link to the plan section opens the preview expanded. */
+  kind: DocKind;
+  /** A deep link to the section opens the preview expanded. */
   startExpanded?: boolean;
+  /** Replaces the markdown preview. */
+  preview?: (props: DocPreviewProps) => ReactNode;
+  /** Shown in place of the preview while nothing is saved and nothing is being written; `write` starts a draft from `template`. */
+  empty?: (write: () => void) => ReactNode;
+  /** The draft "Write one" starts from. */
+  template?: string;
 }) => {
+  const doc = DOCS[kind];
   const client = useQueryClient();
   const toast = useToast();
-  const plan = useQuery({ queryKey: ['plan', globId], queryFn: () => api.plan(globId) });
+  const plan = useQuery({ queryKey: [doc.queryKey, globId], queryFn: () => doc.read(globId) });
   const current = plan.data?.current ?? null;
   const versionCount = plan.data?.versions.length ?? 0;
   // The version the preview shows: null is the latest. Edit always returns to the latest.
   const [viewed, setViewed] = useState<number | null>(null);
   const [opened, setOpened] = useState(false);
   const past = useQuery({
-    queryKey: ['plan-versions', globId, current?.version ?? 0],
-    queryFn: () => api.artifactVersions(globId, 'plan', ''),
+    queryKey: [`${doc.queryKey}-versions`, globId, current?.version ?? 0],
+    queryFn: () => api.artifactVersions(globId, kind, ''),
     enabled: opened && versionCount > 1,
     // A live update bumps the key; the viewed version stays on screen while the list refetches.
     placeholderData: keepPreviousData,
@@ -54,13 +97,21 @@ export const PlanEditor = ({
   };
 
   const save = useMutation({
-    mutationFn: (content: string) => api.savePlan(globId, content),
+    // The test plan checks the version it was read at, so a save over a newer one is refused instead of overwriting it.
+    mutationFn: (content: string) =>
+      kind === 'plan' ? api.savePlan(globId, content) : api.saveTestPlan(globId, content, current?.version ?? 0),
     onSuccess: () => {
       setDraft(null);
       setEditing(false);
-      void client.invalidateQueries({ queryKey: ['plan', globId] });
+      void client.invalidateQueries({ queryKey: [doc.queryKey, globId] });
     },
-    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save the plan'),
+    onError: (e) => {
+      toast(e instanceof RequestError ? e.body.message : `Could not save the ${doc.noun}`);
+      // A conflict means the saved text moved: refetch, and the banner below offers Reload or Keep editing.
+      if (e instanceof RequestError && e.body.code === 'version_conflict') {
+        void client.invalidateQueries({ queryKey: [doc.queryKey, globId] });
+      }
+    },
   });
 
   const value = viewedVersion === null ? planText(draft, saved) : viewedVersion.content;
@@ -80,6 +131,12 @@ export const PlanEditor = ({
     setDraft(null);
     setEditing(false);
   };
+  // "Write one": the template is the draft, so Save is offered at once.
+  const startWriting = () => {
+    setBase(saved);
+    setDraft(template ?? '');
+    setEditing(true);
+  };
   const startEditing = () => {
     setViewed(null);
     setEditing(true);
@@ -88,7 +145,7 @@ export const PlanEditor = ({
   return (
     <div className='grid gap-2'>
       <div className='flex items-center justify-between text-xs text-muted-foreground'>
-        <span className='font-semibold'>plan.md</span>
+        <span className='font-semibold'>{doc.file}</span>
         <span className='flex items-center gap-2'>
           {versionCount > 1 && !editing ? (
             <DropdownMenu onOpenChange={(open) => open && setOpened(true)}>
@@ -118,21 +175,29 @@ export const PlanEditor = ({
         </span>
       </div>
       {!editing ? (
-        <div onDoubleClick={startEditing}>
-          <CollapsibleMarkdown content={value} startExpanded={startExpanded} />
-        </div>
+        empty !== undefined && current === null && draft === null && !plan.isPending ? (
+          empty(startWriting)
+        ) : (
+          <div onDoubleClick={startEditing}>
+            {preview === undefined ? (
+              <CollapsibleMarkdown content={value} startExpanded={startExpanded} />
+            ) : (
+              preview({ content: value, artifact: viewedVersion ?? (draft === null ? current : null), startExpanded })
+            )}
+          </div>
+        )
       ) : (
         <Textarea
           ref={area}
           className='min-h-40 resize-none overflow-hidden font-mono text-xs'
           value={value}
-          placeholder='What to build, and "Done when:" lines…'
+          placeholder={doc.placeholder}
           onChange={(e) => edit(e.target.value)}
         />
       )}
       {changedUnderneath && (
         <div className='flex items-center justify-between gap-2 rounded border border-amber/50 bg-amber/10 px-2 py-1 text-xs'>
-          <span>plan.md changed since you started editing.</span>
+          <span>{doc.file} changed since you started editing.</span>
           <span className='flex gap-2'>
             <Button variant='outline' size='sm' onClick={() => setDraft(null)}>
               Reload
@@ -149,10 +214,20 @@ export const PlanEditor = ({
             Discard
           </Button>
           <Button size='sm' disabled={save.isPending} onClick={() => save.mutate(draft)}>
-            Save plan
+            {doc.saveLabel}
           </Button>
         </div>
       )}
     </div>
   );
 };
+
+/** plan.md for a glob: what the implementer works from. Every save is a new version. */
+export const PlanEditor = ({
+  globId,
+  startExpanded = false,
+}: {
+  globId: string;
+  /** A deep link to the plan section opens the preview expanded. */
+  startExpanded?: boolean;
+}) => <DocEditor globId={globId} kind='plan' startExpanded={startExpanded} />;
