@@ -1,6 +1,7 @@
 import { isForViewer } from '@slop/core';
 import type { HumanStepViewer } from '@slop/core';
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { GlobView, ListedHumanStep } from '@/lib/api';
@@ -123,16 +124,9 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
   );
 };
 
-const AddStep = ({ busy, onAdd }: { busy: boolean; onAdd: StepActions['onAdd'] }) => {
-  const [open, setOpen] = useState(false);
+const AddStep = ({ busy, onAdd, onClose }: { busy: boolean; onAdd: StepActions['onAdd']; onClose: () => void }) => {
   const [draft, setDraft] = useState<StepDraft>(EMPTY_DRAFT);
   const input = stepInput(draft);
-  if (!open)
-    return (
-      <button type='button' className='justify-self-start text-xs underline' data-testid='add-step' onClick={() => setOpen(true)}>
-        Add a step
-      </button>
-    );
   return (
     <form
       className='grid gap-2 rounded border p-2'
@@ -143,7 +137,7 @@ const AddStep = ({ busy, onAdd }: { busy: boolean; onAdd: StepActions['onAdd'] }
         void onAdd(input).then((ok) => {
           if (!ok) return;
           setDraft(EMPTY_DRAFT);
-          setOpen(false);
+          onClose();
         });
       }}
     >
@@ -172,7 +166,7 @@ const AddStep = ({ busy, onAdd }: { busy: boolean; onAdd: StepActions['onAdd'] }
         <Button size='sm' type='submit' disabled={busy || input === null} data-testid='add-step-submit'>
           Add step
         </Button>
-        <Button size='sm' type='button' variant='ghost' onClick={() => setOpen(false)}>
+        <Button size='sm' type='button' variant='ghost' onClick={onClose}>
           Cancel
         </Button>
       </div>
@@ -206,6 +200,7 @@ export const HumanSteps = ({
   const steps = glob.humanSteps ?? [];
   const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : readStepsOpen()));
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   useEffect(() => {
     if (openSignal > 0) setToggled(true);
   }, [openSignal]);
@@ -229,14 +224,31 @@ export const HumanSteps = ({
   const left = steps.filter((s) => s.state === 'due' || s.state === 'pending').length;
   return (
     <section className='grid gap-2' aria-label='Human steps' data-testid='human-steps'>
-      <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>
-        Human steps ({steps.length})
-        {!open && left > 0 && (
-          <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='human-steps-left'>
-            {left} to do
-          </span>
+      <div className='flex items-center gap-2'>
+        <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>
+          Human steps ({steps.length})
+          {!open && left > 0 && (
+            <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='human-steps-left'>
+              {left} to do
+            </span>
+          )}
+        </SectionToggle>
+        {canAdd && (
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-6 gap-1 px-1.5 text-xs'
+            data-testid='add-step'
+            onClick={() => {
+              setAdding(!(adding && open));
+              setToggled(true);
+            }}
+          >
+            <Plus className='h-3.5 w-3.5' />
+            Add step
+          </Button>
         )}
-      </SectionToggle>
+      </div>
       {open && (
         <>
           {steps.length > 0 && (
@@ -253,7 +265,7 @@ export const HumanSteps = ({
               ))}
             </ul>
           )}
-          {canAdd && <AddStep busy={busy} onAdd={wrapped.onAdd} />}
+          {canAdd && adding && <AddStep busy={busy} onAdd={wrapped.onAdd} onClose={() => setAdding(false)} />}
         </>
       )}
     </section>
