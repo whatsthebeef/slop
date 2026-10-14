@@ -24,8 +24,8 @@ const renderSteps = (onAdd = vi.fn(() => Promise.resolve(true))) => {
 };
 
 describe('Human steps section', () => {
-  it('sits directly after Choices', () => {
-    expect(GLOB_VIEW_SECTIONS.indexOf('human-steps')).toBe(GLOB_VIEW_SECTIONS.indexOf('choices') + 1);
+  it('sits directly above Choices', () => {
+    expect(GLOB_VIEW_SECTIONS.indexOf('human-steps')).toBe(GLOB_VIEW_SECTIONS.indexOf('choices') - 1);
   });
 
   it('shows a "+ Add step" button in the title row even with no steps', () => {
