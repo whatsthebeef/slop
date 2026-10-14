@@ -38,7 +38,7 @@ const BoardTabs = ({
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
   return (
-    <header className='mx-5 mt-1.5 flex items-end gap-x-6 sm:flex-wrap border-b border-edge/50 text-sm'>
+    <header className='mx-5 mt-1.5 flex items-end gap-x-2 sm:flex-wrap sm:gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex min-w-0 flex-1 gap-4 sm:flex-none sm:gap-6' aria-label='Board sections'>
         {BOARD_TABS.map(({ tab, label, path }) => (
           <Link
