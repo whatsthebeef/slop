@@ -3,7 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { canChooseType, CHOOSE_TYPE_REFUSAL } from './access.js';
 import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
-import { groupFromTitle } from '../domain/group.js';
+import { groupFromTitle, normaliseGroup } from '../domain/group.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
@@ -270,6 +270,8 @@ export interface SplitInput {
   readonly idempotencyKey: string | null;
   /** Who is splitting, for the new plans' provenance (default: a person). */
   readonly planBy?: Provenance['by'];
+  /** The group every part shares when the original has none (default: named from its title); ignored when it has one. */
+  readonly group?: string | null;
 }
 
 /** Part N's glob ID wherever a plan or summary writes `{part:N}`. */
@@ -1248,13 +1250,15 @@ export class GlobService {
       if (first === undefined) return invalidInput('A split needs at least 2 parts');
       const firstEscalation = escalations[0];
       const firstType = firstEscalation?.type ?? first.type;
-      // Every part shares one group: the original's, else one named from its title (an existing group of that name is reused).
+      // Every part shares one group: the original's, else the one asked for, else one named from its title (an existing group of
+      // that name is reused as is).
+      const existingGroups = [...new Set((await tx.listGlobs(board.id, {})).flatMap((g) => (g.group === null ? [] : [g.group])))];
+      const asked = input.group?.trim() ?? '';
       const group =
         original.group ??
-        groupFromTitle(
-          original.title,
-          [...new Set((await tx.listGlobs(board.id, {})).flatMap((g) => (g.group === null ? [] : [g.group])))],
-        );
+        (asked === ''
+          ? groupFromTitle(original.title, existingGroups)
+          : (existingGroups.find((g) => normaliseGroup(g) === normaliseGroup(asked)) ?? asked));
       const changes: FieldChanges = {
         title: first.title,
         ...(group === original.group ? {} : { group }),

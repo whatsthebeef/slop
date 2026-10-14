@@ -162,6 +162,8 @@ export const createGlobSchema = z.object({
 export const splitGlobSchema = z.object({
   version: z.number().int(),
   idempotencyKey: z.string().min(1).nullable().default(null),
+  /** The group the parts share when the glob has none. */
+  group: z.string().min(1).max(100).optional(),
   parts: z
     .array(
       z.object({
@@ -590,6 +592,7 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
+      ...(body.group === undefined ? {} : { group: body.group }),
       parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),

@@ -10,7 +10,7 @@ export const splittable = (glob: GlobView, decision: boolean): boolean =>
 
 /** The size section: a flagged glob's explanation, and the split form that Split… in the actions opens. */
 export const SizeSection = ({
-  ctx: { glob },
+  ctx: { glob, groups },
   decision,
   size,
   splitting,
@@ -31,6 +31,7 @@ export const SizeSection = ({
     return (
       <SplitGlob
         glob={glob}
+        groups={groups}
         onCancel={() => onSplitting(false)}
         onDone={onClose}
       />
