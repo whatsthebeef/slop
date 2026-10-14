@@ -13,7 +13,7 @@ export interface ActivityEntry {
   /** When it happened; null where slop doesn't record the time (the PR's own state). */
   readonly at: string | null;
   readonly link: string | null;
-  /** What the link is called: "open", "CI run", "session", "PR". */
+  /** What the link is called: "open", "CI run", "session", "PR", "glob". */
   readonly linkLabel: string;
   /** The entry's full text for its tooltip, where the line cuts it short (a failure's reason). */
   readonly title: string;
@@ -40,7 +40,7 @@ const entry = (
 
 /** A reason on one line: its first line, cut at `LINE_MAX`. */
 const oneLine = (reason: string): string => {
-  const first = (reason.split('\n')[0] ?? '').trim();
+  const first = (reason.split('\n').find((l) => l.trim() !== '') ?? '').trim();
   return first.length > LINE_MAX ? `${first.slice(0, LINE_MAX - 1)}…` : first;
 };
 
