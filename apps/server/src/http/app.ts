@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -28,6 +28,8 @@ export interface AppDeps {
   readonly intake?: Pick<IntakeService, 'suggestGroup'>;
   /** Proposes (and with apply, writes) groups for a board's open globs that have none; absent: its route isn't mounted. */
   readonly groupBackfill?: Pick<GroupBackfillService, 'run'>;
+  /** The board's groups (list, one group's view, rename, merge); absent: their routes aren't mounted. */
+  readonly groups?: Pick<GroupService, 'list' | 'view' | 'rename' | 'merge'>;
   /** Looks at a glob's pending files when it is read (the fallback for a lost storage event); absent: file attachments are off. */
   readonly attachments?: Pick<AttachmentService, 'refreshGlob'>;
   /** The board's LLM spend line; absent: its route isn't mounted. */
@@ -413,6 +415,36 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, z.object({ apply: z.boolean().default(false) }));
     if (body instanceof Response) return body;
     return send(c, await groupBackfill.run(c.get('email'), Number(c.req.param('b')), body.apply));
+  });
+
+  // Groups are derived from the globs that carry the name: no stored group. The literal `backfill` route above is registered first.
+  app.get('/api/boards/:b/groups', async (c) => {
+    const { groups } = deps;
+    if (groups === undefined) return c.json({ code: 'not_found', message: 'Groups are not available' }, 404);
+    return send(c, await groups.list(c.get('email'), Number(c.req.param('b'))));
+  });
+
+  app.get('/api/boards/:b/groups/:name', async (c) => {
+    const { groups } = deps;
+    if (groups === undefined) return c.json({ code: 'not_found', message: 'Groups are not available' }, 404);
+    return send(c, await groups.view(c.get('email'), Number(c.req.param('b')), c.req.param('name')));
+  });
+
+  // Rename (a new name) and merge (into an existing group): the new name goes on every glob in the group, one event per glob.
+  app.post('/api/boards/:b/groups/:name/rename', async (c) => {
+    const { groups } = deps;
+    if (groups === undefined) return c.json({ code: 'not_found', message: 'Groups are not available' }, 404);
+    const body = await parse(c, z.object({ to: z.string() }));
+    if (body instanceof Response) return body;
+    return send(c, await groups.rename(c.get('email'), Number(c.req.param('b')), c.req.param('name'), body.to));
+  });
+
+  app.post('/api/boards/:b/groups/:name/merge', async (c) => {
+    const { groups } = deps;
+    if (groups === undefined) return c.json({ code: 'not_found', message: 'Groups are not available' }, 404);
+    const body = await parse(c, z.object({ into: z.string() }));
+    if (body instanceof Response) return body;
+    return send(c, await groups.merge(c.get('email'), Number(c.req.param('b')), c.req.param('name'), body.into));
   });
 
   app.get('/api/boards/:b/members', async (c) =>
