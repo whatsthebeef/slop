@@ -556,8 +556,9 @@ const splitMoves = (
         ? [{ id: 'split', label: 'Split…', tip: SPLIT_TIP, run: open }]
         : [],
     };
-  // The proposal comes with the single-glob read: until it is here there is nothing to lead with.
-  if (size.check === undefined) return { lead: null, menu: [] };
+  // The proposal comes with the single-glob read: until it is here there is nothing to lead with. If the read failed,
+  // the glob is treated as having no proposal, so splitting by hand and Keep whole stay possible.
+  if (size.check === undefined && !size.loadFailed) return { lead: null, menu: [] };
   const canKeep = board.role !== 'qa' || glob.type === 'sub';
   const hasProposal = size.proposal !== null;
   const menu: SplitMove[] = [];
@@ -568,12 +569,13 @@ const splitMoves = (
       tip: 'Open the split form, pre-filled with the proposal',
       run: open,
     });
-  menu.push({
-    id: 'propose-split',
-    label: size.proposing ? 'Proposing…' : hasProposal ? 'Propose again' : 'Propose split',
-    tip: 'Ask slop for a new proposed split',
-    run: size.proposeAgain,
-  });
+  if (size.check !== undefined)
+    menu.push({
+      id: 'propose-split',
+      label: size.proposing ? 'Proposing…' : hasProposal ? 'Propose again' : 'Propose split',
+      tip: 'Ask slop for a new proposed split',
+      run: size.proposeAgain,
+    });
   if (canKeep)
     menu.push({
       id: 'keep-whole',
