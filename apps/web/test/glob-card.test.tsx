@@ -121,9 +121,10 @@ describe('card rows', () => {
       expect(bottom?.textContent).toContain('Planner: ann@x.com');
       expect(bottom?.lastElementChild?.textContent).toContain('AN');
     });
-    it('shows nothing for a slop-planned glob', () => {
+    it('shows the robot head for a slop-planned glob', () => {
       const bottom = avatar(view({implementer: null, planner: 'slop', runs: []}));
-      expect(bottom?.textContent).not.toMatch(/Planner|Implementer/);
+      expect(bottom?.textContent).toContain('Planner: slop (machine)');
+      expect(bottom?.lastElementChild?.querySelector('[aria-label="machine"]')).not.toBeNull();
     });
   });
 

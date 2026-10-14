@@ -68,7 +68,14 @@ const initials = (email: string): string => {
 };
 
 /** The implementer, or the planner (dashed) while no person implements (unassigned, or the machine implementing). */
-const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
+const Avatar = ({ email, planner }: { email: string; planner: boolean }) =>
+  planner && email === 'slop' ? (
+    <Tip text='Planner: slop (machine)'>
+      <span className='inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground'>
+        <MachineIcon />
+      </span>
+    </Tip>
+  ) : (
   <Tip text={`${planner ? 'Planner' : 'Implementer'}: ${email}`}>
   <span
     className={cn(
@@ -79,7 +86,7 @@ const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
     {initials(email)}
   </span>
   </Tip>
-);
+  );
 
 /**
  * A group's label: a curated sticker colour, the only shiny thing on the board. With `onFilter` (on the board's cards) it is a
@@ -715,8 +722,8 @@ export const GlobCard = ({
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
 }) => {
-  // A person implementing shows; otherwise (unassigned, or the machine implementing) the planner. Slop-created globs show none.
-  const person = glob.implementer ?? (glob.planner === 'slop' ? null : glob.planner);
+  // A person implementing shows; otherwise (unassigned, or the machine implementing) the planner. Slop-created globs show the robot head.
+  const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
   const now = new Date().toISOString();
@@ -882,7 +889,7 @@ export const GlobCard = ({
             </div>
           )}
         </div>
-        {person !== null && <Avatar email={person} planner={glob.implementer === null} />}
+        <Avatar email={person} planner={glob.implementer === null} />
       </div>
       {tag !== undefined && (
         // Keyed by the move, so a second move's tag restarts its fade.
