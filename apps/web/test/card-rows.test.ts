@@ -127,7 +127,7 @@ describe('cornerStatus', () => {
 
   it('says what it waits on once, with the chain in the tooltip and no "blocked by"', () => {
     const status = at(ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t9'));
-    expect(status).toMatchObject({ kind: 'waiting-on', icon: 'hourglass', text: 'waiting on s1t1, s1t2 +2 · next: s1t9' });
+    expect(status).toMatchObject({ kind: 'waiting-on', icon: 'hourglass', text: 'waiting on s1t1 +3' });
     expect(status?.tip).toContain('Waits for, in order: s1t1 (Doing)');
     expect(JSON.stringify(status)).not.toMatch(/blocked by/i);
   });
@@ -192,5 +192,26 @@ describe('turnButton', () => {
     const g = prOpen({ allowedActions: ['merge'] });
     expect(turnButton(g, NOW, undefined, false)?.click).toEqual({ kind: 'act', action: 'merge', confirm: true });
     expect(turnButton(g, NOW, undefined, true)).toBeNull();
+  });
+});
+
+describe('cornerStatus text stays a word or two', () => {
+  const situations: readonly [string, () => GlobView, string][] = [
+    ['machine running', () => view({ status: 'in_progress', ...live('active') }), 'implementing'],
+    ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'starting'],
+    ['merge conflict stall', mergeConflictStall, ''],
+    ['open conflict', openConflict, 'conflicts with main'],
+    ['waiting on prerequisites', () => ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t9'), 'waiting on s1t1 +3'],
+    ['waiting on one prerequisite', () => ahead(['s1t1']), 'waiting on s1t1'],
+    ['escalated', escalated, 'needs a'],
+    ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'Merge'],
+    ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'checks running'],
+  ];
+  it.each(situations)('%s: at most 3 words (not counting "+N"), no "(", ";" or digits but glob IDs and a "+N" count', (_name, make, expected) => {
+    const text = cornerStatus(make(), NOW)?.text ?? '';
+    if (expected !== '') expect(text).toBe(expected);
+    expect(text.replace(/\+\d+/g, '').trim().split(/\s+/).length).toBeLessThanOrEqual(3);
+    expect(text).not.toMatch(/[(;]/);
+    expect(text.replace(/\bs\d+[a-z]\d+\b/g, '').replace(/\+\d+/g, '')).not.toMatch(/\d/);
   });
 });

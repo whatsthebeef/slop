@@ -194,8 +194,8 @@ describe('GlobHeader', () => {
           <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
-      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('Merged; rollout 1/2 (Your turn)');
-      expect(header).toBe('Merged; rollout 1/2 (Your turn)');
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');
+      expect(header).toBe('rollout');
     });
 
     it('keeps the lifecycle text only where the shared status has nothing to say', () => {
