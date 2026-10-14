@@ -2313,9 +2313,8 @@ export const readyRequested = (
   if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
     return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
   }
-  // Already ready (a conflict fixed, a second call): GitHub raises no event, so go straight to pr_open.
-  if (glob.pr.state === 'ready')
-    return prReadyForReview(glob, { number: glob.pr.number, headSha: glob.pr.headSha ?? '' }, ctx);
+  // Already ready (a conflict fixed, a second call): GitHub raises no ready event, and slop's stored head may be stale
+  // (a missed push webhook), so the executor reads the PR's real head and records pr_open with it.
   return new Builder(glob, ctx)
     .effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation })
     .done();

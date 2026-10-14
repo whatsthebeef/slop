@@ -12,6 +12,8 @@ const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
 
 /** How often a run held for pending files looks again. */
 const FILES_POLL_MS = 15_000;
+/** GitHub's refusal when a merge names a head the PR no longer has. */
+const HEAD_MODIFIED = /head branch was modified/i;
 
 /** The HTTP status of a code host error (Octokit's `status`), when it has one. */
 const httpStatus = (error: unknown): number | null =>
@@ -417,9 +419,20 @@ export const codeHostExecutors = (
             machine.mergeFailed(g, "GitHub hasn't decided whether the PR can merge; try again", ctx),
           );
           break;
-        case 'refused':
+        case 'refused': {
+          // "Head branch was modified": slop merged at a head GitHub no longer has (a missed push webhook). Take the real
+          // head, as the reconcile job does, so its checks run and the merge is tried again, instead of failing the glob.
+          if (HEAD_MODIFIED.test(result.reason)) {
+            const pr = await host.prState(repo, prNumber);
+            if (pr.state === 'open' && pr.headSha !== effect.sha) {
+              log('merge', `${glob.id} head moved to ${pr.headSha} (missed webhook)`);
+              await globs.applyEvent(glob.id, (g, ctx) => machine.commitPushed(g, { sha: pr.headSha, runId: null }, ctx));
+              break;
+            }
+          }
           await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, result.reason, ctx));
           break;
+        }
       }
       return 'done';
     },
