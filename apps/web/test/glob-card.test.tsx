@@ -88,6 +88,7 @@ describe('card rows', () => {
     expect(status?.className).toContain('shrink');
     expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-0');
+    expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('gap-[3px]');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('task');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
     expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
