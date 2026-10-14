@@ -106,6 +106,24 @@ describe('mainAction after repeated failures', () => {
   });
 });
 
+describe('mainAction while the machine implements', () => {
+  const implementing = (type: 'same' | 'sub' | 'super') => glob({ type, status: 'implementing' });
+  const all: Action[] = ['review_now', 'take_over', 'delete'];
+
+  it('leads with Pick up on a same or super', () => {
+    expect(pick(all, implementing('same'))).toBe('take_over');
+    expect(pick(all, implementing('super'))).toBe('take_over');
+  });
+
+  it('leaves a sub to the machine', () => {
+    expect(pick(all, implementing('sub'))).toBeNull();
+  });
+
+  it('needs a live run to take over', () => {
+    expect(pick(['review_now', 'delete'], implementing('same'))).toBeNull();
+  });
+});
+
 describe('promotedAction', () => {
   it('leads with Cancel merge, then Review code, then Pick up', () => {
     expect(promotedAction(['review_now', 'take_over', 'cancel_merge'])).toBe('cancel_merge');
