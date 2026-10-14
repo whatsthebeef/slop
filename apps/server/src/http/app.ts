@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SpendService, SplitInfo } from '@slop/core';
 import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -24,8 +24,6 @@ export interface AppDeps {
   readonly globs: GlobService;
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
-  /** Keep whole on a flagged glob; absent: its route isn't mounted. */
-  readonly sizeCheck?: SizeCheckService;
   /** Chooses the group of a glob created without one; absent: it gets none. */
   readonly intake?: Pick<IntakeService, 'suggestGroup'>;
   /** Proposes (and with apply, writes) groups for a board's open globs that have none; absent: its route isn't mounted. */
@@ -190,7 +188,6 @@ const updateGlobSchema = z.object({
   relations: relationListSchema.optional(),
   /** A decision's scope, the only attribute a client edits; core validates it (kind, ref, glob on the board). */
   attributes: z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict().optional(),
-  autoStart: z.boolean().optional(),
 });
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
@@ -467,7 +464,7 @@ export const createApp = (deps: AppDeps) => {
     const thresholds = stallThresholds(membership.value.board);
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, relations, holding }) => {
-        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
+        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
         const facts = machineSteps(glob);
@@ -575,32 +572,6 @@ export const createApp = (deps: AppDeps) => {
     return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob, null, null, null, null, relations.get(glob.id) ?? [])) }));
   });
 
-  // Keep whole: a person decides a flagged glob stays one glob; a glob held for the flag then starts.
-  const { sizeCheck } = deps;
-  if (sizeCheck !== undefined) {
-    app.post('/api/globs/:id/keep-whole', async (c) => {
-      const email = c.get('email');
-      const id = c.req.param('id');
-      const kept = await sizeCheck.keepWhole(email, id);
-      if (!kept.ok) return send(c, kept);
-      const released = await globs.release(id);
-      if (!released.ok) return send(c, released);
-      await deps.outbox.drain(id);
-      return send(c, await globs.get(email, id), globViewOf);
-    });
-  }
-
-  // Propose split again: re-runs the size check's proposal on the current plan in the background; the card refreshes when it lands.
-  if (sizeCheck !== undefined) {
-    app.post('/api/globs/:id/actions/repropose-split', async (c) => {
-      const id = c.req.param('id');
-      const asked = await sizeCheck.repropose(c.get('email'), id);
-      if (!asked.ok) return send(c, asked);
-      void sizeCheck.runRepropose(id);
-      return send(c, asked, () => ({ running: true }));
-    });
-  }
-
   app.delete('/api/globs/:id', async (c) => {
     const body = await parse(c, versionSchema);
     if (body instanceof Response) return body;
@@ -609,11 +580,7 @@ export const createApp = (deps: AppDeps) => {
 
   const actions = {
     start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
-    // Starting a glob held for its oversized flag keeps it whole (recorded for the size learning); a glob not flagged is unaffected.
-    'start-anyway': async (email: string, id: string, b: ActionBody) => {
-      await deps.sizeCheck?.keepWhole(email, id);
-      return globs.startAnyway(email, id, b.version);
-    },
+    'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version),
     investigate: (email: string, id: string, b: ActionBody) => globs.investigate(email, id, b.version),
     // Queues an independent review of the PR as it is now (any member; the version is not checked, nothing on the glob changes).
     'review-now': (email: string, id: string) => globs.reviewNow(email, id),

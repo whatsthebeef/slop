@@ -134,7 +134,7 @@ export interface SplitPart {
   readonly category?: Category;
   /** Default: the original's type. */
   readonly type?: SlopType;
-  /** Indexes of earlier parts this one starts after; none means it runs in parallel. Part 0 has none. */
+  /** Indexes of earlier parts this one needs merged first (stored as ordinary needs); none, the default, leaves the parts independent. Part 0 has none. */
   readonly after?: readonly number[];
   /** Labels of the original's text attachments to copy to this part (link attachments always are). New parts only. */
   readonly attachments?: readonly string[];
@@ -291,7 +291,7 @@ export interface GlobView {
   readonly holding: readonly Holding[];
   /** The glob's relations in groups: holding it back, held back by it, and no longer holding. */
   readonly relationGroups: RelationsView;
-  /** The size check (flag, estimate, proposed split); null when none was made. */
+  /** The size check (flag, estimate, suggested cut); null when none was made. */
   readonly sizeCheck: SizeCheck | null;
   /** Everything a person must do on the glob: steps the machine implies and stored work steps, most pressing first. */
   readonly humanSteps: readonly HumanStep[];
@@ -380,8 +380,7 @@ export class GlobService {
       const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
       const relations = await this.relationFacts(tx, await tx.listRelationsFrom([glob.id]));
       const sizeCheck = await tx.getSizeCheck(glob.id);
-      const sizeHeld = glob.status === 'planning' && glob.waiting != null && unresolved(sizeCheck);
-      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, sizeHeld };
+      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations };
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       return ok({
         glob,
@@ -1054,15 +1053,14 @@ export class GlobService {
       }
       const created = applyWrite([], { add: needs, update: [], remove: [] }, { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() });
       const relations: RelationFacts = { relations: created.relations, states: await this.statesOf(tx, created.relations.map((r) => r.to)) };
-      const sizeHold = size !== null && size.flagged ? `Oversized: ${size.reasons.join('; ')}. Split it or keep it whole to start it` : undefined;
       // Predicted overlaps stay on the glob as internal data (the merge policy's holds); they are not shown and not an input.
       const implied = mergeImplied(holds, []);
-      const createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(sizeHold === undefined ? {} : { sizeHold }) };
+      const createInput: CreateInput = { ...input, id, impliedAfter: implied };
       const ctx = await this.context(actor.value, board);
       const created0 = machine.create(createInput, board, ctx, relations);
       if (!created0.ok) return created0;
       // A sub the size check flagged is a same from the start: too big for one clean PR to merge without a person's review.
-      // It is still held in Planning for the split decision.
+      // The flag only advises: it is not held, and starts as any same does.
       let transition: Result<Transition> = created0;
       if (size !== null && size.flagged && created0.value.glob.type === 'sub') {
         const escalated = machine.escalateToSame(created0.value.glob, sizeEscalationInput(size), ctx);
@@ -1156,10 +1154,11 @@ export class GlobService {
   }
 
   /**
-   * Cuts a glob in Planning into parts in one transaction: the original keeps part 0 (its ID, history and decisions; a new
-   * plan.md version, title and summary), the others are created in its group with their share of the plan, copies of its
-   * link attachments and the `after` chain between them. Refused once the glob has started. With an idempotency key a retry
-   * returns the same parts, whatever the version.
+   * Cuts the scope of a glob in Planning into independent globs in one transaction: the original keeps part 0 (its ID,
+   * history and decisions; a new plan.md version, title and summary), the others are created in its group with their share of
+   * the plan and copies of its link attachments. A scope cut makes no gates: no sign-off relation from the original, nothing
+   * between the parts, no auto-start; only the needs a part names in `after` become ordinary relations. Refused once the
+   * glob has started. With an idempotency key a retry returns the same parts, whatever the version.
    */
   async split(email: string, id: string, version: number, input: SplitInput): Promise<Result<Glob[]>> {
     const wanted = input.parts;
@@ -1264,7 +1263,6 @@ export class GlobService {
       if (!changed.ok) return changed;
       const escalationChanged = firstEscalation?.change != null;
       const moved = escalationChanged ? { ...changed.value.glob, escalation: firstEscalation.escalation } : changed.value.glob;
-      // The sign-off relations written below are a change to the original: its version always moves.
       const updated = { ...moved, updatedAt: ctx.now, version: original.version + 1 };
       if (!(await tx.updateGlob(updated, original.version))) {
         const current = await tx.getGlob(id);
@@ -1283,8 +1281,7 @@ export class GlobService {
         return target !== undefined && !hasMerged(target);
       });
       const globs: Glob[] = [updated];
-      const growing: Relation[] = [...boardRelations];
-      const signOffs: Relation[] = [];
+      const needsBy = input.planBy === 'human' || input.planBy === undefined ? 'person' : 'agent';
       const withArtifacts = [original.id];
       for (const [index, part] of wanted.entries()) {
         if (index === 0) continue;
@@ -1293,17 +1290,9 @@ export class GlobService {
         const earlier = [...new Set((part.after ?? []).map((n) => ids[n] ?? ''))];
         const awaitedIds = [...new Set([...inherited, ...earlier])];
         if (awaitedIds.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
-        // The chain between parts is a split's own relation; what the original waited for stays a person's.
-        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: earlier.includes(to) ? 'earlier part of the split' : null, evidence: [], source: earlier.includes(to) ? 'split' : 'person' }));
+        // A need the part names is an ordinary relation (a person's or an agent's); what the original waited for stays a person's.
+        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: earlier.includes(to) ? needsBy : 'person' }));
         const startRelations = applyWrite([], { add: startWrite, update: [], remove: [] }, { boardId: board.id, from: partId, now: ctx.now, newId: () => this.relationId() });
-        // The source can't be signed off before this part has merged.
-        const signOff = applyWrite([], { add: [{ to: partId, gate: 'sign_off', until: 'merged', reason: 'split part', evidence: [], source: 'split' }], update: [], remove: [] }, { boardId: board.id, from: id, now: ctx.now, newId: () => this.relationId() }).inserted;
-        for (const draft of signOff) {
-          const checked = checkRelation(draft, board.id, growing, (gid) => (gid === partId ? { boardId: board.id } : undefined));
-          if (!checked.ok) return checked;
-          growing.push(draft);
-          signOffs.push(draft);
-        }
         const created = machine.create(
           {
             id: partId,
@@ -1314,8 +1303,6 @@ export class GlobService {
             group,
             environment: original.environment,
             autoTrigger: false,
-            // A same part that waits for others starts by itself when they merge (a person can turn that off).
-            autoStart: true,
           },
           board,
           ctx,
@@ -1347,7 +1334,6 @@ export class GlobService {
           },
         ]);
       };
-      await this.writeNew(tx, updated, signOffs, email, ctx.now);
       const sized = await tx.getSizeCheck(original.id);
       if (sized !== null && sized.decision === null) {
         await tx.upsertSizeCheck({ ...sized, decision: 'split', decidedBy: email, decidedAt: at, updatedAt: at });
@@ -1456,7 +1442,7 @@ export class GlobService {
    * What stating relations `wanted` on a glob does (any gate): each is checked (the other glob is on the board and not this one,
    * a shape that makes sense, within the limit, no cycle) and then added. A relation a person or agent already set to the same
    * glob and gate only changes its `until` and reason; an inferred or learned one, or one that was dismissed or overridden,
-   * gives way to a fresh one; a split's stays as it is. Nothing is removed otherwise.
+   * gives way to a fresh one. Nothing is removed otherwise.
    */
   private async planRelations(
     tx: Tx,
@@ -1482,7 +1468,6 @@ export class GlobService {
       const reason = (w.reason ?? '').trim();
       if (reason.length > MAX_RELATION_REASON) return invalidInput(`A reason is limited to ${MAX_RELATION_REASON} characters`);
       const mine = growing.find((r) => r.from === glob.id && r.to === w.to && r.gate === gate);
-      if (mine !== undefined && isActive(mine) && mine.source === 'split') continue;
       const rest = growing.filter((r) => r.id !== mine?.id);
       const checked = checkRelation({ from: glob.id, to: w.to, gate, until }, glob.boardId, rest, (gid) => found.get(gid));
       if (!checked.ok) return checked;
@@ -1502,7 +1487,7 @@ export class GlobService {
   }
 
   /**
-   * What replacing a glob's start list (`needs`/`after`) with `wanted` does to its relations: the ones a person or a split set
+   * What replacing a glob's start list (`needs`/`after`) with `wanted` does to its relations: the ones a person (or an old split) set
    * (not inferred or learned) are replaced, a recorded inferred or learned one to the same glob gives way to the person's, merged
    * globs are dropped, and every new relation is checked (on the board, not itself, no cycle, within the limit).
    */
@@ -1570,8 +1555,7 @@ export class GlobService {
   /**
    * A person says a recorded relation is not a dependency (the ✕ on a Related row). The plan's hash is kept with it so a
    * changed plan may infer it again. A held glob that waited only for that relation starts, as when its last dependency
-   * merges, and a merge or sign-off held for it goes on. A split's relation can't be dismissed: it is how the parts are
-   * tracked.
+   * merges, and a merge or sign-off held for it goes on.
    */
   async dismissRelation(email: string, id: string, version: number | null, relationId: string) {
     const result = await this.command(email, id, version, (glob) => ok({ glob, changed: false, events: [], effects: [] }), {
@@ -1579,7 +1563,6 @@ export class GlobService {
       relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[], now: string): Promise<Result<RelationWrite>> => {
         const found = board.find((r) => r.id === relationId && r.from === glob.id);
         if (found === undefined) return invalidInput(`${glob.id} has no relation ${relationId}`);
-        if (found.source === 'split') return invalidInput(`${found.to} is one of ${glob.id}'s split parts: the relation tracks the split and cannot be dismissed`);
         if (found.dismissedAt !== null) return ok(NO_WRITE);
         const planHash = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '');
         return ok({ add: [], update: [{ id: found.id, patch: { dismissedAt: now, dismissedPlanHash: planHash } }], remove: [] });
@@ -1944,20 +1927,14 @@ export class GlobService {
   }
 
   /**
-   * After a size check was re-judged (its plan was saved): a sub held in Planning for the flag starts once the check no
-   * longer holds it. A newly flagged sub needs nothing here: `release` refuses an unanswered flag, and a sub in Planning
-   * is always waiting on something.
+   * After a size check was re-judged (its plan was saved): a sub waiting in Planning that the check now flags becomes a same,
+   * with the size check's reasons. The flag never holds or releases a glob. A size-escalated same stays a same when the flag lifts.
    */
-  async reconcileSizeHold(id: string): Promise<void> {
+  async reconcileSizeCheck(id: string): Promise<void> {
     const read = await this.deps.store.transaction(async (tx) => ({ glob: await tx.getGlob(id), check: await tx.getSizeCheck(id) }));
     const { glob, check } = read;
-    const heldInPlanning = glob !== null && glob.status === 'planning' && glob.waiting != null;
-    if (heldInPlanning && check !== null && unresolved(check) && glob.type === 'sub') {
-      // Newly flagged on a recheck: the sub becomes a same, with the size check's reasons.
+    if (glob !== null && glob.status === 'planning' && glob.waiting != null && glob.type === 'sub' && check !== null && check.flagged) {
       await this.command(null, id, null, (g, ctx) => machine.escalateToSame(g, sizeEscalationInput(check), ctx));
-    } else if (heldInPlanning && !unresolved(check) && (glob.type === 'sub' || glob.escalation?.criterion === 'size')) {
-      // No longer flagged: the glob held for it starts (a size-escalated same stays a same).
-      await this.release(id);
     }
     // The plan was re-judged: a glob that now looks big is investigated (a no-op when it already was).
     await this.autoInvestigate(id);
@@ -2125,9 +2102,6 @@ export class GlobService {
 
   /** Starts one held glob if everything it waits for has merged and the merge policy still lets it. */
   async release(id: string) {
-    // A glob held for its size flag stays held until a person splits it or keeps it whole.
-    const held = await this.deps.store.transaction(async (tx) => (unresolved(await tx.getSizeCheck(id)) ? await tx.getGlob(id) : null));
-    if (held !== null) return ok(held);
     const holds = await this.holdsFor(id, true);
     return this.command(null, id, null, (glob, ctx, _board, facts) => machine.released(glob, ctx, facts.relations, holds), {
       relations: true,

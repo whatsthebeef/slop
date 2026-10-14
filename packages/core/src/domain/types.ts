@@ -247,7 +247,7 @@ export type RelationGate = (typeof RELATION_GATES)[number];
 /** What `to` must reach for the gate to open: merged, decided (a decision glob's outcome) or signed off. */
 export const RELATION_UNTILS = ['merged', 'decided', 'signed_off'] as const;
 export type RelationUntil = (typeof RELATION_UNTILS)[number];
-/** Who set a relation: a person, slop's inference, slop's learning from outcomes, a split, or an agent. */
+/** Who set a relation: a person, slop's inference, slop's learning from outcomes, an agent, or (old rows only; nothing creates it now) a split. */
 export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent'] as const;
 export type RelationSource = (typeof RELATION_SOURCES)[number];
 
@@ -354,11 +354,6 @@ export interface Glob {
    * passed, or a sub whose gate passed): `sha` is the head it would merge. `gateReleased` resumes it; cleared on merge, disarm or a new head.
    */
   readonly mergeHold?: { readonly since: string; readonly sha: string; readonly for: readonly string[] } | null;
-  /**
-   * A same that starts its routine by itself when what it waits for merges (set on the parts of a split that need another
-   * part; subs always do). A person turns it off, which ends the wait and leaves the needs in place.
-   */
-  readonly autoStart?: boolean;
   /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
   readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;

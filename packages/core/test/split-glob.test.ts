@@ -66,7 +66,7 @@ describe('split a glob into parts', () => {
     );
   });
 
-  it('keeps part 1 on the original and creates the others with their plans, group and chain', async () => {
+  it('keeps part 1 on the original and creates the others with their plans and group, and the needs they name', async () => {
     unwrap(await artifacts.attach(DEV, original.id, { label: 'Spec', text: null, link: 'https://example.com/spec' }));
     unwrap(await artifacts.attach(DEV, original.id, { label: 'Notes', text: 'private notes', link: null }));
     unwrap(await artifacts.attach(DEV, original.id, { label: 'Data', text: 'the data', link: null }));
@@ -91,13 +91,11 @@ describe('split a glob into parts', () => {
     expect(second.category).toBe('feature');
     expect(second.group).toBe('grp');
     const needs = (id: string) => [...store.state.relations.values()].filter((r) => r.from === id && r.gate === 'start').map((r) => [r.to, r.source]);
-    expect(needs(second.id)).toEqual([[first.id, 'split']]);
-    expect(needs(third.id)).toEqual([[first.id, 'split'], [second.id, 'split']]);
-    // The glob that was cut can't be signed off until each other part has merged.
-    expect([...store.state.relations.values()].filter((r) => r.gate === 'sign_off').map((r) => [r.from, r.to, r.until, r.source])).toEqual([
-      [first.id, second.id, 'merged', 'split'],
-      [first.id, third.id, 'merged', 'split'],
-    ]);
+    expect(needs(second.id)).toEqual([[first.id, 'person']]);
+    expect(needs(third.id)).toEqual([[first.id, 'person'], [second.id, 'person']]);
+    // A scope cut: the original signs off on its own, and nothing starts a part by itself.
+    expect([...store.state.relations.values()].filter((r) => r.gate === 'sign_off')).toEqual([]);
+    expect(second).not.toHaveProperty('autoStart');
     expect(await planOf(first.id)).toContain(`First, then ${second.id} and ${third.id}`);
     expect(await planOf(second.id)).toContain(`Second, needs ${first.id}`);
     expect(await planOf(second.id)).toContain(`Split from ${first.id} on 2026-10-09`);

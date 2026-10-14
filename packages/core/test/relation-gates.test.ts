@@ -309,37 +309,41 @@ describe('the relation service: gates, resumes and the relations API', () => {
     expect((await current(sub2.id)).status).toBe('merging');
   });
 
-  it('a split source cannot be signed off until every part has merged, then it is (the release path)', async () => {
+  /** A glob that signs off only after others have merged: the sign-off relations a person or agent sets (a split makes none now). */
+  const gated = async (waitsFor: readonly string[]) => {
     const original = await create({ title: 'Big', plan: 'Big plan' });
-    const [one, two, three] = unwrap(
-      await globs.split(DEV, original.id, original.version, { idempotencyKey: null, parts: [{ title: 'One', plan: 'one' }, { title: 'Two', plan: 'two' }, { title: 'Three', plan: 'three' }] }),
-    );
-    // The source (part one) merges and is reviewed: labels approved while two parts are still open.
-    const merged = await merge(one?.id ?? '');
+    for (const to of waitsFor) unwrap(await globs.addRelation(DEV, original.id, (await current(original.id)).version, { to, gate: 'sign_off' }));
+    return original;
+  };
+
+  it('a glob with sign-off relations cannot be signed off until each has merged, then it is (the release path)', async () => {
+    const two = await create({ title: 'Two', plan: 'two' });
+    const three = await create({ title: 'Three', plan: 'three' });
+    const one = await gated([two.id, three.id]);
+    // It merges and is reviewed: labels approved while the others are still open.
+    const merged = await merge(one.id);
     let latest = merged;
     for (const label of LABEL_NAMES.filter((n) => n in merged.labels)) latest = unwrap(await globs.reviewLabel(DEV, latest.id, latest.version, label, { kind: 'approve' }));
     expect(Object.values(latest.labels).every((s) => s === 'approved')).toBe(true);
     expect(latest.status).toBe('reviewing');
     const view = unwrap(await globs.get(DEV, latest.id));
-    expect(view.holding.map((h) => h.to)).toEqual([two?.id, three?.id]);
-    expect(view.holding[0]?.parts).toEqual({ merged: 0, total: 2 });
-    await merge(two?.id ?? '');
-    await globs.releaseDependents(two?.id ?? '', boardId);
+    expect(view.holding.map((h) => h.to)).toEqual([two.id, three.id]);
+    await merge(two.id);
+    await globs.releaseDependents(two.id, boardId);
     expect((await current(latest.id)).status).toBe('reviewing');
-    expect(unwrap(await globs.get(DEV, latest.id)).holding[0]?.parts).toEqual({ merged: 1, total: 2 });
-    await merge(three?.id ?? '');
-    await globs.releaseDependents(three?.id ?? '', boardId);
+    await merge(three.id);
+    await globs.releaseDependents(three.id, boardId);
     expect((await current(latest.id)).status).toBe('signed_off');
   });
 
-  it('deleting the last unmet part releases the split source sign-off, once; a second gateReleased changes nothing', async () => {
-    const original = await create({ title: 'Big', plan: 'Big plan' });
-    const [one, two] = unwrap(await globs.split(DEV, original.id, original.version, { idempotencyKey: null, parts: [{ title: 'One', plan: 'one' }, { title: 'Two', plan: 'two' }] }));
-    const merged = await merge(one?.id ?? '');
+  it('deleting the last unmet glob releases the sign-off, once; a second gateReleased changes nothing', async () => {
+    const two = await create({ title: 'Two', plan: 'two' });
+    const one = await gated([two.id]);
+    const merged = await merge(one.id);
     let latest = merged;
     for (const label of LABEL_NAMES.filter((n) => n in merged.labels)) latest = unwrap(await globs.reviewLabel(DEV, latest.id, latest.version, label, { kind: 'approve' }));
     expect(latest.status).toBe('reviewing');
-    unwrap(await globs.delete(DEV, two?.id ?? '', (await current(two?.id ?? '')).version));
+    unwrap(await globs.delete(DEV, two.id, (await current(two.id)).version));
     const done = await current(latest.id);
     expect(done.status).toBe('signed_off');
     const before = done.version;
@@ -348,15 +352,26 @@ describe('the relation service: gates, resumes and the relations API', () => {
     expect((await current(latest.id)).version).toBe(before);
   });
 
-  it('refuses a relation that closes a cycle through another gate: part waits for source to merge while source signs off after the part', async () => {
+  it('a split makes no sign-off relation: the original signs off on its own, whatever its parts do', async () => {
     const original = await create({ title: 'Big', plan: 'Big plan' });
     const [one, two] = unwrap(await globs.split(DEV, original.id, original.version, { idempotencyKey: null, parts: [{ title: 'One', plan: 'one' }, { title: 'Two', plan: 'two' }] }));
-    // The source signs off after part two merges; making part two wait for the source to be signed off is a deadlock.
-    const refused = await globs.addRelation(DEV, two?.id ?? '', null, { to: one?.id ?? '', gate: 'start', until: 'signed_off' });
+    expect(rows(one?.id ?? '')).toEqual([]);
+    const merged = await merge(one?.id ?? '');
+    let latest = merged;
+    for (const label of LABEL_NAMES.filter((n) => n in merged.labels)) latest = unwrap(await globs.reviewLabel(DEV, latest.id, latest.version, label, { kind: 'approve' }));
+    expect(latest.status).toBe('signed_off');
+    expect((await current(two?.id ?? '')).status).toBe('planning');
+  });
+
+  it('refuses a relation that closes a cycle through another gate: part waits for source to be signed off while source signs off after the part', async () => {
+    const two = await create({ title: 'Two', plan: 'two' });
+    const one = await gated([two.id]);
+    // The source signs off after the other merges; making the other wait for the source to be signed off is a deadlock.
+    const refused = await globs.addRelation(DEV, two.id, null, { to: one.id, gate: 'start', until: 'signed_off' });
     expect(code(refused)).toBe('invalid_input');
     expect(message(refused)).toContain('cycle');
-    // Waiting for the source to merge is what a split already does: no cycle, nothing new.
-    expect(code(await globs.addRelation(DEV, two?.id ?? '', null, { to: one?.id ?? '', gate: 'merge' }))).toBeNull();
+    // Waiting for the source to merge is no cycle: the source's sign-off comes after its merge.
+    expect(code(await globs.addRelation(DEV, two.id, null, { to: one.id, gate: 'merge' }))).toBeNull();
   });
 
   it('a decision relation (until decided) holds a sub until the decision is accepted or rejected, not on needs work', async () => {

@@ -121,7 +121,7 @@ export const GlobDetail = ({
   };
 
   const [splitting, setSplitting] = useState(false);
-  const size = useOversized({ glob, enabled: !actionState.decision && isOversized(glob), onDone: onClose });
+  const size = useOversized({ glob, enabled: !actionState.decision && isOversized(glob) });
   useEffect(() => setSplitting(false), [glob.id]);
   // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
   const confirming = actionState.confirmDelete || actionState.confirmingAgain || splitting;

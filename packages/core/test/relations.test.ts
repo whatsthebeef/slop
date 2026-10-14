@@ -383,7 +383,7 @@ describe('the service and relations', () => {
     expect(rows(a.id)).toEqual([]);
   });
 
-  it('a split: the chain between parts and a sign-off relation from the source to each part, in the same transaction', async () => {
+  it('a split is a scope cut: no sign-off relation and no gate between parts; needs a part names are ordinary relations', async () => {
     const original = await create({ title: 'Big', plan: 'Big plan' });
     const parts = unwrap(
       await globs.split(DEV, original.id, original.version, {
@@ -393,17 +393,17 @@ describe('the service and relations', () => {
     );
     const [one, two, three] = parts;
     expect(rows().filter((r) => r.gate === 'start').map((r) => [r.from, r.to, r.source])).toEqual([
-      [two?.id, one?.id, 'split'],
-      [three?.id, one?.id, 'split'],
-      [three?.id, two?.id, 'split'],
+      [two?.id, one?.id, 'person'],
+      [three?.id, one?.id, 'person'],
+      [three?.id, two?.id, 'person'],
     ]);
-    expect(rows(one?.id).map((r) => [r.to, r.gate, r.until, r.source])).toEqual([
-      [two?.id, 'sign_off', 'merged', 'split'],
-      [three?.id, 'sign_off', 'merged', 'split'],
-    ]);
+    // The original signs off on its own.
+    expect(rows(one?.id)).toEqual([]);
+    expect(rows().some((r) => r.gate === 'sign_off' || r.source === 'split')).toBe(false);
     expect(one?.version).toBe(original.version + 1);
-    // Two waits for One: it starts by itself when One merges.
+    // Two names One as a need, so it is held for it, but nothing starts it by itself.
     expect(two?.status).toBe('planning');
+    expect(two).not.toHaveProperty('autoStart');
     expect(unwrap(await globs.get(DEV, two?.id ?? '')).waitingFor.map((w) => w.id)).toEqual([one?.id]);
   });
 

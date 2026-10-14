@@ -613,7 +613,7 @@ describe('glob view: the conflict section', () => {
 
 describe('glob view: split moves in the action ▾', () => {
   const now = '2026-10-14T00:00:00Z';
-  const part = (title: string, after: number[] = []) => ({ title, plan: `plan ${title}`, after });
+  const stream = (name: string, needs: number[] = []) => ({ name, goal: `goal ${name}`, files: [], plan: `plan ${name}`, needs });
   const sizeCheck = (proposal: boolean): NonNullable<GlobView['sizeCheck']> => ({
     globId: 's1t1',
     boardId: 1,
@@ -632,7 +632,7 @@ describe('glob view: split moves in the action ▾', () => {
     threshold: { maxParts: 3, maxTasks: 5 },
     flagged: true,
     reasons: ['6 tasks'],
-    proposal: proposal ? { parts: [part('One'), part('Two', [0])] } : null,
+    proposal: proposal ? { workstreams: [stream('One'), stream('Two', [0])] } : null,
     decision: null,
     decidedBy: null,
     decidedAt: null,
@@ -650,10 +650,6 @@ describe('glob view: split moves in the action ▾', () => {
     });
   const oversizedGlob = (proposal: boolean, patch: Partial<GlobView> = {}) =>
     splittableGlob({ oversized: true, sizeCheck: sizeCheck(proposal), ...patch });
-  const menuLabels = () =>
-    within(screen.getByTestId('more-menu'))
-      .getAllByRole('menuitem')
-      .map((item) => item.querySelector('span')?.textContent ?? '');
 
   it('has no standalone Split button; Split… is in the ▾ and opens the split form', async () => {
     const user = userEvent.setup();
@@ -665,56 +661,23 @@ describe('glob view: split moves in the action ▾', () => {
     expect(await screen.findByTestId('split-editor')).toBeTruthy();
   });
 
-  it('leads with Split as proposed on an oversized glob, with the moves first in the ▾', async () => {
+  it('never holds an oversized glob: Start still leads, and Split… is a scope cut in the ▾', async () => {
     const user = userEvent.setup();
     renderGlob(oversizedGlob(true));
-    expect(mainButton()?.textContent).toBe('Split as proposed');
+    expect(mainButton()?.textContent).toBe('Start');
     await user.click(screen.getByTestId('more-actions'));
     await screen.findByTestId('more-menu');
-    expect(menuLabels()).toEqual(['Edit split', 'Propose again', 'Keep whole', 'Start']);
+    expect(screen.getByTestId('more-split')).toBeTruthy();
+    expect(screen.queryByTestId('more-keep-whole')).toBeNull();
+    expect(screen.queryByTestId('more-propose-split')).toBeNull();
   });
 
-  it('keeps the explanation and the proposed parts in the panel, without buttons', () => {
+  it('keeps the explanation and the proposed workstreams in the panel, without buttons', () => {
     renderGlob(oversizedGlob(true));
     const panel = screen.getByTestId('oversized-proposal');
     expect(panel.textContent).toContain('Oversized: this looks like more than one PR');
+    expect(panel.textContent).toContain('This is advice');
     expect(within(panel).getByTestId('oversized-parts').textContent).toContain('Two');
     expect(within(panel).queryAllByRole('button')).toHaveLength(0);
-  });
-
-  it('leads with Split… and offers Propose split when nothing was proposed', async () => {
-    const user = userEvent.setup();
-    renderGlob(oversizedGlob(false));
-    expect(mainButton()?.textContent).toBe('Split…');
-    await user.click(screen.getByTestId('more-actions'));
-    await screen.findByTestId('more-menu');
-    expect(menuLabels()).toEqual(['Propose split', 'Keep whole', 'Start']);
-  });
-
-  it('asks before Keep whole', async () => {
-    const user = userEvent.setup();
-    renderGlob(oversizedGlob(true));
-    await user.click(screen.getByTestId('more-actions'));
-    await user.click(await screen.findByTestId('more-keep-whole'));
-    expect(screen.getByRole('alert').textContent).toContain('Keep it as one glob? slop learns from how it goes.');
-    expect(screen.getByTestId('confirm-keep-whole')).toBeTruthy();
-  });
-
-  it('hides Keep whole from QA on a same', async () => {
-    const user = userEvent.setup();
-    cleanup();
-    const cb = callbacks();
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={client}>
-        <MemoryRouter>
-          <GlobDetail board={{ ...board, role: 'qa' }} glob={oversizedGlob(true, { type: 'same' })} initialArtifact={null} {...cb} />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    await user.click(screen.getByTestId('more-actions'));
-    await screen.findByTestId('more-menu');
-    expect(screen.queryByTestId('more-keep-whole')).toBeNull();
-    expect(screen.getByTestId('more-edit-split')).toBeTruthy();
   });
 });

@@ -2,7 +2,7 @@ import type { Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, Doma
 import { blockProgress, checksExplanation, compactStep, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-/** The globs a person, an agent or a split said this one starts after (the old `after` list). */
+/** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
 const explicitNeeds = (relations: readonly Relation[]): string[] =>
   relations.filter((r) => r.gate === 'start' && isExplicit(r) && isActive(r)).map((r) => r.to);
 
@@ -55,7 +55,7 @@ export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; a
     handover: v.handover ?? null,
     // The status messages the viewer dismissed (per person): the card and the Now panel collapse them.
     dismissedKeys: v.dismissedKeys ?? [],
-    // The size check: the flag, why, the estimate's evidence and the proposed split (get_glob carries it to routines).
+    // The size check: the flag (advice only), why, the estimate's evidence and the proposed workstreams (get_glob carries it to routines).
     ...(v.sizeCheck == null ? {} : { sizeCheck: v.sizeCheck, oversized: v.glob.status === 'planning' && unresolved(v.sizeCheck) }),
   });
 
@@ -82,8 +82,6 @@ export const globViewFor = (
   relations?: RelationFacts,
   /** The glob's unmet relations (see `holdingOf`), computed by the service for the whole list. */
   holding: readonly Holding[] = [],
-  /** Held in Planning for an unanswered oversized flag: nothing unmerged is awaited, yet Start now applies. */
-  sizeHeld = false,
   /** The board's open work steps for this glob (the list reads them for the whole board at once). */
   stored: readonly StoredHumanStep[] = [],
 ) =>
@@ -97,7 +95,6 @@ export const globViewFor = (
         // Without the artifacts loaded the reviews are unknown, so no Retry review is guessed.
         ...(artifacts === null ? {} : { reviews: machine.reviewsOf(artifacts) }),
         ...(relations === undefined ? {} : { relations }),
-        sizeHeld,
       },
     ),
     artifacts,
@@ -136,18 +133,18 @@ export const onBoard = (glob: Glob, now: number): boolean =>
   glob.signedOffAt === null ||
   now - Date.parse(glob.signedOffAt) < SIGNED_OFF_VISIBLE_MS;
 
-/** A part's plan is the whole plan again plus its share; an agent that reads a glob needs the part's title and shape, not 10 KB of repeats. */
+/** A workstream's plan is the whole plan again plus its share; an agent that reads a glob needs its name and shape, not 10 KB of repeats. */
 const PART_SUMMARY_CHARS = 200;
 
 /**
- * The glob view with the size check's proposed split trimmed for MCP reads: each part keeps its title and needs, and its plan
- * becomes a short summary with its length. `get_glob` with `include: ['size_proposal']` returns the plans in full (split_glob's input).
+ * The glob view with the size check's proposed workstreams trimmed for MCP reads: each keeps its name, goal, files and needs, and
+ * its plan share becomes a short summary with its length. `get_context`'s `size` carries the workstreams in full.
  */
 export const compactSizeProposal = <V extends { sizeCheck?: SizeCheck | null }>(view: V): V => {
   const proposal = view.sizeCheck?.proposal;
   if (proposal == null || view.sizeCheck == null) return view;
-  const parts = proposal.parts.map(({ plan, ...rest }) => ({ ...rest, planSummary: plan.replace(/\s+/g, ' ').slice(0, PART_SUMMARY_CHARS), planChars: plan.length }));
-  return { ...view, sizeCheck: { ...view.sizeCheck, proposal: { ...proposal, parts } } };
+  const workstreams = proposal.workstreams.map(({ plan, ...rest }) => ({ ...rest, planSummary: plan.replace(/\s+/g, ' ').slice(0, PART_SUMMARY_CHARS), planChars: plan.length }));
+  return { ...view, sizeCheck: { ...view.sizeCheck, proposal: { ...proposal, workstreams } } };
 };
 
 const KB_TEXT_CHARS = 400;

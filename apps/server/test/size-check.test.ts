@@ -69,7 +69,7 @@ describe('The learned size check in Postgres', () => {
       return Promise.resolve(
         system.startsWith('You judge')
           ? '{"independentParts": 4, "parallelParts": 3, "reason": "four pieces"}'
-          : '{"parts":[{"title":"Data","summary":"a","plan":"## Tasks\\n1. migration","after":[]},{"title":"Web","summary":"b","plan":"## Tasks\\n3. card","after":[0]},{"title":"CLI","summary":"c","plan":"## Tasks\\n4. cli","after":[0]}]}',
+          : '{"workstreams":[{"name":"Data","goal":"a","files":[],"plan":"## Tasks\\n1. migration","needs":[]},{"name":"Web","goal":"b","files":[],"plan":"## Tasks\\n3. card","needs":[0]},{"name":"CLI","goal":"c","files":[],"plan":"## Tasks\\n4. cli","needs":[0]}]}',
       );
     },
   };
@@ -104,18 +104,18 @@ describe('The learned size check in Postgres', () => {
     await drop();
   });
 
-  it('stores the estimate, evidence and proposed split with the glob, and holds a flagged sub', async () => {
+  it('stores the estimate, evidence and proposed workstreams with the glob, and does not hold a flagged sub', async () => {
     const sub = await create('sub', BIG);
-    expect(sub.status).toBe('planning');
+    expect(sub.status).toBe('implementing');
+    expect(sub.type).toBe('same');
     const check = await store.transaction((tx) => tx.getSizeCheck(sub.id));
     expect(check).toMatchObject({ flagged: true, decision: null, threshold: { maxTasks: 5, maxParts: 3 } });
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 4, partsSource: 'model' });
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Web', 'CLI']);
+    expect(check?.proposal?.workstreams.map((w) => w.name)).toEqual(['Data', 'Web', 'CLI']);
+    expect(check?.proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], [0]]);
     expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
     expect(unwrap(await globs.get(DEV, sub.id)).sizeCheck?.flagged).toBe(true);
-    expect([...(await globs.oversizedOf(boardId))]).toContain(sub.id);
-    unwrap(await size.keepWhole(DEV, sub.id));
-    expect(unwrap(await globs.release(sub.id)).status).toBe('implementing');
+    // Only a glob still in Planning shows the chip; this one is already running.
     expect([...(await globs.oversizedOf(boardId))]).not.toContain(sub.id);
   });
 

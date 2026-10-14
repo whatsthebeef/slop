@@ -31,7 +31,6 @@ export const SizeSection = ({
     return (
       <SplitGlob
         glob={glob}
-        proposal={oversized ? (size.proposal ?? undefined) : undefined}
         onCancel={() => onSplitting(false)}
         onDone={onClose}
       />

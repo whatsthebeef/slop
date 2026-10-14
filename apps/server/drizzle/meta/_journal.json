@@ -498,6 +498,13 @@
       "when": 1791985425691,
       "tag": "0070_chat_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1792003628739,
+      "tag": "0071_split_scope_cut",
+      "breakpoints": true
     }
   ]
 }
