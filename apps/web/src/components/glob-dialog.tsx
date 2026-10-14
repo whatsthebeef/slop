@@ -28,6 +28,7 @@ const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) 
 export const GlobDetail = ({
   board,
   glob,
+  groups = [],
   initialArtifact,
   section = null,
   openLabel = null,
@@ -48,6 +49,8 @@ export const GlobDetail = ({
 }: {
   board: BoardView;
   glob: GlobView;
+  /** The board's existing groups, suggested in the Group field. */
+  groups?: readonly string[];
   /** The artifact to show first (from a card icon). */
   initialArtifact: ArtifactRef | null;
   /** The section to scroll to once it has rendered (from `?section=`); unknown or null stays at the top. */
@@ -109,6 +112,7 @@ export const GlobDetail = ({
   const ctx: GlobViewContext = {
     board,
     glob,
+    groups,
     busy,
     onAction,
     onUpdate,

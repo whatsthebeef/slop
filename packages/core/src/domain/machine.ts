@@ -555,6 +555,7 @@ export const start = (
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
+  if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
   const awaited = awaitedOf(relations);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
   // Overlaps the policy predicted never hold the start; they stay on the glob as internal data for conflicts and learning.
@@ -648,6 +649,7 @@ export const startAnyway = (
   relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
   if (glob.type !== 'super' && glob.status === 'in_progress' && glob.implementer !== null) {
     if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
     return new Builder(glob, ctx)
@@ -710,7 +712,7 @@ export const released = (
     .done();
 };
 
-/** Supers and sames are picked up by developers; QA and PO members only pick up subs. */
+/** Sames and supers are started, retried and picked up by developers and admins; QA and PO members only do that for subs. */
 const restrictedFrom = (actor: Actor, glob: Glob): boolean =>
   (actor.role === 'qa' || actor.role === 'po') && glob.type !== 'sub';
 
@@ -873,6 +875,7 @@ export const retrigger = (
   if (glob.status !== 'failed' || glob.type === 'super') {
     return invalidTransition(glob, actor, 'Only a failed sub or same can be retried');
   }
+  if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot retry ${glob.type}s`);
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
   const awaited = awaitedOf(relations);
   if (awaited.length > 0 && !anyway) return invalidTransition(glob, actor, refusalText(awaited));
@@ -1057,6 +1060,9 @@ export const conflictCleared = (
  */
 export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
+  if (restrictedFrom(actor, glob)) {
+    return forbidden(`QA and PO members cannot resolve conflicts on ${glob.type}s`);
+  }
   if (glob.implementer !== null) {
     return invalidTransition(
       glob,
@@ -1100,6 +1106,9 @@ export const startAgain = (
   const actor = requireActor(ctx);
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
     return invalidTransition(glob, actor, 'A merged glob cannot be started again');
+  }
+  if (restrictedFrom(actor, glob)) {
+    return forbidden(`QA and PO members cannot start ${glob.type}s again`);
   }
   const b = new Builder(glob, ctx)
     .endRun('superseded', null, { cause: 'start_again' })
@@ -2897,7 +2906,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     glob.type !== 'super' &&
     (facts.sizeHeld === true ||
       (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0));
-  if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
+  if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (canReviewNow(glob)) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');
@@ -2931,6 +2940,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   // A merge failure on a glob a person implements is theirs to fix and push: a routine run is the wrong answer.
   const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
   if (
+    !restricted &&
     glob.status === 'failed' &&
     glob.type !== 'super' &&
     !hasLiveRun(glob) &&
@@ -2940,8 +2950,8 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   }
   if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob)) actions.push('retry_autofix');
   if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
-  if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
-  if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
+  if (!restricted && canRequestConflictFix(glob)) actions.push('resolve_conflict');
+  if (!restricted && glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (isMergeArmed(glob)) {
     if (!restricted) actions.push('cancel_merge');
   } else if (mergeBlocker(glob, facts.relations) === null) {

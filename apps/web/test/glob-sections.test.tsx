@@ -39,13 +39,13 @@ const callbacks = () => ({
 });
 
 /** Renders the glob view with stubbed callbacks; the server is never reached (every fetch fails and the queries stay empty). */
-const renderGlob = (glob: GlobView) => {
+const renderGlob = (glob: GlobView, groups?: readonly string[]) => {
   const cb = callbacks();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <GlobDetail board={board} glob={glob} initialArtifact={null} {...cb} />
+        <GlobDetail board={board} glob={glob} initialArtifact={null} {...(groups === undefined ? {} : { groups })} {...cb} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -343,6 +343,12 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('suggests the board’s groups in the Group field', () => {
+    renderGlob(view(), ['alpha', 'beta']);
+    const list = document.getElementById(screen.getByLabelText('Group').getAttribute('list') ?? '');
+    expect([...(list?.querySelectorAll('option') ?? [])].map((o) => o.value)).toEqual(['alpha', 'beta']);
   });
 
   it('saves the edited group through onUpdate', async () => {

@@ -8,6 +8,7 @@ import type { ArtifactRef } from '@/components/artifacts';
 import { GlobDetail } from '@/components/glob-dialog';
 import { ACTION_PATHS, api, RequestError } from '@/lib/api';
 import type { GlobChanges, GlobView } from '@/lib/api';
+import { groupNames } from '@/lib/group-names';
 import { withGlob } from '@/lib/glob-list';
 import { labelToOpen, parseGlobTarget } from '@/lib/glob-section';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
@@ -32,6 +33,7 @@ export const GlobPage = () => {
   useLiveBoard(boardId);
   const board = useQuery({ queryKey: ['board', boardId], queryFn: () => api.board(boardId) });
   const glob = useQuery({ queryKey: globKey(globId), queryFn: () => api.glob(globId), refetchInterval: REFRESH_MS });
+  const boardGlobs = useQuery({ queryKey: globsKey(boardId), queryFn: () => api.globs(boardId) });
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const view = glob.data;
   const state = view === undefined ? undefined : view.status === 'failed' || view.failure !== null ? 'failed' : view.status === 'signed_off' || view.pr?.state === 'merged' ? 'merged' : 'open';
@@ -86,6 +88,7 @@ export const GlobPage = () => {
     <GlobDetail
       board={board.data}
       glob={open}
+      groups={groupNames(boardGlobs.data ?? [])}
       initialArtifact={initialArtifact}
       section={target.section}
       openLabel={labelToOpen(target)}

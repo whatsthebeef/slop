@@ -12,6 +12,7 @@ import { globsKey } from '@/lib/live';
 import { attachFile, checkFile } from '@/lib/upload';
 import { useToast } from '@/toast';
 import { FileDropZone } from './file-drop';
+import { GroupInput } from './group-input';
 import type { BoardView, IntakeProposalView, NewGlob } from '@/lib/api';
 
 const empty = (): NewGlob => ({
@@ -218,16 +219,11 @@ export const CreateGlobDialog = ({
             </Label>
             <Label>
               Group
-              <Input
-                list='groups'
+              <GroupInput
+                groups={groups}
                 value={form.group ?? ''}
                 onChange={(e) => setForm({ ...form, group: e.target.value })}
               />
-              <datalist id='groups'>
-                {groups.map((g) => (
-                  <option key={g} value={g} />
-                ))}
-              </datalist>
             </Label>
             <Label>
               Environment
