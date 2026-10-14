@@ -64,7 +64,7 @@ export type { Containment, EnvironmentDeploy, EnvironmentIndicator, GlobPresence
 export * as testRuns from './domain/test-runs.js';
 export { REVIEW_GUIDE_AREA } from './domain/code-review.js';
 export { SPEC_STATUSES, TEST_RUN_KINDS } from './domain/test-runs.js';
-export type { AtfBatch, AtfBatchGrep, AtfBatchSpec, AtfIndicator, EnvironmentCommit, NewAtfBatch, NewTestRun, SpecStatus, StoredRunSpec, TestRun, TestRunKind, TestRunSpec } from './domain/test-runs.js';
+export type { AtfBatch, AtfBatchGrep, AtfBatchSpec, AtfIndicator, EnvironmentCommit, GlobSpecResult, NewAtfBatch, NewTestRun, OwnSpecs, PlannedSpecCounts, SpecStatus, StoredRunSpec, TestRun, TestRunKind, TestRunSpec } from './domain/test-runs.js';
 export * as machine from './domain/machine.js';
 export type { Action, ActionFacts, Context, DecideInput, FieldChanges, LabelCommand, Transition } from './domain/machine.js';
 export * from './ports.js';

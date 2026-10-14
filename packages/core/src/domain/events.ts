@@ -191,6 +191,18 @@ export type Effect =
       readonly environment: string;
       readonly sha: string;
     }
+  /**
+   * A push-mode board's deploy of `sha` to `environment` has been checked: start the board's ATF project with the specs its
+   * merged globs' test plans listed. Board-wide like `check_environment` (`globId` is `board-<id>`, not generation-checked);
+   * dropped when a newer deploy has replaced `sha`; a failed start is logged and never blocks anything.
+   */
+  | {
+      readonly kind: 'start_atf';
+      readonly globId: string;
+      readonly boardId: number;
+      readonly environment: string;
+      readonly sha: string;
+    }
   /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
   | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
   /**

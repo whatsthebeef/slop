@@ -8,6 +8,12 @@
 # slop the counts and a link, whether the tests passed or not. Any failing test shows as an ATF failure on
 # the glob's card; it never blocks a PR, approval, sign-off or a production deploy.
 #
+# Which specs run: .sstor/atf-specs.sh asks slop for the specs the globs merged in this deploy planned (their test
+# plans), exports them as SLOP_ATF_SPECS (one path per line) and SLOP_ATF_GREP, and .sstor/atf.sh runs only those, or the
+# board's default suite when the list is empty. The project needs SLOP_URL, SLOP_BOARD and SLOP_TOKEN (the board's
+# integration token, from Secrets Manager or Parameter Store) for that; without them, or if slop can't be reached, the
+# default suite runs. A board that has slop start this project (push mode) gets the list in SLOP_ATF_SPECS already.
+#
 # The project's role needs events:PutEvents on the default EventBridge bus for the report to reach slop.
 version: 0.2
 
@@ -15,6 +21,8 @@ phases:
   build:
     commands:
       - mkdir -p reports/atf
+      # Sourced, so the exports reach the next command (all commands share one shell). Never fails the build.
+      - '. .sstor/atf-specs.sh "$SLOP_ENVIRONMENT" reports/atf'
       - bash .sstor/atf.sh "$SLOP_ENVIRONMENT"
   post_build:
     commands:

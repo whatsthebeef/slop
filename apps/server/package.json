@@ -18,6 +18,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1148.0",
     "@aws-sdk/client-sqs": "^3.1148.0",
     "@aws-sdk/client-sso-oidc": "^3.1147.0",
+    "@aws-sdk/client-sts": "^3.1151.0",
     "@aws-sdk/s3-presigned-post": "^3.1148.0",
     "@aws-sdk/s3-request-presigner": "^3.1148.0",
     "@hono/node-server": "^2.1.3",
