@@ -13,7 +13,7 @@ const implementerCell = (over: Record<string, unknown>) => {
     glob: { ...glob(), generation: 1, runs: [], prs: [], pr: null, ...over },
   } as unknown as GlobViewContext;
   cleanup();
-  const { getByText } = render(<GlobMeta ctx={ctx} decision={false} />);
+  const { getByText } = render(<GlobMeta ctx={ctx} />);
   return getByText('Implementer').nextElementSibling as HTMLElement;
 };
 const run = (over: Record<string, unknown>) => ({
@@ -21,6 +21,24 @@ const run = (over: Record<string, unknown>) => ({
   generation: 1,
   routineOwner: 'a@b.c',
   ...over,
+});
+
+describe('GlobMeta sections', () => {
+  it('has no Machine runs or Pull request section', () => {
+    const ctx = {
+      board: { repo: null },
+      glob: {
+        ...glob(),
+        generation: 1,
+        runs: [run({})],
+        prs: [],
+        pr: { number: 3, state: 'draft' },
+      },
+    } as unknown as GlobViewContext;
+    const { queryByText } = render(<GlobMeta ctx={ctx} />);
+    expect(queryByText('Pull request')).toBeNull();
+    expect(queryByText('Machine runs')).toBeNull();
+  });
 });
 
 describe('GlobMeta implementer', () => {

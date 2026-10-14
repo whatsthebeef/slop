@@ -19,14 +19,8 @@ const Actor = ({ who, title }: { who: string | null; title?: string }) =>
     </span>
   );
 
-/** Planner, implementer, creation date and pull requests. */
-export const GlobMeta = ({
-  ctx: { board, glob },
-  decision,
-}: {
-  ctx: GlobViewContext;
-  decision: boolean;
-}) => {
+/** Planner, implementer, creation date and merged pull requests (the activity log carries the PR and the runs). */
+export const GlobMeta = ({ ctx: { board, glob } }: { ctx: GlobViewContext }) => {
   const machineRun = glob.runs.find(
     (r) => r.generation === glob.generation && r.purpose !== 'investigate',
   );
@@ -46,35 +40,6 @@ export const GlobMeta = ({
       </dd>
       <dt>Created</dt>
       <dd>{when(glob.createdAt)}</dd>
-      {!decision && (
-        <>
-          <dt>Pull request</dt>
-          <dd>
-            {glob.pr === null ? (
-              glob.provisioning === 'failed' ? (
-                'provisioning failed; retrying'
-              ) : glob.provisioning === 'none' ? (
-                'opened when work starts'
-              ) : glob.prs.length > 0 ? (
-                'a new one opens on the next push'
-              ) : (
-                'opening…'
-              )
-            ) : board.repo === null ? (
-              `#${glob.pr.number} (${glob.pr.state})`
-            ) : (
-              <a
-                className="underline"
-                href={`https://github.com/${board.repo}/pull/${glob.pr.number}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                #{glob.pr.number} ({glob.pr.state})
-              </a>
-            )}
-          </dd>
-        </>
-      )}
       {glob.prs.length > 0 && (
         <>
           <dt>Merged and continued</dt>
@@ -100,40 +65,5 @@ export const GlobMeta = ({
         </>
       )}
     </dl>
-  );
-};
-
-/** Every machine run on the glob, newest first. */
-export const MachineRuns = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
-  if (glob.runs.length === 0) return null;
-  return (
-    <div className="grid gap-1">
-      <h3 className="text-xs font-semibold text-muted-foreground">Machine runs</h3>
-      {[...glob.runs].reverse().map((run) => (
-        <div key={run.id} className="flex justify-between gap-2 rounded bg-muted px-2 py-1 text-xs">
-          <span>
-            {run.purpose === 'investigate' && 'Investigation · '}
-            {run.purpose === 'resolve_conflict' && 'Conflict fix · '}
-            {run.state === 'ended' ? (run.outcome ?? 'ended') : run.state} · owner{' '}
-            {run.routineOwner}
-            {run.sessionUrl !== null && (
-              <>
-                {' · '}
-                <a className="underline" href={run.sessionUrl} target="_blank" rel="noreferrer">
-                  Open in Claude
-                </a>
-              </>
-            )}
-            {run.failureReason !== null && (
-              <span className="block text-red">{run.failureReason}</span>
-            )}
-          </span>
-          <span className="text-muted-foreground">
-            queued {when(run.queuedAt)}
-            {run.lastProgressAt !== null && ` · last progress ${when(run.lastProgressAt)}`}
-          </span>
-        </div>
-      ))}
-    </div>
   );
 };
