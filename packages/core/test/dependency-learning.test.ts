@@ -8,9 +8,10 @@ import type { DependencyDefaults } from '../src/domain/dependency-rules.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import { renderMergePolicy } from '../src/domain/merge-policy.js';
-import type { Board, Glob } from '../src/domain/types.js';
+import type { Board, Glob, Relation } from '../src/domain/types.js';
 import type { BranchFiles, Catalog } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { relation } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -85,6 +86,14 @@ describe('dependency learning', () => {
   const weight = async (): Promise<number | undefined> =>
     (await store.transaction((tx) => tx.listDependencyRules(boardId))).find((r) => r.pattern === PATTERN)?.weight;
   /** An open glob (a same someone picked up) whose branch changes the migrations. */
+  /** The relations that start at a glob, from the store's rows. */
+  const relationsOf = (id: string) => [...store.state.relations.values()].filter((r) => r.from === id);
+  /** Records an inferred need of `from` on `to`, as inference would have. */
+  const inferNeed = (from: string, to: string, patch: Partial<Relation> = {}): Relation => {
+    const row = relation(from, to, { source: 'inferred', reason: 'x', ...patch });
+    store.state.relations.set(row.id, row);
+    return row;
+  };
   const openGlob = async () => {
     const made = await create({ type: 'same', plan: 'Something else entirely' });
     const picked = unwrap(await globs.pickUp(DEV, made.id, made.version, false));
@@ -104,7 +113,7 @@ describe('dependency learning', () => {
       agentSet: () => Promise.resolve({ hash: '', files: [] }),
       dependencyDefaults: () => Promise.resolve(DEFAULTS),
     };
-    learning = new DependencyLearningService({ store, notifier, clock: { now: () => NOW }, catalog });
+    learning = new DependencyLearningService({ store, notifier, clock: { now: () => NOW }, ids: { runId: () => `rel-${++runs}` }, catalog });
     globs = new GlobService({
       store,
       notifier,
@@ -199,9 +208,11 @@ describe('dependency learning', () => {
     expect(started.status).toBe('implementing');
     const learned = await learning.onFailed(stuck.id, `Blocked on unmerged ${prerequisite.id}`);
     expect(learned).toEqual([prerequisite.id]);
-    const after = await current(stuck.id);
-    expect(after.impliedAfter).toMatchObject([{ id: prerequisite.id, kind: 'needs', source: 'learned' }]);
-    expect(after.impliedAfter?.[0]?.evidence).toContain('Blocked on unmerged');
+    expect(relationsOf(stuck.id)).toMatchObject([{ to: prerequisite.id, gate: 'start', until: 'merged', source: 'learned' }]);
+    expect(relationsOf(stuck.id)[0]?.reason).toContain('Blocked on unmerged');
+    // The version moved and the log says why.
+    expect((await current(stuck.id)).version).toBeGreaterThan(started.version);
+    expect(store.state.events.find((e) => e.globId === stuck.id && e.type === 'RelationAdded')?.data).toMatchObject({ to: prerequisite.id, source: 'learned' });
     const view = unwrap(await globs.get(DEV, stuck.id));
     expect(view.waitingFor.map((w) => w.id)).toEqual([prerequisite.id]);
     // Saying it twice changes nothing.
@@ -210,42 +221,66 @@ describe('dependency learning', () => {
     expect(history.map((h) => h.cause)).toEqual(['unmerged_prerequisite']);
   });
 
+  it('a glob that already has the most start relations learns no more from a failure', async () => {
+    const others: Glob[] = [];
+    for (let i = 0; i < 21; i++) others.push(await create({ type: 'same' }));
+    const stuck = await create({ type: 'same', after: others.slice(0, 20).map((g) => g.id) });
+    expect(relationsOf(stuck.id)).toHaveLength(20);
+    expect(await learning.onFailed(stuck.id, `Blocked on unmerged ${others[20]?.id ?? ''}`)).toEqual([]);
+    expect(relationsOf(stuck.id)).toHaveLength(20);
+  });
+
   it('upgrades an overlap to a need when the run failed for it, and strengthens its pattern', async () => {
     const open = await openGlob();
     const g = await overlapping();
     await learning.onFailed(g.id, `Blocked on unmerged ${open.id}`);
-    expect((await current(g.id)).impliedAfter).toEqual([expect.objectContaining({ id: open.id, kind: 'needs', source: 'learned', paths: [MIGRATION] })]);
+    // The predicted overlap becomes the need: its paths are the relation's evidence and the overlap entry goes.
+    expect(relationsOf(g.id)).toEqual([expect.objectContaining({ to: open.id, gate: 'start', source: 'learned', evidence: [MIGRATION] })]);
+    expect((await current(g.id)).impliedAfter).toEqual([]);
     expect(await weight()).toBe(1);
   });
 
-  it('downgrades a need overridden with start anyway to an overlap once the glob merges without failing for it', async () => {
+  it('downgrades an inferred need overridden with start anyway to an overlap once the glob merges without failing for it', async () => {
     const prerequisite = await create({ type: 'same' });
-    const waiter = await create({ after: [prerequisite.id] });
-    expect(waiter.status).toBe('planning');
+    const waiter = await create({ type: 'same' });
+    const need = inferNeed(waiter.id, prerequisite.id);
     unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
+    // Start now marks the inferred relation overridden: it no longer holds, and is still there to be judged.
+    expect(store.state.relations.get(need.id)?.overriddenAt).not.toBeNull();
     await merge(waiter.id);
     const after = await current(waiter.id);
-    expect(after.after).toEqual([]);
+    expect(relationsOf(waiter.id)).toEqual([]);
     expect(after.impliedAfter).toEqual([expect.objectContaining({ id: prerequisite.id, kind: 'overlaps', source: 'learned' })]);
+    expect(store.state.events.find((e) => e.globId === waiter.id && e.type === 'RelationReleased')?.data).toMatchObject({ to: prerequisite.id, gate: 'start' });
     const history = await store.transaction((tx) => tx.listDependencyRuleChanges(boardId));
     expect(history.map((h) => h.cause)).toEqual(['start_anyway_succeeded']);
   });
 
-  it('keeps a need whose start anyway then failed for the prerequisite', async () => {
+  it('Start now leaves a need a person set as it was, and a merge never downgrades it', async () => {
     const prerequisite = await create({ type: 'same' });
     const waiter = await create({ after: [prerequisite.id] });
     unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
+    expect(relationsOf(waiter.id)).toMatchObject([{ to: prerequisite.id, source: 'person', overriddenAt: null }]);
+    await merge(waiter.id);
+    expect(relationsOf(waiter.id)).toHaveLength(1);
+    expect(await store.transaction((tx) => tx.listDependencyRuleChanges(boardId))).toEqual([]);
+  });
+
+  it('keeps a need whose start anyway then failed for the prerequisite', async () => {
+    const prerequisite = await create({ type: 'same' });
+    const waiter = await create({ type: 'same' });
+    inferNeed(waiter.id, prerequisite.id);
+    unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
     await learning.onFailed(waiter.id, `Blocked on unmerged ${prerequisite.id}`);
     await merge(waiter.id);
-    expect((await current(waiter.id)).after).toEqual([prerequisite.id]);
+    expect(relationsOf(waiter.id).map((r) => r.to)).toEqual([prerequisite.id]);
   });
 
   it('a dismissed inferred edge weakens its patterns once the glob merges; Start now alone is no dismissal', async () => {
     const other = await create({ type: 'same' });
     const made = await create({ type: 'same' });
-    const edge = { id: other.id, paths: [MIGRATION], kind: 'overlaps' as const, source: 'inferred' as const, evidence: 'both touch the migrations' };
-    store.state.globs.set(made.id, { glob: { ...made, impliedAfter: [edge] }, creationKey: null });
-    unwrap(await globs.dismissEdge(DEV, made.id, made.version, other.id));
+    inferNeed(made.id, other.id, { reason: 'both touch the migrations', evidence: [MIGRATION] });
+    unwrap(await globs.dismissRelation(DEV, made.id, made.version, relationsOf(made.id).find((r) => r.to === other.id)?.id ?? ''));
     await merge(made.id);
     const history = await store.transaction((tx) => tx.listDependencyRuleChanges(boardId));
     expect(history.map((h) => [h.cause, h.pattern])).toEqual([['edge_dismissed', PATTERN]]);
@@ -254,8 +289,8 @@ describe('dependency learning', () => {
     expect(await weight()).toBe(0.75);
 
     const prerequisite = await create({ type: 'same' });
-    const waiter = await create({ after: [prerequisite.id] });
-    store.state.globs.set(waiter.id, { glob: { ...waiter, after: [], impliedAfter: [{ id: prerequisite.id, paths: [], kind: 'needs', source: 'inferred', evidence: 'x' }] }, creationKey: null });
+    const waiter = await create({ type: 'same' });
+    inferNeed(waiter.id, prerequisite.id);
     unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
     await merge(waiter.id);
     const after = await store.transaction((tx) => tx.listDependencyRuleChanges(boardId));
@@ -272,36 +307,5 @@ describe('dependency learning', () => {
     const view = unwrap(await learning.view(DEV, boardId));
     expect(view.rules.find((r) => r.pattern === PATTERN)).toMatchObject({ state: 'default', weight: 1 });
     expect(view.history[0]).toMatchObject({ cause: 'reset', from: 0.75, to: 1, globId: null });
-  });
-});
-
-describe('overlaps set by a person', () => {
-  it('are recorded on create and update, never block, and are checked', async () => {
-    const store = new MemoryStore();
-    const notifier = new RecordingNotifier();
-    const boards = new BoardService({ store, notifier });
-    const globs = new GlobService({
-      store,
-      notifier,
-      clock: { now: () => NOW },
-      ids: { runId: () => 'run-1' },
-      routines: { hasRoutine: () => Promise.resolve(true) },
-    });
-    await store.transaction(async (tx) => {
-      for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
-    });
-    const boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
-    const base = { boardId, title: 'Work', summary: '', category: 'task' as const, group: null, environment: null, autoTrigger: false, idempotencyKey: null };
-    const other = unwrap(await globs.create(DEV, { ...base, type: 'same' }));
-    const sub = unwrap(await globs.create(DEV, { ...base, type: 'sub', overlaps: [other.id] }));
-    expect(sub.status).toBe('implementing');
-    expect(sub.impliedAfter).toEqual([{ id: other.id, paths: [], kind: 'overlaps', source: 'explicit' }]);
-    const same = unwrap(await globs.create(DEV, { ...base, type: 'same' }));
-    const updated = unwrap(await globs.update(DEV, same.id, same.version, { overlaps: [other.id] }));
-    expect(updated.impliedAfter?.map((i) => i.id)).toEqual([other.id]);
-    expect((await globs.update(DEV, same.id, updated.version, { overlaps: ['s99t99'] })).ok).toBe(false);
-    const cleared = unwrap(await globs.update(DEV, same.id, updated.version, { overlaps: [] }));
-    expect(cleared.impliedAfter).toEqual([]);
   });
 });

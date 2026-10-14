@@ -396,36 +396,6 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   );
 };
 
-/**
- * Globs that may change the same files as this one (predicted from the board's merge policy, or set by a person): a note
- * that the later merge rebases, never a hold. Each ID opens that glob on the board.
- */
-export const OverlapChip = ({ glob }: { glob: GlobView }) => {
-  const overlaps = (glob.impliedAfter ?? []).filter((i) => (i.kind ?? 'overlaps') === 'overlaps' && i.overridden !== true);
-  if (overlaps.length === 0 || glob.status === 'reviewing' || glob.status === 'signed_off') return null;
-  const reason = overlaps.map((i) => (i.paths.length === 0 ? i.id : `${i.id}: both may change ${i.paths.join(', ')}`)).join('; ');
-  return (
-    <Tip text={`Overlaps ${reason}. Only the merge order matters: the later one rebases on main`}>
-      <span className='max-w-full truncate whitespace-nowrap font-mono text-[11px] text-muted-foreground' data-testid='overlap-chip'>
-        overlaps{' '}
-        {overlaps.map((o, i) => (
-          <span key={o.id}>
-            {i > 0 && ', '}
-            <Link
-              to={`/boards/${glob.boardId}?glob=${encodeURIComponent(o.id)}`}
-              className='underline-offset-2 hover:underline'
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-            >
-              {o.id}
-            </Link>
-          </span>
-        ))}
-      </span>
-    </Tip>
-  );
-};
-
 /** The size check's flag: the glob looks like more than one PR's worth of work and nobody has answered it yet. */
 export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) =>
   glob.oversized === true ? (
@@ -749,7 +719,6 @@ export const GlobCard = ({
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
-            <OverlapChip glob={glob} />
             <SplitChip glob={glob} />
             <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
             <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />

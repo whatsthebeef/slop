@@ -159,4 +159,24 @@ describe('split a glob (MCP and REST, on Postgres)', () => {
     expect(sub?.status).toBe('planning');
     expect(sub?.runs).toHaveLength(0);
   });
+
+  it('has no overlaps anywhere: not in the tool inputs, and a body that still sends them records none', async () => {
+    const tools = (await client.listTools()).tools;
+    for (const name of ['create_glob', 'update_glob', 'split_glob']) {
+      expect(JSON.stringify(tools.find((t) => t.name === name)?.inputSchema ?? {})).not.toContain('overlaps');
+    }
+    const glob = await make('Overlaps ignored');
+    const reply = await client.callTool({
+      name: 'split_glob',
+      arguments: { id: glob.id, version: glob.version, idempotencyKey: 'mcp-overlaps', parts: parts({ overlaps: [0] }) },
+    });
+    const body = JSON.parse((reply.content as { text: string }[])[0]?.text ?? '') as SplitBody;
+    const second = await globs.peek(body.parts[1]?.id ?? '');
+    expect(second?.impliedAfter).toBeUndefined();
+    const relations = await store.transaction((tx) => tx.listRelationsFrom([second?.id ?? '']));
+    expect(relations.map((r) => [r.to, r.gate, r.source])).toEqual([[glob.id, 'start', 'split']]);
+    // The glob's own sign-off waits for the new part.
+    const own = await store.transaction((tx) => tx.listRelationsFrom([glob.id]));
+    expect(own.map((r) => [r.to, r.gate, r.until, r.source])).toEqual([[second?.id, 'sign_off', 'merged', 'split']]);
+  });
 });

@@ -260,7 +260,7 @@ describe('split outcomes', () => {
 
 describe('proposal from the model parts', () => {
   const part = (title: string, plan: string, after: number[] = []) => ({ title, summary: `${title} summary`, plan, after });
-  it('copies a context section into every part, and makes parts that share files overlaps, not needs', () => {
+  it('copies a context section into every part, and makes parts that share files no relation at all', () => {
     const proposal = buildProposal(PLAN, [
       part('Data', '## Tasks\n1. Add the migration in apps/server/drizzle/0001.sql'),
       part('Server', '## Tasks\n2. Endpoint in apps/server/drizzle/0001.sql'),
@@ -268,9 +268,8 @@ describe('proposal from the model parts', () => {
     ]);
     expect(proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Server', 'Web']);
     expect(proposal?.parts[1]?.after).toEqual([]);
-    expect(proposal?.parts[1]?.overlaps).toEqual([0]);
+    expect(proposal?.parts[1]).not.toHaveProperty('overlaps');
     expect(proposal?.parts[2]?.after).toEqual([]);
-    expect(proposal?.parts[2]?.overlaps).toEqual([]);
     for (const p of proposal?.parts ?? []) expect(p.plan).toContain('Some prose about the chat panel');
   });
   it('a shared contract as part 0 with three independent consumers: each consumer needs only part 0, low-risk ones are subs', () => {
@@ -284,14 +283,13 @@ describe('proposal from the model parts', () => {
     expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 3 });
     expect(proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', 'sub', undefined]);
   });
-  it('keeps direct needs only, and does not repeat a need (or one reached through another) as an overlap', () => {
+  it('keeps direct needs only, and does not repeat a need reached through another', () => {
     const proposal = buildProposal(PLAN, [
       part('A', '## Tasks\n1. a in apps/server/src/a.ts'),
       part('B', '## Tasks\n2. b in apps/server/src/a.ts', [0]),
       part('C', '## Tasks\n3. c in apps/server/src/a.ts', [0, 1]),
     ]);
     expect(proposal?.parts.map((p) => p.after)).toEqual([[], [0], [1]]);
-    expect(proposal?.parts.map((p) => p.overlaps)).toEqual([[], [], []]);
     expect(proposal).toMatchObject({ criticalPath: 3, maxParallel: 1 });
   });
   it('does not repeat a section a part already carries, and drops bad `after` indexes', () => {

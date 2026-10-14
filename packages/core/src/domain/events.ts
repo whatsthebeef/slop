@@ -24,6 +24,10 @@ export const DOMAIN_EVENT_TYPES = [
   'MergeFailed',
   'MergeArmed',
   'MergeDisarmed',
+  /** A merge that would have started (merge when checks pass, or a sub whose gate passed) waits for a `merge` relation (data: the globs it waits on, the head). */
+  'MergeHeld',
+  /** A held merge started after its `merge` relations were met (data: the head). */
+  'MergeResumed',
   'MergeReverted',
   'MergeRevertFailed',
   'MergeRevertDeclined',
@@ -59,6 +63,12 @@ export const DOMAIN_EVENT_TYPES = [
   'EdgeDismissed',
   /** Slop inferred a glob's needs and overlaps from its plan, the open globs and any investigation (data: added, dropped, notes, the plan hash). */
   'EdgesInferred',
+  /** A relation was added to a glob (data: the other glob, gate, until, source and reason). */
+  'RelationAdded',
+  /** A person dismissed a relation as not a dependency (data: the other glob, gate and the plan hash). */
+  'RelationDismissed',
+  /** A relation was removed, or its gate opened because the other glob was deleted (data: the other glob, gate, why). */
+  'RelationReleased',
   /** Another open glob started or stopped changing the same exclusive paths as this one. */
   'ClashChanged',
   /** An overlap edge was predicted for a glob (data: the other glob, its paths and why) by a recheck. */
@@ -84,6 +94,10 @@ export const DOMAIN_EVENT_TYPES = [
   'HumanStepChanged',
   /** The last work step holding back sign-off was done (or dismissed), so the glob moved on. */
   'RolloutDone',
+  /** Every label is approved but a `sign_off` relation is unmet, so the glob stays in Reviewing (data: the globs it waits on). */
+  'SignOffHeld',
+  /** The last `sign_off` relation was met, so a glob with approved labels moved to Signed off. */
+  'SignOffReleased',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 

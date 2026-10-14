@@ -1,7 +1,7 @@
 import type { Action, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
+import type { AddRelationInput, BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
 import type { GlobSection } from '@/lib/glob-section';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
@@ -43,6 +43,7 @@ export const GlobDetail = ({
   onAction,
   onReviewLabel,
   onDismissEdge,
+  onAddRelation,
   onDismiss,
   onDecide,
   onDelete,
@@ -77,8 +78,10 @@ export const GlobDetail = ({
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
-  /** The ✕ on a needs or overlaps row: the edge to this glob is not a dependency; resolves false when it failed. */
-  onDismissEdge: (edgeId: string) => Promise<boolean>;
+  /** The ✕ on a Related row: the relation is not a dependency; resolves false when it failed. */
+  onDismissEdge: (relationId: string) => Promise<boolean>;
+  /** "Add relation…" (and a decision's "Holds back…"); resolves false when it failed. */
+  onAddRelation: (input: AddRelationInput) => Promise<boolean>;
   /** "Got it" / ×: dismisses a status message for the viewer (`dismiss` false is Show again); resolves false when it failed. */
   onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
@@ -165,6 +168,7 @@ export const GlobDetail = ({
     onReload,
     onReviewLabel,
     onDismissEdge,
+    onAddRelation,
     onDecide,
     onAddStep,
     onCompleteStep,

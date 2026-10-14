@@ -43,7 +43,7 @@ import {
 } from '../domain/size-forecast.js';
 import type { CodeFootprint, ReferenceClass, SizeCalibrationView } from '../domain/size-forecast.js';
 import type { ModelPart, SizeCheck, SizeOutcome, SizeProposal, SizeThreshold, SizeThresholdView } from '../domain/size-check.js';
-import { dependencyIds, dependencyState } from '../domain/waiting.js';
+import { hasMerged, startIds } from '../domain/relations.js';
 import type { Clock, Embedder, Notifier, Store } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import type { CodeView } from './code-view.js';
@@ -581,14 +581,15 @@ export class SizeCheckService implements SizeAssessor {
    */
   async learn(boardId: number): Promise<SizeThresholdResult> {
     const read = await this.deps.store.transaction(async (tx) => {
-      const [outcomes, checks, globs, changes, events] = await Promise.all([
+      const [outcomes, checks, globs, changes, events, relations] = await Promise.all([
         tx.listGlobOutcomes(boardId),
         tx.listSizeChecks(boardId),
         tx.listGlobs(boardId, {}),
         tx.listSizeThresholdChanges(boardId),
         tx.listBoardEvents(boardId, EPOCH, LEARN_EVENT_TYPES),
+        tx.listRelations(boardId),
       ]);
-      return { outcomes, checks, globs, recorded: new Set(changes.map((c) => c.globId)), events };
+      return { outcomes, checks, globs, relations, recorded: new Set(changes.map((c) => c.globId)), events };
     });
     const byGlob = new Map<string, DomainEvent[]>();
     for (const e of read.events) byGlob.set(e.globId, [...(byGlob.get(e.globId) ?? []), e]);
@@ -612,10 +613,10 @@ export class SizeCheckService implements SizeAssessor {
       const splitIds = splitAfterStartOf(events) ? null : splitPartsOf(outcome.globId, events);
       if (splitIds !== null) {
         const partGlobs = splitIds.map((id) => globsById.get(id));
-        if (partGlobs.some((g) => g !== undefined && dependencyState(g) !== 'merged')) continue;
+        if (partGlobs.some((g) => g !== undefined && !hasMerged(g))) continue;
         const shape = splitShape(
           splitIds.map((id, index) => ({
-            after: dependencyIds(globsById.get(id) ?? {}).flatMap((n) => {
+            after: startIds(read.relations.filter((r) => r.from === id)).flatMap((n) => {
               const at = splitIds.indexOf(n);
               return at >= 0 && at < index ? [at] : [];
             }),

@@ -12,6 +12,7 @@ import type { MergeGate, ReadyGate } from '../ready-gate.js';
 import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
+import { addRelationSchema, relationInput, relationInputs, relationListSchema } from './relation-schemas.js';
 import { requestTiming } from '../request-metrics.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
@@ -141,8 +142,8 @@ export const createGlobSchema = z.object({
   needs: z.array(z.string().min(1)).max(20).optional(),
   /** Alias of `needs`. */
   after: z.array(z.string().min(1)).max(20).optional(),
-  /** IDs of globs on the board this one overlaps: the same files may change, so only the merge order matters. Never blocks a start. */
-  overlaps: z.array(z.string().min(1)).max(20).optional(),
+  /** Relations of any gate beside `needs`/`after`: `[{to, gate?, until?, reason?}]`. */
+  relations: relationListSchema.optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
   /** What the intake proposal behind the form said, passed back so the glob's snapshot records it (the request is the text intake read). */
@@ -169,7 +170,6 @@ export const splitGlobSchema = z.object({
         category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
-        overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         attachments: z.array(z.string().min(1)).optional(),
       }),
     )
@@ -186,7 +186,8 @@ const updateGlobSchema = z.object({
   environment: z.string().min(1).nullable().optional(),
   needs: z.array(z.string().min(1)).max(20).optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
-  overlaps: z.array(z.string().min(1)).max(20).optional(),
+  /** Relations to add or change (any gate); additive, unlike `after`, which replaces the start list. */
+  relations: relationListSchema.optional(),
   /** A decision's scope, the only attribute a client edits; core validates it (kind, ref, glob on the board). */
   attributes: z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict().optional(),
   autoStart: z.boolean().optional(),
@@ -327,8 +328,9 @@ export const createApp = (deps: AppDeps) => {
         // the board's list adds effects, deploys and uploads for the full picture.
         const now = new Date().toISOString();
         const thresholds = stallThresholds(m.board);
+        const holdings = new Map((everyone.ok ? everyone.value : []).map((r) => [r.glob.id, r.holding]));
         const stalled = list.filter(
-          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer, thresholds, complete: false }).holder === 'stalled',
+          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), holdings.get(g.id) ?? [], now, { viewer, thresholds, complete: false }).holder === 'stalled',
         ).length;
         const yourTurn = (everyone.ok ? everyone.value : []).reduce(
           (n, { glob, artifacts }) =>
@@ -464,13 +466,13 @@ export const createApp = (deps: AppDeps) => {
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts, dependencies, chain }) => {
-        const view = globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
+      list.map(({ glob, artifacts, relations, holding }) => {
+        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
         const facts = machineSteps(glob);
         const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, steps.get(glob.id) ?? []);
-        const move = whoseMove(glob, human, facts, dependencies, now, { viewer, thresholds, complete: false });
+        const move = whoseMove(glob, human, facts, holding, now, { viewer, thresholds, complete: false });
         return {
           ...view,
           // A stalled glob also hands a step to its implementer (or planner).
@@ -510,7 +512,7 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, group, ...fields } = body;
+    const { intake, needs, group, relations, ...fields } = body;
     const boardId = Number(c.req.param('b'));
     let chosen: string | null = group?.trim() === '' ? null : (group ?? null);
     if (group === undefined && deps.intake !== undefined) {
@@ -521,6 +523,7 @@ export const createApp = (deps: AppDeps) => {
       ...fields,
       group: chosen,
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
+      ...(relations === undefined ? {} : { relations: relationInputs(relations) }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
       boardId,
@@ -543,9 +546,12 @@ export const createApp = (deps: AppDeps) => {
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
     if (body instanceof Response) return body;
-    const { version, needs, ...changes } = body;
+    const { version, needs, relations, ...changes } = body;
     const after = needs ?? changes.after;
-    return withView(c, await globs.update(c.get('email'), c.req.param('id'), version, { ...changes, ...(after === undefined ? {} : { after }) }));
+    return withView(
+      c,
+      await globs.update(c.get('email'), c.req.param('id'), version, { ...changes, ...(after === undefined ? {} : { after }), ...(relations === undefined ? {} : { relations: relationInputs(relations) }) }),
+    );
   });
 
   // Split a glob in Planning into parts (the board's Split; MCP's split_glob).
@@ -555,18 +561,18 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
-      parts: body.parts.map(({ category, type, after, overlaps, attachments, ...rest }) => ({
+      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),
         ...(type === undefined ? {} : { type }),
         ...(after === undefined ? {} : { after }),
-        ...(overlaps === undefined ? {} : { overlaps }),
         ...(attachments === undefined ? {} : { attachments }),
       })),
     });
     if (!split.ok) return send(c, split);
     for (const glob of split.value) await deps.outbox.drain(glob.id);
-    return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob)) }));
+    const relations = await globs.peekRelations(split.value.map((g) => g.id));
+    return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob, null, null, null, null, relations.get(glob.id) ?? [])) }));
   });
 
   // Keep whole: a person decides a flagged glob stays one glob; a glob held for the flag then starts.
@@ -678,11 +684,24 @@ export const createApp = (deps: AppDeps) => {
     );
   });
 
-  // The ✕ on a Dependencies row: the edge is not a dependency (a held glob that waited only for it then starts).
-  app.post('/api/globs/:id/edges/:edgeId/dismiss', async (c) => {
+  // Add a relation (the Related section's "Add relation…", a decision's "Holds back…"). `to`: this glob can't pass the gate until
+  // `to` reaches `until`; `holdsBack`: the other glob can't, until this one does. Answers with this glob's view.
+  app.post('/api/globs/:id/relations', async (c) => {
+    const body = await parse(c, addRelationSchema);
+    if (body instanceof Response) return body;
+    const { to, holdsBack, version, ...rest } = body;
+    const id = c.req.param('id');
+    const other = to ?? holdsBack ?? '';
+    const added = await globs.addRelation(c.get('email'), id, version ?? null, relationInput({ ...rest, to: other }), to === undefined ? 'holds_back' : 'held_by');
+    if (added.ok) void deps.outbox.drain(added.value.id).catch(() => undefined);
+    return added.ok ? send(c, await globs.get(c.get('email'), id), globViewOf) : send(c, added);
+  });
+
+  // The ✕ on a Related row: the relation is not a dependency (a held glob that waited only for it then starts, a held merge goes on).
+  app.post('/api/globs/:id/relations/:relationId/dismiss', async (c) => {
     const body = await parse(c, versionSchema);
     if (body instanceof Response) return body;
-    const result = await globs.dismissEdge(c.get('email'), c.req.param('id'), body.version, c.req.param('edgeId'));
+    const result = await globs.dismissRelation(c.get('email'), c.req.param('id'), body.version, c.req.param('relationId'));
     if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
     return withView(c, result);
   });

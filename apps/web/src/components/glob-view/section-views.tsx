@@ -1,6 +1,6 @@
 import type { LabelName, SuggestionPrefill } from '@slop/core';
 import type { ReactNode } from 'react';
-import type { DecideInput } from '@/lib/api';
+import type { AddRelationInput, DecideInput } from '@/lib/api';
 import type { GlobSection } from '@/lib/glob-section';
 import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
@@ -13,8 +13,7 @@ import { ArtifactsPanel } from './artifacts';
 import { ChoicesPanel } from './choices';
 import { ConflictSection } from './conflict';
 import type { GlobViewContext } from './context';
-import { DecisionAssessmentPanel, DecisionPanel } from './decision';
-import { DependenciesSection } from './dependencies';
+import { DecisionAssessmentPanel, DecisionHoldsBack, DecisionPanel } from './decision';
 import { DeploysPanel } from './deploys';
 import { EditFieldsSection } from './edit-fields';
 import type { GlobEdits } from './edit-fields';
@@ -22,6 +21,7 @@ import { EnvironmentsPanel } from './environments';
 import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
+import { RelatedSection } from './related';
 import { SizeSection } from './size';
 import type { OversizedState } from '../oversized-glob';
 import type { NowState } from './status';
@@ -49,7 +49,8 @@ export interface SectionProps {
   onClose: () => void;
   onReload: () => Promise<void>;
   onReviewLabel: ReviewLabel;
-  onDismissEdge: (edgeId: string) => Promise<boolean>;
+  onDismissEdge: (relationId: string) => Promise<boolean>;
+  onAddRelation: (input: AddRelationInput) => Promise<boolean>;
   onDecide: (input: DecideInput) => Promise<boolean>;
   onAddStep: (step: {
     title: string;
@@ -74,9 +75,11 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.decision && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  prerequisites: ({ ctx, actions, onDismissEdge }) =>
-    !actions.decision && (
-      <DependenciesSection ctx={ctx} onDismissEdge={onDismissEdge} />
+  related: ({ ctx, actions, onDismissEdge, onAddRelation }) =>
+    actions.decision ? (
+      <DecisionHoldsBack ctx={ctx} onAddRelation={onAddRelation} />
+    ) : (
+      <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} />
     ),
   size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection

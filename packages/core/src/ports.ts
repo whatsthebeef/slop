@@ -30,7 +30,7 @@ import type { LlmSpend, SpendSummary } from './domain/spend.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
-import type { BaseChecks, Board, Glob, Member, Role, Status, SlopType, User } from './domain/types.js';
+import type { BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
 
 /**
  * Which globs a listing includes: `work` (the default: features, tasks and bugs, so every consumer that treats a glob as
@@ -255,6 +255,22 @@ export interface Tx {
   listOpenHumanSteps(boardId: number): Promise<StoredHumanStep[]>;
   /** Writes work steps (insert or replace by ID). */
   saveHumanSteps(steps: readonly StoredHumanStep[]): Promise<void>;
+
+  /** Every relation of a board, oldest first. */
+  listRelations(boardId: number): Promise<Relation[]>;
+  /** The relations that start at these globs (any gate), oldest first; none for an empty list. */
+  listRelationsFrom(globIds: readonly string[]): Promise<Relation[]>;
+  /** The relations that point at these globs (any gate), oldest first; none for an empty list. */
+  listRelationsTo(globIds: readonly string[]): Promise<Relation[]>;
+  /** Inserts a relation; false when the glob already has one to the same glob for the same gate. */
+  insertRelation(relation: Relation): Promise<boolean>;
+  /** Changes a relation's dismissal, override, reason, evidence or until; the rest of it stays. */
+  updateRelation(id: string, patch: RelationPatch): Promise<void>;
+  deleteRelation(id: string): Promise<void>;
+  /** Deletes every relation that starts at the glob (its own; the ones pointing at it stay, so a view can say it was deleted). */
+  deleteRelationsFrom(globId: string): Promise<void>;
+  /** Serialises a board's relation writes until the transaction ends, so two cycle checks can't both pass (a no-op where transactions don't overlap). */
+  lockBoardRelations(boardId: number): Promise<void>;
 
   /** The status messages this person dismissed on the board's globs: the glob and the message key. */
   listStatusDismissals(email: string, boardId: number): Promise<{ globId: string; key: string }[]>;
