@@ -54,9 +54,10 @@ describe('reading why a commit failed', () => {
     expect(result.failure?.name).toBe('Check');
   });
 
-  it('leaves slop\'s own neutral review check out: alone it is no sign of CI, beside a passing check it changes nothing', async () => {
+  it('leaves slop\'s own neutral review check out: alone it is no sign of CI (pending), beside a passing check it changes nothing', async () => {
     const review = run({ id: 12, name: 'slop-review', conclusion: 'neutral' });
-    expect((await readCommitChecks(fakeGitHub({ runs: [review] }).request, repo, 'abc')).state).toBe('passed');
+    expect((await readCommitChecks(fakeGitHub({ runs: [review] }).request, repo, 'abc')).state).toBe('pending');
+    expect((await readCommitChecks(fakeGitHub({ runs: [] }).request, repo, 'abc')).state).toBe('pending');
     expect((await readCommitChecks(fakeGitHub({ runs: [review, run({})] }).request, repo, 'abc')).state).toBe('passed');
     expect((await readCommitChecks(fakeGitHub({ runs: [review, run({ status: 'in_progress', conclusion: null })] }).request, repo, 'abc')).state).toBe('pending');
   });
