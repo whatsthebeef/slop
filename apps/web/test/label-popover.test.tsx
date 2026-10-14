@@ -117,6 +117,12 @@ describe('outstanding label chips', () => {
       expect(chipOf(c, 'QA').className).toContain('bg-lcd');
     });
 
+    it(`ignores unsent drafts on the ${where}`, () => {
+      const draft = { ...item('d', false), draft: true };
+      const c = draw(withLabels({ QA: 'required' }, { QA: [draft] }));
+      expect(chipOf(c, 'QA').className).not.toContain('bg-outstanding');
+    });
+
     it(`drops the red once the last item is ticked on the ${where}`, () => {
       const c = draw(withLabels({ QA: 'added' }, { QA: [item('x', true)] }));
       expect(chipOf(c, 'QA').className).not.toContain('bg-outstanding');

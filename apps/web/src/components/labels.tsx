@@ -118,9 +118,7 @@ const Chip = ({ glob, name }: { glob: GlobView; name: LabelName }) => {
   const state = glob.labels[name] ?? 'required';
   const outstanding = hasOutstanding(glob, name);
   return (
-    <Tip
-      text={`${LABEL_TITLES[name]}: ${outstanding && state !== 'added' ? CHIP_TIPS.added : CHIP_TIPS[state]}`}
-    >
+    <Tip text={`${LABEL_TITLES[name]}: ${outstanding ? CHIP_TIPS.added : CHIP_TIPS[state]}`}>
       <span
         data-outstanding={outstanding || undefined}
         className={cn(
