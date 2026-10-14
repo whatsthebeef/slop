@@ -199,6 +199,8 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 ### Phase 2: Investigation
 
+**Wait for a running investigation.** If `get_context` (or `get_glob`) carries `investigationRunning: { runId, since }`, an investigate-only run is still working on this glob (a person picked the glob up, or started it, while it ran), and its result should shape this work, so don't start an investigation of your own. Wait for it: poll `get_glob(id, runId)` (with your run ID when unattended, which also keeps your run's progress moving) at most every 2 minutes, for up to 20 minutes, until `investigationRunning` is gone from `get_context`, then fetch the context again and carry on with the rule below. A run that the glob's Start queued behind the investigation only starts when it has ended, so it never waits. If the 20 minutes pass, go on without it: investigate as usual and note in the record's `## Decisions` that the running investigation was not waited out.
+
 **Reuse or refresh.** If `get_context` returned an `investigation` (the glob was investigated earlier, usually by an investigate-only run), decide first whether it still holds, unless this run is investigate-only (it investigates anyway, unless the investigation is still current: then push nothing). Reuse it only when **all** of these hold:
 
 - `validation` is null (the block parsed);
@@ -610,14 +612,16 @@ On this board, a concrete reason to want a human that fits none of the named cri
 
 s15b1 had such a reason but merged as a sub without escalation. s15b2 then reported a bug naming it.
 
-### Splitting oversized globs
+### Oversized globs: workstreams, not splits
 
-`split_glob` is refused once a glob has a run and a branch, even with no commits beyond the start commit. Split an oversized glob before it starts:
+On this board, "more than 3 independent parts" in `risk_and_size` means the work is cut into workstreams inside one run and one PR. It does not mean a board split. This replaces the earlier rule to `split_glob` before start.
 
-- When intake flags a glob you create or start as oversized (`oversized` / `sizeCheck`), split it with `split_glob` while it is still in Planning. Don't start it whole and plan to split it in Phase 1.
-- If a run's `split_glob` returns "has started, so it can no longer be split", treat it as a glob that has already started work, not as an unclear cut. Don't call `report_failure` for it. Finish part 1's scope and create the rest as follow-ups, as the catalog describes.
+- When `oversized` / `sizeCheck` flags a glob, or plan.md clearly holds more independent parts than `risk_and_size` allows, have the investigator list the parts under `## Workstreams` in the plan file.
+- Fan the implementation out across those workstreams in worktrees, and land them all on the glob's own branch and PR.
+- Don't call `split_glob` to keep a glob under the limit, either before it starts or in Phase 1. Don't create its parts as follow-up globs either.
+- A scope cut is offered to a person only in an interactive session: if the work still looks too big as workstreams, propose the cut with `AskUserQuestion`. Unattended, don't cut scope. Carry out every workstream and record any size concern in the `Assumptions` attachment.
 
-In s15f51, sizeCheck flagged 4 independent parts, but the glob was started anyway. `split_glob` was then refused with "has started, so it can no longer be split". The run shipped T1 only and created s15f52, s15f53 and s15f54 as follow-ups with `create_glob`.
+In s15f143 (ec8af97, bbf45b8), the orchestrator, investigator and implementer were changed to cut work into workstreams and fan out in worktrees instead of splitting globs.
 
 ### Specs that name missing infrastructure
 
@@ -670,10 +674,11 @@ In s15f92 on 2026-10-13, the glob was picked up at 18:51 for a conflict. The fix
 **A sub's `mark_ready` squash-merges straight away, at the head slop has recorded.**
 
 - Push every commit before you call `mark_ready`.
+- Before calling `mark_ready`, check that slop has recorded your push: `get_glob`'s `pr.headSha` must equal `git rev-parse HEAD` (and `git ls-remote origin <id>`). If it doesn't yet, call `get_glob` again after a short wait; don't call `mark_ready` on a stale head.
 - Never push to a ready sub except to fix failed checks.
 - If a merge fails with "Head branch was modified", compare `get_glob`'s `pr.headSha` with `git ls-remote origin <id>`. If they differ, slop missed the push. Push again (an empty commit is enough) so the push webhook records the real head, then call `pick_up` and `mark_ready`. Retrying `mark_ready` or Start again on its own reuses the stale head and fails the same way (bug s15b103: `readyRequested` in `packages/core/src/domain/machine.ts` reuses `glob.pr.headSha` for an already-ready PR).
 
-In s15t152, routine run ddfdf665 pushed 0b61855 around the time of its `mark_ready` on b060874, and slop kept `pr.headSha=b060874`. Runs ddfdf665, 4c6a637e and a34c92e0 and a manual `mark_ready` all failed with "Head branch was modified". The empty commit 3bbd92d updated the head, and `pick_up` followed by `mark_ready` moved the glob to `pr_open`.
+This is a recurring failure: from 2026-09-16 to 2026-10-14, 4 of 45 routine runs (9%) failed with "Head branch was modified", on s15f101 and s15t152. In s15t152, routine run ddfdf665 pushed 0b61855 around the time of its `mark_ready` on b060874, and slop kept `pr.headSha=b060874`. Runs ddfdf665, 4c6a637e and a34c92e0 and a manual `mark_ready` all failed with "Head branch was modified". The empty commit 3bbd92d updated the head, and `pick_up` followed by `mark_ready` moved the glob to `pr_open`.
 
 ### Diagnosing production incidents
 
@@ -697,3 +702,17 @@ In s15f88 on 2026-10-13, slopmux returned 504 at 16:41 UTC. The orchestrator bla
 - Don't block on a missing file. Record the gap (the file's name and its `note`) in the context file, and in a routine also in the `Assumptions` attachment. Then carry on with what the plan and the other sources say.
 
 In s15f84, `get_context` began returning `files`, and `get_artifact` began adding `downloadUrl` for a stored file.
+
+### Avoiding no-progress timeouts
+
+From 2026-09-16 to 2026-10-14, 9 of 45 routine runs (20%) ended with "Run timed out: No progress for 2 hours" (s15b4, s15b6, s15b15, s15f7, s15t7, s15t11, s15t12, s15t18). The catalog's progress calls under "Keep progress moving" only help if the run actually gets to make them:
+
+- **Sub-agents block the main session.** While a sub-agent runs, you can't make the 10-minute `get_glob` calls. Pass the run ID to every sub-agent. Tell it to call `get_glob(id, runId)` at least every 10 minutes, and before and after any command that may run long.
+- **Never let a command hang.** Run every command non-interactively and with a time limit:
+  - no watch modes (`vitest run`, not `vitest`);
+  - no prompts;
+  - no foreground dev servers;
+  - wrap long checks in `timeout`.
+
+  A command that hangs or is killed by its timeout is a blocker. Don't wait it out or retry it in a loop.
+- **Fail before the clock does.** If the run can't go on, call `report_failure` with the phase, the blocker and what you tried. Don't let the run time out: a timeout tells the next person nothing.

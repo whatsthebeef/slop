@@ -148,3 +148,9 @@ Include a brief summary.
 - **Accumulate the document**: each round appends; never overwrite earlier rounds.
 - **No code modifications in standalone mode.**
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+
+## Board rules
+
+### Verify claimed side effects before raising them
+
+Before raising an `IN-SCOPE` finding that depends on a side effect of a called function (for example, "this stores a conversation" or "this writes to the DB"), follow that function's code path and confirm the side effect really happens there. Sibling methods often differ: in `ChatService`, only `ask()` calls `createChat`/`addChatMessage`, while `answer()` is the one-off path and only calls `compose()`. If you can't confirm the side effect, don't raise the finding as in-scope.
