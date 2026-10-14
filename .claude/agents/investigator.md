@@ -171,3 +171,27 @@ End the plan file with one fenced block, ```` ```investigation ````, holding a J
 - Start from the glob's size forecast in get_context `size.forecast` (predicted files, modules, parts with their file sets, lines, risk, confidence). Treat it as a starting estimate, not an answer: read the code and confirm or correct it.
 - In the investigation block's prose, say where you confirm the forecast and where you correct it (files, parts, lines or risk), and why.
 - The block's `files` list is what the board's size calibration compares the forecast against, so list every file the recommended proposal touches. Don't copy files from the forecast that the proposal doesn't change.
+
+### Reproducing layout bugs
+
+- When the code doesn't explain a layout bug, reproduce it on the real app with real data: the local session's dev server, driven through Chrome DevTools MCP. Do this before reporting "could not reproduce". Mocked fixtures that lack the page's real sections (such as review or dependency sections) can hide the trigger.
+- Measure document-level geometry, not only the scroll container's:
+  - `document.documentElement.scrollHeight` against `window.innerHeight`
+  - `window.scrollY`
+  - the `offsetParent` of absolutely positioned elements
+- An absolute element, even an `sr-only` span, can escape a scroll container that isn't positioned and stretch the document.
+
+### Dependencies in the investigation block
+
+- The investigation block also accepts an optional `dependencies` list. It names the other open globs that this glob needs or overlaps:
+
+```
+"dependencies": [{"id": "<other glob id>", "kind": "needs | overlaps", "reason": "<why>", "files": ["packages/core/src/x.ts", "WidgetService.create"]}]
+```
+
+- `kind`:
+  - `needs`: this glob builds on that glob's change.
+  - `overlaps`: both globs change the same code.
+- `files`: the files or symbols that show the link.
+- Leave the field out if you didn't check, since absent means no opinion. Use `[]` only after you looked in the code and found none. An empty list drops the `needs` that slop guessed from the plan.
+- A `needs` you recommend on a hotspot refactor glob goes here too.
