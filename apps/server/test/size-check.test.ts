@@ -151,16 +151,17 @@ describe('The learned size check in Postgres', () => {
   });
 
   it('stores the fan-out floor with the threshold and in its history, and refuses a stale floor', async () => {
-    const start = { maxTasks: 5, maxParts: 3, minParallel: 2 };
-    const raised = { ...start, minParallel: 3 };
+    // The board's threshold carries over from earlier tests in this file, so start from what it holds now.
+    const start = await store.transaction((tx) => tx.getSizeThreshold(boardId));
+    const raised = { ...start, minParallel: start.minParallel + 1 };
     expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, raised))).toBe(true);
     expect(await store.transaction((tx) => tx.getSizeThreshold(boardId))).toEqual(raised);
     // Same task and part limits, but another floor: a compare-and-set on the old floor loses.
-    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, { ...start, minParallel: 4 }))).toBe(false);
+    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, { ...start, minParallel: start.minParallel + 2 }))).toBe(false);
     await store.transaction((tx) =>
       tx.insertSizeThresholdChange({ boardId, at: '2026-09-20T00:00:00.000Z', from: start, to: raised, outcome: 'fanout_stalled', globId: 's1f77', evidence: 'conflicted' }),
     );
-    expect(unwrap(await size.view(DEV, boardId)).history).toMatchObject([{ outcome: 'fanout_stalled', from: start, to: raised }]);
+    expect(unwrap(await size.view(DEV, boardId)).history).toEqual(expect.arrayContaining([expect.objectContaining({ globId: 's1f77', outcome: 'fanout_stalled', from: start, to: raised })]));
   });
 
   it('keeps the forecast in the estimate and stores the calibration, its history and the three-point record', async () => {

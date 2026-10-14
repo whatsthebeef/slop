@@ -5,6 +5,7 @@ import type { Area, GlobOutcome } from './intake-learning.js';
 import type { Investigation } from './investigation.js';
 import type { RiskTier } from './knowledge.js';
 import type { SizeEstimate, SizeProposal, SizeThreshold, Workstream } from './size-check.js';
+import type { WorkstreamsBlock, WorkstreamState } from './workstreams.js';
 import { MAX_PROPOSED_PARTS, applyOwnership, isChain, splitShape } from './size-check.js';
 
 /**
@@ -541,6 +542,30 @@ const orderParts = (parts: readonly ForecastPart[]): ForecastPart[] => {
 // ---------------------------------------------------------------------------
 // Three-point record and calibration
 
+/** One workstream of the run set against the forecast part it covered: what the forecast's split got right and wrong. */
+export interface WorkstreamActual {
+  readonly name: string;
+  readonly state: WorkstreamState;
+  readonly predictedFiles: readonly string[];
+  readonly actualFiles: readonly string[];
+  readonly conflicts: readonly string[];
+  /** The forecast part sharing the most files with the workstream's actual files; null when none shares any. */
+  readonly part: string | null;
+  /** Actual files the part's file set had. */
+  readonly partHit: number;
+  /** Actual files the part's file set missed (all of them when no part matched). */
+  readonly partMissed: number;
+  /** Files the part predicted that the workstream did not change. */
+  readonly partExtra: number;
+}
+
+/** The workstreams the run really used (from the implementation record's workstreams block), against the forecast's parts. */
+export interface WorkstreamsActual {
+  readonly fannedOut: boolean;
+  readonly maxParallel: number;
+  readonly items: readonly WorkstreamActual[];
+}
+
 /** The three points of one merged glob: what was forecast, what the investigator found, and what happened. */
 export interface SizeRecord {
   readonly globId: string;
@@ -556,8 +581,34 @@ export interface SizeRecord {
     readonly escalated: boolean;
     readonly followUpBugs: number;
     readonly hoursOpen: number | null;
+    /** Absent on a record made before workstreams, null when the record had no valid workstreams block (a small glob). */
+    readonly workstreams?: WorkstreamsActual | null;
   };
 }
+
+/** Each workstream of the block against the forecast part that shares the most of its actual files (pure). */
+export const workstreamsActualOf = (forecast: SizeForecast, block: WorkstreamsBlock): WorkstreamsActual => ({
+  fannedOut: block.fannedOut,
+  maxParallel: block.maxParallel,
+  items: block.workstreams.map((w) => {
+    const actual = new Set(w.actualFiles);
+    const overlap = (files: readonly string[]): number => files.filter((f) => actual.has(f)).length;
+    let best: ForecastPart | null = null;
+    for (const part of forecast.parts) if (overlap(part.files) > (best === null ? 0 : overlap(best.files))) best = part;
+    const hit = best === null ? 0 : overlap(best.files);
+    return {
+      name: w.name,
+      state: w.state,
+      predictedFiles: w.predictedFiles,
+      actualFiles: w.actualFiles,
+      conflicts: w.conflicts,
+      part: best?.name ?? null,
+      partHit: hit,
+      partMissed: actual.size - hit,
+      partExtra: best === null ? 0 : best.files.length - hit,
+    };
+  }),
+});
 
 export const sizeRecordOf = (input: {
   readonly globId: string;
@@ -569,6 +620,8 @@ export const sizeRecordOf = (input: {
   readonly files: { readonly count: number } | null;
   readonly events: readonly DomainEvent[];
   readonly hoursOpen: number | null;
+  /** The implementation record's parsed workstreams block, when it has a valid one. */
+  readonly workstreams?: WorkstreamsBlock | null;
 }): SizeRecord => ({
   globId: input.globId,
   boardId: input.boardId,
@@ -583,6 +636,7 @@ export const sizeRecordOf = (input: {
     escalated: input.events.some((e) => e.type === 'Escalated'),
     followUpBugs: input.outcome.postMerge.fixGlobs.length,
     hoursOpen: input.hoursOpen,
+    workstreams: input.workstreams == null ? null : workstreamsActualOf(input.forecast, input.workstreams),
   },
 });
 
@@ -598,6 +652,19 @@ const normalised = (w: SizeWeights): SizeWeights => {
   return { code: round(w.code / total, 2), reference: round(w.reference / total, 2), text: round(w.text / total, 2) };
 };
 
+/** Where the forecast's split missed: "the forecast part X covered 3 of the 5 files of workstream Y". Empty when it matched. */
+const workstreamMisses = (built: readonly WorkstreamActual[]): string => {
+  const off = built.filter((w) => w.partMissed > 0 || w.partExtra > 0 || w.part === null);
+  if (off.length === 0) return '';
+  return `, where ${off
+    .map((w) =>
+      w.part === null
+        ? `no forecast part covered workstream ${w.name} (${String(w.actualFiles.length)} files)`
+        : `the forecast part ${w.part} covered ${String(w.partHit)} of the ${String(w.actualFiles.length)} files of workstream ${w.name}`,
+    )
+    .join(', ')}`;
+};
+
 /**
  * Moves the calibration with one record (pure). Area factors: for each area the forecast named, the factor moves
  * `FACTOR_RATE` of the way to actual lines over the uncalibrated estimate. Weights: when the investigator's file count
@@ -610,6 +677,8 @@ export const calibrate = (calibration: SizeCalibration, record: SizeRecord): Cal
   const forecast = record.estimate;
   const { lines } = record.actual;
   if (lines !== null && forecast.areas.length > 0) {
+    const names = (record.actual.workstreams?.items ?? []).map((w) => w.name);
+    const workstreamNote = names.length === 0 ? '' : ` (built as workstreams ${names.join(', ')})`;
     const raw = ((forecast.lines.min + forecast.lines.max) / 2) / (forecast.calibrated.scale || 1);
     if (raw > 0) {
       const target = lines / raw;
@@ -624,13 +693,19 @@ export const calibrate = (calibration: SizeCalibration, record: SizeRecord): Cal
           area,
           from: { factor: old },
           to: { factor: next },
-          cause: `${area}: ${record.globId} changed ${String(lines)} lines against an estimate of about ${String(round(raw))} (x${String(round(target, 2))}), so the ${area} correction moves from x${String(old)} to x${String(next)}`,
+          cause: `${area}: ${record.globId} changed ${String(lines)} lines against an estimate of about ${String(round(raw))} (x${String(round(target, 2))}), so the ${area} correction moves from x${String(old)} to x${String(next)}${workstreamNote}`,
         });
       }
     }
   }
   let weights = calibration.weights;
-  const truth = record.investigation?.files.length;
+  // The files the run really changed, by workstream, are a better truth than the investigation's list.
+  const built = (record.actual.workstreams?.items ?? []).filter((w) => w.state === 'done' && w.actualFiles.length > 0);
+  const truth = built.length > 0 ? new Set(built.flatMap((w) => w.actualFiles)).size : record.investigation?.files.length;
+  const source =
+    built.length > 0
+      ? `The workstreams of ${record.globId} (${built.map((w) => w.name).join(', ')}) changed ${String(truth)} files${workstreamMisses(built)}`
+      : `The investigation of ${record.globId} found ${String(truth)} files`;
   if (truth !== undefined) {
     const errors = SIGNALS.flatMap((name) => {
       const signal = forecast.signals[name];
@@ -647,7 +722,7 @@ export const calibrate = (calibration: SizeCalibration, record: SizeRecord): Cal
           area: null,
           from: { weights },
           to: { weights: to },
-          cause: `The investigation of ${record.globId} found ${String(truth)} files: the ${worst.name} signal said ${String(worst.files)} (${String(round(worst.error * 100))}% off) and the ${best.name} signal said ${String(best.files)} (${String(round(best.error * 100))}% off), so weight moves from ${worst.name} to ${best.name}`,
+          cause: `${source}: the ${worst.name} signal said ${String(worst.files)} (${String(round(worst.error * 100))}% off) and the ${best.name} signal said ${String(best.files)} (${String(round(best.error * 100))}% off), so weight moves from ${worst.name} to ${best.name}`,
         });
         weights = to;
       }

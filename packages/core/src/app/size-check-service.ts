@@ -590,9 +590,16 @@ export class SizeCheckService implements SizeAssessor {
         if (forecast === undefined || record !== null) return null;
         const artifact = (await tx.artifactVersions(outcome.globId, 'investigation', '')).at(-1);
         const parsed = artifact === undefined ? null : parseInvestigation(artifact.content);
+        const recorded = (await tx.artifactVersions(outcome.globId, 'implementation_plan', '')).at(-1);
+        const workstreams = recorded === undefined ? null : parseWorkstreams(recorded.content);
         const summaries = await tx.changeCandidates({ boardId, query: '', mode: 'all_time', globId: outcome.globId }, 5);
         const files = summaries.map((c) => parseFilesLine(c.text)).find((f) => f !== null) ?? null;
-        return { forecast, investigation: parsed?.ok === true ? parsed.investigation : null, files };
+        return {
+          forecast,
+          investigation: parsed?.ok === true ? parsed.investigation : null,
+          files,
+          workstreams: workstreams?.kind === 'ok' ? workstreams.block : null,
+        };
       });
       if (gathered === null) continue;
       const events = byGlob.get(outcome.globId) ?? [];
@@ -604,6 +611,7 @@ export class SizeCheckService implements SizeAssessor {
         investigation: gathered.investigation,
         outcome,
         files: gathered.files,
+        workstreams: gathered.workstreams,
         events,
         hoursOpen: prHoursOf(events),
       });
