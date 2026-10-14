@@ -64,6 +64,14 @@ export const mainAction = (
     const person = TAKE_OVERS.find((action) => available.includes(action));
     if (person !== undefined) return person;
   }
+  // A same (or super) is the person's to own: while the machine implements it, stepping in leads and Review code waits in the menu.
+  if (
+    !stepFirst &&
+    glob.type !== 'sub' &&
+    glob.status === 'implementing' &&
+    available.includes('take_over')
+  )
+    return 'take_over';
   const candidate = (action: Action): boolean => {
     if (!available.includes(action) || NEVER_MAIN.includes(action)) return false;
     return actionPresentation(action, glob, decision, viewer).placement === 'main';
