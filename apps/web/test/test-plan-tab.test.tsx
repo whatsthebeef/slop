@@ -298,7 +298,20 @@ describe('test plan: saved', () => {
     expect(server.puts[0]?.version).toBe(1);
     expect(server.puts[0]?.content.endsWith(' more')).toBe(true);
     // Back to the preview, now at version 2.
-    await waitFor(() => expect(screen.getByTestId('plan-version').textContent).toContain('v2'));
+    await waitFor(() => expect(within(screen.getByRole('tabpanel')).getByTestId('plan-version').textContent).toContain('v2'));
+  });
+
+  it('keeps an unsaved draft when switching tabs and back', async () => {
+    install(newServer({ testPlan: [artifact('test_plan', 1, PLAN_TEXT)] }));
+    const user = userEvent.setup();
+    renderPlan();
+    await openTestPlan(user);
+    await screen.findByRole('table');
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.type(await screen.findByRole<HTMLTextAreaElement>('textbox'), ' kept');
+    await user.click(screen.getByRole('tab', { name: /plan\.md/ }));
+    await openTestPlan(user);
+    expect((await screen.findByRole<HTMLTextAreaElement>('textbox')).value.endsWith(' kept')).toBe(true);
   });
 
   it('switches the preview between versions from the dropdown', async () => {
@@ -311,7 +324,7 @@ describe('test plan: saved', () => {
     renderPlan();
     await openTestPlan(user);
     expect(await screen.findByText('new text')).toBeTruthy();
-    await user.click(screen.getByTestId('plan-version'));
+    await user.click(within(screen.getByRole('tabpanel')).getByTestId('plan-version'));
     const items = await screen.findAllByRole('menuitem');
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain('(latest)');
