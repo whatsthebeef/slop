@@ -41,6 +41,8 @@ export const DOMAIN_EVENT_TYPES = [
   'LabelItemTicked',
   'PickedUp',
   'ArtifactAdded',
+  /** The implementation record's workstreams block changed (data: the parsed block, `version`, `commitSha`, `runId`). */
+  'WorkstreamsRecorded',
   /** A person asked for an independent review now (data: the stage it will run at). */
   'ReviewRequested',
   'DeployRequested',

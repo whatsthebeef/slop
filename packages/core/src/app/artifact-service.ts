@@ -3,6 +3,7 @@ import type { AttachmentFile, FileState } from '../domain/attachment-file.js';
 import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
 import { parseInvestigation, validationNote } from '../domain/investigation.js';
+import { parseWorkstreams, sameWorkstreams, workstreamsEventData, workstreamsValidationNote } from '../domain/workstreams.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
@@ -325,6 +326,8 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
   const globId = glob.id;
   // An investigation whose block doesn't validate is kept as text, with the reason beside it.
   const parsed = kind === 'investigation' ? parseInvestigation(content) : null;
+  // Likewise a record whose workstreams block doesn't validate. A record without the section (a small glob) has nothing to say.
+  const workstreams = kind === 'implementation_plan' ? parseWorkstreams(content) : null;
   const provenance: Provenance = {
     by:
       input.by ??
@@ -338,8 +341,16 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
     agentSetVersion: input.agentSetVersion,
     ...(kind === 'local_review' && input.reviewStats !== null && { reviewStats: input.reviewStats }),
     ...(parsed !== null && !parsed.ok && { validation: validationNote(parsed.errors) }),
+    ...(workstreams?.kind === 'invalid' && { validation: workstreamsValidationNote(workstreams.errors) }),
   };
   const now = clock.now();
+  // Read the previous record under the artifact lock, so two pushes can't both see the same "previous" block.
+  let previous: ReturnType<typeof parseWorkstreams> | null = null;
+  if (workstreams?.kind === 'ok') {
+    await tx.lockGlobArtifacts(globId);
+    const before = (await tx.artifactVersions(globId, 'implementation_plan', '')).at(-1);
+    previous = before === undefined ? null : parseWorkstreams(before.content);
+  }
   const artifact = await tx.insertArtifact({
     globId,
     kind,
@@ -375,6 +386,18 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
       at: now,
       data: { kind, label, version: artifact.version, commitSha: input.commitSha, runId: input.runId, agentSetVersion: input.agentSetVersion },
     },
+    // Only a changed block is an event, so re-pushing the same record doesn't pile them up; consumers read the latest per glob.
+    ...(workstreams?.kind === 'ok' && !(previous?.kind === 'ok' && sameWorkstreams(previous.block, workstreams.block))
+      ? [
+          {
+            type: 'WorkstreamsRecorded' as const,
+            globId,
+            actor: email,
+            at: now,
+            data: workstreamsEventData(workstreams.block, { version: artifact.version, commitSha: input.commitSha, runId: input.runId }),
+          },
+        ]
+      : []),
   ]);
   return artifact;
 };
