@@ -225,7 +225,7 @@ describe('independent review icon', () => {
           review: { stage: 'pre_merge', headSha, findings, high: 0, medium: 0, low: 0 },
         },
       ],
-    } as Partial<GlobView>);
+    });
 
   it('shows no icon or text for a review with zero findings', () => {
     const root = dom(markup(reviewed(0)));
