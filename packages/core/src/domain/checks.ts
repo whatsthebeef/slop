@@ -130,7 +130,8 @@ export const recordBaseChecks = (
 ): BaseChecksChange => {
   const wasRed = previous?.state === 'failed';
   // A new red run: the base was green or unseen, or this head's parent passed (it went green and red again between reads).
-  const continuing = wasRed && result.fromGreen !== true;
+  const sameHead = wasRed && previous.sha === result.sha;
+  const continuing = wasRed && (sameHead || result.fromGreen !== true);
   const next: BaseChecks = result.passed
     ? { sha: result.sha, state: 'passed', since: null, checkedAt: now }
     : {
@@ -138,7 +139,8 @@ export const recordBaseChecks = (
         state: 'failed',
         ...(result.failure !== null && { failure: result.failure }),
         redSha: continuing ? (previous.redSha ?? previous.sha) : result.sha,
-        since: continuing ? previous.since : result.fromGreen === true ? result.merged : null,
+        // Reading the same red head again keeps its red run (and `redAt`); its blame is still worked out from its parent.
+        since: sameHead || !continuing ? (result.fromGreen === true ? result.merged : sameHead ? previous.since : null) : previous.since,
         redAt: continuing ? (previous.redAt ?? now) : now,
         checkedAt: now,
       };

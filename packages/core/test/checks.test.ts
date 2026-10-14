@@ -155,6 +155,12 @@ describe('base checks transitions', () => {
     expect(c.next).toMatchObject({ sha: 'm5', redSha: 'm5', since: 's1b7', redAt: LATER });
   });
 
+  it('reading the same red head again keeps when the base went red', () => {
+    const first = recordBaseChecks(null, red, NOW).next;
+    const again = recordBaseChecks(first, red, LATER);
+    expect(again.next).toMatchObject({ redSha: 'm1', since: 's1f5', redAt: NOW });
+  });
+
   it('the same result again changes nothing', () => {
     const first = recordBaseChecks(null, red, NOW).next;
     expect(recordBaseChecks(first, red, LATER).changed).toBe(false);
