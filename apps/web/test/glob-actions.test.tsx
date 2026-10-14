@@ -613,7 +613,7 @@ describe('glob view: the conflict section', () => {
 
 describe('glob view: split moves in the action ▾', () => {
   const now = '2026-10-14T00:00:00Z';
-  const stream = (name: string, needs: number[] = []) => ({ name, goal: `goal ${name}`, files: [], plan: `plan ${name}`, needs });
+  const stream = (name: string, needs: number[] = []) => ({ name, goal: `goal ${name}`, files: [`apps/${name.toLowerCase()}.ts`], plan: `plan ${name}`, needs });
   const sizeCheck = (proposal: boolean): NonNullable<GlobView['sizeCheck']> => ({
     globId: 's1t1',
     boardId: 1,
@@ -686,6 +686,7 @@ describe('glob view: split moves in the action ▾', () => {
     expect(panel.textContent).toContain('Oversized: this looks like more than one PR');
     expect(panel.textContent).toContain('This is advice');
     expect(within(panel).getByTestId('oversized-parts').textContent).toContain('Two');
+    expect(within(panel).getByTestId('oversized-parts').textContent).toContain('apps/two.ts');
     expect(within(panel).queryAllByRole('button')).toHaveLength(0);
   });
 });
