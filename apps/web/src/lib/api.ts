@@ -92,7 +92,7 @@ export interface GlobView extends Glob {
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
   /** True while the size check flagged the glob oversized and it hasn't started (advice only; the card's chip). */
   readonly oversized?: boolean;
-  /** The size check: why it was flagged, its evidence and the proposed split (single-glob reads only). */
+  /** The size check: why it was flagged, its evidence and the forecast's workstreams, advice only (single-glob reads only). */
   readonly sizeCheck?: SizeCheck;
   /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
   readonly handover?: Handover | null;
