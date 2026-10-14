@@ -19,8 +19,9 @@ export const canSplit = (glob: GlobView): boolean =>
   glob.status === 'planning' && glob.provisioning === 'none' && glob.runs.length === 0 && glob.pr === null && glob.type !== 'super';
 
 /**
- * Cuts the scope of a glob in Planning into independent globs: part 1 stays this glob, with its plan pre-filled to edit down;
- * the others are new globs in its group. `{part:2}` in a plan stands for that part's glob ID.
+ * A manual scope cut: a glob in Planning becomes independent globs. Part 1 stays this glob with its plan to edit down; the
+ * others are new globs in its group. Each part ships on its own; a part only waits for another when picked in "Starts after".
+ * `{part:2}` in a plan stands for that part's glob ID.
  */
 export const SplitGlob = ({
   glob,
@@ -71,7 +72,8 @@ export const SplitGlob = ({
   return (
     <div className='grid gap-3 rounded border p-3' data-testid='split-editor'>
       <p className='text-xs text-muted-foreground'>
-        Part 1 stays {glob.id}. Cut its plan between the parts; write {'{part:2}'} to name another part's glob ID.
+        Part 1 stays {glob.id}. Cut its plan between the parts; each piece ships on its own, so give each its own title and share of
+        the plan. Pick "Starts after" only when a part needs another's code; write {'{part:2}'} to name another part's glob ID.
       </p>
       {shown.map((part, index) => (
         <div key={index} className='grid gap-2 rounded border p-2' data-testid={`split-part-${index + 1}`}>
@@ -100,7 +102,7 @@ export const SplitGlob = ({
                   <option value='sub'>sub</option>
                 </Select>
               </Label>
-              <span>Waits for:</span>
+              <span>Starts after:</span>
               {shown.slice(0, index).map((_, n) => (
                 <label key={n} className='flex items-center gap-1'>
                   <input
@@ -130,7 +132,7 @@ export const SplitGlob = ({
           Cancel
         </Button>
         <Button size='sm' disabled={busy || !ready} data-testid='confirm-split' onClick={() => void submit()}>
-          Split into {shown.length} parts
+          Split into {shown.length} independent globs
         </Button>
       </div>
       {error !== null && (
