@@ -17,3 +17,18 @@ export const latestSignedOff = <
 >(
   items: readonly T[],
 ): T[] => bySignedOffNewest(items).slice(0, SIGNED_OFF_ON_BOARD);
+
+/**
+ * A board list's order: when each glob entered the list, newest first (`listSince`, falling back to `createdAt` for an
+ * API that doesn't send it), ties by ID descending. Not `updatedAt`: work on a card doesn't move it.
+ */
+export const byListSinceNewest = <
+  T extends { readonly id: string; readonly createdAt: string; readonly listSince?: string },
+>(
+  items: readonly T[],
+): T[] =>
+  [...items].sort(
+    (a, b) =>
+      (b.listSince ?? b.createdAt).localeCompare(a.listSince ?? a.createdAt) ||
+      b.id.localeCompare(a.id, undefined, { numeric: true }),
+  );

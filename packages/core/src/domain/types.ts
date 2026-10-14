@@ -367,6 +367,11 @@ export interface Glob {
   readonly signedOffAt: string | null;
   /** When the glob last entered Doing; null outside Doing. Drives the aging colour. */
   readonly doingSince: string | null;
+  /**
+   * When the glob entered the list it is in (Planning, Doing, Reviewing, Signed Off): set when a transition changes the list,
+   * left alone by everything else. The board orders its lists by it. Absent on documents from before it existed (the migration backfills it).
+   */
+  readonly listSince?: string;
 }
 
 /**
