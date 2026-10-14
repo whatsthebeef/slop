@@ -119,6 +119,8 @@ export class GroupService {
       if (!result.ok && result.error.code === 'version_conflict') {
         const current = await this.deps.globs.peek(glob.id);
         if (current !== null && inGroup(current, from)) result = await this.deps.globs.update(email, glob.id, current.version, { group: name });
+        // Moved elsewhere by someone else: not ours to move, and not counted as carrying the new name.
+        else if (current !== null && current.group !== name) continue;
         else if (current !== null) result = ok(current);
       }
       if (result.ok) moved += 1;

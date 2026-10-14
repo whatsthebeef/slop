@@ -232,6 +232,22 @@ describe('GroupService', () => {
       expect(await groupOf(a.id)).toBe('raced');
     });
 
+    it('does not count a glob someone moved to a third group while it was being renamed', async () => {
+      const a = await create({ title: 'Raced away' });
+      let raced = false;
+      const racing = Object.create(globs) as GlobService;
+      racing.update = async (...args: Parameters<GlobService['update']>) => {
+        if (!raced) {
+          raced = true;
+          unwrap(await globs.update(ADMIN, a.id, a.version, { group: 'third' }));
+        }
+        return globs.update(...args);
+      };
+      const service = new GroupService({ store, globs: racing, boards: new BoardService({ store, notifier: new RecordingNotifier() }), clock: { now: () => '2026-10-13T12:00:00.000Z' } });
+      expect(unwrap(await service.rename(DEV, boardId, 'chat', 'raced'))).toEqual({ name: 'raced', moved: 0, failed: [] });
+      expect(await groupOf(a.id)).toBe('third');
+    });
+
     it('refuses a non-member', async () => {
       await create();
       expect((await groups.rename(OUTSIDER, boardId, 'chat', 'x')).ok).toBe(false);
