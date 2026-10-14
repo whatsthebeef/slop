@@ -361,7 +361,7 @@ export class GlobService {
       const relations = await this.relationFacts(tx, await tx.listRelationsFrom([glob.id]));
       const sizeCheck = await tx.getSizeCheck(glob.id);
       const sizeHeld = glob.status === 'planning' && glob.waiting != null && unresolved(sizeCheck);
-      const facts = { recordSha: machine.recordShaOf(artifacts), relations, sizeHeld };
+      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, sizeHeld };
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       return ok({
         glob,
@@ -1592,7 +1592,7 @@ export class GlobService {
 
   /** Review now: queues a fresh independent review of a glob with a PR in Doing or Reviewing (any board member; no version needed). */
   reviewNow(email: string, id: string) {
-    return this.command(email, id, null, (glob, ctx) => machine.reviewNow(glob, ctx));
+    return this.command(email, id, null, (glob, ctx, _board, facts) => machine.reviewNow(glob, ctx, facts), { facts: true });
   }
 
   /** Investigate: an investigate-only routine run on a glob in Planning (refused while any run is live). */
@@ -2205,8 +2205,9 @@ export class GlobService {
         rows = applied.relations;
         inserted = applied.inserted;
       }
+      const summaries = options.facts === true ? await tx.listArtifactSummaries(glob.boardId, [glob.id]) : [];
       const record = options.facts === true
-        ? { recordSha: machine.recordShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
+        ? { recordSha: machine.recordShaOf(summaries), reviews: machine.reviewsOf(summaries) }
         : {};
       const relations =
         options.relations === true

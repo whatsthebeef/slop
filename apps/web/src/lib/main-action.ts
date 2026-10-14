@@ -1,9 +1,9 @@
 import type { Action } from '@slop/core';
-import { actionPresentation } from './action-presentation';
+import { actionPresentation, isReviewRetry } from './action-presentation';
 import type { GlobView } from './api';
 
 type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
-  Partial<Pick<GlobView, 'runs'>>;
+  Partial<Pick<GlobView, 'runs' | 'artifacts'>>;
 
 /** The machine has failed this many runs in a row (a retry included, whatever the cause): another retry is unlikely to help, so a person steps in. */
 export const REPEATED_FAILURES = 2;
@@ -79,15 +79,35 @@ export const mainAction = (
   return (stepFirst ? FIXES : [...FIXES, ...NEXT_STEPS]).find(candidate) ?? null;
 };
 
-/** Promoted in this order when nothing is the natural main: undo what the person just started, review, then step in. */
+/** Promoted in this order when nothing is the natural main: undo what the person just started, retry a missing review, then step in. */
 const PROMOTION: readonly Action[] = ['cancel_merge', 'review_now', 'take_over', 'pick_up'];
 
 /**
  * The menu item to lead with when `mainAction` finds no natural main, so the split button never shows a lone ▾:
- * Cancel merge, Review code, Pick up, else the first remaining item. Never a destructive action (those stay in the
- * Reset area). Null when nothing is left, and the row then shows no actions.
+ * Cancel merge, Retry review, Pick up, else the first remaining item. Never a destructive action (those stay in the
+ * Reset area), and a person's own Review code only as the last resort (only the retry of a missing review leads). Null when
+ * nothing is left, and the row then shows no actions.
  */
-export const promotedAction = (available: readonly Action[]): Action | null => {
+export const promotedAction = (available: readonly Action[], glob: Subject): Action | null => {
   const rest = available.filter((a) => !NEVER_MAIN.includes(a));
-  return PROMOTION.find((a) => rest.includes(a)) ?? rest[0] ?? null;
+  const leading = rest.filter((a) => a !== 'review_now' || isReviewRetry(glob));
+  // Only when nothing else is left does a person's own Review code lead, so the row isn't empty.
+  return PROMOTION.find((a) => leading.includes(a)) ?? leading[0] ?? rest[0] ?? null;
 };
+
+/**
+ * Whether the main button shows as an outline: a sub the machine is implementing and making progress on, where Pick up is
+ * there to step in but a stopped healthy run is not what anyone wants. Stalled, it turns black.
+ */
+export const mainVariant = (
+  main: Action | null,
+  glob: Subject,
+  stalled: boolean,
+): 'default' | 'outline' =>
+  !stalled &&
+  glob.type === 'sub' &&
+  (main === 'take_over' || main === 'pick_up') &&
+  (glob.status === 'implementing' || glob.status === 'pr_open') &&
+  glob.pr?.state !== 'merged'
+    ? 'outline'
+    : 'default';

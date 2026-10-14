@@ -1301,34 +1301,66 @@ describe('checks and merging (slice 2)', () => {
   });
 
   describe('review now (on-demand independent review)', () => {
-    const doing = glob({ status: 'pr_open', pr: { number: 7, state: 'draft', headSha: 'bbb' } });
-    const merged = glob({ type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'bbb' } });
+    const pr = (state: 'draft' | 'ready' | 'merged') => ({ number: 7, state, headSha: 'bbbbbbb1' });
+    const review = (stage: 'pre_merge' | 'post_merge', headSha = 'bbbbbbb1') => ({ stage, headSha, findings: 0, high: 0, medium: 0, low: 0 });
+    // A person's own same with an open PR, and a ready same whose automatic review is missing.
+    const own = glob({ status: 'in_progress', implementer: dev.email, pr: pr('draft') });
+    const ready = glob({ status: 'pr_open', pr: pr('ready') });
+    const merged = glob({ type: 'sub', status: 'reviewing', pr: pr('merged') });
+    const offered = (g: Glob, reviews?: Parameters<typeof m.reviewOffer>[1]) => m.allowedActions(g, dev, reviews === undefined ? {} : { reviews }).includes('review_now');
 
-    it('is offered in Doing and Reviewing for a glob with an open or merged PR, and nowhere else', () => {
-      expect(m.allowedActions(doing, dev)).toContain('review_now');
-      expect(m.allowedActions(glob({ status: 'in_progress', pr: { number: 7, state: 'draft', headSha: 'bbb' } }), dev)).toContain('review_now');
-      expect(m.allowedActions(merged, dev)).toContain('review_now');
-      expect(m.allowedActions(glob({ status: 'planning' }), dev)).not.toContain('review_now');
-      expect(m.allowedActions(glob({ status: 'in_progress', pr: null }), dev)).not.toContain('review_now');
-      expect(m.allowedActions(glob({ status: 'signed_off', pr: { number: 7, state: 'merged', headSha: 'bbb' } }), dev)).not.toContain('review_now');
-      expect(m.allowedActions(glob({ status: 'failed', pr: { number: 7, state: 'closed', headSha: 'bbb' } }), dev)).not.toContain('review_now');
+    it('is offered for a person\'s own same or super with an open PR, never as a retry', () => {
+      expect(offered(own)).toBe(true);
+      expect(m.reviewOffer(own, [])).toBe('review');
+      expect(offered(glob({ type: 'super', status: 'in_progress', implementer: dev.email, pr: pr('draft') }))).toBe(true);
+    });
+
+    it('is not offered while the machine implements, or on a sub in Doing, or with a live run', () => {
+      expect(offered(glob({ type: 'sub', status: 'implementing', pr: pr('draft') }), [])).toBe(false);
+      expect(offered(glob({ type: 'same', status: 'implementing', pr: pr('draft') }), [])).toBe(false);
+      expect(offered(glob({ type: 'sub', status: 'pr_open', pr: pr('ready') }), [])).toBe(false);
+      expect(offered({ ...own, runs: [run({ state: 'active' })] }, [])).toBe(false);
+      expect(offered({ ...ready, runs: [run({ state: 'queued' })] }, [])).toBe(false);
+      expect(offered({ ...merged, runs: [run({ state: 'watching' })] }, [])).toBe(false);
+    });
+
+    it('retries a missing automatic review: a ready same without a before-merge review at the head, a merged glob without an after-merge one', () => {
+      expect(m.reviewOffer(ready, [])).toBe('retry');
+      expect(m.reviewOffer(ready, [review('pre_merge', 'oldoldo2')])).toBe('retry');
+      expect(m.reviewOffer(ready, [review('pre_merge')])).toBeNull();
+      expect(m.reviewOffer(merged, [])).toBe('retry');
+      expect(m.reviewOffer(merged, [review('pre_merge')])).toBe('retry');
+      expect(m.reviewOffer(merged, [review('post_merge')])).toBeNull();
+      expect(offered(merged, [review('post_merge')])).toBe(false);
+    });
+
+    it('does not guess the retry case without the reviews loaded', () => {
+      expect(offered(ready)).toBe(false);
+      expect(offered(merged)).toBe(false);
+    });
+
+    it('is not offered outside Doing and Reviewing, without a PR or on a closed one', () => {
+      expect(offered(glob({ status: 'planning', implementer: dev.email }), [])).toBe(false);
+      expect(offered(glob({ status: 'in_progress', implementer: dev.email, pr: null }), [])).toBe(false);
+      expect(offered(glob({ status: 'signed_off', pr: pr('merged') }), [])).toBe(false);
+      expect(offered(glob({ status: 'failed', implementer: dev.email, pr: { number: 7, state: 'closed', headSha: 'bbb' } }), [])).toBe(false);
     });
 
     it('queues one review job with a request id and changes nothing on the glob', () => {
-      const t = value(m.reviewNow(doing, ctx()));
+      const t = value(m.reviewNow(own, ctx()));
       expect(t.changed).toBe(false);
       expect(t.effects).toHaveLength(1);
-      expect(t.effects[0]).toMatchObject({ kind: 'review_change', stage: 'pre_merge', sha: 'bbb', generation: 1 });
+      expect(t.effects[0]).toMatchObject({ kind: 'review_change', stage: 'pre_merge', sha: 'bbbbbbb1', generation: 1 });
       expect(t.effects[0]?.kind === 'review_change' ? t.effects[0].requestId : undefined).toEqual(expect.any(String));
       expect(t.events.map((e) => e.type)).toEqual(['ReviewRequested']);
     });
 
     it('reviews a merged glob at the post-merge stage, with a request id each time it is asked', () => {
-      const first = value(m.reviewNow(merged, ctx()));
+      const first = value(m.reviewNow(merged, ctx(), { reviews: [] }));
       expect(first.effects[0]).toMatchObject({ kind: 'review_change', stage: 'post_merge' });
       const id = (t: Transition) => (t.effects[0]?.kind === 'review_change' ? t.effects[0].requestId : undefined);
       const calls = ['r1', 'r2'];
-      const asked = () => value(m.reviewNow(merged, { ...ctx(), newRunId: () => calls.shift() ?? 'x' }));
+      const asked = () => value(m.reviewNow(merged, { ...ctx(), newRunId: () => calls.shift() ?? 'x' }, { reviews: [] }));
       expect([id(asked()), id(asked())]).toEqual(['r1', 'r2']);
     });
 
@@ -1336,6 +1368,13 @@ describe('checks and merging (slice 2)', () => {
       expect(errorCode(m.reviewNow(glob({ status: 'planning' }), ctx()))).toBe('invalid_transition');
       expect(errorCode(m.reviewNow(glob({ status: 'in_progress', pr: null }), ctx()))).toBe('invalid_transition');
       expect(errorCode(m.reviewNow(glob({ status: 'failed', pr: { number: 7, state: 'closed', headSha: 'bbb' } }), ctx()))).toBe('invalid_transition');
+    });
+
+    it('refuses a review nobody needs: the machine reviews it itself', () => {
+      expect(errorCode(m.reviewNow(glob({ type: 'sub', status: 'implementing', pr: pr('draft') }), ctx(), { reviews: [] }))).toBe('invalid_transition');
+      expect(errorCode(m.reviewNow(merged, ctx(), { reviews: [review('post_merge')] }))).toBe('invalid_transition');
+      expect(errorCode(m.reviewNow(ready, ctx(), { reviews: [review('pre_merge')] }))).toBe('invalid_transition');
+      expect(errorCode(m.reviewNow({ ...own, runs: [run({ state: 'active' })] }, ctx()))).toBe('invalid_transition');
     });
   });
 

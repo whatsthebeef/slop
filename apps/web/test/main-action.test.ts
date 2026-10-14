@@ -1,6 +1,6 @@
 import type { Action, PullRequest } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { failedRepeatedly, mainAction, promotedAction } from '../src/lib/main-action';
+import { failedRepeatedly, mainAction, mainVariant, promotedAction } from '../src/lib/main-action';
 
 const glob = (over: Partial<Parameters<typeof mainAction>[1]> = {}) => ({
   type: 'same' as const,
@@ -125,19 +125,47 @@ describe('mainAction while the machine implements', () => {
 });
 
 describe('promotedAction', () => {
-  it('leads with Cancel merge, then Review code, then Pick up', () => {
-    expect(promotedAction(['review_now', 'take_over', 'cancel_merge'])).toBe('cancel_merge');
-    expect(promotedAction(['take_over', 'investigate', 'review_now'])).toBe('review_now');
-    expect(promotedAction(['investigate', 'pick_up'])).toBe('pick_up');
+  const g = glob();
+  const retry = glob({ type: 'sub', status: 'reviewing', pr: pr('merged') });
+
+  it('leads with Cancel merge, then a Retry review, then Pick up', () => {
+    expect(promotedAction(['review_now', 'take_over', 'cancel_merge'], retry)).toBe('cancel_merge');
+    expect(promotedAction(['take_over', 'investigate', 'review_now'], retry)).toBe('review_now');
+    expect(promotedAction(['investigate', 'pick_up'], g)).toBe('pick_up');
+  });
+
+  it("never leads with a person's own Review code while something else is left", () => {
+    const own = glob({ status: 'in_progress', implementer: 'a@b.c', pr: pr('draft') });
+    expect(promotedAction(['review_now', 'investigate', 'pick_up'], own)).toBe('pick_up');
+    expect(promotedAction(['review_now', 'investigate'], own)).toBe('investigate');
+    expect(promotedAction(['review_now', 'delete'], own)).toBe('review_now');
   });
 
   it('falls back to the first remaining item', () => {
-    expect(promotedAction(['investigate', 'merge_continue'])).toBe('investigate');
+    expect(promotedAction(['investigate', 'merge_continue'], g)).toBe('investigate');
   });
 
   it('never promotes a Reset action, and is null when nothing is left', () => {
-    expect(promotedAction(['start_again', 'delete', 'start_anyway'])).toBeNull();
-    expect(promotedAction([])).toBeNull();
-    expect(promotedAction(['review_now', 'delete'])).toBe('review_now');
+    expect(promotedAction(['start_again', 'delete', 'start_anyway'], g)).toBeNull();
+    expect(promotedAction([], g)).toBeNull();
+  });
+});
+
+describe('mainVariant', () => {
+  const sub = glob({ type: 'sub', status: 'implementing', pr: pr('draft') });
+
+  it('is an outline Pick up on a sub the machine is implementing', () => {
+    expect(mainVariant('take_over', sub, false)).toBe('outline');
+    expect(mainVariant('pick_up', glob({ type: 'sub', status: 'pr_open', pr: pr('ready') }), false)).toBe('outline');
+  });
+
+  it('turns black once the sub is stalled', () => {
+    expect(mainVariant('take_over', sub, true)).toBe('default');
+  });
+
+  it('stays black for a same or super, and for any other main', () => {
+    expect(mainVariant('take_over', glob({ type: 'same', status: 'implementing' }), false)).toBe('default');
+    expect(mainVariant('retrigger', sub, false)).toBe('default');
+    expect(mainVariant(null, sub, false)).toBe('default');
   });
 });

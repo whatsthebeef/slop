@@ -92,7 +92,13 @@ export const globViewFor = (
     machine.allowedActions(
       glob,
       { email, role },
-      { recordSha: machine.recordShaOf(artifacts ?? []), ...(relations === undefined ? {} : { relations }), sizeHeld },
+      {
+        recordSha: machine.recordShaOf(artifacts ?? []),
+        // Without the artifacts loaded the reviews are unknown, so no Retry review is guessed.
+        ...(artifacts === null ? {} : { reviews: machine.reviewsOf(artifacts) }),
+        ...(relations === undefined ? {} : { relations }),
+        sizeHeld,
+      },
     ),
     artifacts,
     null,

@@ -1,3 +1,4 @@
+import { machine } from '@slop/core';
 import type { Action } from '@slop/core';
 import type { GlobView } from './api';
 
@@ -15,7 +16,24 @@ export interface ActionPresentation {
   readonly placement: ActionPlacement;
 }
 
-type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> & Partial<Pick<GlobView, 'headChecks'>>;
+type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
+  Partial<Pick<GlobView, 'headChecks' | 'artifacts'>>;
+
+/**
+ * Whether Review code, when offered, retries slop's automatic review: a merged glob with no after-merge review, or a ready
+ * same with no before-merge review at the PR head. The server only offers it then, or to a person's own same or super.
+ */
+export const isReviewRetry = (glob: Subject): boolean => {
+  const pr = glob.pr;
+  if (pr === null || (pr.state !== 'merged' && !(pr.state === 'ready' && glob.type !== 'sub'))) return false;
+  return !(glob.artifacts ?? []).some(
+    (a) =>
+      a.review !== undefined &&
+      (pr.state === 'merged'
+        ? a.review.stage === 'post_merge'
+        : a.review.stage === 'pre_merge' && machine.sameCommit(a.review.headSha, pr.headSha)),
+  );
+};
 
 const prRef = (glob: Subject): string => (glob.pr === null ? 'the PR' : `PR #${glob.pr.number}`);
 
@@ -166,9 +184,11 @@ export const actionPresentation = (
       };
     case 'review_now':
       return {
-        label: 'Review code',
+        label: isReviewRetry(glob) ? 'Retry review' : 'Review code',
         icon: 'machine',
-        tip: "An independent model reviews the PR's code as it would land on the base branch and posts findings; never blocks merging",
+        tip: isReviewRetry(glob)
+          ? "The automatic independent review is missing for this commit: an independent model reviews the PR's code again and posts findings; never blocks merging"
+          : "An independent model reviews the PR's code as it would land on the base branch and posts findings; never blocks merging",
         placement: 'more',
       };
     case 'start_again':
