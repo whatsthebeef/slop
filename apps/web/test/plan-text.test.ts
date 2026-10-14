@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { copyOrSelect, listedArtifacts, planBaseline, planText, planVersionLine } from '@/lib/plan-text';
+import { copyOrSelect, listedArtifacts, planBaseline, planText, planVersionLabel, planVersionLine } from '@/lib/plan-text';
 
 describe('plan text', () => {
   it('is empty when no version is saved', () => {
@@ -42,18 +42,29 @@ describe('copyOrSelect', () => {
   });
 });
 
-describe('plan version line', () => {
-  const saved = { version: 3, createdAt: '2026-10-08T19:52:08.000Z', provenance: { by: 'human', actor: 'a@x.com' } };
+describe('plan version label', () => {
+  const at = (iso: string) => {
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${String(d.getFullYear())}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const created = '2026-10-14T12:00:00.000Z';
+  const saved = { version: 3, createdAt: created, provenance: { by: 'human', actor: 'john@example.com' } };
 
-  it('says which version is shown and who saved it', () => {
-    expect(planVersionLine(saved)).toBe('version 3 · saved by a@x.com · 2026-10-08 19:52 UTC');
-    expect(planVersionLine({ ...saved, provenance: { by: 'routine', actor: 'a@x.com' } })).toContain('a@x.com (routine)');
+  it('names the version, the author without the domain and the local date', () => {
+    expect(planVersionLabel(saved)).toBe(`v3 · john · ${at(created)}`);
+    expect(planVersionLabel({ ...saved, provenance: { by: 'human', actor: 'john.bower@thepocketlab.com' } })).toContain('· john.bower ·');
   });
 
-  it('says what Save will make while editing', () => {
-    expect(planVersionLine(saved, true)).toMatch(/Save makes version 4$/);
+  it('keeps machine authors as they are', () => {
+    expect(planVersionLabel({ ...saved, provenance: { by: 'sessionator', actor: 'slop' } })).toBe(`v3 · slop · ${at(created)}`);
+  });
+
+  it('marks an unsaved draft', () => {
+    expect(planVersionLine(saved)).toBe(`v3 · john · ${at(created)}`);
+    expect(planVersionLine(saved, true)).toBe(`v3 · john · ${at(created)} · unsaved`);
     expect(planVersionLine(null)).toBe('not written yet');
-    expect(planVersionLine(null, true)).toBe('not written yet · Save makes version 1');
+    expect(planVersionLine(null, true)).toBe('not written yet · unsaved');
   });
 });
 
