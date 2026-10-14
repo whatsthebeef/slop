@@ -129,6 +129,20 @@ describe('split a glob into parts', () => {
     expect(grouped.map((g) => g.group)).toEqual(['grp', 'grp']);
   });
 
+  it('puts a group-less glob and its parts in the group asked for, reusing an existing one of that name, and ignores it for a grouped glob', async () => {
+    unwrap(
+      await globs.create(ADMIN, { boardId, title: 'Other', type: 'same', category: 'task', group: 'Chat Work', environment: null, autoTrigger: false, idempotencyKey: null, plan: 'x' }),
+    );
+    const bare = unwrap(
+      await globs.create(ADMIN, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
+    );
+    const parts = unwrap(await globs.split(DEV, bare.id, bare.version, { ...input([part({ title: 'A' }), part({ title: 'B', after: [0] })]), group: ' chat-work ' }));
+    expect(parts.map((g) => g.group)).toEqual(['Chat Work', 'Chat Work']);
+    expect((await current(bare.id)).group).toBe('Chat Work');
+    const grouped = unwrap(await globs.split(DEV, original.id, original.version, { ...input([part({ title: 'A' }), part({ title: 'B', after: [0] })]), group: 'elsewhere' }));
+    expect(grouped.map((g) => g.group)).toEqual(['grp', 'grp']);
+  });
+
   it('records a GlobSplit event on every part', async () => {
     const parts = unwrap(await globs.split(DEV, original.id, original.version, input([part(), part()])));
     const splits = store.state.events.filter((e) => e.type === 'GlobSplit');

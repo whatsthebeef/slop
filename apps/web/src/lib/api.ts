@@ -787,8 +787,8 @@ export const api = {
       `/api/globs/${id}/plan`,
     ),
   /** Cuts a glob in Planning into parts; the first keeps the glob's ID. */
-  splitGlob: (id: string, version: number, parts: SplitPartInput[], idempotencyKey: string) =>
-    request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts }),
+  splitGlob: (id: string, version: number, parts: SplitPartInput[], idempotencyKey: string, group?: string) =>
+    request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts, ...(group === undefined ? {} : { group }) }),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   /** An upload link for a file on a glob (refills the `missing` file with `label`); the bytes then go straight to storage. */
