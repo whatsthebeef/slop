@@ -412,6 +412,20 @@ export type DeployIntegration =
       readonly workflow: string;
     };
 
+/**
+ * How a board's ATF stage learns what to run after a deploy. `pull`: the pipeline asks slop (`GET /api/boards/:b/atf-specs`).
+ * `push`: slop starts the CodeBuild project itself with the spec list in environment variable overrides (a person sets up the
+ * project and a role slop can assume; slop creates nothing in AWS).
+ */
+export interface AtfIntegration {
+  readonly provider: 'codebuild';
+  readonly region: string;
+  readonly project: string;
+  /** A role slop assumes to start the build; the server's own credentials when absent. */
+  readonly roleArn?: string;
+  readonly mode: 'pull' | 'push';
+}
+
 export interface Board {
   readonly id: number;
   readonly name: string;
@@ -423,6 +437,8 @@ export interface Board {
   readonly sensitivePaths: readonly string[];
   /** How branch deploys run; null when the board has none. */
   readonly deploy: DeployIntegration | null;
+  /** How the ATF stage gets the specs to run after a deploy; null when the board has none set up. */
+  readonly atf: AtfIntegration | null;
   /** Readiness items slop can't check, ticked by an admin (routines, the routine's repo, the Claude GitHub App). */
   readonly readinessTicks: Readonly<Partial<Record<'routines' | 'routine_repo' | 'claude_app', boolean>>>;
   /** Increases with every approved change to the board's agent set. */

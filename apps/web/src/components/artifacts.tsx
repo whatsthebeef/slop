@@ -3,6 +3,7 @@ import type { ArtifactKind, Investigation } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  ClipboardCheck,
   FileText,
   Gavel,
   Gauge,
@@ -36,6 +37,7 @@ export const ARTIFACT_META: Record<
   { readonly title: string; readonly icon: LucideIcon }
 > = {
   plan: { title: 'plan.md', icon: FileText },
+  test_plan: { title: 'Test plan', icon: ClipboardCheck },
   implementation_plan: { title: 'Implementation record', icon: Hammer },
   // Legacy rows only: postplans were migrated into the record and writes to the kind land there.
   postplan: { title: 'Postplan (old)', icon: Hammer },

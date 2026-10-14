@@ -493,6 +493,7 @@ describe('Manifest changes and commit trailers', () => {
     environments: [],
     sensitivePaths: [],
     deploy: null,
+    atf: null,
     readinessTicks: {},
     agentSetVersion: 3,
     agentCatalogHash: null,

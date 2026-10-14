@@ -1,5 +1,5 @@
-import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
+import type { AtfBatch, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -57,6 +57,7 @@ const toBoard = (row: typeof schema.boards.$inferSelect): Board => ({
   knowledgePageIntervalMinutes: row.knowledgePageIntervalMinutes,
   review: reviewSettingsOf(row.reviewSettings),
   deploy: row.deploy,
+  atf: row.atf,
   readinessTicks: row.readinessTicks,
   baseChecks: row.baseChecks,
   version: row.version,
@@ -318,6 +319,12 @@ const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
 const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
   ...row,
   at: row.at.toISOString(),
+  checkedAt: row.checkedAt?.toISOString() ?? null,
+});
+
+const toAtfBatch = (row: typeof schema.atfBatches.$inferSelect): AtfBatch => ({
+  ...row,
+  createdAt: row.createdAt.toISOString(),
 });
 
 const toPresence = (row: typeof schema.globEnvironments.$inferSelect): GlobPresence => ({
@@ -794,6 +801,7 @@ export class PgStore implements Store {
             runStartMinutes: board.runStartMinutes,
             runRespondMinutes: board.runRespondMinutes,
             deploy: board.deploy,
+            atf: board.atf,
             readinessTicks: board.readinessTicks,
             // Not the learned sub limit: `setSubLimit` writes it, so a settings save doesn't undo a learned move.
             effectCheckGlobs: board.effectCheckGlobs,
@@ -1522,6 +1530,23 @@ export class PgStore implements Store {
           .limit(1);
         return row === undefined ? null : toEnvironmentDeploy(row);
       },
+      listEnvironmentDeploys: async (boardId, environment, limit) => {
+        const d = schema.environmentDeploys;
+        const rows = await t
+          .select()
+          .from(d)
+          .where(and(eq(d.boardId, boardId), eq(d.environment, environment)))
+          .orderBy(desc(d.at), desc(d.id))
+          .limit(limit);
+        return rows.map(toEnvironmentDeploy);
+      },
+      markEnvironmentDeployChecked: async (boardId, environment, sha, at) => {
+        const d = schema.environmentDeploys;
+        await t
+          .update(d)
+          .set({ checkedAt: new Date(at) })
+          .where(and(eq(d.boardId, boardId), eq(d.environment, environment), eq(d.sha, sha)));
+      },
       listGlobPresence: async (boardId, filter) => {
         const g = schema.globEnvironments;
         const conditions = [eq(g.boardId, boardId)];
@@ -1558,12 +1583,60 @@ export class PgStore implements Store {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
       },
       insertTestRun: async (run) => {
+        const { specs = [], ...fields } = run;
         const rows = await t
           .insert(schema.testRuns)
-          .values({ ...run, finishedAt: new Date(run.finishedAt) })
+          .values({ ...fields, finishedAt: new Date(fields.finishedAt) })
           .onConflictDoNothing()
           .returning({ id: schema.testRuns.id });
-        return rows.length === 1;
+        const id = rows[0]?.id;
+        if (id === undefined) return false;
+        if (specs.length > 0) {
+          await t
+            .insert(schema.testRunSpecs)
+            .values(specs.map((spec) => ({ ...spec, testRunId: id })))
+            .onConflictDoNothing();
+        }
+        return true;
+      },
+      listTestRunSpecs: async (runIds) => {
+        if (runIds.length === 0) return [];
+        const rows = await t
+          .select()
+          .from(schema.testRunSpecs)
+          .where(inArray(schema.testRunSpecs.testRunId, [...runIds]))
+          .orderBy(schema.testRunSpecs.testRunId, schema.testRunSpecs.spec);
+        return rows.map((row): StoredRunSpec => ({ ...row, status: oneOf(SPEC_STATUSES, row.status) }));
+      },
+      getAtfBatch: async (boardId, environment, sha) => {
+        const b = schema.atfBatches;
+        const [row] = await t.select().from(b).where(and(eq(b.boardId, boardId), eq(b.environment, environment), eq(b.sha, sha)));
+        return row === undefined ? null : toAtfBatch(row);
+      },
+      latestAtfBatch: async (boardId, environment) => {
+        const b = schema.atfBatches;
+        const [row] = await t
+          .select()
+          .from(b)
+          .where(and(eq(b.boardId, boardId), eq(b.environment, environment)))
+          .orderBy(desc(b.createdAt), desc(b.id))
+          .limit(1);
+        return row === undefined ? null : toAtfBatch(row);
+      },
+      insertAtfBatch: async (batch) => {
+        const b = schema.atfBatches;
+        const [row] = await t
+          .insert(b)
+          .values({ ...batch, specs: [...batch.specs], greps: [...batch.greps], createdAt: new Date(batch.createdAt) })
+          .onConflictDoNothing()
+          .returning();
+        if (row !== undefined) return toAtfBatch(row);
+        const [stored] = await t
+          .select()
+          .from(b)
+          .where(and(eq(b.boardId, batch.boardId), eq(b.environment, batch.environment), eq(b.sha, batch.sha)));
+        if (stored === undefined) throw new Error('ATF batch insert returned nothing');
+        return toAtfBatch(stored);
       },
       listTestRuns: async (boardId, filter) => {
         const r = schema.testRuns;

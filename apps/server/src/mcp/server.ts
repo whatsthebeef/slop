@@ -106,7 +106,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'get_board',
     {
-      description: "A board's settings: repo, base branch, environments, time zone, and its enabled integrations (integrations.deploy: how branch deploys run, or null).",
+      description: "A board's settings: repo, base branch, environments, time zone, and its enabled integrations (integrations.deploy: how branch deploys run, or null; integrations.atf: how the ATF stage gets its spec list after a deploy, or null).",
       inputSchema: { board: z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)') },
     },
     async ({ board }) =>
@@ -117,7 +117,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         baseBranch: b.baseBranch,
         timeZone: b.timeZone,
         environments: b.environments,
-        integrations: { deploy: b.deploy },
+        integrations: { deploy: b.deploy, atf: b.atf },
       })),
   );
 
@@ -869,7 +869,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized` (advice, not a hold), its reasons and evidence, `decision` (`split` when its scope was cut) and the proposed workstreams (name, goal, files, plan share and `needs` as earlier workstream indexes: parallel work inside this glob's one run and PR). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. `hotspots` lists the board's conflict hotspots among the files the glob plans to change (its investigation's or plan.md's paths) or conflicted on: path, conflicts, globs, real conflicts, last conflict time and the window in days; empty when none. `handover` is the hand-over brief (why a person is needed, what to do first), null when nothing is wrong. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md, the test plan (`testPlan`: version, full text, the parsed `atfSpecs` block and any `validation` note; null before one is saved) and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized` (advice, not a hold), its reasons and evidence, `decision` (`split` when its scope was cut) and the proposed workstreams (name, goal, files, plan share and `needs` as earlier workstream indexes: parallel work inside this glob's one run and PR). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. `hotspots` lists the board's conflict hotspots among the files the glob plans to change (its investigation's or plan.md's paths) or conflicted on: path, conflicts, globs, real conflicts, last conflict time and the window in days; empty when none. `handover` is the hand-over brief (why a person is needed, what to do first), null when nothing is wrong. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {
@@ -1043,7 +1043,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_artifact',
     {
       description:
-        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label; a stored file comes with a fresh `downloadUrl`: fetch it with curl).",
+        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'test_plan', 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label; a stored file comes with a fresh `downloadUrl`: fetch it with curl).",
       inputSchema: { id: z.string(), kind: z.enum(ARTIFACT_KINDS), label: z.string().optional() },
     },
     async ({ id, kind, label }) => {
@@ -1061,6 +1061,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: { id: z.string(), version: z.number().int().optional() },
     },
     async ({ id, version }) => reply(await artifacts.plan(email, id, version ?? null)),
+  );
+
+  server.registerTool(
+    'get_test_plan',
+    {
+      description:
+        "The glob's test plan (the matrix of ATF specs that prove the change and the ```atf-specs block of specs to run after the merge), optionally a given version, with its version history. `current` is null before one is saved; its provenance carries the parsed `atfSpecs` and a `validation` note when the text has problems.",
+      inputSchema: { id: z.string(), version: z.number().int().optional() },
+    },
+    async ({ id, version }) => reply(await artifacts.testPlan(email, id, version ?? null)),
   );
 
   server.registerTool(
@@ -1183,13 +1193,26 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'save_test_plan',
+    {
+      description:
+        "Save a new version of the glob's test plan, as the Test plan tab in the glob view does: a Markdown matrix (Name | Status new/existing/adjusted | Location | Description) and one fenced ```atf-specs block (`specs:` list of repo-relative paths, optional `grep:`). Pass the test plan version you read (get_test_plan or get_context; 0 when none is saved yet); a stale version is refused with version_conflict. A text with problems is stored anyway and the reply carries `validation`. Routines use put_artifact(kind: test_plan) with their run ID instead.",
+      inputSchema: { id: z.string(), version: z.number().int(), content: z.string().min(1) },
+    },
+    async ({ id, version, content }) =>
+      reply(await artifacts.putTestPlan(email, id, content, version), (a) =>
+        'ignored' in a ? a : { id: a.id, version: a.version, ...(a.provenance.validation === undefined ? {} : { validation: a.provenance.validation }) },
+      ),
+  );
+
+  server.registerTool(
     'put_artifact',
     {
       description:
-        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review, a test plan (kind test_plan: the matrix and the ```atf-specs block; text with problems is stored and the reply carries `validation`) or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan']),
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
@@ -1235,10 +1258,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'artifact_upload_url',
     {
       description:
-        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review or an investigation from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review, a test plan or an investigation from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan']),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),

@@ -62,6 +62,12 @@ describe('slop put-artifact', () => {
     expect(out.join('')).toContain('"version":2');
   });
 
+  it('accepts the test plan kind', async () => {
+    const { calls, deps } = setup({ 't.md': '| Name | Status | Location | Description |' });
+    await putArtifactCommand(['s1t4', '--kind', 'test_plan', '--file', 't.md'], deps);
+    expect(calls[0]?.args).toEqual({ id: 's1t4', kind: 'test_plan', content: '| Name | Status | Location | Description |' });
+  });
+
   it('reads stdin for --file -', async () => {
     const { calls, deps } = setup({ '-': 'from stdin' });
     await putArtifactCommand(['s1t4', '--kind', 'postplan', '--file', '-'], deps);

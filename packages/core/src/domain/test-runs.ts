@@ -34,7 +34,51 @@ export interface TestRun {
   readonly eventId: string;
 }
 
-export type NewTestRun = Omit<TestRun, 'id'>;
+/** What one spec did in a run. `missing`: the batch listed it and the run reported no test for it. */
+export const SPEC_STATUSES = ['passed', 'failed', 'skipped', 'missing'] as const;
+export type SpecStatus = (typeof SPEC_STATUSES)[number];
+
+/** One spec's result inside a run, as the reporter sent it (or slop derived it for a missing one). */
+export interface TestRunSpec {
+  /** Repo-relative path of the spec file. */
+  readonly spec: string;
+  readonly status: SpecStatus;
+  /** Tests of the spec in the run, and how many failed. */
+  readonly tests: number;
+  readonly failedTests: number;
+  readonly durationMs: number | null;
+}
+
+/** A stored spec row with the run it belongs to. */
+export interface StoredRunSpec extends TestRunSpec {
+  readonly testRunId: number;
+}
+
+/** A run to record; `specs` (per-spec rows, when the reporter sent them) are written in the same transaction. */
+export type NewTestRun = Omit<TestRun, 'id'> & { readonly specs?: readonly TestRunSpec[] };
+
+/** One spec (or grep) of a deploy's batch with the globs whose test plans asked for it. */
+export interface AtfBatchSpec {
+  readonly spec: string;
+  readonly globIds: readonly string[];
+}
+export interface AtfBatchGrep {
+  readonly grep: string;
+  readonly globIds: readonly string[];
+}
+
+/** The union of specs one deploy (environment and commit) should run, stored on first request so a repeat call returns the same list. */
+export interface AtfBatch {
+  readonly id: number;
+  readonly boardId: number;
+  readonly environment: string;
+  readonly sha: string;
+  readonly specs: readonly AtfBatchSpec[];
+  readonly greps: readonly AtfBatchGrep[];
+  readonly createdAt: string;
+}
+
+export type NewAtfBatch = Omit<AtfBatch, 'id'>;
 
 /** An environment's commit, for finding the runs against it. */
 export interface EnvironmentCommit {

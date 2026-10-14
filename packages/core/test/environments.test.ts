@@ -190,6 +190,18 @@ describe('EnvironmentService', () => {
     expect(store.state.globPresence.size).toBe(0);
   });
 
+  it('stamps the deploy as checked once its containment is stored, and only then', async () => {
+    await service.recordDeploy(report());
+    expect((await store.transaction((tx) => tx.latestEnvironmentDeploy(board.id, 'prod')))?.checkedAt).toBeNull();
+    await service.recordDeploy(report({ eventId: 'aws:e2', sha: 'd2', at: '2026-10-05T13:00:00.000Z' }));
+    expect(await service.recordContainment(board.id, 'prod', 'd1', [])).toBe('stale');
+    const stale = await store.transaction((tx) => tx.listEnvironmentDeploys(board.id, 'prod', 10));
+    expect(stale.map((d) => [d.sha, d.checkedAt])).toEqual([['d2', null], ['d1', null]]);
+    expect(await service.recordContainment(board.id, 'prod', 'd2', [{ globId: 's1t1', mergeSha: 'm1', contained: true }])).toBe('recorded');
+    const after = await store.transaction((tx) => tx.listEnvironmentDeploys(board.id, 'prod', 10));
+    expect(after.map((d) => [d.sha, d.checkedAt])).toEqual([['d2', NOW], ['d1', null]]);
+  });
+
   it('rolls a glob out when a later deploy no longer contains it', async () => {
     await service.recordDeploy(report());
     await service.recordContainment(board.id, 'prod', 'd1', [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);

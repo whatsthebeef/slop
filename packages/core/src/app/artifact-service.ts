@@ -3,6 +3,8 @@ import type { AttachmentFile, FileState } from '../domain/attachment-file.js';
 import { decisionViews } from '../domain/decisions.js';
 import type { DecisionView } from '../domain/decisions.js';
 import { parseInvestigation, validationNote } from '../domain/investigation.js';
+import { parseTestPlan, testPlanNote, testPlanSpecs } from '../domain/test-plan.js';
+import type { AtfSpecList } from '../domain/test-plan.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
@@ -86,6 +88,17 @@ export interface GlobContext {
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
   /** plan.md: the latest version. */
   readonly plan: { readonly version: number; readonly content: string } | null;
+  /**
+   * The latest test plan (full text): the matrix of specs that prove the change and the `atf-specs` block the pipeline runs
+   * after the merge. `atfSpecs` is the parsed block (null when there is none); `validation` says what is wrong with it. Null
+   * when none is saved yet.
+   */
+  readonly testPlan: {
+    readonly version: number;
+    readonly content: string;
+    readonly atfSpecs: AtfSpecList | null;
+    readonly validation: string | null;
+  } | null;
   /** What the glob is about: plan.md for work, the proposal text for a decision. The same as `plan`, which older agent sets read. */
   readonly payload: Payload | null;
   /** A decision's scope, source and outcome; absent on work globs. */
@@ -289,13 +302,22 @@ export interface Ignored {
   readonly reason: string;
 }
 
+/** A versioned document (plan.md, the test plan) with its history, newest as `current`. */
+export interface VersionedDoc {
+  readonly kind: ArtifactKind;
+  readonly current: Artifact | null;
+  readonly versions: { version: number; createdAt: string; by: string }[];
+}
+
 export interface PutOptions {
   readonly commitSha: string | null;
   readonly runId: string | null;
   readonly agentSetVersion: number | null;
   /** Local reviews: the review cycle's figures, kept in the provenance (other kinds ignore them). */
   readonly reviewStats?: ReviewStats | null;
-  /** plan.md only: the version the writer read (0 before the first is saved); a later one is refused. */
+  /** plan.md and the test plan: the version the writer read (0 before the first is saved); a later one is refused. */
+  readonly expectedVersion?: number;
+  /** The same as `expectedVersion`, under its old name (plan.md only then). */
   readonly expectedPlanVersion?: number;
 }
 
@@ -325,6 +347,9 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
   const globId = glob.id;
   // An investigation whose block doesn't validate is kept as text, with the reason beside it.
   const parsed = kind === 'investigation' ? parseInvestigation(content) : null;
+  // A test plan with problems is kept as text with the notes beside it; its parsed spec list is stored so readers don't parse again.
+  const plan = kind === 'test_plan' ? parseTestPlan(content) : null;
+  const planNote = plan === null ? null : testPlanNote(plan.notes);
   const provenance: Provenance = {
     by:
       input.by ??
@@ -338,6 +363,8 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
     agentSetVersion: input.agentSetVersion,
     ...(kind === 'local_review' && input.reviewStats !== null && { reviewStats: input.reviewStats }),
     ...(parsed !== null && !parsed.ok && { validation: validationNote(parsed.errors) }),
+    ...(planNote !== null && { validation: planNote }),
+    ...(plan !== null && plan.atf !== null && { atfSpecs: plan.atf }),
   };
   const now = clock.now();
   const artifact = await tx.insertArtifact({
@@ -450,7 +477,17 @@ export class ArtifactService {
       commitSha: null,
       runId: null,
       agentSetVersion: null,
-      ...(version === undefined ? {} : { expectedPlanVersion: version }),
+      ...(version === undefined ? {} : { expectedVersion: version }),
+    });
+  }
+
+  /** `save_test_plan` and `PUT /globs/{id}/test-plan`: a new test plan version, conditional on `version` when given. */
+  async putTestPlan(email: string, globId: string, content: string, version?: number): Promise<Result<Artifact | Ignored>> {
+    return this.put(email, globId, 'test_plan', '', content, null, {
+      commitSha: null,
+      runId: null,
+      agentSetVersion: null,
+      ...(version === undefined ? {} : { expectedVersion: version }),
     });
   }
 
@@ -477,7 +514,7 @@ export class ArtifactService {
   async putArtifact(
     email: string,
     globId: string,
-    kind: 'implementation_plan' | 'postplan' | 'local_review' | 'investigation',
+    kind: 'implementation_plan' | 'postplan' | 'local_review' | 'investigation' | 'test_plan',
     content: string,
     options: PutOptions,
   ): Promise<Result<Artifact | Ignored>> {
@@ -486,17 +523,21 @@ export class ArtifactService {
   }
 
   /** `get_plan`: plan.md with its version history. */
-  async plan(
-    email: string,
-    globId: string,
-    version: number | null,
-  ): Promise<Result<{ kind: ArtifactKind; current: Artifact | null; versions: { version: number; createdAt: string; by: string }[] }>> {
+  plan(email: string, globId: string, version: number | null): Promise<Result<VersionedDoc>> {
+    return this.versionedDoc(email, globId, 'plan', version);
+  }
+
+  /** `get_test_plan`: the test plan with its version history (`current` null before the first is saved). */
+  testPlan(email: string, globId: string, version: number | null): Promise<Result<VersionedDoc>> {
+    return this.versionedDoc(email, globId, 'test_plan', version);
+  }
+
+  private async versionedDoc(email: string, globId: string, kind: 'plan' | 'test_plan', version: number | null): Promise<Result<VersionedDoc>> {
     return this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(globId);
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const kind: ArtifactKind = 'plan';
       const versions = await tx.artifactVersions(globId, kind, '');
       const current = version === null ? (versions.at(-1) ?? null) : (versions.find((v) => v.version === version) ?? null);
       if (version !== null && current === null) return notFound(`${globId} has no ${kind} version ${version}`);
@@ -546,6 +587,7 @@ export class ArtifactService {
       const plan = latest('plan');
       const record = latest('implementation_plan');
       const investigation = latest('investigation');
+      const testPlan = latest('test_plan');
       // listArtifacts returns the latest version of each (kind, label).
       const full = (a: Artifact) =>
         (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
@@ -586,6 +628,15 @@ export class ArtifactService {
         },
         board: { id: board.id, repo: board.repo, baseBranch: board.baseBranch },
         plan: plan === null ? null : { version: plan.version, content: plan.content },
+        testPlan:
+          testPlan === null
+            ? null
+            : {
+                version: testPlan.version,
+                content: testPlan.content,
+                atfSpecs: testPlanSpecs(testPlan),
+                validation: testPlan.provenance.validation ?? null,
+              },
         payload: payloadOf(artifacts),
         ...(glob.attributes === undefined ? {} : { attributes: glob.attributes }),
         scopedDecisions,
@@ -674,12 +725,13 @@ export class ArtifactService {
           });
         }
       }
-      if (kind === 'plan' && options.expectedPlanVersion !== undefined) {
-        const latest = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.version ?? 0;
-        if (latest !== options.expectedPlanVersion) {
+      const expected = options.expectedVersion ?? options.expectedPlanVersion;
+      if ((kind === 'plan' || kind === 'test_plan') && expected !== undefined) {
+        const latest = (await tx.artifactVersions(globId, kind, '')).at(-1)?.version ?? 0;
+        if (latest !== expected) {
           return err({
             code: 'version_conflict',
-            message: `plan.md is at version ${String(latest)}, not ${String(options.expectedPlanVersion)}: read it again and retry`,
+            message: `${kind === 'plan' ? 'plan.md' : 'The test plan'} is at version ${String(latest)}, not ${String(expected)}: read it again and retry`,
             current: glob,
           });
         }

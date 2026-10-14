@@ -24,6 +24,9 @@ import type {
   BaseChecks,
   Board,
   BoardJobResult,
+  AtfBatchGrep,
+  AtfBatchSpec,
+  AtfIntegration,
   DeployIntegration,
   DomainEvent,
   Effect,
@@ -99,6 +102,8 @@ export const boards = pgTable('boards', {
   reviewSettings: jsonb('review_settings').$type<Partial<ReviewBoardSettings>>().notNull().default({}),
   /** How branch deploys run (CodeBuild or GitHub Actions); null when the board has none. */
   deploy: jsonb('deploy').$type<DeployIntegration>(),
+  /** How the ATF stage gets its spec list after a deploy (pull, or push by starting the CodeBuild project); null when none. */
+  atf: jsonb('atf').$type<AtfIntegration>(),
   /** The latest check result on the base branch head; written by check events, not by settings changes. */
   baseChecks: jsonb('base_checks').$type<BaseChecks>(),
   /** Readiness items slop can't check, ticked by an admin. */
@@ -987,6 +992,8 @@ export const environmentDeploys = pgTable(
     url: text('url'),
     eventId: text('event_id').notNull(),
     at: timestamp('at', { withTimezone: true }).notNull(),
+    /** When the containment check for this deploy finished; the ATF spec list waits for it. */
+    checkedAt: timestamp('checked_at', { withTimezone: true }),
   },
   (t) => [
     // A redelivered event is recorded once per board.
@@ -1041,6 +1048,40 @@ export const testRuns = pgTable(
     index('test_runs_board_env_sha_idx').on(t.boardId, t.environment, t.sha),
     index('test_runs_glob_idx').on(t.globId),
   ],
+);
+
+/** What each spec did in a run, when the reporter sent per-spec results (or slop derived `missing` ones). */
+export const testRunSpecs = pgTable(
+  'test_run_specs',
+  {
+    testRunId: bigint('test_run_id', { mode: 'number' })
+      .notNull()
+      .references(() => testRuns.id, { onDelete: 'cascade' }),
+    spec: text('spec').notNull(),
+    /** passed, failed, skipped or missing (`SPEC_STATUSES`). */
+    status: text('status').notNull(),
+    tests: integer('tests').notNull().default(0),
+    failedTests: integer('failed_tests').notNull().default(0),
+    durationMs: integer('duration_ms'),
+  },
+  (t) => [primaryKey({ columns: [t.testRunId, t.spec] })],
+);
+
+/** The specs one deploy should run (the union of the newly deployed globs' test plans), stored on first request. */
+export const atfBatches = pgTable(
+  'atf_batches',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    environment: text('environment').notNull(),
+    sha: text('sha').notNull(),
+    specs: jsonb('specs').$type<AtfBatchSpec[]>().notNull(),
+    greps: jsonb('greps').$type<AtfBatchGrep[]>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex('atf_batches_deploy_idx').on(t.boardId, t.environment, t.sha)],
 );
 
 /** Board notifications: board-wide incidents that need a person, one per board and source. No version. */

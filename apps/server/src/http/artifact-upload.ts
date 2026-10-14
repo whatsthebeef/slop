@@ -14,7 +14,7 @@ const UPLOAD_PREFIX = '/uploads/artifact/';
 
 const payloadSchema = z.object({
   id: z.string(),
-  kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
+  kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan']),
   email: z.string(),
   commitSha: z.string().nullable(),
   runId: z.string().nullable(),

@@ -34,6 +34,8 @@ import type {
   Deploy,
   DeployIndicator,
   AtfIndicator,
+  AtfSpecList,
+  SpecStatus,
   EnvironmentIndicator,
   GlobEnvironment,
   ReadinessItem,
@@ -187,7 +189,7 @@ export interface ArtifactView {
   readonly link: string | null;
   readonly commitSha: string | null;
   readonly createdAt: string;
-  readonly provenance: { readonly by: string; readonly actor: string; readonly validation?: string };
+  readonly provenance: { readonly by: string; readonly actor: string; readonly validation?: string; readonly atfSpecs?: AtfSpecList };
   /** File attachments: the stored file's facts (state, name, type, size). */
   readonly file?: AttachmentFile | null;
 }
@@ -221,7 +223,39 @@ export type SubLimitResponse = Omit<SubLimitView, 'bounds' | 'history'> & {
 
 /** What intake learned about types; every field is optional so an older server's answer still renders. */
 export type TypeLearningResponse = Partial<TypeLearningView>;
-export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
+export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number; readonly specs?: readonly RunSpecView[] };
+
+/** One spec's result inside a run; absent from runs that reported counts only (and from an older server). */
+export interface RunSpecView {
+  readonly spec: string;
+  readonly status: SpecStatus;
+  readonly tests?: number;
+  readonly failedTests?: number;
+  readonly durationMs?: number | null;
+}
+
+/** A planned spec's latest result on a glob: `status` null (and no run) while nothing has reported it ("no result yet"). */
+export interface GlobSpecResult {
+  readonly spec: string;
+  readonly status: SpecStatus | null;
+  readonly runId?: number | null;
+  readonly url?: string | null;
+  readonly at?: string | null;
+  readonly environment?: string | null;
+  readonly sha?: string | null;
+}
+
+/** The glob's tests as the API sends them: its runs, and (when its test plan lists specs) each planned spec's latest result. */
+export interface GlobTestsView {
+  readonly value: AtfRun[];
+  readonly specs?: readonly GlobSpecResult[];
+}
+
+/** A glob's plan.md or test plan with its version history (`current` null before the first is saved). */
+export interface VersionedDocView {
+  readonly current: ArtifactView | null;
+  readonly versions: { version: number; createdAt: string; by: string }[];
+}
 
 export interface BoardDeploys {
   readonly indicators: Readonly<Record<string, DeployIndicator>>;
@@ -635,7 +669,9 @@ export const api = {
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
   globEnvironments: (id: string) =>
     request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
-  globTests: (id: string) => request<{ value: AtfRun[] }>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
+  globTests: (id: string) => request<GlobTestsView>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
+  /** The same read with the planned specs' results beside the runs. */
+  globTestsView: (id: string) => request<GlobTestsView>('GET', `/api/globs/${id}/tests`),
   searchBoard: (boardId: number, q: string, history: boolean) =>
     request<{ value: BoardSearchResult }>(
       'GET',
@@ -778,6 +814,12 @@ export const api = {
   splitGlob: (id: string, version: number, parts: SplitPartInput[], idempotencyKey: string) =>
     request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts }),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
+  /** The glob's test plan with its versions; `version` reads an older one. */
+  testPlan: (id: string, version?: number) =>
+    request<VersionedDocView>('GET', `/api/globs/${id}/test-plan${version === undefined ? '' : `?version=${String(version)}`}`),
+  /** A new test plan version; `version` is the one you read (0 when none), a stale one is refused with version_conflict. */
+  saveTestPlan: (id: string, content: string, version?: number) =>
+    request<ArtifactView>('PUT', `/api/globs/${id}/test-plan`, version === undefined ? { content } : { content, version }),
   artifacts: (id: string) => request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts`),
   /** An upload link for a file on a glob (refills the `missing` file with `label`); the bytes then go straight to storage. */
   requestFileUpload: (id: string, input: { fileName: string; contentType?: string; label?: string }) =>
