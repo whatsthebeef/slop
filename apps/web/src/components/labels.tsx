@@ -18,12 +18,12 @@ const LABEL_TITLES: Record<LabelName, string> = {
 /** Resolves true when the command went through (failures are reported by the board). */
 export type ReviewLabel = (label: LabelName, command: LabelCommand) => Promise<boolean>;
 
-/** Required: outlined brown. Added (items to work through): clay. Approved: LCD green. */
+/** Required: outlined brown. Added (items to work through): dark red. Approved: LCD green. */
 const chip = (state: LabelState) =>
   state === 'approved'
     ? 'border-foreground bg-lcd text-lcd-foreground'
     : state === 'added'
-      ? 'border-red-soft bg-red-soft/35 text-foreground'
+      ? 'border-red bg-red/30 text-foreground'
       : 'border-required-border bg-transparent text-required';
 
 const presentLabels = (glob: GlobView): LabelName[] =>
