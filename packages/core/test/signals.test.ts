@@ -16,8 +16,8 @@ import {
 } from '../src/domain/signals.js';
 import type { ArtifactMeta, BoardActivity, Measurement } from '../src/domain/signals.js';
 import type { ReviewStats } from '../src/domain/knowledge.js';
-import {missingSources} from '../src/domain/chat-feedback.js';
-import type {ChatFeedbackActivity} from '../src/domain/chat-feedback.js';
+import { missingSources } from '../src/domain/chat-feedback.js';
+import type { ChatFeedbackActivity } from '../src/domain/chat-feedback.js';
 import type { ReviewFeedback } from '../src/domain/review-feedback.js';
 import type { SlopType } from '../src/domain/types.js';
 
@@ -818,11 +818,11 @@ describe('chat_feedback signal (s15f142)', () => {
   });
 
   it('stays below the threshold with two, and ignores 👍', () => {
-    expect(keys([rated(1, 'rollouts one'), rated(2, 'rollouts two'), rated(3, 'rollouts three', {rating: 'up'})])).toEqual([['chat_feedback:term:rollouts', 2, false]]);
+    expect(keys([rated(1, 'rollouts one'), rated(2, 'rollouts two'), rated(3, 'rollouts three', { rating: 'up' })])).toEqual([['chat_feedback:term:rollouts', 2, false]]);
   });
 
   it('raises the missing source theme separately', () => {
-    const found = keys([rated(1, 'alpha', {missing: ['code']}), rated(2, 'bravo', {missing: ['code']}), rated(3, 'charlie', {missing: ['code', 'records']})]);
+    const found = keys([rated(1, 'alpha', { missing: ['code'] }), rated(2, 'bravo', { missing: ['code'] }), rated(3, 'charlie', { missing: ['code', 'records'] })]);
     expect(found).toContainEqual(['chat_feedback:source:code', 3, true]);
     expect(found).toContainEqual(['chat_feedback:source:records', 1, false]);
   });
