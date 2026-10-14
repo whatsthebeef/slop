@@ -693,7 +693,7 @@ export const createApp = (deps: AppDeps) => {
     if (holdsBackGroup !== undefined) {
       const held = await globs.holdGroup(c.get('email'), id, holdsBackGroup, relationInput({ ...rest, to: id }));
       if (held.ok) void deps.outbox.drain(id).catch(() => undefined);
-      return held.ok ? send(c, await globs.get(c.get('email'), id), globViewOf) : send(c, held);
+      return held.ok ? send(c, await globs.get(c.get('email'), id), (v) => ({ ...globViewOf(v), groupHold: held.value })) : send(c, held);
     }
     const other = to ?? holdsBack ?? '';
     const added = await globs.addRelation(c.get('email'), id, version ?? null, relationInput({ ...rest, to: other }), to === undefined ? 'holds_back' : 'held_by');

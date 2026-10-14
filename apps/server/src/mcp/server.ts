@@ -477,7 +477,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       if (holdsBackGroup !== undefined) {
         const held = await globs.holdGroup(email, id, holdsBackGroup, relationInput({ ...fields, to: id }), 'agent');
         if (held.ok) await deps.outbox.drain(id);
-        return held.ok ? reply(await globs.get(email, id), (v) => globViewOf(v)) : reply(held);
+        return held.ok ? reply(await globs.get(email, id), (v) => ({ ...globViewOf(v), groupHold: held.value })) : reply(held);
       }
       const added = await globs.addRelation(email, id, version ?? null, relationInput({ ...fields, to: to ?? holdsBack ?? '' }), to === undefined ? 'holds_back' : 'held_by', 'agent');
       if (added.ok) await deps.outbox.drain(added.value.id);

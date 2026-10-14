@@ -256,6 +256,7 @@ describe('relations over REST and MCP (Postgres)', () => {
     const b = await make('Group B', { group: 'wide' });
     const added = await rest('POST', `/api/globs/${d.id}/relations`, { holdsBackGroup: 'Wide' });
     expect(added.status).toBe(200);
+    expect((added.body as unknown as { groupHold: { held: string[]; failed: unknown[] } }).groupHold).toMatchObject({ failed: [] });
     expect(added.body.relations?.holdsBack.map((r) => r.from).sort()).toEqual([a.id, b.id].sort());
     expect((await rows(a.id)).map((r) => [r.to, r.group, r.source])).toEqual([[d.id, 'wide', 'person']]);
     const both = await rest('POST', `/api/globs/${d.id}/relations`, { holdsBackGroup: 'wide', holdsBack: a.id });
