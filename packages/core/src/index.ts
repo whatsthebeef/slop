@@ -9,6 +9,7 @@ export * from './domain/payload.js';
 export * from './domain/decision-glob.js';
 export * from './domain/suggestion.js';
 export * from './domain/investigation.js';
+export * from './domain/workstreams.js';
 export * from './domain/knowledge.js';
 export * from './domain/attachment-file.js';
 export * from './domain/knowledge-page.js';

@@ -1186,7 +1186,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`; the same holds for a record with its fenced ```workstreams block) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
         kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation']),
