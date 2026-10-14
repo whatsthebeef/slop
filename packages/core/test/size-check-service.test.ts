@@ -50,8 +50,8 @@ describe('learned size check', () => {
   let clockNow: string;
   /** What the judge answers; the default says five parts, three of them buildable at the same time. */
   let judged: string;
-  /** What the proposer answers: the parts, with the model's needs. */
-  let proposed: { title: string; summary: string; plan: string; after: number[] }[];
+  /** What the proposer answers: the workstreams, with the model's needs. */
+  let proposed: { name: string; goal: string; files: string[]; plan: string; needs: number[] }[];
 
   const llm: Llm = {
     complete: (request: LlmRequest) => {
@@ -63,7 +63,7 @@ describe('learned size check', () => {
       return Promise.resolve(
         request.system.startsWith('You judge')
           ? judged
-          : JSON.stringify({ parts: proposed }),
+          : JSON.stringify({ workstreams: proposed }),
       );
     },
   };
@@ -93,9 +93,9 @@ describe('learned size check', () => {
     llmMode = 'ok';
     judged = '{"independentParts": 5, "parallelParts": 3, "reason": "five pieces"}';
     proposed = [
-      { title: 'Data and server', summary: 'a', plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
-      { title: 'Web', summary: 'b', plan: '## Tasks\n3. web card', after: [0] },
-      { title: 'CLI', summary: 'c', plan: '## Tasks\n4. CLI command in apps/server/drizzle', after: [0] },
+      { name: 'Data and server', goal: 'the table and its endpoint', files: ['apps/server/drizzle'], plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', needs: [] },
+      { name: 'Web', goal: 'the card', files: [], plan: '## Tasks\n3. web card', needs: [0] },
+      { name: 'CLI', goal: 'the command', files: [], plan: '## Tasks\n4. CLI command in apps/server/drizzle', needs: [0] },
     ];
     calls = [];
     spends = [];
@@ -123,37 +123,40 @@ describe('learned size check', () => {
     expect(check?.evidence.join('\n')).toContain('Model: 5 independent parts');
     expect(check?.reasons.length).toBe(3);
     expect(check?.estimate.parallelParts).toBe(3);
-    // The model's two parts; the untasked "Chat content" section is context, copied into each.
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web', 'CLI']);
-    for (const part of check?.proposal?.parts ?? []) expect(part.plan).toContain('This section has prose and no task of its own');
-    expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0]]);
-    // Part 0 is the shared contract: two parts that need only it, and the proposal shows the shape.
+    // The model's workstreams; the untasked "Chat content" section is context, copied into each.
+    expect(check?.proposal?.workstreams.map((w) => w.name)).toEqual(['Data and server', 'Web', 'CLI']);
+    expect(check?.proposal?.workstreams.map((w) => w.goal)).toEqual(['the table and its endpoint', 'the card', 'the command']);
+    expect(check?.proposal?.workstreams[0]?.files).toEqual(['apps/server/drizzle']);
+    for (const w of check?.proposal?.workstreams ?? []) expect(w.plan).toContain('This section has prose and no task of its own');
+    expect(check?.proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], [0]]);
+    // The first workstream is the shared contract: two that need only it, and the proposal shows the shape.
     expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
     // The judge and the split proposal both go to the board's ledger as the size check.
     expect(calls).toEqual(['judge', 'propose']);
     expect(spends).toEqual([{ boardId, source: 'size_check' }, { boardId, source: 'size_check' }]);
   });
 
-  it('gives the proposer the original title and the rules for naming parts', async () => {
+  it('gives the proposer the original title and asks for workstreams, not parts', async () => {
     unwrap(
       await globs.create(ADMIN, { boardId, title: 'Board chat feedback', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG }),
     );
     const request = requests.find((r) => !r.system.startsWith('You judge'));
     expect(request?.prompt).toContain('Original title: Board chat feedback');
-    expect(request?.system).toContain("feature's short name");
-    expect(request?.system).toContain('Board chat: answers get 👍/👎 buttons, stored per board');
-    expect(request?.system).toContain('Feedback UI and submission');
-    expect(request?.system).toContain('100 characters');
+    expect(request?.system).toContain('workstreams');
+    expect(request?.system).toContain('"needs"');
+    expect(request?.system).not.toContain('Part 0');
   });
 
-  it('keeps a proposed part title to one trimmed line of at most 100 characters', () => {
+  it('keeps a proposed workstream name to one trimmed line of at most 100 characters', () => {
     expect(cleanTitle('  Board chat:\n answers   get buttons ')).toBe('Board chat: answers get buttons');
     expect(cleanTitle('   ')).toBeNull();
     expect(cleanTitle(null)).toBeNull();
     const long = cleanTitle(`Board chat: ${'x'.repeat(200)}`);
     expect(long?.length).toBe(100);
     expect(long?.endsWith('…')).toBe(true);
-    expect(parseParts(JSON.stringify({ parts: [{ title: ' A:  b ', plan: 'p' }, { title: ' ', plan: 'p' }] })).map((p) => p.title)).toEqual(['A: b']);
+    expect(parseParts(JSON.stringify({ workstreams: [{ name: ' A:  b ', plan: 'p', files: ['x.ts', 3], needs: [0] }, { name: ' ', plan: 'p' }] }))).toEqual([
+      { name: 'A: b', goal: null, files: ['x.ts'], plan: 'p', needs: [0] },
+    ]);
   });
 
   it('does not flag a small plan, and makes no model call for a trivial one', async () => {
@@ -175,41 +178,35 @@ describe('learned size check', () => {
     }
   });
 
-  it('holds a flagged sub in Planning, not queuing a run, until it is kept whole', async () => {
+  it('does not hold a flagged sub: it is a same from the start, with the size check\'s reasons, and starts at once', async () => {
     const sub = await create('sub', BIG);
-    expect(sub.status).toBe('planning');
     // A glob too big for one clean PR is a same, escalated with the size check's reasons.
     expect(sub.type).toBe('same');
     expect(sub.escalation).toMatchObject({ criterion: 'size', by: 'slop' });
     expect(sub.escalation?.reason).toMatch(/^Flagged oversized: .*more than/);
     expect(sub.escalation?.evidence).toContain('independent parts');
     expect(store.state.events.filter((e) => e.globId === sub.id).map((e) => e.type)).toContain('Escalated');
-    // Only the automatic investigate-only run: nothing implements it.
-    expect(sub.runs.map((r) => r.purpose)).toEqual(['investigate']);
-    expect(sub.waiting).not.toBeNull();
-    // Nothing waited for merging starts it.
-    expect((unwrap(await globs.release(sub.id))).status).toBe('planning');
-    unwrap(await service.keepWhole(DEV, sub.id));
-    const released = unwrap(await globs.release(sub.id));
-    expect(released.status).toBe('implementing');
-    // Keeping it whole does not make it a sub again: a person reviews it before it merges.
-    expect(released.type).toBe('same');
-    expect(released.escalation?.criterion).toBe('size');
-    // The queued investigation is superseded by the run that implements it.
-    expect(released.runs.map((r) => [r.purpose, r.outcome ?? r.state])).toEqual([['investigate', 'superseded'], [undefined, 'queued']]);
-    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
+    // Nothing holds it: it is implementing, with its run queued, and the flag stays as information.
+    expect(sub.status).toBe('implementing');
+    expect(sub.waiting ?? null).toBeNull();
+    expect(sub.runs.map((r) => [r.purpose, r.state])).toEqual([[undefined, 'queued']]);
+    const check = await store.transaction((tx) => tx.getSizeCheck(sub.id));
+    expect(check).toMatchObject({ flagged: true, decision: null });
+    expect(check?.proposal?.workstreams).toHaveLength(3);
   });
 
-  it('Start now on a flagged sub offers the action and starts it; keeping whole first records the override', async () => {
-    const sub = await create('sub', BIG);
+  it('a flagged sub that waits for another glob is held only for that, and starts when it merges', async () => {
+    const first = await create('same', SMALL);
+    const sub = unwrap(
+      await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG, after: [first.id] }),
+    );
+    expect([sub.type, sub.status]).toEqual(['same', 'planning']);
+    expect(sub.waiting).not.toBeNull();
     const view = unwrap(await globs.get(DEV, sub.id));
-    expect(view.allowedActions).toContain('start_anyway');
-    unwrap(await service.keepWhole(DEV, sub.id));
-    const started = unwrap(await globs.startAnyway(DEV, sub.id, sub.version));
-    expect(started.status).toBe('implementing');
-    expect(started.implementer).toBeNull();
-    expect(started.runs.filter((r) => r.purpose === undefined)).toHaveLength(1);
-    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
+    expect(view.waitingFor.map((w) => w.id)).toEqual([first.id]);
+    unwrap(await globs.applyEvent(first.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
+    expect(await globs.releaseDependents(first.id, boardId)).toContain(sub.id);
+    expect((await get(sub.id)).status).toBe('implementing');
   });
 
   it('a sub that is not flagged stays a sub, and a flagged same or super is not escalated', async () => {
@@ -219,7 +216,7 @@ describe('learned size check', () => {
     expect([same.type, same.escalation ?? null]).toEqual(['same', null]);
   });
 
-  it('a held sub flagged when its plan is saved becomes a same with the reasons', async () => {
+  it('a waiting sub flagged when its plan is saved becomes a same with the reasons', async () => {
     const first = await create('same', SMALL);
     const sub = unwrap(
       await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: SMALL, after: [first.id] }),
@@ -227,55 +224,50 @@ describe('learned size check', () => {
     expect([sub.type, sub.status]).toEqual(['sub', 'planning']);
     unwrap(await artifacts.putPlan(DEV, sub.id, BIG));
     await service.refresh(sub.id);
-    await globs.reconcileSizeHold(sub.id);
+    await globs.reconcileSizeCheck(sub.id);
     const flagged = await get(sub.id);
     expect(flagged.type).toBe('same');
     expect(flagged.escalation).toMatchObject({ criterion: 'size' });
     // Reconciling again changes nothing.
-    await globs.reconcileSizeHold(sub.id);
+    await globs.reconcileSizeCheck(sub.id);
     expect((await get(sub.id)).version).toBe(flagged.version);
   });
 
-  it('QA members can answer the flag of the sub they created: keep whole and start', async () => {
-    const QA = 'qa@example.com';
-    await store.transaction((tx) => tx.upsertUser({ email: QA, name: QA, active: true }));
-    unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).setMember(ADMIN, boardId, QA, 'qa'));
-    const sub = await create('sub', BIG);
-    expect(sub.type).toBe('same');
-    unwrap(await service.keepWhole(QA, sub.id));
-    const started = unwrap(await globs.startAnyway(QA, sub.id, sub.version));
-    expect(started.status).toBe('implementing');
-    // A same that was not size-escalated is still the developers' to decide.
-    const plain = await create('same', BIG);
-    expect((await service.keepWhole(QA, plain.id)).ok).toBe(false);
-  });
-
   it('an admin setting a size-escalated same back to a sub takes the size escalation with it', async () => {
-    const glob = await create('sub', BIG);
+    const first = await create('same', SMALL);
+    const glob = unwrap(
+      await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG, after: [first.id] }),
+    );
     const back = unwrap(await globs.update(ADMIN, glob.id, glob.version, { type: 'sub' }));
     expect(back.type).toBe('sub');
     expect(back.escalation ?? null).toBeNull();
   });
 
   it('splitting a sub the size check made a same makes subs again, without the size escalation', async () => {
-    const glob = await create('sub', BIG);
+    // Waiting for another glob keeps it in Planning, where it can be cut.
+    const first = await create('same', SMALL);
+    const glob = unwrap(
+      await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG, after: [first.id] }),
+    );
     expect(glob.type).toBe('same');
+    expect(glob.status).toBe('planning');
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    const parts = (check?.proposal?.parts ?? []).map((p) => ({ title: p.title, plan: p.plan, after: p.after }));
+    const parts = (check?.proposal?.workstreams ?? []).map((w) => ({ title: w.name, plan: w.plan }));
     const created = unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
     expect(created.map((g) => g.type)).toEqual(['sub', 'sub', 'sub']);
     expect(created.map((g) => g.escalation ?? null)).toEqual([null, null, null]);
     expect((await get(glob.id)).escalation ?? null).toBeNull();
   });
 
-  it('does not auto-trigger a flagged same, and leaves one without auto-trigger alone', async () => {
+  it('auto-triggers a flagged same as usual, and leaves one without auto-trigger alone', async () => {
     const auto = await create('same', BIG, true);
-    expect(auto.status).toBe('planning');
-    expect(auto.runs.map((r) => r.purpose)).toEqual(['investigate']);
+    expect(auto.status).toBe('implementing');
+    expect(auto.waiting ?? null).toBeNull();
+    expect(auto.runs.map((r) => r.purpose)).toEqual([undefined]);
     const plain = await create('same', BIG);
     expect(plain.status).toBe('planning');
     expect(plain.waiting ?? null).toBeNull();
-    // A small auto-triggered same still starts.
+    // A small auto-triggered same starts too.
     expect((await create('same', SMALL, true)).status).toBe('implementing');
   });
 
@@ -298,66 +290,19 @@ describe('learned size check', () => {
     expect((await create('same', BIG)).runs).toHaveLength(0);
   });
 
-  it('keep whole is refused for a glob that is not flagged', async () => {
-    const small = await create('same', SMALL);
-    const result = await service.keepWhole(DEV, small.id);
-    expect(result.ok).toBe(false);
-  });
-
-  it('proposes again on the current plan, and records why when the model gives no split', async () => {
-    // A model that judges the plan big but gives no usable split.
+  it('records why a flagged plan has no proposal when the model gives no workstreams', async () => {
+    // A model that judges the plan big but gives no usable division.
     proposed = [];
     const glob = await create('same', BIG);
-    const first = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    expect(first).toMatchObject({ flagged: true, proposal: null });
-    expect(first?.evidence).toContain('No split was proposed: the model gave fewer than 2 usable parts');
-    // The plan changed behind the stored check's back (same hash is not required).
-    proposed = [
-      { title: 'Data and server', summary: 'a', plan: '## Tasks\n1. migration in apps/server/drizzle\n2. endpoint in apps/server/drizzle', after: [] },
-      { title: 'Web', summary: 'b', plan: '## Tasks\n3. web card', after: [0] },
-      { title: 'CLI', summary: 'c', plan: '## Tasks\n4. CLI command in apps/server/drizzle', after: [0] },
-    ];
-    clockNow = '2026-10-09T13:00:00.000Z';
-    unwrap(await service.repropose(DEV, glob.id));
-    expect(service.isReproposing(glob.id)).toBe(true);
-    // A second request while one runs is not an error.
-    unwrap(await service.repropose(DEV, glob.id));
-    await service.runRepropose(glob.id);
-    expect(service.isReproposing(glob.id)).toBe(false);
-    const again = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    expect(again).toMatchObject({ flagged: true, createdAt: first?.createdAt, updatedAt: '2026-10-09T13:00:00.000Z' });
-    expect(again?.proposal?.parts.map((p) => p.title)).toEqual(['Data and server', 'Web', 'CLI']);
-    expect(again?.evidence.join('\n')).not.toContain('No split was proposed');
-  });
-
-  it('a failed proposal keeps the flag and says the model timed out or was unavailable', async () => {
-    const glob = await create('same', BIG);
-    llmMode = 'unavailable';
-    unwrap(await service.repropose(DEV, glob.id));
-    await service.runRepropose(glob.id);
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    // The judge failed too, so the text estimate is back and does not flag: the earlier flag is not the model's to lift silently.
-    expect(check?.proposal).toBeNull();
-    expect(check?.evidence.some((e) => e.startsWith('No split was proposed')) || check?.flagged === false).toBe(true);
-  });
-
-  it('proposing again is refused when not flagged, answered or started', async () => {
-    const small = await create('same', SMALL);
-    expect((await service.repropose(DEV, small.id)).ok).toBe(false);
-    const flagged = await create('same', BIG);
-    unwrap(await service.keepWhole(DEV, flagged.id));
-    expect((await service.repropose(DEV, flagged.id)).ok).toBe(false);
-    expect((await service.repropose('nobody@example.com', flagged.id)).ok).toBe(false);
-    const sub = await create('sub', BIG);
-    unwrap(await service.keepWhole(DEV, sub.id));
-    unwrap(await globs.release(sub.id));
-    expect((await service.repropose(DEV, sub.id)).ok).toBe(false);
+    expect(check).toMatchObject({ flagged: true, proposal: null });
+    expect(check?.evidence).toContain('No workstreams were proposed: the model gave fewer than 2 usable workstreams');
   });
 
   it('splitting a flagged glob records the decision', async () => {
     const glob = await create('same', BIG);
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    const parts = (check?.proposal?.parts ?? []).map((p) => ({ title: p.title, plan: p.plan, after: p.after }));
+    const parts = (check?.proposal?.workstreams ?? []).map((w) => ({ title: w.name, plan: w.plan }));
     unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
     expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.decision).toBe('split');
     const view = unwrap(await globs.get(DEV, glob.id));
@@ -371,9 +316,10 @@ describe('learned size check', () => {
     await service.refresh(glob.id);
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
     expect(check?.flagged).toBe(true);
-    unwrap(await service.keepWhole(DEV, glob.id));
+    if (check === null) throw new Error('no check');
+    await store.transaction((tx) => tx.upsertSizeCheck({ ...check, decision: 'split', decidedBy: DEV, decidedAt: NOW }));
     await service.refresh(glob.id);
-    expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.decision).toBe('kept_whole');
+    expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.decision).toBe('split');
   });
 
   it('a summary-only sub is not held by the model\'s parts estimate', async () => {
@@ -385,18 +331,13 @@ describe('learned size check', () => {
     expect(sub.status).toBe('implementing');
   });
 
-  it('saving a smaller plan re-judges a held sub and lifts the hold, as save_plan does', async () => {
-    const sub = await create('sub', BIG);
-    expect(sub.status).toBe('planning');
-    expect(sub.waiting).not.toBeNull();
-    unwrap(await artifacts.putPlan(DEV, sub.id, SMALL));
-    await service.refresh(sub.id);
-    // The save's own background refresh may still be lifting the hold; the lift is idempotent.
-    await globs.reconcileSizeHold(sub.id);
-    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.flagged).toBe(false);
-    const started = await get(sub.id);
-    expect(started.status).toBe('implementing');
-    expect(started.runs.map((r) => [r.purpose, r.outcome ?? r.state])).toEqual([['investigate', 'superseded'], [undefined, 'queued']]);
+  it('saving a smaller plan re-judges the check and lifts the flag, and the glob is untouched', async () => {
+    const glob = await create('same', BIG);
+    expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.flagged).toBe(true);
+    unwrap(await artifacts.putPlan(DEV, glob.id, SMALL));
+    await service.refresh(glob.id);
+    expect((await store.transaction((tx) => tx.getSizeCheck(glob.id)))?.flagged).toBe(false);
+    expect((await get(glob.id)).status).toBe('planning');
   });
 
   it('reports oversized only while the glob is in Planning, and skips the model for an unchanged plan', async () => {
@@ -410,21 +351,21 @@ describe('learned size check', () => {
     expect([...(await globs.oversizedOf(boardId))]).toEqual([]);
   });
 
-  describe('serial plans, shared contracts and parallel parts', () => {
+  describe('serial plans, shared contracts and parallel workstreams', () => {
     const contractParts = [
-      { title: 'Contract', summary: 'the shared schema', plan: '## Tasks\n1. migration in apps/server/drizzle/0001.sql', after: [] },
-      { title: 'Server', summary: 's', plan: '## Tasks\n2. endpoint in apps/server/src/shared.ts\n3. route in apps/server/src/http/app.ts', after: [0] },
-      { title: 'Web', summary: 'w', plan: '## Tasks\n4. web card\n5. web page\n6. web test', after: [0] },
-      { title: 'CLI', summary: 'c', plan: '## Tasks\n7. cli command in apps/server/src/shared.ts', after: [0] },
+      { name: 'Contract', goal: 'the shared schema', files: [], plan: '## Tasks\n1. migration in apps/server/drizzle/0001.sql', needs: [] },
+      { name: 'Server', goal: 's', files: [], plan: '## Tasks\n2. endpoint in apps/server/src/shared.ts\n3. route in apps/server/src/http/app.ts', needs: [0] },
+      { name: 'Web', goal: 'w', files: [], plan: '## Tasks\n4. web card\n5. web page\n6. web test', needs: [0] },
+      { name: 'CLI', goal: 'c', files: [], plan: '## Tasks\n7. cli command in apps/server/src/shared.ts', needs: [0] },
     ];
     const needsOf = (id: string | undefined): string[] => [...store.state.relations.values()].filter((r) => r.from === id && r.gate === 'start').map((r) => r.to);
-    const splitAsProposed = async (glob: Glob): Promise<Glob[]> => {
+    /** A scope cut along the proposal's workstreams, as a person or agent would make it: each part independent unless it names needs. */
+    const cutAlongProposal = async (glob: Glob, withNeeds = false): Promise<Glob[]> => {
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-      const parts = (check?.proposal?.parts ?? []).map((p, index) => ({
-        title: p.title,
-        plan: p.plan,
-        ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
-        ...(index > 0 && p.type !== undefined ? { type: p.type } : {}),
+      const parts = (check?.proposal?.workstreams ?? []).map((w, index) => ({
+        title: w.name,
+        plan: w.plan,
+        ...(withNeeds && index > 0 && w.needs.length > 0 ? { after: [...w.needs] } : {}),
       }));
       return unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
     };
@@ -452,76 +393,55 @@ describe('learned size check', () => {
       expect(check?.proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
     });
 
-    it('drops a proposal whose parts wait on each other in one line, and does not flag the glob', async () => {
+    it('drops a proposal whose workstreams wait on each other in one line, and does not flag the glob', async () => {
       proposed = [
-        { title: 'A', summary: 'a', plan: '## Tasks\n1. a', after: [] },
-        { title: 'B', summary: 'b', plan: '## Tasks\n2. b', after: [0] },
-        { title: 'C', summary: 'c', plan: '## Tasks\n3. c', after: [1] },
+        { name: 'A', goal: 'a', files: [], plan: '## Tasks\n1. a', needs: [] },
+        { name: 'B', goal: 'b', files: [], plan: '## Tasks\n2. b', needs: [0] },
+        { name: 'C', goal: 'c', files: [], plan: '## Tasks\n3. c', needs: [1] },
       ];
       const glob = await create('sub', BIG);
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
       expect(check).toMatchObject({ flagged: false, proposal: null });
-      expect(check?.evidence.join('\n')).toContain('a chain of 3 parts');
+      expect(check?.evidence.join('\n')).toContain('would be a chain of 3');
       expect((await get(glob.id)).status).toBe('implementing');
     });
 
-    it('splits a shared schema and three consumers into part 0 plus three parts that need only part 0; shared files make no relation', async () => {
+    it('proposes a shared schema and three consumers as the first workstream plus three that need only it; shared files make no need', async () => {
       proposed = contractParts;
       const glob = await create('same', BIG);
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-      expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0], [0]]);
-      expect(check?.proposal?.parts.every((p) => !('overlaps' in p))).toBe(true);
-      // Small, low-risk parts are subs; the 3-task part stays the glob's own type.
-      expect(check?.proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', undefined, 'sub']);
-      const created = await splitAsProposed(glob);
+      expect(check?.proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], [0], [0]]);
+      expect(check?.proposal?.workstreams.every((w) => !('type' in w) && !('overlaps' in w))).toBe(true);
+    });
+
+    it('a split is a scope cut: independent globs, no gate between them and no sign-off from the original', async () => {
+      proposed = contractParts;
+      const glob = await create('same', BIG);
+      const created = await cutAlongProposal(glob);
       expect(created).toHaveLength(4);
-      const [first, server, web, cli] = created;
-      expect(needsOf(server?.id)).toEqual([first?.id]);
-      expect(needsOf(web?.id)).toEqual([first?.id]);
-      expect(needsOf(cli?.id)).toEqual([first?.id]);
-      expect(created.map((g) => g.type)).toEqual(['same', 'sub', 'same', 'sub']);
-      // The file overlap is not a relation at all: only the need on part 0 is.
-      expect(needsOf(cli?.id)).not.toContain(server?.id);
-      // The source can't be signed off until each part has merged.
-      expect([...store.state.relations.values()].filter((r) => r.gate === 'sign_off').map((r) => [r.from, r.to, r.source])).toEqual(
-        [server, web, cli].map((p) => [first?.id, p?.id, 'split']),
-      );
+      expect(created.map((g) => g.type)).toEqual(['same', 'same', 'same', 'same']);
+      for (const part of created) {
+        expect(needsOf(part.id)).toEqual([]);
+        expect(part).not.toHaveProperty('autoStart');
+        expect(part.waiting ?? null).toBeNull();
+        expect(part.status).toBe('planning');
+      }
+      expect([...store.state.relations.values()]).toEqual([]);
+      // The original signs off on its own.
+      expect((await get(created[0]?.id ?? '')).status).toBe('planning');
     });
 
-    it('a split same starts its routine on its own when its last need merges, and a person can turn that off', async () => {
+    it('a part that names needs has them as ordinary person relations, and nothing starts it by itself', async () => {
       proposed = contractParts;
       const glob = await create('same', BIG);
-      const [first, , web, cli] = await splitAsProposed(glob);
-      if (first === undefined || web === undefined || cli === undefined) throw new Error('no parts');
-      expect(web).toMatchObject({ status: 'planning', autoStart: true });
-      expect(web.waiting).not.toBeNull();
-      // Turn it off on the web part: the wait ends, the need stays.
-      const off = unwrap(await globs.update(DEV, web.id, web.version, { autoStart: false }));
-      expect(off).toMatchObject({ autoStart: false, waiting: null, status: 'planning' });
-      expect(needsOf(web.id)).toEqual([first.id]);
+      const [first, server, web] = await cutAlongProposal(glob, true);
+      if (first === undefined || server === undefined || web === undefined) throw new Error('no parts');
+      expect(needsOf(server.id)).toEqual([first.id]);
+      expect([...store.state.relations.values()].map((r) => [r.gate, r.source])).toEqual([['start', 'person'], ['start', 'person'], ['start', 'person']]);
+      expect(web.waiting ?? null).toBeNull();
       unwrap(await globs.applyEvent(first.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
-      const released = await globs.releaseDependents(first.id, boardId);
-      expect(released).toContain(cli.id);
-      expect(released).not.toContain(web.id);
+      await globs.releaseDependents(first.id, boardId);
       expect((await get(web.id)).status).toBe('planning');
-    });
-
-    it('a split same that keeps the flag starts when its need merges', async () => {
-      proposed = contractParts;
-      const glob = await create('same', BIG);
-      const [first, , web] = await splitAsProposed(glob);
-      if (first === undefined || web === undefined) throw new Error('no parts');
-      unwrap(await globs.applyEvent(first.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
-      expect(await globs.releaseDependents(first.id, boardId)).toContain(web.id);
-      const started = await get(web.id);
-      expect(started).toMatchObject({ status: 'implementing', waiting: null });
-      expect(started.runs).toHaveLength(1);
-    });
-
-    it('the flag only exists on a same that waits: a part with no needs has none', async () => {
-      proposed = contractParts;
-      const [first] = await splitAsProposed(await create('same', BIG));
-      expect(first?.autoStart).toBeUndefined();
     });
   });
 
@@ -552,7 +472,7 @@ describe('learned size check', () => {
     };
     const threshold = () => store.transaction((tx) => tx.getSizeThreshold(boardId));
 
-    it('raises when a flagged glob kept whole merged cleanly, once', async () => {
+    it('raises when a flagged glob merged cleanly, once', async () => {
       const glob = await create('same', BIG);
       await merge(glob.id);
       const first = await service.learn(boardId);
@@ -561,10 +481,10 @@ describe('learned size check', () => {
       expect((await service.learn(boardId)).changes).toEqual([]);
       const view = unwrap(await service.view(DEV, boardId));
       expect(view.history).toHaveLength(1);
-      expect(view.history[0]?.evidence).toContain('kept whole');
+      expect(view.history[0]?.evidence).toContain('merged cleanly');
     });
 
-    it('lowers when an unflagged glob hit max review rounds, or was split after it started', async () => {
+    it('lowers when an unflagged glob hit max review rounds; a split after it started no longer counts', async () => {
       const a = await create('same', SMALL);
       const b = await create('same', SMALL);
       await merge(a.id, { rounds: 3 });
@@ -573,11 +493,11 @@ describe('learned size check', () => {
         { type: 'GlobSplit', at: '2026-08-31T12:00:00.000Z' },
       ]);
       const result = await service.learn(boardId);
-      expect(result.changes.map((c) => c.outcome)).toEqual(['unflagged_struggled', 'unflagged_struggled']);
-      expect(await threshold()).toEqual({ maxTasks: 3, maxParts: 2 });
+      expect(result.changes.map((c) => [c.globId, c.outcome])).toEqual([[a.id, 'unflagged_struggled']]);
+      expect(await threshold()).toEqual({ maxTasks: 4, maxParts: 2 });
     });
 
-    it('leaves the threshold when a flagged glob was split, or kept whole and not clean', async () => {
+    it('leaves the threshold when a flagged glob was split, or merged and was not clean', async () => {
       const split = await create('same', BIG);
       const messy = await create('same', BIG);
       await merge(split.id, {}, [{ type: 'GlobSplit', at: '2026-08-30T00:00:00.000Z' }]);
@@ -587,51 +507,18 @@ describe('learned size check', () => {
       expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
     });
 
-    describe('split outcomes', () => {
-      const partsOf = (after: number[][]) => after.map((a, i) => ({ title: `P${i}`, summary: '', plan: `## Tasks\n${i + 1}. step ${i + 1}`, after: a }));
-      /** Splits a flagged glob, merges the parts named (all by default) and records the source's outcome. */
-      const splitAndMerge = async (after: number[][], mergeParts = after.map((_, i) => i)) => {
-        const glob = await create('same', BIG);
-        const parts = unwrap(await globs.split(DEV, glob.id, glob.version, { parts: partsOf(after), idempotencyKey: null }));
-        for (const index of mergeParts) {
-          const part = parts[index];
-          if (part !== undefined) unwrap(await globs.applyEvent(part.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
-        }
-        await store.transaction((tx) => tx.upsertGlobOutcome(outcomeOf(glob.id)));
-        return { glob, parts };
-      };
-      const failRun = (globId: string) =>
-        store.transaction((tx) => tx.appendEvents([{ type: 'RunFailed', globId, actor: null, at: NOW, data: {} }]));
-
-      it('a split whose parts serialised and stalled raises the threshold, with the cause in the history', async () => {
-        const { glob, parts } = await splitAndMerge([[], [0], [1]]);
-        await failRun(parts[1]?.id ?? '');
-        const result = await service.learn(boardId);
-        expect(result.changes).toMatchObject([{ globId: glob.id, outcome: 'split_stalled', from: { maxTasks: 5, maxParts: 3 }, to: { maxTasks: 6, maxParts: 4 } }]);
-        expect(await threshold()).toEqual({ maxTasks: 6, maxParts: 4 });
-        const history = unwrap(await service.view(DEV, boardId)).history;
-        expect(history[0]?.evidence).toContain('one after another');
-        expect(history[0]?.evidence).toContain('1 failed run');
-        expect((await service.learn(boardId)).changes).toEqual([]);
-      });
-
-      it('a split whose parts ran in parallel is recorded and leaves the threshold, even with a failed run', async () => {
-        const { glob, parts } = await splitAndMerge([[], [0], [0]]);
-        await failRun(parts[2]?.id ?? '');
-        const result = await service.learn(boardId);
-        expect(result.changes).toMatchObject([{ globId: glob.id, outcome: 'split_helped' }]);
-        expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
-      });
-
-      it('a serialised split that did not stall leaves the threshold', async () => {
-        await splitAndMerge([[], [0]]);
-        expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['split_helped']);
-      });
-
-      it('waits until every part has merged', async () => {
-        await splitAndMerge([[], [0], [1]], [0, 1]);
-        expect((await service.learn(boardId)).changes).toEqual([]);
-      });
+    it('records no split outcome any more: a split original is judged like any flagged glob, and old split outcomes stay readable', async () => {
+      const glob = await create('same', BIG);
+      const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+      const parts = (check?.proposal?.workstreams ?? []).map((w) => ({ title: w.name, plan: w.plan }));
+      unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
+      // Only the original has merged; its parts are not waited for.
+      await merge(glob.id, {}, [{ type: 'GlobSplit', at: '2026-08-30T00:00:00.000Z' }]);
+      expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['flag_confirmed']);
+      await store.transaction((tx) =>
+        tx.insertSizeThresholdChange({ boardId, at: NOW, from: DEFAULT_SIZE_THRESHOLD, to: { maxTasks: 6, maxParts: 4 }, outcome: 'split_stalled', globId: 's1f99', evidence: 'Split into 3 parts' }),
+      );
+      expect(unwrap(await service.view(DEV, boardId)).history.map((h) => h.outcome)).toEqual(expect.arrayContaining(['split_stalled', 'flag_confirmed']));
     });
 
     it('shows the learned threshold beside the default, and an admin resets it', async () => {

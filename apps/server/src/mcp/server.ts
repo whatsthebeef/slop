@@ -1,4 +1,4 @@
-import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
+import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
 import { cleanFileName, invalidInput, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -38,8 +38,6 @@ export interface McpDeps {
   readonly inbox: InboxService;
   /** Upload links for file attachments; absent when no bucket is configured (then `files` is refused). */
   readonly attachments?: Pick<AttachmentService, 'createUpload' | 'downloadUrl'>;
-  /** Answers a glob's oversized flag: starting a held glob anyway keeps it whole. */
-  readonly sizeCheck?: Pick<SizeCheckService, 'keepWhole'>;
   /** Refuses `mark_ready` for a branch that conflicts with its base. */
   readonly readyGate: ReadyGate;
   /** Refuses `merge` on an agent-set PR whose diff is empty. */
@@ -125,7 +123,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `type` always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -302,7 +300,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Title every part with the feature's short name from the original title, a colon, then what it delivers and changes (\"Board chat: answers get 👍/👎 buttons, stored per board\", not \"Feedback UI and submission\"); at most ~100 characters, no \"Part N\". Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0). Split creates relations: each `after` is a start relation (start until merged, source `split`) from the part to the earlier part, and the glob you cut (part 0) gets a sign-off relation (sign-off until merged, source `split`) to every other part, so it cannot be signed off until every part has merged (`get_glob` shows them under `relations`, as 3/5 parts merged). Parts that touch the same files are not related. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
+        "Cut the scope of a glob in Planning (not started: no run, no branch) into independent globs in one step: a scope cut, for work that could each ship alone, not a way to parallelise one piece of work (parallel work happens inside the run as workstreams). Part 0 is this glob: it keeps its ID, history and decisions, gets the new title and plan, and signs off on its own like any glob. The other parts are created in its group with their own plan and copies of its link attachments (and the text attachments you list). Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Title every part with the feature's short name from the original title, a colon, then what it delivers and changes (\"Board chat: answers get 👍/👎 buttons, stored per board\", not \"Feedback UI and submission\"); at most ~100 characters, no \"Part N\". Parts default to the glob's type and category. The parts are independent: there is no gate between them and no sign-off from the original on the others, unless you pass `after` on a part (earlier parts it needs merged before it starts), which is stored as an ordinary need (a start relation from the part to the earlier part). Name only direct prerequisites in `after`. The parts keep a \"Split from <id>\" line in their plan and a split event as provenance.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -347,7 +345,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           status: glob.status,
           ...(startIds(relations.get(glob.id) ?? []).length === 0 ? {} : { after: startIds(relations.get(glob.id) ?? []) }),
           ...(glob.waiting == null ? {} : { waiting: true }),
-          ...(glob.autoStart === true ? { autoStart: true } : {}),
         })),
       }));
     },
@@ -357,21 +354,20 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, inferred, learned or split), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape while the glob is held for it; afterwards each part has its title, needs and overlaps, a short `planSummary` and `planChars`, and `include: ['size_proposal']` returns the plans); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
+        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, inferred or learned; older rows may say split), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
       inputSchema: {
         id: z.string(),
         runId: z.string().optional(),
-        include: z.array(z.enum(['size_proposal'])).optional().describe("'size_proposal': each proposed part's plan in full (the default has a short summary and the length)"),
       },
     },
-    async ({ id, runId, include }) => {
+    async ({ id, runId }) => {
       if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
       const view = await globs.get(email, id);
       if (!view.ok) return reply(view, () => null);
       const history = await deps.deploys.history(email, id, 5);
       return reply(view, (v) => ({
-        // A glob held for its oversized flag keeps the plans: the split is made from them. Otherwise the proposal is a summary.
-        ...(include?.includes('size_proposal') === true || globViewOf(v).oversized === true ? globViewOf(v) : compactSizeProposal(globViewOf(v))),
+        // The proposed workstreams are a summary here (name, goal, files, needs and a short plan share); get_context has them in full.
+        ...compactSizeProposal(globViewOf(v)),
         deploys: history.ok ? history.value.map(deployView) : [],
       }));
     },
@@ -431,7 +427,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
         after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
         relations: z.array(relationInputSchema).max(60).optional().describe(RELATIONS_HELP),
-        autoStart: z.boolean().optional().describe("false: a same from a split stops waiting to start by itself when its needs merge (it keeps them); start it with start_glob"),
       },
     },
     async ({ id, version, needs, relations, ...changes }) => {
@@ -473,7 +468,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'dismiss_relation',
     {
       description:
-        "Say a relation of this glob is not a dependency (the relation's `relationId` is in `get_glob`'s `relations.holding`). It stops holding: a glob held in Planning for it starts, a merge held for it goes on. Slop remembers a dismissal of an inferred relation until the plan changes. A split's relation cannot be dismissed. Pass the version you read.",
+        "Say a relation of this glob is not a dependency (the relation's `relationId` is in `get_glob`'s `relations.holding`). It stops holding: a glob held in Planning for it starts, a merge held for it goes on. Slop remembers a dismissal of an inferred relation until the plan changes. Pass the version you read.",
       inputSchema: { id: z.string(), version: z.number().int(), relationId: z.string().min(1) },
     },
     async ({ id, version, relationId }) => {
@@ -487,11 +482,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'start_glob',
     {
       description:
-        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way, and starting one held for its oversized flag keeps it whole). Also hands a glob a person picked up, with no routine run, to a routine.",
+        "Start a same's routine run (planning → implementing). Refused while the glob waits for globs named in `after` or a merge-policy hold; pass `anyway` to start it before they merge (a sub held in Planning can only be started this way). An oversized flag never holds a glob: start it as usual. Also hands a glob a person picked up, with no routine run, to a routine.",
       inputSchema: { id: z.string(), version: z.number().int(), anyway: z.boolean().optional() },
     },
     async ({ id, version, anyway }) => {
-      if (anyway === true) await deps.sizeCheck?.keepWhole(email, id);
       const result = anyway === true ? await globs.startAnyway(email, id, version) : await globs.start(email, id, version);
       if (result.ok) await deps.outbox.drain(id);
       return reply(result, (g) => globView(g));
@@ -860,7 +854,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized`, its reasons and evidence, the decision taken and the proposed split (parts in split_glob's shape, `after` as earlier part indexes). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. `hotspots` lists the board's conflict hotspots among the files the glob plans to change (its investigation's or plan.md's paths) or conflicted on: path, conflicts, globs, real conflicts, last conflict time and the window in days; empty when none. `handover` is the hand-over brief (why a person is needed, what to do first), null when nothing is wrong. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized` (advice, not a hold), its reasons and evidence, `decision` (`split` when its scope was cut) and the proposed workstreams (name, goal, files, plan share and `needs` as earlier workstream indexes: parallel work inside this glob's one run and PR). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. `hotspots` lists the board's conflict hotspots among the files the glob plans to change (its investigation's or plan.md's paths) or conflicted on: path, conflicts, globs, real conflicts, last conflict time and the window in days; empty when none. `handover` is the hand-over brief (why a person is needed, what to do first), null when nothing is wrong. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {

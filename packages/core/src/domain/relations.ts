@@ -52,7 +52,7 @@ const lifted = (r: Relation): boolean => r.dismissedAt !== null || r.overriddenA
 /** Whether the relation still counts (it was neither dismissed nor overridden), whether or not its gate is open yet. */
 export const isActive = (r: Relation): boolean => !lifted(r);
 
-/** The sources a person, an agent or a split set: an `after`/`needs` list replaces these and leaves inferred and learned ones. */
+/** The sources a person, an agent or an old split set: an `after`/`needs` list replaces these and leaves inferred and learned ones. */
 export const isExplicit = (r: Pick<Relation, 'source'>): boolean => r.source === 'person' || r.source === 'agent' || r.source === 'split';
 
 /** Whether the gate this relation guards is open: lifted, `to` gone, or `to` has reached `until`. */
@@ -254,8 +254,9 @@ export interface RelationDraft {
 
 /**
  * Whether adding `draft` would close a cycle. Nodes are (glob, milestone): a glob's later milestone depends on its earlier
- * ones and on the relations of that gate, so a split (part 1 starts after part 0 merged, part 0 signs off after part 1
- * merged) is no cycle, while two globs each waiting to start for the other to merge is. Lifted relations don't count.
+ * ones and on the relations of that gate, so a glob that merges only after another has merged, which in turn starts after
+ * the first has merged, is no cycle, while two globs each waiting to start for the other to merge is. Lifted relations
+ * don't count.
  */
 export const wouldCycle = (relations: readonly Relation[], draft: RelationDraft): boolean => {
   const byFrom = new Map<string, Relation[]>();
@@ -332,16 +333,7 @@ export interface Holding {
   readonly state: ToState;
   readonly reason: string | null;
   readonly source: RelationSource;
-  /** Split sign-off relations: how many of the parts have merged, of how many. Repeated on each of the glob's split holdings. */
-  readonly parts?: { readonly merged: number; readonly total: number };
 }
-
-/** The merged count of a glob's split sign-off relations: lifted ones are not parts any more. */
-const partsOf = (facts: RelationFacts): { readonly merged: number; readonly total: number } | undefined => {
-  const parts = facts.relations.filter((r) => r.gate === 'sign_off' && r.source === 'split' && !lifted(r) && (facts.states.get(r.to) ?? 'missing') !== 'missing');
-  if (parts.length === 0) return undefined;
-  return { merged: parts.filter((r) => isMet(r, facts.states.get(r.to) ?? 'missing')).length, total: parts.length };
-};
 
 /**
  * Every relation of a glob that still holds something back (any gate), in the order they were made. `titles` and `decisions`
@@ -351,7 +343,6 @@ export const holdingOf = (
   facts: RelationFacts,
   titles: ReadonlyMap<string, { readonly title: string; readonly decision: boolean }>,
 ): Holding[] => {
-  const parts = partsOf(facts);
   // Start gates first, then merge, then sign-off: the order a glob meets them.
   return RELATION_GATES.flatMap((gate) => unmet(facts, gate)).map(({ relation: r, state }): Holding => {
     const to = titles.get(r.to);
@@ -365,7 +356,6 @@ export const holdingOf = (
       state,
       reason: r.reason,
       source: r.source,
-      ...(parts !== undefined && r.gate === 'sign_off' && r.source === 'split' ? { parts } : {}),
     };
   });
 };

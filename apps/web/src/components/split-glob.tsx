@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
-import type { SizeProposal } from '@slop/core';
 import type { GlobView, SplitPartInput } from '@/lib/api';
 import { planText } from '@/lib/plan-text';
 
@@ -20,18 +19,15 @@ export const canSplit = (glob: GlobView): boolean =>
   glob.status === 'planning' && glob.provisioning === 'none' && glob.runs.length === 0 && glob.pr === null && glob.type !== 'super';
 
 /**
- * Cuts a glob in Planning into parts: part 1 stays this glob, with its plan pre-filled to edit down; the others are new
- * globs in its group. `{part:2}` in a plan stands for that part's glob ID.
+ * Cuts the scope of a glob in Planning into independent globs: part 1 stays this glob, with its plan pre-filled to edit down;
+ * the others are new globs in its group. `{part:2}` in a plan stands for that part's glob ID.
  */
 export const SplitGlob = ({
   glob,
-  proposal,
   onDone,
   onCancel,
 }: {
   glob: GlobView;
-  /** The size check's proposed split, to pre-fill the editor with (Edit split). */
-  proposal?: SizeProposal | undefined;
   onDone: (parts: GlobView[]) => void;
   onCancel: () => void;
 }) => {
@@ -42,9 +38,7 @@ export const SplitGlob = ({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (plan.isPending) return <p className='text-xs text-muted-foreground'>Loading plan.md…</p>;
-  const proposed: Draft[] | null =
-    proposal === undefined ? null : proposal.parts.map((p) => ({ title: p.title, plan: p.plan, type: glob.type, after: [...p.after] }));
-  const shown: Draft[] = parts ?? proposed ?? [
+  const shown: Draft[] = parts ?? [
     { title: glob.title, plan: original, type: glob.type, after: [] },
     { title: '', plan: '', type: glob.type, after: [0] },
   ];

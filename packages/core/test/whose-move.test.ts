@@ -324,11 +324,10 @@ describe('whoseMove: unmet relations', () => {
     expect(move(glob({ status: 'in_progress', implementer: dev.email }), {}, { waiting: [hold()] }).holder).not.toBe('waiting');
   });
 
-  it('split parts: "3/5 parts merged", grouped, for a merged source whose labels are approved', () => {
-    const parts = { merged: 3, total: 5 };
+  it('sign-off relations, listed, for a merged source whose labels are approved (no "N/M parts merged" any more)', () => {
     const source = glob({ status: 'reviewing', labels: { QA: 'approved' } });
-    const holds = [hold({ to: 's1t2', gate: 'sign_off', source: 'split', parts }), hold({ relationId: 'rel_2', to: 's1t3', gate: 'sign_off', source: 'split', parts })];
-    expect(move(source, {}, { waiting: holds })).toMatchObject({ holder: 'waiting', reason: '3/5 parts merged', waitingOn: ['s1t2', 's1t3'] });
+    const holds = [hold({ to: 's1t2', gate: 'sign_off' }), hold({ relationId: 'rel_2', to: 's1t3', gate: 'sign_off' })];
+    expect(move(source, {}, { waiting: holds })).toMatchObject({ holder: 'waiting', reason: 'sign-off waits on s1t2, s1t3', waitingOn: ['s1t2', 's1t3'] });
     // Labels still to approve: the reviewer's turn comes first.
     const reviewing = glob({ status: 'reviewing', labels: { QA: 'required' } });
     expect(move(reviewing, {}, { waiting: holds }).reason).toBe('Review needed');

@@ -39,7 +39,7 @@ export interface SectionProps {
   openLabel: LabelName | null;
   artifact: ArtifactRef | null;
   onSelectArtifact: (artifact: ArtifactRef | null) => void;
-  /** The size check's moves (Split as proposed, Keep whole, …), shared by the size panel and the actions menu. */
+  /** The size check's advice (the proposed workstreams), read by the size panel. */
   size: OversizedState;
   splitting: boolean;
   onSplitting: (splitting: boolean) => void;
@@ -88,8 +88,8 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       onClose={onClose}
     />
   ),
-  actions: ({ ctx, actions, size, onSplitting }) => (
-    <GlobActions ctx={ctx} state={actions} size={size} onSplitting={onSplitting} />
+  actions: ({ ctx, actions, onSplitting }) => (
+    <GlobActions ctx={ctx} state={actions} onSplitting={onSplitting} />
   ),
   plan: ({ ctx }) => <PlanSection ctx={ctx} />,
   decision: ({ ctx, onDecide }) => <DecisionPanel ctx={ctx} onDecide={onDecide} />,

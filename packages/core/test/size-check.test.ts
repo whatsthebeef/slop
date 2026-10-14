@@ -9,17 +9,16 @@ import {
   SIZE_TASKS_MIN,
   buildProposal,
   estimateFromText,
+  isChain,
   loweredThreshold,
   needsInvestigation,
   nextThreshold,
   oversizedReasons,
   prHoursOf,
   prRangeOf,
+  proposalOfStored,
   raisedThreshold,
   sizeOutcomeOf,
-  splitAfterStartOf,
-  splitOutcomeOf,
-  splitPartsOf,
   splitShape,
   withModelParts,
 } from '../src/domain/size-check.js';
@@ -138,7 +137,8 @@ describe('threshold steps and bounds', () => {
     expect(nextThreshold('kept_whole_clean', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(6);
     expect(nextThreshold('unflagged_struggled', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(4);
     expect(nextThreshold('flag_confirmed', DEFAULT_SIZE_THRESHOLD)).toEqual(DEFAULT_SIZE_THRESHOLD);
-    expect(nextThreshold('split_stalled', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(6);
+    // The old split outcomes are only read from history now: they move nothing.
+    expect(nextThreshold('split_stalled', DEFAULT_SIZE_THRESHOLD)).toEqual(DEFAULT_SIZE_THRESHOLD);
     expect(nextThreshold('split_helped', DEFAULT_SIZE_THRESHOLD)).toEqual(DEFAULT_SIZE_THRESHOLD);
   });
 });
@@ -167,13 +167,12 @@ const input = (patch: Partial<SizeOutcomeInput> & { rounds?: number | null; maxR
     failedRuns: 0,
     prHours: 10,
     split: false,
-    splitAfterStart: false,
     ...rest,
   };
 };
 const range = prRangeOf([8, 10, 10, 12, 10]);
 
-describe('raise: a flagged glob kept whole merged cleanly', () => {
+describe('raise: a flagged glob merged cleanly', () => {
   it('raises when review rounds, runs, PR time and bugs are all fine', () => {
     expect(sizeOutcomeOf(input(), range)?.outcome).toBe('kept_whole_clean');
   });
@@ -204,7 +203,6 @@ describe('lower: an unflagged glob struggled', () => {
     ['max review rounds', { rounds: 3 }],
     ['a failed run', { failedRuns: 2 }],
     ['a very long PR', { prHours: 40 }],
-    ['a split after it started', { splitAfterStart: true }],
   ])('lowers on %s', (_name, patch) => {
     expect(sizeOutcomeOf(unflagged(patch), range)?.outcome).toBe('unflagged_struggled');
   });
@@ -220,68 +218,62 @@ describe('outcome inputs from events', () => {
     expect(prHoursOf([ev('PROpened', '2026-09-01T00:00:00.000Z'), ev('Merged', '2026-09-01T06:00:00.000Z')])).toBe(6);
     expect(prHoursOf([ev('Merged', '2026-09-01T06:00:00.000Z')])).toBeNull();
   });
-  it('a hand split after the glob started counts, one before does not', () => {
-    expect(splitAfterStartOf([ev('RunTriggered', '2026-09-01T00:00:00.000Z'), ev('GlobSplit', '2026-09-02T00:00:00.000Z')])).toBe(true);
-    expect(splitAfterStartOf([ev('GlobSplit', '2026-09-01T00:00:00.000Z'), ev('RunTriggered', '2026-09-02T00:00:00.000Z')])).toBe(false);
-    expect(splitAfterStartOf([ev('GlobSplit', '2026-09-01T00:00:00.000Z')])).toBe(false);
-  });
 });
 
-describe('split shape', () => {
+describe('workstream shape', () => {
   it('is the longest chain and the widest level', () => {
-    expect(splitShape([{ after: [] }, { after: [0] }, { after: [0] }, { after: [0] }])).toEqual({ criticalPath: 2, maxParallel: 3 });
-    expect(splitShape([{ after: [] }, { after: [0] }, { after: [1] }])).toEqual({ criticalPath: 3, maxParallel: 1 });
-    expect(splitShape([{ after: [] }, { after: [] }])).toEqual({ criticalPath: 1, maxParallel: 2 });
+    expect(splitShape([{ needs: [] }, { needs: [0] }, { needs: [0] }, { needs: [0] }])).toEqual({ criticalPath: 2, maxParallel: 3 });
+    expect(splitShape([{ needs: [] }, { needs: [0] }, { needs: [1] }])).toEqual({ criticalPath: 3, maxParallel: 1 });
+    expect(splitShape([{ needs: [] }, { needs: [] }])).toEqual({ criticalPath: 1, maxParallel: 2 });
   });
 });
 
-describe('split outcomes', () => {
-  const range = prRangeOf([10, 10, 10, 10, 10]);
-  const input = { parts: 3, criticalPath: 3, failedRuns: 0, missing: 0, conflicts: 0, hours: 20 };
-  it('a serialised split that stalled is split_stalled, with the cause', () => {
-    const stalled = splitOutcomeOf({ ...input, failedRuns: 2 }, range);
-    expect(stalled.outcome).toBe('split_stalled');
-    expect(stalled.evidence).toContain('one after another');
-    expect(stalled.evidence).toContain('2 failed runs');
-    expect(splitOutcomeOf({ ...input, hours: 200 }, range).evidence).toContain('from the split to the last merge');
-    expect(splitOutcomeOf({ ...input, missing: 1 }, range).evidence).toContain('deleted');
-  });
-  it('a serialised split that did not stall, or one that ran in parallel, is split_helped', () => {
-    expect(splitOutcomeOf(input, range).outcome).toBe('split_helped');
-    expect(splitOutcomeOf({ ...input, criticalPath: 2, failedRuns: 3 }, range).outcome).toBe('split_helped');
-  });
-  it('reads the parts from the latest split event of part 0', () => {
-    const split = (data: DomainEvent['data']): DomainEvent => ({ type: 'GlobSplit', globId: 's1f1', actor: null, at: '2026-09-01T00:00:00.000Z', data });
-    expect(splitPartsOf('s1f1', [split({ source: 's1f1', part: 0, parts: ['s1f1', 's1f2'] })])).toEqual(['s1f1', 's1f2']);
-    expect(splitPartsOf('s1f1', [split({})])).toBeNull();
-    expect(splitPartsOf('s1f1', [])).toBeNull();
+describe('stored proposals', () => {
+  it('reads an older check\'s parts as workstreams, and workstreams as they are', () => {
+    const old = { parts: [{ title: 'Data', plan: '# Data\n\nThe table.\n- [ ] 1', after: [] }, { title: 'Web', plan: 'Cards', after: [0] }], criticalPath: 2, maxParallel: 1 };
+    expect(proposalOfStored(old)).toEqual({
+      workstreams: [
+        { name: 'Data', goal: 'The table.', files: [], plan: '# Data\n\nThe table.\n- [ ] 1', needs: [] },
+        { name: 'Web', goal: 'Cards', files: [], plan: 'Cards', needs: [0] },
+      ],
+      criticalPath: 2,
+      maxParallel: 1,
+    });
+    const now = { workstreams: [{ name: 'A', goal: 'g', files: ['x.ts'], plan: 'p', needs: [] }] };
+    expect(proposalOfStored(now)).toBe(now);
+    expect(proposalOfStored(null)).toBeNull();
   });
 });
 
-describe('proposal from the model parts', () => {
-  const part = (title: string, plan: string, after: number[] = []) => ({ title, summary: `${title} summary`, plan, after });
-  it('copies a context section into every part, and makes parts that share files no relation at all', () => {
+describe('proposal from the model workstreams', () => {
+  const part = (name: string, plan: string, needs: number[] = []) => ({ name, goal: `${name} goal`, files: [`${name}.ts`], plan, needs });
+  it('copies a context section into every workstream, and makes workstreams that share files no need at all', () => {
     const proposal = buildProposal(PLAN, [
       part('Data', '## Tasks\n1. Add the migration in apps/server/drizzle/0001.sql'),
       part('Server', '## Tasks\n2. Endpoint in apps/server/drizzle/0001.sql'),
       part('Web', '## Tasks\n3. Card'),
     ]);
-    expect(proposal?.parts.map((p) => p.title)).toEqual(['Data', 'Server', 'Web']);
-    expect(proposal?.parts[1]?.after).toEqual([]);
-    expect(proposal?.parts[1]).not.toHaveProperty('overlaps');
-    expect(proposal?.parts[2]?.after).toEqual([]);
-    for (const p of proposal?.parts ?? []) expect(p.plan).toContain('Some prose about the chat panel');
+    expect(proposal?.workstreams.map((w) => w.name)).toEqual(['Data', 'Server', 'Web']);
+    expect(proposal?.workstreams.map((w) => w.goal)).toEqual(['Data goal', 'Server goal', 'Web goal']);
+    expect(proposal?.workstreams.map((w) => w.files)).toEqual([['Data.ts'], ['Server.ts'], ['Web.ts']]);
+    expect(proposal?.workstreams[1]?.needs).toEqual([]);
+    expect(proposal?.workstreams[2]?.needs).toEqual([]);
+    for (const w of proposal?.workstreams ?? []) expect(w.plan).toContain('Some prose about the chat panel');
   });
-  it('a shared contract as part 0 with three independent consumers: each consumer needs only part 0, low-risk ones are subs', () => {
+  it('a shared contract first with three independent consumers: each consumer needs only the first', () => {
     const proposal = buildProposal(PLAN, [
       part('Contract', '## Tasks\n1. Add the shared schema type in packages/core/src/schema.ts'),
       part('Server', '## Tasks\n2. Endpoint in apps/server/src/http/app.ts', [0]),
       part('Web', '## Tasks\n3. Card in apps/web/src/components/card.tsx', [0]),
       part('CLI', '## Tasks\n4. CLI command\n5. LLM prompt\n6. Infra pipeline change\n7. Core tests', [0]),
     ]);
-    expect(proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0], [0]]);
+    expect(proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], [0], [0]]);
     expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 3 });
-    expect(proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', 'sub', undefined]);
+  });
+  it('a chain has no parallel workstreams: its critical path is all of them', () => {
+    const proposal = buildProposal(PLAN, [part('A', '## Tasks\n1. a'), part('B', '## Tasks\n2. b', [0]), part('C', '## Tasks\n3. c', [1])]);
+    expect(proposal).toMatchObject({ criticalPath: 3, maxParallel: 1 });
+    expect(proposal !== null && isChain(proposal)).toBe(true);
   });
   it('keeps direct needs only, and does not repeat a need reached through another', () => {
     const proposal = buildProposal(PLAN, [
@@ -289,31 +281,38 @@ describe('proposal from the model parts', () => {
       part('B', '## Tasks\n2. b in apps/server/src/a.ts', [0]),
       part('C', '## Tasks\n3. c in apps/server/src/a.ts', [0, 1]),
     ]);
-    expect(proposal?.parts.map((p) => p.after)).toEqual([[], [0], [1]]);
+    expect(proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], [1]]);
     expect(proposal).toMatchObject({ criticalPath: 3, maxParallel: 1 });
   });
-  it('does not repeat a section a part already carries, and drops bad `after` indexes', () => {
+  it('does not repeat a section a workstream already carries, and drops bad `needs` indexes', () => {
     const proposal = buildProposal(PLAN, [part('A', '## Tasks\n1. a'), part('B', '## Chat content\nprose\n\n## Tasks\n2. b', [0, 1, 5, -1])]);
-    expect(proposal?.parts).toHaveLength(2);
-    expect(proposal?.parts[1]?.after).toEqual([0]);
-    expect(proposal?.parts[1]?.plan.match(/Chat content/g)).toHaveLength(1);
+    expect(proposal?.workstreams).toHaveLength(2);
+    expect(proposal?.workstreams[1]?.needs).toEqual([0]);
+    expect(proposal?.workstreams[1]?.plan.match(/Chat content/g)).toHaveLength(1);
   });
-  it('never makes a part of a context section', () => {
+  it('takes the goal from the plan when the model gave none', () => {
+    const proposal = buildProposal(PLAN, [
+      { name: 'A', goal: null, files: [], plan: '## Tasks\n1. a', needs: [] },
+      { name: 'B', goal: null, files: [], plan: 'Make the card.\n\n## Tasks\n2. b', needs: [] },
+    ]);
+    expect(proposal?.workstreams.map((w) => w.goal)).toEqual(['', 'Make the card.']);
+  });
+  it('never makes a workstream of a context section', () => {
     const proposal = buildProposal(S15B31, [
       part('T1 and T2', '## Tasks\n- [ ] T1: First.\n- [ ] T2: Second.'),
       part('T3', '## Tasks\n- [ ] T3: Third.'),
       part('Evidence (2026-10-09)', '## Evidence (2026-10-09)\n\nIt went wrong on the board.'),
     ]);
-    expect(proposal?.parts.map((p) => p.title)).toEqual(['T1 and T2', 'T3']);
-    for (const p of proposal?.parts ?? []) {
-      expect(p.plan).toContain('It went wrong on the board.');
-      expect(p.plan).toContain('Look at the splitter');
+    expect(proposal?.workstreams.map((w) => w.name)).toEqual(['T1 and T2', 'T3']);
+    for (const w of proposal?.workstreams ?? []) {
+      expect(w.plan).toContain('It went wrong on the board.');
+      expect(w.plan).toContain('Look at the splitter');
     }
   });
-  it('is null when removing context-only parts leaves one part', () => {
+  it('is null when removing context-only workstreams leaves one', () => {
     expect(buildProposal(S15B31, [part('Work', '## Tasks\n- [ ] T1: First.'), part('Evidence', '## Evidence (2026-10-09)\n\nx')])).toBeNull();
   });
-  it('is null with fewer than two usable parts', () => {
+  it('is null with fewer than two usable workstreams', () => {
     expect(buildProposal('## Do\n- [ ] one\n', [part('Only', '- [ ] x'), part('', 'y')])).toBeNull();
   });
 });

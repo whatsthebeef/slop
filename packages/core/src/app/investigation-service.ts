@@ -50,7 +50,7 @@ export class InvestigationService implements InvestigationReactor {
 
       // A person's answer to the flag stands; a merged or finished glob has nothing left to cut.
       if (read.check?.decision != null || !['planning', 'implementing'].includes(glob.status)) return;
-      const oversize = oversizeOf(investigation, read.threshold, read.plan, glob.title);
+      const oversize = oversizeOf(investigation, read.threshold, read.plan);
       if (oversize === null) return;
       const raised = await this.deps.store.transaction(async (tx) => {
         const current = await tx.getGlob(globId);

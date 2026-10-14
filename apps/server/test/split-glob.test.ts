@@ -174,9 +174,9 @@ describe('split a glob (MCP and REST, on Postgres)', () => {
     const second = await globs.peek(body.parts[1]?.id ?? '');
     expect(second?.impliedAfter).toBeUndefined();
     const relations = await store.transaction((tx) => tx.listRelationsFrom([second?.id ?? '']));
-    expect(relations.map((r) => [r.to, r.gate, r.source])).toEqual([[glob.id, 'start', 'split']]);
-    // The glob's own sign-off waits for the new part.
+    expect(relations.map((r) => [r.to, r.gate, r.source])).toEqual([[glob.id, 'start', 'agent']]);
+    // A scope cut: the glob signs off on its own, with no gate on the new part.
     const own = await store.transaction((tx) => tx.listRelationsFrom([glob.id]));
-    expect(own.map((r) => [r.to, r.gate, r.until, r.source])).toEqual([[second?.id, 'sign_off', 'merged', 'split']]);
+    expect(own).toEqual([]);
   });
 });

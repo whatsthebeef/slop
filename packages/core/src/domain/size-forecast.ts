@@ -4,7 +4,7 @@ import { contextSectionList, planTaskLines } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
 import type { Investigation } from './investigation.js';
 import type { RiskTier } from './knowledge.js';
-import type { ProposedPart, SizeEstimate, SizeProposal, SizeThreshold } from './size-check.js';
+import type { SizeEstimate, SizeProposal, SizeThreshold, Workstream } from './size-check.js';
 import { MAX_PROPOSED_PARTS, isChain, splitShape } from './size-check.js';
 
 /**
@@ -458,7 +458,7 @@ const arranged = (
 
 /** The shape of the forecast's parts (the longest chain of needs, the most that can run at once). */
 export const forecastShape = (forecast: SizeForecast): { criticalPath: number; maxParallel: number } =>
-  splitShape(arranged(forecast).after.map((after) => ({ after })));
+  splitShape(arranged(forecast).after.map((needs) => ({ needs })));
 
 /**
  * Why the forecast says the work is more than one PR's. Like the text rule, size alone never flags: at least 2 parts must
@@ -504,7 +504,7 @@ export const proposalFromForecast = (plan: string, forecast: SizeForecast): Size
   };
   const context = contextSectionList(plan);
   const goal = plan.split(/\r?\n/).find((l) => l.trim() !== '' && !l.startsWith('#'))?.trim() ?? '';
-  const parts: ProposedPart[] = ordered.map((part, index) => {
+  const workstreams: Workstream[] = ordered.map((part, index) => {
     const own = tasks.filter((t) => owner(t) === index);
     const body = [
       `# ${part.name}`,
@@ -516,13 +516,14 @@ export const proposalFromForecast = (plan: string, forecast: SizeForecast): Size
       ...context.map((s) => `## ${s.heading}\n\n${s.body}`),
     ];
     return {
-      title: `${part.name} (${String(part.files.length)} file${part.files.length === 1 ? '' : 's'})`.slice(0, 120),
-      summary: `The change in ${part.name}: ${part.files.slice(0, 3).join(', ')}${part.files.length > 3 ? ', ...' : ''}`,
+      name: `${part.name} (${String(part.files.length)} file${part.files.length === 1 ? '' : 's'})`.slice(0, 120),
+      goal: `The change in ${part.name}: ${part.files.slice(0, 3).join(', ')}${part.files.length > 3 ? ', ...' : ''}`,
+      files: part.files,
       plan: body.join('\n\n'),
-      after: after[index] ?? [],
+      needs: after[index] ?? [],
     };
   });
-  const proposal: SizeProposal = { parts, ...splitShape(parts) };
+  const proposal: SizeProposal = { workstreams, ...splitShape(workstreams) };
   return isChain(proposal) ? null : proposal;
 };
 

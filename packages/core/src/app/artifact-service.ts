@@ -145,7 +145,7 @@ export interface GlobContext {
    * hottest first, with their counts. Empty when none; absent when hotspots are not configured.
    */
   readonly hotspots?: readonly GlobHotspot[];
-  /** Present when intake judged the glob: the oversized flag, its reasons and the proposed split (apply it with split_glob). */
+  /** Present when intake judged the glob: the oversized flag (advice only), its reasons and the proposed workstreams. */
   readonly size?: SizeContext;
   readonly fetch: string;
 }
@@ -154,9 +154,9 @@ export interface SizeContext {
   readonly oversized: boolean;
   readonly reasons: readonly string[];
   readonly evidence: readonly string[];
-  /** What a person did about the flag: `kept_whole`, or `split`; null while it is unresolved. */
+  /** `split` once the glob's scope was cut into independent globs; null otherwise. */
   readonly decision: SizeCheck['decision'];
-  /** Parts in the shape split_glob takes (part 0 is this glob; `after` holds earlier part indexes). */
+  /** Workstreams the run can work in parallel inside this glob's one PR (name, goal, files, plan share, `needs` as earlier indexes). */
   readonly proposal: SizeCheck['proposal'];
   /** Present once the code forecast was made: predicted files and parts; confirm or correct. */
   readonly forecast?: SizeForecastContext;
