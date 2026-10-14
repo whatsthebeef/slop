@@ -448,17 +448,20 @@ export const BoardPage = () => {
         }}
       />
 
-      <nav className='flex justify-center pt-1 sm:hidden' aria-label='Lists' data-testid='list-dots'>
+      <nav className='flex gap-1 px-3 pt-1 sm:hidden' aria-label='Lists' data-testid='list-dots'>
         {LISTS.map((list, i) => (
           <button
             key={list}
             type='button'
-            className='flex h-8 w-8 items-center justify-center'
-            aria-label={LIST_TITLES[list]}
+            className={cn(
+              'min-h-8 min-w-0 flex-1 truncate rounded border border-foreground/60 px-1.5 py-1 text-xs',
+              i === activeList && 'bg-foreground text-background',
+            )}
+            title={LIST_TITLES[list]}
             aria-current={i === activeList ? 'true' : undefined}
             onClick={() => listsRow.current?.scrollTo({ left: listScrollLeft(i, listsRow.current.clientWidth), behavior: 'smooth' })}
           >
-            <span className={cn('h-2.5 w-2.5 rounded-full border border-foreground/60', i === activeList && 'bg-foreground')} />
+            {LIST_TITLES[list]}
           </button>
         ))}
       </nav>
