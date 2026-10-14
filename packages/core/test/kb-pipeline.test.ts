@@ -1253,11 +1253,29 @@ describe('KB pipeline: routing and dedupe', () => {
     expect(await item(id)).toMatchObject({ processing: 'pending', processingAttempts: 0, processingError: 'AI unavailable: AWS sign-in expired' });
   });
 
-  it('fails an item when the dedupe answer is unusable', async () => {
-    const id = await submit();
-    llm.answer(toDoc('build_test_lint', 'Test'), 'not json');
+  it.each([
+    ['not json', 'not json'],
+    ['truncated', '{"fact": "Run `vitest` with \\"--reporter=dot\\"", "checked": [{"ref": "current text", "rel'],
+  ])('leaves the item open with no match when the dedupe answer is unusable (%s)', async (_name, answer) => {
+    const id = await submit({ statement: 'Run `vitest` with "--reporter=dot".\n- Never echo logs\n- Keep `quotes` intact' });
+    llm.answer(toDoc('build_test_lint', 'Test'), answer);
     await queue.processNext();
-    expect(await item(id)).toMatchObject({ processing: 'pending', processingError: 'The dedupe answer was not usable JSON' });
+    expect(await item(id)).toMatchObject({ status: 'open', processingError: null });
+    expect((await item(id)).processing).not.toBe('failed');
+  });
+
+  it.each([
+    ['a code fence', (o: string) => '```json\n' + o + '\n```'],
+    ['prose before and after', (o: string) => 'Here is my answer: ' + o + ' Hope that helps {not json}'],
+  ])('reads a dedupe answer wrapped in %s', async (_name, wrap) => {
+    const first = await routedAlone();
+    const second = await submit({ sourceGlobId: otherGlobId, statement: 'Code in src/gen/ is generated' });
+    llm.answer(
+      toNewDoc('testing'),
+      wrap(JSON.stringify({ checked: [{ ref: first, relation: 'same fact' }], duplicateOf: claim(first), suppressedBy: null, coveredBy: null, contradicts: [] })),
+    );
+    expect(await queue.process(second)).toBe(true);
+    expect(await item(second)).toMatchObject({ status: 'merged', duplicateOf: first });
   });
 
   it('skips routing and drafting for document proposals: the target is that document, the proposal its draft', async () => {
