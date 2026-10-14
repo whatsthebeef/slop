@@ -380,6 +380,15 @@ describe('card actions', () => {
     expect(merge).not.toContain('your-turn-chip');
   });
 
+  it('shows signed off and provisioning failed only in the corner status', () => {
+    const signed = markup(view({ status: 'signed_off', signedOffAt: NOW }));
+    expect(signed).not.toContain('card-signed-off');
+    expect(signed).toContain('data-kind="signed-off"');
+    const failed = markup(view({ type: 'same', status: 'planning', provisioning: 'failed' }));
+    expect(failed).not.toContain('provisioning-chip');
+    expect(failed).toContain('provisioning failed');
+  });
+
   it('offers Merge when nothing blocks it', () => {
     expect(markup(prOpen({ allowedActions: ['merge'] }))).toMatch(/<button[^>]*aria-label="Your turn: Merge PR #289"[^>]*data-testid="your-turn-chip"/);
   });
