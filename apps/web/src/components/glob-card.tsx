@@ -434,7 +434,29 @@ export const EnvironmentChips = ({ environments }: { environments: readonly Envi
 export const atfLine = (run: AtfRun): string => {
   const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
   const counts = `${run.passed} passed, ${run.failed} failed${run.skipped > 0 ? `, ${run.skipped} skipped` : ''}`;
-  return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}`;
+  const own = run.plannedSpecs === undefined ? '' : ` · this glob's planned specs: ${plannedSpecsText(run.plannedSpecs)}`;
+  return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}${own}`;
+};
+
+/** The glob's own planned specs in one run, in words: "2 passed, 1 failed, 1 missing, 1 not reported". */
+export const plannedSpecsText = (p: NonNullable<AtfRun['plannedSpecs']>): string =>
+  [
+    `${p.passed} passed`,
+    ...(p.failed > 0 ? [`${p.failed} failed`] : []),
+    ...(p.skipped > 0 ? [`${p.skipped} skipped`] : []),
+    ...(p.missing > 0 ? [`${p.missing} missing`] : []),
+    ...(p.unreported > 0 ? [`${p.unreported} not reported`] : []),
+  ].join(', ');
+
+/** Whether a run is a failure for this glob: its own planned specs when the run reported them, else any failing test. */
+const failsForGlob = (run: AtfRun): boolean => (run.plannedSpecs === undefined ? run.failing : run.plannedSpecs.failed > 0);
+
+/** The chip's words for a run: the glob's own specs when the run reported them ("ATF 2/3 specs ✓"), else the run's counts. */
+const atfChipText = (run: AtfRun): string => {
+  const p = run.plannedSpecs;
+  if (p === undefined) return run.failing ? `ATF ${run.failed} failed` : `ATF ${run.passed}✓`;
+  if (p.failed > 0) return `ATF ${p.failed} of ${p.total} specs failed`;
+  return `ATF ${p.passed}/${p.total} specs ✓${p.missing > 0 ? ` ${p.missing} missing` : ''}`;
 };
 
 /**
@@ -443,12 +465,14 @@ export const atfLine = (run: AtfRun): string => {
  */
 export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   const current = runs.filter((r) => r.stale !== true);
-  const shown = current.find((r) => r.failing) ?? current[0] ?? runs[0];
+  const shown = current.find(failsForGlob) ?? current[0] ?? runs[0];
   if (shown === undefined) return null;
-  const failing = current.some((r) => r.failing);
-  // The text always says what the run found; a stale run is only muted, never shown as passing.
-  const text = shown.failing ? `ATF ${shown.failed} failed` : `ATF ${shown.passed}✓`;
-  const tone = failing ? 'text-red' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
+  const failing = current.some(failsForGlob);
+  // The text always says what the run found; a stale run is only muted, never shown as passing. With a test plan the
+  // chip counts the glob's own planned specs, so another glob's failing spec in the same run doesn't turn it red.
+  const text = atfChipText(shown);
+  const missing = shown.plannedSpecs !== undefined && shown.plannedSpecs.missing > 0;
+  const tone = failing ? 'text-red' : missing ? 'text-required' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
   const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
   const chip = (
     <span className={cn('whitespace-nowrap font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>

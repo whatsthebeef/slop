@@ -4,9 +4,9 @@ import type { ToolCaller } from './init.js';
 import { parseJsonOrUndefined } from './util.js';
 
 export const PUT_ARTIFACT_USAGE =
-  'put-artifact <id> --kind implementation_plan|postplan|local_review|investigation --file <path|-> [--commit <sha>] [--agent-set <n>] [--review-stats <json>] [--run <runId>]';
+  'put-artifact <id> --kind implementation_plan|postplan|local_review|investigation|test_plan --file <path|-> [--commit <sha>] [--agent-set <n>] [--review-stats <json>] [--run <runId>]';
 
-const KINDS = ['implementation_plan', 'postplan', 'local_review', 'investigation'] as const;
+const KINDS = ['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan'] as const;
 
 export interface PutArtifactDeps {
   readonly client: ToolCaller;

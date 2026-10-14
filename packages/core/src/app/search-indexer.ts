@@ -92,6 +92,7 @@ const artifactSource = (kind: ArtifactKind): SourceType => {
       return 'local_review';
     case 'independent_review':
       return 'independent_review';
+    case 'test_plan':
     case 'investigation':
     case 'assessment':
     case 'draft':

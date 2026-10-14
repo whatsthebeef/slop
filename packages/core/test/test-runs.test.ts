@@ -202,7 +202,7 @@ describe('TestRunService', () => {
     expect([...state.keys()]).toEqual(['s1t1', 's1t2']);
     expect(state.get('s1t2')).toEqual([expect.objectContaining({ scope: 'environment', environment: 'staging', failing: true })]);
     const view = await service.forGlob('dev@example.com', 's1t2');
-    expect(view.ok && view.value.map((r) => [r.scope, r.sha])).toEqual([['environment', DEPLOYED]]);
+    expect(view.ok && view.value.runs.map((r) => [r.scope, r.sha])).toEqual([['environment', DEPLOYED]]);
     expect((await service.forGlob('stranger@example.com', 's1t2')).ok).toBe(false);
   });
 

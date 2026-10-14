@@ -13,6 +13,7 @@ const board: Board = {
   environments: [],
   sensitivePaths: [],
   deploy: null,
+  atf: null,
   readinessTicks: {},
   agentSetVersion: 1,
   agentCatalogHash: null,

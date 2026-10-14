@@ -320,12 +320,14 @@ describe('knowledge page daily default (migration 0052)', () => {
   });
 
   it('moves boards at 60 to 1440, keeps other values, and sets the column default', async () => {
-    const store = new PgStore(database.db);
-    const ids = await store.transaction(async (tx) => {
-      const out: number[] = [];
-      for (const name of ['hourly', 'custom']) out.push((await tx.insertBoard({ name, repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] })).id);
-      return out;
-    });
+    // Raw inserts: this database stops at the migration before, so a board column added since (the store writes them all) isn't there yet.
+    const ids: number[] = [];
+    for (const name of ['hourly', 'custom']) {
+      const rows = await database.db.execute(
+        sql`insert into boards (name, base_branch, time_zone, environments, sensitive_paths, version) values (${name}, 'main', 'UTC', '[]'::jsonb, '[]'::jsonb, 1) returning id`,
+      );
+      ids.push(Number((rows[0] as { id: unknown } | undefined)?.id));
+    }
     const [hourly, custom] = ids;
     if (hourly === undefined || custom === undefined) throw new Error('boards not created');
     await database.db.execute(sql`update boards set knowledge_page_interval_minutes = 60 where id = ${hourly}`);

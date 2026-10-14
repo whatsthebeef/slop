@@ -132,6 +132,12 @@ export class EnvironmentService {
       const change = environments.containmentChange(previous, live, { boardId, environment, sha }, now);
       await tx.saveGlobPresence(change.writes);
       await tx.appendEvents(change.events);
+      // The ATF stage's spec list waits for this stamp: the globs this deploy newly holds are known now.
+      await tx.markEnvironmentDeployChecked(boardId, environment, sha, now);
+      // A push-mode board's ATF project is started from the outbox, after this commit: the batch needs the stamp above.
+      if ((await tx.getBoard(boardId))?.atf?.mode === 'push') {
+        await tx.enqueueEffects([{ kind: 'start_atf', globId: `board-${String(boardId)}`, boardId, environment, sha }]);
+      }
       // ATF reported before this check ran now shows on every glob the commit holds, moved or not.
       const tested = (await tx.listTestRuns(boardId, { commits: [{ environment, sha }] })).length > 0;
       return { moved: change.moved, tested: tested && change.writes.some((w) => w.contained) };

@@ -435,6 +435,18 @@ export const mountKnowledge = (
     return send(c, await artifacts.putPlan(c.get('email'), c.req.param('id'), body.content, body.version));
   });
 
+  // The test plan beside plan.md: the same read and conditional write, with its own version history.
+  app.get('/api/globs/:id/test-plan', async (c) => {
+    const version = c.req.query('version');
+    return send(c, await artifacts.testPlan(c.get('email'), c.req.param('id'), version === undefined ? null : Number(version)));
+  });
+
+  app.put('/api/globs/:id/test-plan', async (c) => {
+    const body = await parse(c, z.object({ content: z.string(), version: z.number().int().optional() }));
+    if (body instanceof Response) return body;
+    return send(c, await artifacts.putTestPlan(c.get('email'), c.req.param('id'), body.content, body.version));
+  });
+
   app.get('/api/globs/:id/artifacts', async (c) => send(c, await artifacts.list(c.get('email'), c.req.param('id'))));
 
   // Every version of one artifact, for the glob view's viewer (attachments pass their label).

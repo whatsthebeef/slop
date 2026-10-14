@@ -28,6 +28,8 @@ export interface GlobTarget {
   section?: GlobSection;
   artifact?: string;
   label?: string;
+  /** The tab inside the section: `?section=plan&tab=test-plan` opens the Test plan beside plan.md. */
+  tab?: string;
 }
 
 /** What a glob page opens at, read from its URL; a missing or unknown section is null (the top of the page). */
@@ -35,6 +37,7 @@ export interface ParsedGlobTarget {
   section: GlobSection | null;
   artifact: string | null;
   label: string | null;
+  tab: string | null;
 }
 
 const isSection = (name: string): name is GlobSection => GLOB_SECTIONS.some((s) => s === name);
@@ -58,6 +61,7 @@ export const parseGlobTarget = (search: URLSearchParams): ParsedGlobTarget => {
     section: section === null ? null : sectionOf(section),
     artifact: nonEmpty(search.get('artifact')),
     label: nonEmpty(search.get('label')),
+    tab: nonEmpty(search.get('tab')),
   };
 };
 
@@ -73,6 +77,7 @@ export const globQuery = (target: GlobTarget = {}): string => {
   if (target.section !== undefined) params.set('section', target.section);
   if (target.artifact !== undefined) params.set('artifact', target.artifact);
   if (target.label !== undefined && target.label !== '') params.set('label', target.label);
+  if (target.tab !== undefined && target.tab !== '') params.set('tab', target.tab);
   const query = params.toString();
   return query === '' ? '' : `?${query}`;
 };
@@ -83,11 +88,12 @@ export const globPath = (boardId: number, globId: string, target: GlobTarget = {
 
 /** The target a page's search params describe, to pass on to another glob URL. */
 export const globTargetOf = (search: URLSearchParams): GlobTarget => {
-  const { section, artifact, label } = parseGlobTarget(search);
+  const { section, artifact, label, tab } = parseGlobTarget(search);
   return {
     ...(section === null ? {} : { section }),
     ...(artifact === null ? {} : { artifact }),
     ...(label === null ? {} : { label }),
+    ...(tab === null ? {} : { tab }),
   };
 };
 

@@ -4,7 +4,7 @@ import type { StoredHumanStep } from './domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DecisionOrigin } from './domain/attributes.js';
 import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
-import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
+import type { AtfBatch, EnvironmentCommit, NewAtfBatch, NewTestRun, StoredRunSpec, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
 import type { ChatFeedback, ChatFeedbackFilter, NewChatFeedback } from './domain/chat-feedback.js';
@@ -97,7 +97,7 @@ export interface Tx {
   nextNumber(boardId: number, letter: IdLetter): Promise<number>;
 
   getBoard(id: number): Promise<Board | null>;
-  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'knowledgePageIntervalMinutes' | 'review' | 'deploy' | 'readinessTicks'>): Promise<Board>;
+  insertBoard(board: Omit<Board, 'id' | 'version' | 'agentSetVersion' | 'agentCatalogHash' | 'runNoProgressHours' | 'runReadyHours' | 'runStartMinutes' | 'runRespondMinutes' | 'subMaxChangedLines' | 'subLimitStep' | 'effectCheckGlobs' | 'agentKbApproval' | 'autoInvestigate' | 'knowledgePageIntervalMinutes' | 'review' | 'deploy' | 'atf' | 'readinessTicks'>): Promise<Board>;
   updateBoard(board: Board, expectedVersion: number): Promise<boolean>;
   /**
    * Sets the board's learned sub size limit to `to` if it is still `from`; returns false otherwise. It has no board
@@ -299,6 +299,10 @@ export interface Tx {
   insertEnvironmentDeploy(deploy: NewEnvironmentDeploy): Promise<boolean>;
   /** The environment's latest succeeded deploy (by deploy time): the commit it runs now. */
   latestEnvironmentDeploy(boardId: number, environment: string): Promise<EnvironmentDeploy | null>;
+  /** The environment's deploys (any outcome), newest first, at most `limit`: how far back a deploy burst reaches. */
+  listEnvironmentDeploys(boardId: number, environment: string, limit: number): Promise<EnvironmentDeploy[]>;
+  /** Stamps `checkedAt` on the environment's deploy rows of `sha` (the containment check for them has run). */
+  markEnvironmentDeployChecked(boardId: number, environment: string, sha: string, at: string): Promise<void>;
   /** Whether environments held globs when last checked, narrowed by the filter. */
   listGlobPresence(boardId: number, filter: PresenceFilter): Promise<GlobPresence[]>;
   /** Writes presence rows (insert or replace by glob and environment). */
@@ -311,6 +315,14 @@ export interface Tx {
 
   /** Records a test run; false when the board already has its event ID (a redelivery). */
   insertTestRun(run: NewTestRun): Promise<boolean>;
+  /** The per-spec rows of these runs (runs without any have none). */
+  listTestRunSpecs(runIds: readonly number[]): Promise<StoredRunSpec[]>;
+  /** The batch stored for an environment's commit (`sha` as given, exact match); null when none. */
+  getAtfBatch(boardId: number, environment: string, sha: string): Promise<AtfBatch | null>;
+  /** The environment's newest batch by creation time; null when it has none. */
+  latestAtfBatch(boardId: number, environment: string): Promise<AtfBatch | null>;
+  /** Stores the batch; when one exists for the board, environment and commit (a concurrent call) the stored one is returned and nothing changes. */
+  insertAtfBatch(batch: NewAtfBatch): Promise<AtfBatch>;
   /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
   listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
 

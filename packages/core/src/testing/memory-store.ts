@@ -7,7 +7,7 @@ import type { StoredHumanStep } from '../domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
-import type { TestRun } from '../domain/test-runs.js';
+import type { AtfBatch, StoredRunSpec, TestRun } from '../domain/test-runs.js';
 import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ChatFeedback } from '../domain/chat-feedback.js';
@@ -107,6 +107,8 @@ interface State {
   /** Keyed by glob and environment. */
   globPresence: Map<string, GlobPresence>;
   testRuns: TestRun[];
+  testRunSpecs: StoredRunSpec[];
+  atfBatches: AtfBatch[];
   notifications: Map<string, BoardNotification>;
   /** Search store: items keyed by board and external ref, and their chunks. */
   searchItems: Map<string, KnowledgeItem>;
@@ -207,6 +209,8 @@ const clone = (state: State): State => ({
   environmentDeploys: [...state.environmentDeploys],
   globPresence: new Map(state.globPresence),
   testRuns: [...state.testRuns],
+  testRunSpecs: [...state.testRunSpecs],
+  atfBatches: [...state.atfBatches],
   notifications: new Map(state.notifications),
   searchItems: new Map(state.searchItems),
   searchChunks: [...state.searchChunks],
@@ -282,6 +286,8 @@ export class MemoryStore implements Store {
     environmentDeploys: [],
     globPresence: new Map(),
     testRuns: [],
+    testRunSpecs: [],
+    atfBatches: [],
     notifications: new Map(),
     searchItems: new Map(),
     searchChunks: [],
@@ -338,7 +344,9 @@ export class MemoryStore implements Store {
         for (const [key, r] of s.relations) if (r.from === id) s.relations.delete(key);
         for (const [key, d] of s.statusDismissals) if (d.globId === id) s.statusDismissals.delete(key);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
+        const goneRuns = new Set(s.testRuns.filter((r) => r.globId === id).map((r) => r.id));
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
+        s.testRunSpecs = s.testRunSpecs.filter((r) => !goneRuns.has(r.testRunId));
         // A glob's own items go with it; a learning or document it fed only loses the link.
         const gone = new Set<number>();
         const goneDecisions = new Set(s.decisions.filter((d) => d.globId === id).map((d) => d.id));
@@ -401,7 +409,7 @@ export class MemoryStore implements Store {
       },
       getBoard: (id) => Promise.resolve(s.boards.get(id) ?? null),
       insertBoard: (input) => {
-        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true, knowledgePageIntervalMinutes: KNOWLEDGE_PAGE_INTERVAL_DEFAULT, review: DEFAULT_REVIEW_BOARD_SETTINGS };
+        const board: Board = { ...input, id: s.nextBoardId++, deploy: null, atf: null, readinessTicks: {}, version: 1, agentSetVersion: 0, agentCatalogHash: null, runNoProgressHours: 2, runReadyHours: 8, runStartMinutes: 30, runRespondMinutes: 30, subMaxChangedLines: 2000, subLimitStep: SUB_LIMIT_STEP, effectCheckGlobs: EFFECT_CHECK_GLOBS_DEFAULT, agentKbApproval: 'docs', autoInvestigate: true, knowledgePageIntervalMinutes: KNOWLEDGE_PAGE_INTERVAL_DEFAULT, review: DEFAULT_REVIEW_BOARD_SETTINGS };
         s.boards.set(board.id, board);
         return Promise.resolve(board);
       },
@@ -763,7 +771,7 @@ export class MemoryStore implements Store {
         if (s.environmentDeploys.some((d) => d.boardId === deploy.boardId && d.eventId === deploy.eventId)) {
           return Promise.resolve(false);
         }
-        s.environmentDeploys.push({ ...deploy, id: this.nextRowId++ });
+        s.environmentDeploys.push({ ...deploy, checkedAt: null, id: this.nextRowId++ });
         return Promise.resolve(true);
       },
       latestEnvironmentDeploy: (boardId, environment) =>
@@ -772,6 +780,19 @@ export class MemoryStore implements Store {
             .filter((d) => d.boardId === boardId && d.environment === environment && d.succeeded)
             .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)[0] ?? null,
         ),
+      listEnvironmentDeploys: (boardId, environment, limit) =>
+        Promise.resolve(
+          s.environmentDeploys
+            .filter((d) => d.boardId === boardId && d.environment === environment)
+            .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)
+            .slice(0, limit),
+        ),
+      markEnvironmentDeployChecked: (boardId, environment, sha, at) => {
+        s.environmentDeploys = s.environmentDeploys.map((d) =>
+          d.boardId === boardId && d.environment === environment && d.sha === sha ? { ...d, checkedAt: at } : d,
+        );
+        return Promise.resolve();
+      },
       listGlobPresence: (boardId, filter) =>
         Promise.resolve(
           [...s.globPresence.values()].filter(
@@ -789,8 +810,27 @@ export class MemoryStore implements Store {
       lockEnvironment: () => Promise.resolve(),
       insertTestRun: (run) => {
         if (s.testRuns.some((r) => r.boardId === run.boardId && r.eventId === run.eventId)) return Promise.resolve(false);
-        s.testRuns.push({ ...run, id: this.nextRowId++ });
+        const { specs = [], ...fields } = run;
+        const id = this.nextRowId++;
+        s.testRuns.push({ ...fields, id });
+        for (const spec of specs) s.testRunSpecs.push({ ...spec, testRunId: id });
         return Promise.resolve(true);
+      },
+      listTestRunSpecs: (runIds) => Promise.resolve(s.testRunSpecs.filter((r) => runIds.includes(r.testRunId))),
+      getAtfBatch: (boardId, environment, sha) =>
+        Promise.resolve(s.atfBatches.find((b) => b.boardId === boardId && b.environment === environment && b.sha === sha) ?? null),
+      latestAtfBatch: (boardId, environment) =>
+        Promise.resolve(
+          s.atfBatches
+            .filter((b) => b.boardId === boardId && b.environment === environment)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0] ?? null,
+        ),
+      insertAtfBatch: (batch) => {
+        const stored = s.atfBatches.find((b) => b.boardId === batch.boardId && b.environment === batch.environment && b.sha === batch.sha);
+        if (stored !== undefined) return Promise.resolve(stored);
+        const added: AtfBatch = { ...batch, id: this.nextRowId++ };
+        s.atfBatches.push(added);
+        return Promise.resolve(added);
       },
       listTestRuns: (boardId, filter) =>
         Promise.resolve(

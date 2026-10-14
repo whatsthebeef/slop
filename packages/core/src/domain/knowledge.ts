@@ -1,4 +1,5 @@
 import type { AttachmentFile } from './attachment-file.js';
+import type { AtfSpecList } from './test-plan.js';
 import type { ReviewStage } from './events.js';
 import type { EffectCheck } from './effect-check.js';
 import type { KbMergeNote, KbOutcome, KbTarget } from './kb.js';
@@ -185,6 +186,7 @@ export const agentSetKind = (path: string): KnowledgeKind | null => {
  */
 export const ARTIFACT_KINDS = [
   'plan',
+  'test_plan',
   'implementation_plan',
   'postplan',
   'local_review',
@@ -207,6 +209,8 @@ export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 export type ArtifactRole = 'payload' | 'record' | 'special' | 'attachment';
 export const ARTIFACT_ROLE: Record<ArtifactKind, ArtifactRole> = {
   plan: 'payload',
+  // The test plan beside plan.md: served in full by get_context (`testPlan`), so not listed.
+  test_plan: 'record',
   implementation_plan: 'record',
   postplan: 'record',
   local_review: 'special',
@@ -242,8 +246,10 @@ export interface Provenance {
   readonly agentSetVersion: number | null;
   /** Local reviews only, when the orchestrator passed them. */
   readonly reviewStats?: ReviewStats;
-  /** Investigations only: why the block could not be parsed; absent when it was valid. The text is stored either way. */
+  /** Investigations and test plans: why the text could not be parsed or has problems; absent when valid. The text is stored either way. */
   readonly validation?: string;
+  /** Test plans only: the parsed `atf-specs` block (absent when the plan has none), so readers don't parse again. */
+  readonly atfSpecs?: AtfSpecList;
   /** Independent reviews only: what was reviewed and how many findings it kept (the card's status reads it). */
   readonly independentReview?: IndependentReviewMeta;
   /** Drafts only: the section it replaces, the target and its version it was drafted against, and the one-line why. */
