@@ -159,6 +159,21 @@ describe('card rows', () => {
       expect(statuses[0]?.querySelector('.sr-only')?.textContent).toContain(detail);
     });
 
+    it('a merging glob says "merging" once, in the corner only, with the SHA in the tip', () => {
+      const fresh = new Date().toISOString();
+      const r = run({ state: 'watching', queuedAt: fresh, startedAt: fresh, lastProgressAt: fresh });
+      const html = markup(prOpen({ mergeMode: 'when_green', headChecks: { sha: head, state: 'pending' }, runs: [r], currentRun: r }));
+      const root = dom(html);
+      const statuses = root.querySelectorAll('[data-testid="card-status"]');
+      expect(statuses).toHaveLength(1);
+      expect(root.querySelector('[data-testid="card-header"]')?.contains(statuses[0] ?? null)).toBe(true);
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).toMatch(/^merging/);
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).not.toMatch(/\b[0-9a-f]{7}\b/);
+      // Outside the corner status (whose tooltip text is its own) the card never says it.
+      statuses[0]?.remove();
+      expect(root.textContent.match(/merging/gi)).toBeNull();
+    });
+
     it('escalated in Planning: "needs a" and the person icon, the reason in the tip', () => {
       const root = dom(markup(view({ status: 'planning', escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'] })));
       const status = root.querySelector('[data-testid="card-status"]');
@@ -436,6 +451,18 @@ describe('card interaction', () => {
     const { onOpen } = renderCard(view({ group: 'glob-groups' }), { onFilterGroup });
     await user.click(screen.getByTestId('group-chip'));
     expect(onFilterGroup).toHaveBeenCalledWith('glob-groups');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('shows a grouped glob as one tag with no separate filter button; a card with a group page opens it', async () => {
+    const user = userEvent.setup();
+    const onFilterGroup = vi.fn();
+    const { onOpen } = renderCard(view({ group: 'glob-groups' }), { onFilterGroup, groupHref: '/boards/1/groups/glob-groups' });
+    expect(screen.queryByTestId('group-filter')).toBeNull();
+    const tag = screen.getByTestId('group-chip');
+    expect(tag.getAttribute('href')).toBe('/boards/1/groups/glob-groups');
+    await user.click(tag);
+    expect(onFilterGroup).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
   });
 

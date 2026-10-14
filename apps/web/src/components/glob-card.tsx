@@ -1,6 +1,6 @@
 import { decisionOf, dueText, scopeLabel, upcomingSteps } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { Bug, GitBranch, ListChecks, ListFilter, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bug, GitBranch, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -88,9 +88,9 @@ const Avatar = ({ email, planner }: { email: string; planner: boolean }) =>
   );
 
 /**
- * A group's label: a curated sticker colour, the only shiny thing on the board. With `to` it links to the group's page
- * (`progress`, such as "3/5", shows after the name); with `onFilter` (on the board's cards) a button filters the board to the
- * group without opening the card. With only `onFilter` the label itself is that button; with only `to` it is the link.
+ * A group's label: a curated sticker colour, the only shiny thing on the board. It is always just the tag, and a click does one
+ * thing: with `to` (`progress`, such as "3/5", shows after the name) it links to the group's page; with only `onFilter` (the
+ * board's cards) it filters the board to the group without opening the card; with neither it is plain.
  */
 export const GroupChip = ({
   name,
@@ -111,54 +111,48 @@ export const GroupChip = ({
   };
   const className = 'sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold';
   const label = progress == null ? name : `${name} ${progress}`;
-  const filter = onFilter === undefined ? null : (
-    <button
-      type='button'
-      className={cn(className, 'cursor-pointer')}
-      style={colours}
-      aria-label={`Show only group ${name}`}
-      data-testid={to === undefined ? 'group-chip' : 'group-filter'}
-      onClick={(e) => {
-        e.stopPropagation();
-        onFilter(name);
-      }}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
-      {to === undefined ? label : <ListFilter className='h-2.5 w-2.5' aria-hidden />}
-    </button>
-  );
-  if (to === undefined) {
-    return filter === null ? (
+  if (to !== undefined) {
+    return (
+      <Tip text={progress == null ? `Open group: ${name}` : `Open group: ${name}, ${progress} merged`}>
+        <Link
+          to={to}
+          className={className}
+          style={colours}
+          data-testid='group-chip'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {label}
+        </Link>
+      </Tip>
+    );
+  }
+  if (onFilter === undefined) {
+    return (
       <Tip text={`Group: ${name}`}>
         <span className={className} style={colours}>
           {label}
         </span>
       </Tip>
-    ) : (
-      <Tip text={`Show only group: ${name}`}>{filter}</Tip>
     );
   }
-  const link = (
-    <Tip text={progress == null ? `Open group: ${name}` : `Open group: ${name}, ${progress} merged`}>
-      <Link
-        to={to}
-        className={className}
+  return (
+    <Tip text={`Show only group: ${name}`}>
+      <button
+        type='button'
+        className={cn(className, 'cursor-pointer')}
         style={colours}
+        aria-label={`Show only group ${name}`}
         data-testid='group-chip'
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFilter(name);
+        }}
         onKeyDown={(e) => e.stopPropagation()}
       >
         {label}
-      </Link>
+      </button>
     </Tip>
-  );
-  return filter === null ? (
-    link
-  ) : (
-    <span className='inline-flex max-w-full items-center gap-0.5'>
-      {link}
-      <Tip text={`Show only group: ${name}`}>{filter}</Tip>
-    </span>
   );
 };
 
@@ -607,7 +601,7 @@ export const GlobCard = ({
   onOpen: () => void;
   /** Filters the board to a group (the card's group tag); without it the tag is plain. */
   onFilterGroup?: (name: string) => void;
-  /** The group's page; with it the tag links there and the filter becomes a small button beside it. */
+  /** The group's page; with it the tag links there instead of filtering. */
   groupHref?: string;
   /** The group's progress ("3/5") while it has more than one open glob. */
   groupProgress?: string | null;
