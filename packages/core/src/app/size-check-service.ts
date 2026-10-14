@@ -1,4 +1,4 @@
-import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
+import { notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { isInvestigateEvent } from '../domain/events.js';
 import type { GlobOutcome } from '../domain/intake-learning.js';
@@ -20,10 +20,6 @@ import {
   prHoursOf,
   prRangeOf,
   sizeOutcomeOf,
-  splitAfterStartOf,
-  splitOutcomeOf,
-  splitPartsOf,
-  splitShape,
   withModelParts,
 } from '../domain/size-check.js';
 import {
@@ -43,7 +39,6 @@ import {
 } from '../domain/size-forecast.js';
 import type { CodeFootprint, ReferenceClass, SizeCalibrationView } from '../domain/size-forecast.js';
 import type { ModelPart, SizeCheck, SizeOutcome, SizeProposal, SizeThreshold, SizeThresholdView } from '../domain/size-check.js';
-import { hasMerged, startIds } from '../domain/relations.js';
 import type { Clock, Embedder, Notifier, Store } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import type { CodeView } from './code-view.js';
@@ -88,14 +83,12 @@ Count its independent parts: pieces that could be built, reviewed and merged on 
 Also say how many parts could be built at the same time once any shared contract (a schema, an interface) is in place. A long plan whose steps each need the one before has 1: splitting it gains nothing.
 Answer with JSON only: {"independentParts": a whole number, at least 1, "parallelParts": a whole number, at least 1, "reason": "one short sentence"}.`;
 
-const PROPOSE_SYSTEM = `You split a plan that is too big for one pull request into parts that can each be built and merged on their own.
-Answer with JSON only: {"parts": [{"title": "...", "plan": "...", "after": [0]}]}.
-- 2 to 6 parts, in the order they should be built. Part 0 stays the original task. When the parts share something (a schema, an interface, a type), make part 0 that shared contract alone and let each other part need only part 0, so they can be built at the same time.
-- "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a part, leave it with the parts that use it.
-- "title" names the feature and says what the part delivers, so it is recognisable on a board on its own. It starts with the feature's short name taken from the original title (a few words, the same for every part), then a colon, then the outcome a reviewer can check, with the concrete thing it changes. Name the user-visible surface or the module when that is what the part is. Part 0 as a contract says what it is for. At most 100 characters; never "Part N", "and more" or a bare noun.
-  Good: "Board chat: answers get 👍/👎 buttons, stored per board"; "Board chat: tries a second search, the code and the stronger model before saying it can't help"; "Board chat feedback: the stored feedback record the buttons and learning use".
-  Bad: "Feedback UI and submission"; "Multi-step search with step budget"; "Schema and types".
-- "after" lists the earlier parts (their index) whose code this one needs on main before it can start: direct prerequisites only. Touching the same files is not a need (leave it out); otherwise leave it empty so parts run in parallel.`;
+const PROPOSE_SYSTEM = `You divide a plan that is big for one pull request into workstreams: shares of the work that one run can build at the same time and deliver in that one pull request.
+Answer with JSON only: {"workstreams": [{"name": "...", "goal": "...", "files": ["..."], "plan": "...", "needs": [0]}]}.
+- 2 to 6 workstreams, in the order they should be built. When they share something (a schema, an interface, a type), make the first workstream that shared contract alone and let each other workstream need only it, so they can be built at the same time.
+- "plan" is the workstream's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one workstream. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a workstream, leave it with the ones that use it.
+- "name" is a few words naming what the workstream delivers. "goal" is one sentence saying what is done when it is finished. "files" lists the repository files it is expected to change (empty when you cannot tell).
+- "needs" lists the earlier workstreams (their index) whose result this one builds on: direct prerequisites only. Touching the same files is not a need (leave it out); otherwise leave it empty so workstreams run in parallel.`;
 
 const FOOTPRINT_SYSTEM = `You predict which files of a repository a plan will change, by looking at the repository.
 Answer with one JSON object and nothing else, one of:
@@ -125,17 +118,22 @@ export const cleanTitle = (title: string | null): string | null => {
   return oneLine.length <= MAX_PART_TITLE_CHARS ? oneLine : `${oneLine.slice(0, MAX_PART_TITLE_CHARS - 1).trimEnd()}…`;
 };
 
-/** The model's proposed parts from its answer; empty when it gave no usable ones. */
+/** The model's proposed workstreams from its answer; empty when it gave no usable ones. */
 export const parseParts = (answer: string): ModelPart[] =>
-  list(field(parseJson(answer), 'parts')).flatMap((p) => {
-    const title = cleanTitle(text(field(p, 'title')));
+  list(field(parseJson(answer), 'workstreams')).flatMap((p) => {
+    const name = cleanTitle(text(field(p, 'name')));
     const plan = text(field(p, 'plan'));
-    if (title === null || plan === null) return [];
+    if (name === null || plan === null) return [];
     return [
       {
-        title,
+        name,
+        goal: text(field(p, 'goal'))?.trim().slice(0, 300) ?? null,
+        files: list(field(p, 'files')).flatMap((f) => {
+          const path = text(f);
+          return path === null ? [] : [path];
+        }),
         plan,
-        after: list(field(p, 'after')).flatMap((n) => {
+        needs: list(field(p, 'needs')).flatMap((n) => {
           const found = intOf(n);
           return found === null ? [] : [found];
         }),
@@ -145,7 +143,7 @@ export const parseParts = (answer: string): ModelPart[] =>
 
 /**
  * The learned size check (spec, Intake). `assess` judges a plan against the board's threshold: the estimate from the plan's
- * text, with the model's count of independent parts when the model answers, and for a flagged plan a proposed split. A
+ * text, with the model's count of independent parts when the model answers, and for a flagged plan a suggested cut. A
  * model that fails or is unavailable leaves the text estimate: creating a glob never waits on it. Hourly, `learn` moves the
  * threshold with the outcomes of merged globs (the `size_threshold` board job).
  */
@@ -162,7 +160,7 @@ export class SizeCheckService implements SizeAssessor {
       codeView?: CodeView;
       /** Embeds plans for the reference class; absent: no history in the forecast. */
       embedder?: Embedder;
-      /** Called after a re-judged check was written, so the glob's hold follows it (set when newly flagged, lifted when not). */
+      /** Called after a re-judged check was written, so a newly flagged sub becomes a same and a big plan is investigated. */
       onRechecked?: (globId: string) => Promise<void>;
     },
   ) {}
@@ -198,17 +196,17 @@ export class SizeCheckService implements SizeAssessor {
     const proposed = reasons.length > 0 ? await this.propose(boardId, plan, title) : null;
     let proposal = proposed?.proposal ?? null;
     // Say why a flagged plan has no proposal, so the card isn't silent about it.
-    if (proposed !== null && proposal === null && proposed.why !== null) evidence.push(`No split was proposed: ${proposed.why}`);
-    // A split whose parts would wait on each other in one line saves nothing: the glob stays whole, and the evidence says why.
+    if (proposed !== null && proposal === null && proposed.why !== null) evidence.push(`No workstreams were proposed: ${proposed.why}`);
+    // Workstreams that would wait on each other in one line gain nothing: the glob is not flagged, and the evidence says why.
     if (proposal !== null && isChain(proposal)) {
-      evidence.push(`Not oversized: a split would be a chain of ${proposal.parts.length} parts (critical path ${proposal.criticalPath ?? proposal.parts.length}), with nothing to build in parallel`);
+      evidence.push(`Not oversized: the workstreams would be a chain of ${proposal.workstreams.length} (critical path ${proposal.criticalPath ?? proposal.workstreams.length}), with nothing to build in parallel`);
       proposal = null;
       reasons = [];
     }
     return { planHash: hash(plan), estimate, evidence, threshold, flagged: reasons.length > 0, reasons, proposal };
   }
 
-  /** The model's split of a flagged plan; no proposal, with the reason, when it is unavailable, slow or gives fewer than 2 usable parts. */
+  /** The model's workstreams for a flagged plan; no proposal, with the reason, when it is unavailable, slow or gives fewer than 2 usable ones. */
   private async propose(boardId: number, plan: string, title?: string): Promise<{ proposal: SizeProposal | null; why: string | null }> {
     if (this.deps.llm === undefined) return { proposal: null, why: 'the model is unavailable' };
     try {
@@ -223,68 +221,9 @@ export class SizeCheckService implements SizeAssessor {
         this.deps.llmTimeoutMs ?? SIZE_LLM_TIMEOUT_MS,
       );
       const proposal = buildProposal(plan, parseParts(answer));
-      return { proposal, why: proposal === null ? 'the model gave fewer than 2 usable parts' : null };
+      return { proposal, why: proposal === null ? 'the model gave fewer than 2 usable workstreams' : null };
     } catch (error) {
       return { proposal: null, why: error instanceof Error && error.message.includes('did not answer') ? 'the model timed out' : 'the model is unavailable or gave no usable answer' };
-    }
-  }
-
-  private readonly reproposing = new Set<string>();
-
-  /**
-   * Members: asks for the split proposal of a flagged glob in Planning to be made again on its current plan.md. Refused once
-   * the glob has started or the flag was answered; a request while one is running is a no-op. The work itself is
-   * `runRepropose`, which the caller starts in the background.
-   */
-  async repropose(email: string, globId: string): Promise<Result<SizeCheck>> {
-    return this.deps.store.transaction(async (tx): Promise<Result<SizeCheck>> => {
-      const glob = await tx.getGlob(globId);
-      if (glob === null) return notFound(`No glob ${globId}`);
-      const actor = await memberOf(tx, email, glob.boardId);
-      if (!actor.ok) return actor;
-      if (actor.value.role === 'qa' && glob.type !== 'sub' && glob.escalation?.criterion !== 'size') return forbidden('QA members can only decide subs');
-      const check = await tx.getSizeCheck(globId);
-      if (check === null || !check.flagged) return invalidInput(`${globId} is not flagged oversized`);
-      if (glob.status !== 'planning') return invalidInput(`${globId} has started, so the flag can no longer be answered`);
-      if (check.decision !== null) return invalidInput(`${globId}'s flag was already answered`);
-      this.reproposing.add(globId);
-      return ok(check);
-    });
-  }
-
-  /** Whether a proposal is being made for the glob right now. */
-  isReproposing(globId: string): boolean {
-    return this.reproposing.has(globId);
-  }
-
-  /** Re-runs the assessment and the proposal on the glob's current plan, whatever its hash, and stores the result like a check. Never throws. */
-  async runRepropose(globId: string): Promise<void> {
-    try {
-      const read = await this.deps.store.transaction(async (tx) => {
-        const glob = await tx.getGlob(globId);
-        if (glob === null || glob.status !== 'planning') return null;
-        const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
-        return { boardId: glob.boardId, plan, title: glob.title };
-      });
-      if (read === null) return;
-      const assessment = await this.assess(read.boardId, read.plan, read.title);
-      const written = await this.deps.store.transaction(async (tx) => {
-        const glob = await tx.getGlob(globId);
-        const previous = await tx.getSizeCheck(globId);
-        // Answered or started while the model worked: the person's answer stands.
-        if (glob === null || glob.status !== 'planning' || previous === null || previous.decision !== null) return false;
-        await tx.updateSizeAssessment(checkFrom(globId, read.boardId, assessment, previous, this.deps.clock.now()));
-        return true;
-      });
-      if (written) {
-        await this.deps.onRechecked?.(globId);
-        this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: read.boardId, globId });
-        await this.forecast(globId);
-      }
-    } catch {
-      // Best effort: the stored check stands.
-    } finally {
-      this.reproposing.delete(globId);
     }
   }
 
@@ -324,7 +263,7 @@ export class SizeCheckService implements SizeAssessor {
 
   /**
    * The forecast of a glob in Planning: its code footprint and reference class, written into the check's estimate, with
-   * the flag, reasons and fan-out proposal judged again by it. Runs in the background after a glob is created or its plan
+   * the flag, reasons and workstreams judged again by it. Runs in the background after a glob is created or its plan
    * saved. A missing code view or model, or any failure, leaves the text estimate: it never throws.
    */
   async forecast(globId: string): Promise<void> {
@@ -527,30 +466,6 @@ export class SizeCheckService implements SizeAssessor {
     }
   }
 
-  /**
-   * Keep whole: a person decides a flagged glob stays one glob. Recorded as an outcome input (the learning reads it when
-   * the glob merges). The caller releases a glob that was held for the flag.
-   */
-  async keepWhole(email: string, globId: string): Promise<Result<SizeCheck>> {
-    const result = await this.deps.store.transaction(async (tx): Promise<Result<SizeCheck>> => {
-      const glob = await tx.getGlob(globId);
-      if (glob === null) return notFound(`No glob ${globId}`);
-      const actor = await memberOf(tx, email, glob.boardId);
-      if (!actor.ok) return actor;
-      if (actor.value.role === 'qa' && glob.type !== 'sub' && glob.escalation?.criterion !== 'size') return forbidden('QA members can only decide subs');
-      const check = await tx.getSizeCheck(globId);
-      if (check === null || !check.flagged) return invalidInput(`${globId} is not flagged oversized`);
-      if (glob.status !== 'planning') return invalidInput(`${globId} has started, so the flag can no longer be answered`);
-      if (check.decision !== null) return ok(check);
-      const now = this.deps.clock.now();
-      const decided: SizeCheck = { ...check, decision: 'kept_whole', decidedBy: email, decidedAt: now, updatedAt: now };
-      await tx.upsertSizeCheck(decided);
-      return ok(decided);
-    });
-    if (result.ok) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId });
-    return result;
-  }
-
   /** The board's threshold, its bounds and its history, for members (board settings). */
   async view(email: string, boardId: number): Promise<Result<SizeThresholdView>> {
     return this.deps.store.transaction(async (tx) => {
@@ -593,21 +508,19 @@ export class SizeCheckService implements SizeAssessor {
    */
   async learn(boardId: number): Promise<SizeThresholdResult> {
     const read = await this.deps.store.transaction(async (tx) => {
-      const [outcomes, checks, globs, changes, events, relations] = await Promise.all([
+      const [outcomes, checks, globs, changes, events] = await Promise.all([
         tx.listGlobOutcomes(boardId),
         tx.listSizeChecks(boardId),
         tx.listGlobs(boardId, {}),
         tx.listSizeThresholdChanges(boardId),
         tx.listBoardEvents(boardId, EPOCH, LEARN_EVENT_TYPES),
-        tx.listRelations(boardId),
       ]);
-      return { outcomes, checks, globs, relations, recorded: new Set(changes.map((c) => c.globId)), events };
+      return { outcomes, checks, globs, recorded: new Set(changes.map((c) => c.globId)), events };
     });
     const byGlob = new Map<string, DomainEvent[]>();
     for (const e of read.events) byGlob.set(e.globId, [...(byGlob.get(e.globId) ?? []), e]);
     const checks = new Map(read.checks.map((c) => [c.globId, c]));
     const categories = new Map(read.globs.map((g) => [g.id, g.category]));
-    const globsById = new Map(read.globs.map((g) => [g.id, g]));
     const range = prRangeOf(
       read.outcomes.flatMap((o) => {
         const hours = prHoursOf(byGlob.get(o.globId) ?? []);
@@ -620,39 +533,6 @@ export class SizeCheckService implements SizeAssessor {
     const changes: SizeThresholdResult['changes'][number][] = [];
     for (const outcome of due) {
       const events = byGlob.get(outcome.globId) ?? [];
-      // A glob cut up before it started is judged by how its parts went, once they have all merged; one whose parts the
-      // events don't name (older splits) is judged as before.
-      const splitIds = splitAfterStartOf(events) ? null : splitPartsOf(outcome.globId, events);
-      if (splitIds !== null) {
-        const partGlobs = splitIds.map((id) => globsById.get(id));
-        if (partGlobs.some((g) => g !== undefined && !hasMerged(g))) continue;
-        const shape = splitShape(
-          splitIds.map((id, index) => ({
-            after: startIds(read.relations.filter((r) => r.from === id)).flatMap((n) => {
-              const at = splitIds.indexOf(n);
-              return at >= 0 && at < index ? [at] : [];
-            }),
-          })),
-        );
-        const partEvents = splitIds.flatMap((id) => byGlob.get(id) ?? []);
-        const splitAt = [...events].reverse().find((e) => e.type === 'GlobSplit')?.at;
-        const lastMerge = partEvents.filter((e) => e.type === 'Merged').map((e) => e.at).sort().at(-1);
-        const ms = splitAt === undefined || lastMerge === undefined ? Number.NaN : Date.parse(lastMerge) - Date.parse(splitAt);
-        const verdict = splitOutcomeOf(
-          {
-            parts: splitIds.length,
-            criticalPath: shape.criticalPath,
-            failedRuns: partEvents.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
-            missing: partGlobs.filter((g) => g === undefined).length,
-            conflicts: partGlobs.filter((g) => g?.conflict != null).length,
-            hours: Number.isFinite(ms) && ms >= 0 ? ms / 3_600_000 : null,
-          },
-          range,
-        );
-        const change = await this.record(boardId, verdict.outcome, outcome.globId, verdict.evidence);
-        if (change !== null) changes.push(change);
-        continue;
-      }
       const found = sizeOutcomeOf(
         {
           globId: outcome.globId,
@@ -661,7 +541,6 @@ export class SizeCheckService implements SizeAssessor {
           failedRuns: events.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
           prHours: prHoursOf(events),
           split: events.some((e) => e.type === 'GlobSplit'),
-          splitAfterStart: splitAfterStartOf(events),
         },
         range,
       );

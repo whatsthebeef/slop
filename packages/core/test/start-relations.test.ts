@@ -351,7 +351,7 @@ describe('start relations', () => {
       expect(store.state.events.some((e) => e.globId === waiting.id && e.type === 'HoldOverridden')).toBe(false);
     });
 
-    it('refuses a stale version, an unknown relation and a split part; a person-set one can be dismissed; a repeat changes nothing', async () => {
+    it('refuses a stale version and an unknown relation; an old split relation, like a person-set one, can be dismissed; a repeat changes nothing', async () => {
       const first = await create();
       const other = await create();
       const second = await create({ after: [first.id] });
@@ -362,13 +362,13 @@ describe('start relations', () => {
       expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
       const split = relation(second.id, other.id, { gate: 'sign_off', source: 'split' });
       store.state.relations.set(split.id, split);
-      const refused = await globs.dismissRelation(DEV, second.id, second.version, split.id);
-      expect(!refused.ok && refused.error.code).toBe('invalid_input');
-      const once = unwrap(await globs.dismissRelation(DEV, second.id, second.version, row.id));
-      expect(once.version).toBe(second.version + 1);
+      const oldSplit = unwrap(await globs.dismissRelation(DEV, second.id, second.version, split.id));
+      expect(oldSplit.version).toBe(second.version + 1);
+      const once = unwrap(await globs.dismissRelation(DEV, second.id, oldSplit.version, row.id));
+      expect(once.version).toBe(oldSplit.version + 1);
       const twice = unwrap(await globs.dismissRelation(DEV, second.id, once.version, row.id));
       expect(twice.version).toBe(once.version);
-      expect(store.state.events.filter((e) => e.type === 'RelationDismissed')).toHaveLength(1);
+      expect(store.state.events.filter((e) => e.type === 'RelationDismissed')).toHaveLength(2);
       // The person's own relation can be dismissed too (the ✕ on a relation they added).
       const mine = [...store.state.relations.values()].find((r) => r.from === second.id && r.to === first.id);
       expect(unwrap(await globs.dismissRelation(DEV, second.id, once.version, mine?.id ?? '')).version).toBe(once.version + 1);

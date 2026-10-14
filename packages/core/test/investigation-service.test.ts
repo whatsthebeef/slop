@@ -152,12 +152,13 @@ describe('acting on an investigation', () => {
     expect(check).toMatchObject({ flagged: true, decision: null });
     expect(check?.reasons[0]).toContain('3 independent parts');
     // Each part after the ones it needs: stable order, server after core; web is free.
-    expect(check?.proposal?.parts.map((p) => p.title)).toEqual([
-      'T 1/3: core',
-      'T 2/3: server',
-      'T 3/3: web',
+    expect(check?.proposal?.workstreams.map((w) => w.name)).toEqual(['core', 'server', 'web']);
+    expect(check?.proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], []]);
+    expect(check?.proposal?.workstreams.map((w) => w.files)).toEqual([
+      THREE[0]?.files,
+      THREE[1]?.files,
+      THREE[2]?.files,
     ]);
-    expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], []]);
   });
 
   it('keeps a person’s answer to the flag, and ignores a single part', async () => {
@@ -173,7 +174,7 @@ describe('acting on an investigation', () => {
       if (check !== null)
         await tx.upsertSizeCheck({
           ...check,
-          decision: 'kept_whole',
+          decision: 'split',
           decidedBy: DEV,
           decidedAt: check.updatedAt,
         });
@@ -194,11 +195,11 @@ describe('oversizeOf and proposalFromParts', () => {
       oversizeOf(read({ ...BLOCK, parts: THREE.slice(0, 2) }), DEFAULT_SIZE_THRESHOLD, PLAN),
     ).toBeNull();
     expect(
-      oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN)?.proposal?.parts,
+      oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN)?.proposal?.workstreams,
     ).toHaveLength(3);
   });
 
-  it('titles new-style parts after the original glob and gives each its own summary and plan', () => {
+  it('names new-style parts by their title and gives each its own goal, files and plan', () => {
     const plan = `${PLAN}\n## Why\nThe cards are unreadable.\n`;
     const parts = [
       {
@@ -218,34 +219,29 @@ describe('oversizeOf and proposalFromParts', () => {
         needs: ['core'],
       },
     ];
-    const built =
-      proposalFromParts(read({ ...BLOCK, parts }).parts, plan, 'Split titles')?.parts ?? [];
-    expect(built.map((p) => p.title)).toEqual([
-      'Split titles 1/2: Add the schema',
-      'Split titles 2/2: Show it',
-    ]);
+    const built = proposalFromParts(read({ ...BLOCK, parts }).parts, plan)?.workstreams ?? [];
+    expect(built.map((w) => w.name)).toEqual(['Add the schema', 'Show it']);
+    expect(built.map((w) => w.files)).toEqual([['a'], ['b']]);
+    expect(built[0]?.goal).toBe('Done when: it parses.');
     expect(built[0]?.plan).toContain('Schema.');
     expect(built[0]?.plan).not.toContain('UI.');
     expect(built[1]?.plan).toContain('## Why');
-    expect(built[1]?.after).toEqual([0]);
+    expect(built[1]?.needs).toEqual([0]);
   });
 
   it('falls back to the name and the whole plan for old-style parts', () => {
     const built =
-      oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN, 'Orig')?.proposal
-        ?.parts ?? [];
-    expect(built[0]?.title).toBe('Orig 1/3: core');
+      oversizeOf(read({ ...BLOCK, parts: THREE }), DEFAULT_SIZE_THRESHOLD, PLAN)?.proposal
+        ?.workstreams ?? [];
+    expect(built[0]?.name).toBe('core');
+    expect(built[0]?.goal).toBe('Scope: core');
     expect(built[0]?.plan).toContain('Fix the label on the card.');
   });
 
-  it('truncates a long original title', () => {
-    const built = proposalFromParts(
-      read({ ...BLOCK, parts: THREE }).parts,
-      PLAN,
-      'x'.repeat(200),
-    ) ?? { parts: [] };
-    expect(built.parts[0]?.title.length).toBeLessThanOrEqual(120);
-    expect(built.parts[0]?.title.endsWith(' 1/3: core')).toBe(true);
+  it('cuts a long name to 120 characters', () => {
+    const parts = THREE.map((p, i) => (i === 0 ? { ...p, title: 'x'.repeat(200) } : p));
+    const built = proposalFromParts(read({ ...BLOCK, parts }).parts, PLAN)?.workstreams ?? [];
+    expect(built[0]?.name).toHaveLength(120);
   });
 
   it('accepts parts with and without the new fields and rejects non-string ones', () => {

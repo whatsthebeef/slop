@@ -466,10 +466,10 @@ const outcomeText = (change: Pick<SubLimitChange, 'outcome' | 'changedLines'>): 
  * text, including the evidence quotes, which come from labels' checklists and bug reports.
  */
 const SIZE_OUTCOME_TEXT: Record<SizeOutcome, string> = {
-  kept_whole_clean: 'Flagged, kept whole and merged cleanly: raised',
+  kept_whole_clean: 'Flagged and merged cleanly: raised',
   unflagged_struggled: 'Not flagged, and it struggled: lowered',
   flag_confirmed: 'Flag confirmed: unchanged',
-  split_stalled: 'Split, but the parts ran one after another and stalled: raised (keep work whole)',
+  split_stalled: 'Split, but the parts ran one after another and stalled: raised',
   split_helped: 'Split, and it helped: unchanged',
   reset: 'Reset to the defaults',
 };
@@ -525,7 +525,7 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
       )}
       <p className='text-xs text-muted-foreground'>
         Intake flags a glob above it, and only when at least two of its parts could be built at the same time (a long serial plan stays whole), and
-        proposes a split with its critical path. A flagged glob kept whole that merges cleanly raises the threshold; so does a split whose parts ended
+        advises with its size workstreams and critical path. A flagged glob that merges cleanly raises the threshold; so does a split whose parts ended
         up one after another and stalled (the cause is in the history). An unflagged glob that struggles (the most review rounds, a failed run, a very long PR, or a split after it started) lowers it.
         Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, in steps of {bounds.step}.
       </p>

@@ -108,13 +108,13 @@ describe('request timing', () => {
 describe('compacting reads for MCP', () => {
   const plan = 'Plan text. '.repeat(1_000);
   const sizeCheck = {
-    proposal: { parts: [{ title: 'One', plan, after: [] }, { title: 'Two', plan, after: [0] }], criticalPath: 2, maxParallel: 1 },
+    proposal: { workstreams: [{ name: 'One', goal: 'g', files: ['a.ts'], plan, needs: [] }, { name: 'Two', goal: 'g', files: [], plan, needs: [0] }], criticalPath: 2, maxParallel: 1 },
   } as unknown as SizeCheck;
 
-  it('replaces each proposed part’s plan with a short summary and its length', () => {
+  it('replaces each proposed workstream’s plan share with a short summary and its length', () => {
     const view = compactSizeProposal({ id: 'x', sizeCheck });
-    const parts = view.sizeCheck.proposal?.parts as unknown as Record<string, unknown>[];
-    expect(parts[0]).toMatchObject({ title: 'One', after: [], planChars: plan.length });
+    const parts = view.sizeCheck.proposal?.workstreams as unknown as Record<string, unknown>[];
+    expect(parts[0]).toMatchObject({ name: 'One', goal: 'g', files: ['a.ts'], needs: [], planChars: plan.length });
     expect(parts[0]).not.toHaveProperty('plan');
     expect(JSON.stringify(view).length).toBeLessThan(15_000);
     expect(JSON.stringify({ sizeCheck }).length).toBeGreaterThan(20_000);

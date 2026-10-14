@@ -36,7 +36,7 @@ export interface RelatedRow {
   readonly words: string;
   readonly reason: string | null;
   readonly source: RelationSource;
-  /** A relation of this glob a person may dismiss (not a split's, and not one that no longer holds). */
+  /** A relation of this glob a person may dismiss (not one that no longer holds). */
   readonly dismissible: boolean;
 }
 
@@ -48,8 +48,6 @@ export interface RelatedGroups {
   readonly decisions: readonly RelatedRow[];
   /** Split relations still unmet: the earlier parts, and for the source the parts that must merge before sign-off. */
   readonly parts: readonly RelatedRow[];
-  /** "3 of 5 parts merged", for a split source. */
-  readonly partsMerged: { readonly merged: number; readonly total: number } | null;
   /** Other globs this one holds back. */
   readonly holdsBack: readonly RelatedRow[];
   /** Relations that stopped holding (met, deleted, dismissed, overridden). */
@@ -63,7 +61,7 @@ const rowOf = (h: Holding): RelatedRow => ({
   words: gateWords(h.gate, h.until),
   reason: h.reason,
   source: h.source,
-  dismissible: h.source !== 'split',
+  dismissible: true,
 });
 
 const HOW_WORDS = { met: 'done', deleted: 'deleted', dismissed: 'dismissed', overridden: 'started anyway' } as const;
@@ -77,7 +75,6 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
     holding: holding.filter((h) => h.source !== 'split' && !h.toIsDecision).map(rowOf),
     decisions: holding.filter((h) => h.source !== 'split' && h.toIsDecision).map(rowOf),
     parts: holding.filter((h) => h.source === 'split').map(rowOf),
-    partsMerged: holding.find((h) => h.parts !== undefined)?.parts ?? null,
     holdsBack: view.holdsBack.map((h) => ({
       relationId: h.relationId,
       id: h.from,
@@ -329,11 +326,6 @@ export const RelatedSection = ({
           {splitFrom !== null && (
             <p className="text-xs text-muted-foreground">
               Split from <GlobLink boardId={boardId} id={splitFrom} />
-            </p>
-          )}
-          {groups?.partsMerged != null && (
-            <p className="text-xs text-muted-foreground" data-testid="related-parts-merged">
-              {groups.partsMerged.merged}/{groups.partsMerged.total} parts merged
             </p>
           )}
           <ul className="ml-4 list-disc">

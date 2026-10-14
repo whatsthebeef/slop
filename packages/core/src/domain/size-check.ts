@@ -1,4 +1,3 @@
-import { isInvestigateEvent } from './events.js';
 import type { DomainEvent } from './events.js';
 import { contextSectionList, extractPlanFeatures } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
@@ -7,7 +6,8 @@ import type { SizeForecast } from './size-forecast.js';
 
 /**
  * The learned size check (spec, Intake): intake judges whether a glob is one PR's worth of work. A glob whose estimate
- * exceeds the board's threshold is flagged oversized and gets a proposed split; the threshold moves in fixed steps with
+ * exceeds the board's threshold is flagged oversized: the flag advises and never holds the glob. It carries a proposed
+ * division into workstreams, which the run can work in parallel inside its one PR; the threshold moves in fixed steps with
  * outcomes recorded after merge, as the sub limit does. Pure: the model, the store and the job are in the service.
  */
 
@@ -49,7 +49,7 @@ export const SIZE_BOUNDS: SizeBounds = {
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
-/** A raise: a flagged glob kept whole merged cleanly. Never lowers a value set above the bounds. */
+/** A raise: a flagged glob merged cleanly. Never lowers a value set above the bounds. */
 export const raisedThreshold = (t: SizeThreshold): SizeThreshold => ({
   maxTasks: Math.max(t.maxTasks, Math.min(SIZE_TASKS_MAX, t.maxTasks + SIZE_STEP)),
   maxParts: Math.max(t.maxParts, Math.min(SIZE_PARTS_MAX, t.maxParts + SIZE_STEP)),
@@ -61,16 +61,17 @@ export const loweredThreshold = (t: SizeThreshold): SizeThreshold => ({
   maxParts: Math.min(t.maxParts, Math.max(SIZE_PARTS_MIN, t.maxParts - SIZE_STEP)),
 });
 
+/** `split_stalled` and `split_helped` are no longer recorded (a split is a scope cut now); old rows stay readable. */
 export const SIZE_OUTCOMES = ['kept_whole_clean', 'unflagged_struggled', 'flag_confirmed', 'split_stalled', 'split_helped', 'reset'] as const;
 /**
- * `kept_whole_clean` and `split_stalled` (a split whose parts serialised and stalled) raise, `unflagged_struggled` lowers,
- * `flag_confirmed` (a flag that was right) and `split_helped` (a split whose parts ran in parallel) leave it; `reset` (an
- * admin returning the board to the defaults) is the only one that sets it to something else.
+ * `kept_whole_clean` (a flagged glob that merged cleanly) raises, `unflagged_struggled` lowers, `flag_confirmed` (a flag that
+ * was right) leaves it; `reset` (an admin returning the board to the defaults) is the only one that sets it to something
+ * else. The old `split_stalled` raised and `split_helped` left it; they are only read from history now and move nothing.
  */
 export type SizeOutcome = (typeof SIZE_OUTCOMES)[number];
 
 export const nextThreshold = (outcome: SizeOutcome, t: SizeThreshold): SizeThreshold =>
-  outcome === 'kept_whole_clean' || outcome === 'split_stalled'
+  outcome === 'kept_whole_clean'
     ? raisedThreshold(t)
     : outcome === 'unflagged_struggled'
       ? loweredThreshold(t)
@@ -185,39 +186,75 @@ export const evidenceOf = (estimate: SizeEstimate): string[] => [
 // ---------------------------------------------------------------------------
 // Stored check and proposal
 
-/** One part of a proposed split, in the shape `GlobService.split` takes (part 0 is the original glob). */
-export interface ProposedPart {
-  readonly title: string;
+/**
+ * One workstream of a flagged glob: a share of its plan that can be worked on beside the others inside the one run and PR
+ * (parallel work within the glob, not a separate glob).
+ */
+export interface Workstream {
+  readonly name: string;
+  /** What the workstream delivers, in a sentence. */
+  readonly goal: string;
+  /** The files it is expected to change; empty when not known. */
+  readonly files: readonly string[];
+  /** Its share of the plan. */
   readonly plan: string;
-  /** Indexes of earlier parts this one needs merged before it starts (`after` in split_glob's shape): direct prerequisites only. */
-  readonly after: readonly number[];
-  /** `sub` for a small, low-risk part (it starts by itself); absent: the original's type. Never set on part 0. */
-  readonly type?: 'sub';
+  /** Indexes of earlier workstreams whose result this one builds on: direct prerequisites only. */
+  readonly needs: readonly number[];
 }
 
 export interface SizeProposal {
-  readonly parts: readonly ProposedPart[];
-  /** Parts on the longest chain of needs (part 0 included): the fewest merges in a row. Absent in older proposals. */
+  readonly workstreams: readonly Workstream[];
+  /** Workstreams on the longest chain of needs (the first included): the most that must be done in a row. */
   readonly criticalPath?: number;
-  /** The most parts that can be built at the same time once their needs have merged. */
+  /** The most workstreams that can run at the same time once their needs are done. */
   readonly maxParallel?: number;
 }
 
-/** The shape of a split from its needs: the longest chain of parts, and the widest level of parts that can run together. */
-export const splitShape = (parts: readonly { readonly after: readonly number[] }[]): { criticalPath: number; maxParallel: number } => {
+/** A proposal as older checks stored it: parts in split_glob's shape (`title`, `plan`, `after`). Read only. */
+export interface LegacySizeProposal {
+  readonly parts: readonly { readonly title: string; readonly plan: string; readonly after: readonly number[] }[];
+  readonly criticalPath?: number;
+  readonly maxParallel?: number;
+}
+
+/** What a stored check's `proposal` column holds: workstreams, or an older check's parts. */
+export type StoredSizeProposal = SizeProposal | LegacySizeProposal;
+
+/** The proposal of a stored check, with an older check's parts read as workstreams. */
+export const proposalOfStored = (stored: StoredSizeProposal | null): SizeProposal | null => {
+  if (stored === null) return null;
+  if ('workstreams' in stored) return stored;
+  return {
+    workstreams: stored.parts.map((p) => ({ name: p.title, goal: goalOf(p.plan), files: [], plan: p.plan, needs: p.after })),
+    ...(stored.criticalPath === undefined ? {} : { criticalPath: stored.criticalPath }),
+    ...(stored.maxParallel === undefined ? {} : { maxParallel: stored.maxParallel }),
+  };
+};
+
+/** The first line of a plan that is text, not a heading, list item or numbered task: what the work is for. */
+export const goalOf = (plan: string): string =>
+  plan
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l !== '' && !/^(#|[-*]|\d+[.)])/.test(l))
+    ?.slice(0, 300) ?? '';
+
+/** The shape of a division from its needs: the longest chain of workstreams, and the widest level that can run together. */
+export const splitShape = (parts: readonly { readonly needs: readonly number[] }[]): { criticalPath: number; maxParallel: number } => {
   const depth: number[] = [];
   for (const [index, part] of parts.entries()) {
-    depth[index] = 1 + Math.max(0, ...part.after.filter((n) => n < index).map((n) => depth[n] ?? 1));
+    depth[index] = 1 + Math.max(0, ...part.needs.filter((n) => n < index).map((n) => depth[n] ?? 1));
   }
   const width = new Map<number, number>();
   for (const d of depth) width.set(d, (width.get(d) ?? 0) + 1);
   return { criticalPath: Math.max(0, ...depth), maxParallel: Math.max(0, ...width.values()) };
 };
 
-/** A proposal whose parts wait on each other in one line: a split that gains nothing, so it is not offered. */
-export const isChain = (proposal: SizeProposal): boolean => (proposal.criticalPath ?? 0) >= proposal.parts.length;
+/** A proposal whose workstreams wait on each other in one line: parallel work that gains nothing, so it is not offered. */
+export const isChain = (proposal: SizeProposal): boolean => (proposal.criticalPath ?? 0) >= proposal.workstreams.length;
 
-export const SIZE_DECISIONS = ['kept_whole', 'split'] as const;
+/** `kept_whole` is gone (a flag only advises); the migration cleared it from old checks. */
+export const SIZE_DECISIONS = ['split'] as const;
 export type SizeDecision = (typeof SIZE_DECISIONS)[number];
 
 /** What intake judged about a glob's size, stored with the glob. */
@@ -234,7 +271,7 @@ export interface SizeCheck {
   /** Why it was flagged; empty when not. */
   readonly reasons: readonly string[];
   readonly proposal: SizeProposal | null;
-  /** What a person did about the flag: kept it whole, or it was split. */
+  /** Set when the glob was cut into independent globs (a scope cut); null otherwise. */
   readonly decision: SizeDecision | null;
   readonly decidedBy: string | null;
   readonly decidedAt: string | null;
@@ -242,64 +279,51 @@ export interface SizeCheck {
   readonly updatedAt: string;
 }
 
-/** A flag nobody has resolved: it holds a sub or an auto-triggered same, and the card shows the chip. */
+/** A flag nobody has acted on: it is advice only (the glob can start at once), and the card shows the chip. */
 export const unresolved = (check: SizeCheck | null): boolean => check !== null && check.flagged && check.decision === null;
 
 // ---------------------------------------------------------------------------
 // Proposal from the model's parts
 
 export interface ModelPart {
-  readonly title: string;
+  readonly name: string;
+  readonly goal: string | null;
+  readonly files: readonly string[];
   readonly plan: string;
-  readonly after: readonly number[];
+  readonly needs: readonly number[];
 }
 
 const lower = (s: string): string => s.toLowerCase();
 
-/** The most tasks a part may have and still start by itself as a sub. */
-const SUB_PART_MAX_TASKS = 2;
-
-/** A small part that touches no migration or infrastructure is low-risk: it can be a sub. */
-const lowRisk = (plan: string): boolean => {
-  const f = extractPlanFeatures(plan);
-  return f.tasks <= SUB_PART_MAX_TASKS && !f.areas.includes('migration') && !f.areas.includes('infra');
-};
-
 /**
- * The proposal from the model's parts (pure). Part 0 stays the original glob, and is the shared contract the others build
- * on when the model made it so. A section of the plan with no task is context, never a part: a part the model made of one
- * (no task line, while the plan has tasks) is dropped, and every context section a part doesn't already carry is copied
- * into it. A part needs only what the model said it needs, cut down to direct prerequisites (a part that needs part 0
- * through another part does not name part 0 as well). Low-risk parts after part 0 are subs. Null when fewer than 2 parts remain.
+ * The proposal from the model's workstreams (pure). The first is the shared contract the others build on when the model made
+ * it so. A section of the plan with no task is context, never a workstream: one the model made of it (no task line, while the
+ * plan has tasks) is dropped, and every context section a workstream doesn't already carry is copied into it. A workstream
+ * needs only what the model said it needs, cut down to direct prerequisites (one that needs the first through another does not
+ * name the first as well). Null when fewer than 2 workstreams remain.
  */
 export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): SizeProposal | null => {
   const hasTasks = extractPlanFeatures(plan).tasks > 0;
   const context = contextSectionList(plan);
-  const parts: (ModelPart & { own: string })[] = modelParts
-    .filter((p) => p.title.trim() !== '' && p.plan.trim() !== '')
+  const parts = modelParts
+    .filter((p) => p.name.trim() !== '' && p.plan.trim() !== '')
     .filter((p) => !hasTasks || extractPlanFeatures(p.plan).tasks > 0)
     .slice(0, MAX_PROPOSED_PARTS)
     .map((p) => {
       const missing = context.filter((section) => !lower(p.plan).includes(lower(section.heading)));
       const carried = [p.plan.trim(), ...missing.map((section) => `## ${section.heading}\n\n${section.body}`)].join('\n\n');
-      return { title: p.title.trim().slice(0, 120), plan: carried, own: p.plan.trim(), after: p.after };
+      return { name: p.name.trim().slice(0, 120), goal: p.goal?.trim() ?? goalOf(p.plan), files: p.files, plan: carried, needs: p.needs };
     });
   if (parts.length < 2) return null;
-  // Everything each part needs, directly or through others, to cut direct needs down.
+  // Everything each workstream needs, directly or through others, to cut direct needs down.
   const reach: Set<number>[] = [];
-  const built: ProposedPart[] = parts.map((p, index) => {
-    const wanted = index === 0 ? [] : [...new Set(p.after.filter((n) => Number.isInteger(n) && n >= 0 && n < index))];
+  const built: Workstream[] = parts.map((p, index) => {
+    const wanted = index === 0 ? [] : [...new Set(p.needs.filter((n) => Number.isInteger(n) && n >= 0 && n < index))];
     const direct = wanted.filter((n) => !wanted.some((m) => m !== n && reach[m]?.has(n) === true));
-    const reached = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
-    reach[index] = reached;
-    return {
-      title: p.title,
-      plan: p.plan,
-      after: direct.sort((a, b) => a - b),
-      ...(index > 0 && lowRisk(p.own) ? { type: 'sub' as const } : {}),
-    };
+    reach[index] = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
+    return { name: p.name, goal: p.goal, files: p.files, plan: p.plan, needs: direct.sort((a, b) => a - b) };
   });
-  return { parts: built, ...splitShape(built) };
+  return { workstreams: built, ...splitShape(built) };
 };
 
 // ---------------------------------------------------------------------------
@@ -315,10 +339,8 @@ export interface SizeOutcomeInput {
   readonly failedRuns: number;
   /** Hours from the PR opening to the merge; null when no PR was recorded. */
   readonly prHours: number | null;
-  /** The glob has a `GlobSplit` event at all (flagged globs split by the proposal or by hand). */
+  /** The glob has a `GlobSplit` event at all (its scope was cut into independent globs). */
   readonly split: boolean;
-  /** A `GlobSplit` event after the glob started: it was cut up mid-way. */
-  readonly splitAfterStart: boolean;
 }
 
 export interface PrRange {
@@ -337,7 +359,7 @@ const known = (range: PrRange): number | null => (range.samples >= PR_MIN_SAMPLE
 
 const hours = (h: number): string => `${Math.round(h * 10) / 10} h`;
 
-/** Why a glob struggled (review rounds at the tier's max, failed runs, a very long PR, a split after it started). */
+/** Why a glob struggled (review rounds at the tier's max, failed runs, or a very long PR). */
 export const struggles = (input: SizeOutcomeInput, range: PrRange): string[] => {
   const { rounds, maxRounds } = input.outcome.review;
   const median = known(range);
@@ -347,11 +369,10 @@ export const struggles = (input: SizeOutcomeInput, range: PrRange): string[] => 
     ...(median !== null && input.prHours !== null && input.prHours > median * PR_LONG_FACTOR
       ? [`a very long PR (${hours(input.prHours)}, the board's median is ${hours(median)})`]
       : []),
-    ...(input.splitAfterStart ? ['was split after it started'] : []),
   ];
 };
 
-/** Why a flagged glob kept whole did not merge cleanly (nothing when it did). */
+/** Why a flagged glob did not merge cleanly (nothing when it did). */
 const notClean = (input: SizeOutcomeInput, range: PrRange): string[] => {
   const median = known(range);
   const { fixGlobs } = input.outcome.postMerge;
@@ -366,8 +387,8 @@ const notClean = (input: SizeOutcomeInput, range: PrRange): string[] => {
 
 /**
  * The outcome a merged glob with a size check shows, or null when it says nothing (unflagged and fine).
- * - flagged, not split, merged cleanly: `kept_whole_clean` (raise);
- * - flagged and split, or kept whole and not clean: `flag_confirmed` (no move);
+ * - flagged, not split, merged cleanly: `kept_whole_clean` (raise): the flag was advice and the glob went through whole;
+ * - flagged and split, or merged whole and not clean: `flag_confirmed` (no move);
  * - unflagged and struggled: `unflagged_struggled` (lower).
  */
 export const sizeOutcomeOf = (input: SizeOutcomeInput, range: PrRange): { outcome: SizeOutcome; evidence: string } | null => {
@@ -375,64 +396,11 @@ export const sizeOutcomeOf = (input: SizeOutcomeInput, range: PrRange): { outcom
     if (input.split) return { outcome: 'flag_confirmed', evidence: 'Flagged oversized and split' };
     const problems = notClean(input, range);
     return problems.length === 0
-      ? { outcome: 'kept_whole_clean', evidence: 'Flagged oversized, kept whole, and merged cleanly: review rounds within the tier, no failed run, PR open time normal, no follow-up bug' }
-      : { outcome: 'flag_confirmed', evidence: `Flagged oversized, kept whole, and it ${problems.join('; ')}` };
+      ? { outcome: 'kept_whole_clean', evidence: 'Flagged oversized, and merged cleanly: review rounds within the tier, no failed run, PR open time normal, no follow-up bug' }
+      : { outcome: 'flag_confirmed', evidence: `Flagged oversized, and it ${problems.join('; ')}` };
   }
   const problems = struggles(input, range);
   return problems.length === 0 ? null : { outcome: 'unflagged_struggled', evidence: `Not flagged, and it ${problems.join('; ')}` };
-};
-
-/** What the learning reads about a split once every part merged (or was deleted). */
-export interface SplitOutcomeInput {
-  readonly parts: number;
-  /** Parts on the longest chain of needs the parts actually had. */
-  readonly criticalPath: number;
-  /** `RunFailed` events across the parts. */
-  readonly failedRuns: number;
-  /** Parts deleted before they merged. */
-  readonly missing: number;
-  /** Parts whose PR conflicted with the base branch. */
-  readonly conflicts: number;
-  /** Hours from the split to the last part's merge; null when unknown. */
-  readonly hours: number | null;
-}
-
-/**
- * What a finished split says: `split_stalled` when its parts ended up in one chain (nothing ran in parallel, so the split
- * only added merges) and something stalled (a failed run, a deleted part, a conflict, or far longer than the board's PRs
- * usually take), with the cause; otherwise `split_helped`. Only the first moves the threshold, toward keeping work whole.
- */
-export const splitOutcomeOf = (input: SplitOutcomeInput, range: PrRange): { outcome: SizeOutcome; evidence: string } => {
-  const serialised = input.criticalPath >= input.parts;
-  const median = known(range);
-  const causes = [
-    ...(input.failedRuns > 0 ? [`${input.failedRuns} failed run${input.failedRuns === 1 ? '' : 's'}`] : []),
-    ...(input.missing > 0 ? [`${input.missing} part${input.missing === 1 ? ' was' : 's were'} deleted`] : []),
-    ...(input.conflicts > 0 ? [`${input.conflicts} part${input.conflicts === 1 ? '' : 's'} conflicted with the base branch`] : []),
-    ...(median !== null && input.hours !== null && input.hours > median * PR_LONG_FACTOR * input.parts
-      ? [`${hours(input.hours)} from the split to the last merge, the board's median PR is ${hours(median)}`]
-      : []),
-  ];
-  const shape = `${input.parts} parts, critical path ${input.criticalPath}`;
-  return serialised && causes.length > 0
-    ? { outcome: 'split_stalled', evidence: `Split into ${shape}: the parts ran one after another and stalled: ${causes.join('; ')}` }
-    : {
-        outcome: 'split_helped',
-        evidence: serialised ? `Split into ${shape}: the parts ran one after another but nothing stalled` : `Split into ${shape}: parts could run in parallel`,
-      };
-};
-
-/** The part IDs (part 0 first) of the latest split a glob was cut by, from its `GlobSplit` events; null when none says. */
-export const splitPartsOf = (globId: string, events: readonly DomainEvent[]): string[] | null => {
-  for (const e of [...events].reverse()) {
-    if (e.type !== 'GlobSplit' || e.globId !== globId) continue;
-    if (e.data['part'] !== 0) continue;
-    const parts = e.data['parts'];
-    if (!Array.isArray(parts)) continue;
-    const ids = parts.filter((p): p is string => typeof p === 'string');
-    return ids.length >= 2 && ids.length === parts.length ? ids : null;
-  }
-  return null;
 };
 
 /** Hours between a glob's first `PROpened` and its `Merged` event, from its events (oldest first); null without both. */
@@ -442,12 +410,6 @@ export const prHoursOf = (events: readonly DomainEvent[]): number | null => {
   if (merged === undefined || opened === undefined) return null;
   const ms = Date.parse(merged.at) - Date.parse(opened.at);
   return Number.isFinite(ms) && ms >= 0 ? ms / 3_600_000 : null;
-};
-
-/** Whether a `GlobSplit` event came after the glob's first run (or pick-up). */
-export const splitAfterStartOf = (events: readonly DomainEvent[]): boolean => {
-  const started = events.find((e) => (e.type === 'RunTriggered' && !isInvestigateEvent(e)) || e.type === 'PickedUp');
-  return started !== undefined && events.some((e) => e.type === 'GlobSplit' && e.at > started.at);
 };
 
 export const SIZE_EVENT_TYPES = ['PROpened', 'Merged', 'RunFailed', 'RunTriggered', 'PickedUp', 'GlobSplit'] as const;

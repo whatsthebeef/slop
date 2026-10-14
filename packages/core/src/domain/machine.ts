@@ -132,8 +132,6 @@ export interface ActionFacts {
   readonly recordSha?: string | null;
   /** The glob's relations and the state of every glob they point at (a missing entry reads as deleted); absent when not loaded. */
   readonly relations?: RelationFacts;
-  /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
-  readonly sizeHeld?: boolean;
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
   readonly rollout?: BlockProgress;
   /** The glob's stored independent reviews, where loaded (Retry review is offered only once they are known). */
@@ -440,10 +438,6 @@ export interface CreateInput {
   readonly autoTrigger: boolean;
   /** Predicted overlaps found for this glob before it was created (merge-policy holds; they never hold a start). */
   readonly impliedAfter?: readonly ImpliedAfter[];
-  /** Set when the size check flagged the glob oversized: a sub or auto-triggered same waits in Planning, with this as the reason, until a person splits or keeps it whole. */
-  readonly sizeHold?: string;
-  /** Same only: wait in Planning for `after` and start by itself when it merges (a split's part that needs another part). */
-  readonly autoStart?: boolean;
   /** Super only: `false` parks it in Planning (no branch, run or implementer) until a person picks it up to pair. */
   readonly start?: boolean;
 }
@@ -475,12 +469,9 @@ export const create = (
 
   const impliedAfter = input.impliedAfter ?? [];
   const awaited = awaitedOf(relations);
-  const startsBySelf = input.type === 'same' && input.autoStart === true && awaited.length > 0;
-  const wantsStart =
-    input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
+  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger);
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
-  const sizeHeld = wantsStart && input.sizeHold !== undefined;
-  const held = wantsStart && (awaited.length > 0 || sizeHeld);
+  const held = wantsStart && awaited.length > 0;
   const autoStart = input.type === 'same' && input.autoTrigger && !held;
   // A parked super waits in Planning for a person to pick it up; nobody's active glob until then.
   const parked = input.type === 'super' && input.start === false;
@@ -516,7 +507,6 @@ export const create = (
     listSince: ctx.now,
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
-    ...(startsBySelf && { autoStart: true }),
   };
   const b = new Builder(glob, ctx).event('GlobCreated', {
     type: glob.type,
@@ -530,7 +520,7 @@ export const create = (
   if (held)
     b.event('Waiting', {
       for: awaited.map((a) => a.id),
-      note: awaited.length > 0 ? waitSummary(awaited) : (input.sizeHold ?? ''),
+      note: waitSummary(awaited),
     });
   else if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
   return b.done();
@@ -678,8 +668,8 @@ export const investigationPushed = (
 };
 
 /**
- * Row 34: Start now. A sub or same in planning that is held (it waits for unmerged globs, or for its oversized flag to be
- * answered) starts now; the hold is recorded as overridden. Also Start (row 34a): a glob a person picked up that has
+ * Row 34: Start now. A sub or same in planning that is held (it waits for unmerged globs) starts now; the hold is
+ * recorded as overridden. Also Start (row 34a): a glob a person picked up that has
  * no routine run goes to a routine, the person no longer implementing it.
  */
 export const startAnyway = (
@@ -1555,8 +1545,6 @@ export interface FieldChanges {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** A decision's scope (the only attribute a client edits); checked by `changeFields`. */
   readonly attributes?: unknown;
-  /** Turn a same's start-when-unblocked off (or back on): off ends its wait and keeps what it needs. */
-  readonly autoStart?: boolean;
 }
 
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
@@ -1623,14 +1611,6 @@ export const changeFields = (
       scope: { from: scopeJson(decisionAttributesOf(glob).scope), to: scopeJson(scope.value) },
     };
   }
-  // Only a same waiting in Planning has a start of its own to switch; the flag changes nothing for any other glob.
-  const switchable = glob.type === 'same' && glob.status === 'planning';
-  const autoStartOff = switchable && changes.autoStart === false && glob.autoStart === true;
-  if (autoStartOff) {
-    Object.assign(patch, { autoStart: false });
-    diff['autoStart'] = { from: true, to: false };
-    if (glob.waiting != null) Object.assign(patch, { waiting: null });
-  }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
   const b = new Builder(glob, ctx).set({ ...patch, ...attributes }).event('FieldsChanged', diff);
@@ -1646,8 +1626,7 @@ export const changeFields = (
     glob.waiting != null &&
     glob.status === 'planning' &&
     glob.type !== 'super' &&
-    type !== 'super' &&
-    !autoStartOff;
+    type !== 'super';
   // A glob parked as a super doesn't wait for anything: a person picks it up.
   if (type === 'super' && glob.waiting != null) b.set({ waiting: null });
   if (wasHeld && glob.type === 'sub' && type === 'same') b.set({ waiting: null });
@@ -2984,8 +2963,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   const held =
     glob.status === 'planning' &&
     glob.type !== 'super' &&
-    (facts.sizeHeld === true ||
-      (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0));
+    (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0);
   if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (reviewOffer(glob, facts.reviews) !== null) actions.push('review_now');

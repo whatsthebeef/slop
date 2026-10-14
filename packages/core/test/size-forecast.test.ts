@@ -322,7 +322,7 @@ describe('size forecast', () => {
       expect(after).toMatchObject({ flagged: false, reasons: [], proposal: null });
     });
 
-    it('flags a short plan touching three unrelated modules, with a fan-out proposal from the file sets', async () => {
+    it('flags a short plan touching three unrelated modules, with workstreams from the file sets', async () => {
       const glob = await create(THREE);
       expect((await check(glob.id))?.flagged).toBe(false);
       script = done('apps/server/src/http/app.ts', 'apps/web/src/card.tsx', 'infra/stack.ts');
@@ -330,20 +330,23 @@ describe('size forecast', () => {
       const after = await check(glob.id);
       expect(after?.flagged).toBe(true);
       expect(after?.reasons.join(' ')).toContain('3 parts in separate modules');
-      const parts = after?.proposal?.parts ?? [];
+      const parts = after?.proposal?.workstreams ?? [];
       expect(parts).toHaveLength(3);
-      const byTitle = (name: string) => parts.find((p) => p.title.startsWith(name));
+      const byTitle = (name: string) => parts.find((p) => p.name.startsWith(name));
+      expect(byTitle('infra')?.files).toEqual(['infra/stack.ts']);
+      expect(byTitle('apps/web')?.goal).toContain('apps/web/src/card.tsx');
       expect(byTitle('apps/server')?.plan).toContain('apps/server/src/http/app.ts');
       expect(byTitle('apps/web')?.plan).toContain('- apps/web/src/card.tsx');
       expect(byTitle('infra')?.plan).toContain('infra/stack.ts');
       // The task lines go to the part whose files they name.
       expect(byTitle('infra')?.plan).toContain('Infra: add the variable');
-      expect(parts.every((p, i) => p.after.every((n) => n < i))).toBe(true);
-      // Held like any flagged glob, until it is split or kept whole.
-      expect(unwrap(await forecaster.keepWhole(DEV, glob.id)).decision).toBe('kept_whole');
+      expect(parts.every((p, i) => p.needs.every((n) => n < i))).toBe(true);
+      // The flag is advice: the glob is not held and carries no decision.
+      expect(after?.decision).toBeNull();
+      expect(unwrap(await globs.get(DEV, glob.id)).glob.waiting ?? null).toBeNull();
     });
 
-    it('makes parts start after the parts they need, and lets two migrations overlap without blocking', () => {
+    it('makes workstreams need the ones they build on, and lets two migrations overlap without blocking', () => {
       const forecast = forecastFrom(
         footprintOf(['apps/server/drizzle/1.sql', 'apps/web/a.ts', 'infra/x.ts', 'infra/drizzle/2.sql'], { importers: { 'apps/server': ['apps/web/b.ts'] } }),
         null,
@@ -351,10 +354,10 @@ describe('size forecast', () => {
         DEFAULT_SIZE_CALIBRATION,
       );
       const proposal = proposalFromForecast(THREE, forecast);
-      const parts = proposal?.parts ?? [];
-      expect(parts.map((p) => p.title.split(' ')[0])).toEqual(['infra', 'apps/server', 'apps/web']);
-      expect(parts[2]?.after).toEqual([1]);
-      expect(parts[1]?.after).toEqual([]);
+      const parts = proposal?.workstreams ?? [];
+      expect(parts.map((p) => p.name.split(' ')[0])).toEqual(['infra', 'apps/server', 'apps/web']);
+      expect(parts[2]?.needs).toEqual([1]);
+      expect(parts[1]?.needs).toEqual([]);
       expect(parts[1]).not.toHaveProperty('overlaps');
       expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
     });
@@ -423,7 +426,7 @@ describe('size forecast', () => {
     });
   });
 
-  describe('the background forecast of a created glob and the hold', () => {
+  describe('the background forecast of a created glob', () => {
     const createSub = async (plan: string): Promise<Glob> =>
       unwrap(
         await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan }),
@@ -493,15 +496,14 @@ describe('size forecast', () => {
       expect(rechecked).toEqual([glob.id]);
     });
 
-    it('lifts the hold of a text-flagged sub once the forecast clears the flag', async () => {
+    it('a text-flagged sub is not held: it starts at once, and the forecast clearing the flag changes nothing about it', async () => {
       judged = MANY;
-      const released = new SizeCheckService({ store, clock: { now: () => NOW }, notifier: new RecordingNotifier(), llm, codeView, embedder, onRechecked: (id) => globs.reconcileSizeHold(id) });
+      const rechecked = new SizeCheckService({ store, clock: { now: () => NOW }, notifier: new RecordingNotifier(), llm, codeView, embedder, onRechecked: (id) => globs.reconcileSizeCheck(id) });
       const sub = await createSub(checklist(10));
-      expect(sub.status).toBe('planning');
-      expect(sub.waiting).not.toBeNull();
+      expect(sub.status).toBe('implementing');
+      expect(sub.type).toBe('same');
       expect((await check(sub.id))?.flagged).toBe(true);
-      await released.forecast(sub.id);
-      expect((await check(sub.id))?.flagged).toBe(false);
+      await rechecked.forecast(sub.id);
       expect(unwrap(await globs.get(DEV, sub.id)).glob.status).toBe('implementing');
     });
 

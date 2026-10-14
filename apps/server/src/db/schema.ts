@@ -12,7 +12,7 @@ import type {
   SizeForecast,
   SizeRecord,
   Investigation,
-  SizeProposal,
+  StoredSizeProposal,
   SizeThreshold,
   PlanFeatures,
   ChatAction,
@@ -730,7 +730,7 @@ export const dependencyRuleChanges = pgTable(
   (t) => [uniqueIndex('dependency_rule_changes_outcome_idx').on(t.boardId, t.globId, t.pattern, t.cause)],
 );
 
-/** What the size check judged about a glob (spec, Intake): the estimate with its evidence, the flag and the proposed split. */
+/** What the size check judged about a glob (spec, Intake): the estimate with its evidence, the flag and the suggested cut. */
 export const globSizeChecks = pgTable(
   'glob_size_checks',
   {
@@ -746,7 +746,7 @@ export const globSizeChecks = pgTable(
     threshold: jsonb('threshold').$type<SizeThreshold>().notNull(),
     flagged: boolean('flagged').notNull(),
     reasons: jsonb('reasons').$type<readonly string[]>().notNull(),
-    proposal: jsonb('proposal').$type<SizeProposal>(),
+    proposal: jsonb('proposal').$type<StoredSizeProposal>(),
     decision: text('decision', { enum: SIZE_DECISIONS }),
     decidedBy: text('decided_by'),
     decidedAt: timestamp('decided_at', { withTimezone: true }),

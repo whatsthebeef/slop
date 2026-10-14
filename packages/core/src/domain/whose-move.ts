@@ -78,20 +78,17 @@ const appliedHolding = (glob: Glob, holding: readonly Holding[]): Holding[] =>
 const named = (h: Holding): string => (h.toIsDecision ? `decision ${h.to}` : h.to);
 
 /**
- * What a glob's holdings say, one phrase per gate: "waiting on s15f82, decision s15k190" for a start gate, "merge waits on s15f82",
- * and "3/5 parts merged" for a split source's sign-off (the parts are grouped, not listed).
+ * What a glob's holdings say, one phrase per gate: "waiting on s15f82, decision s15k190" for a start gate, "merge waits on s15f82"
+ * and "sign-off waits on s15f82".
  */
 export const holdingReason = (holding: readonly Holding[]): string => {
   const start = holding.filter((h) => h.gate === 'start');
   const merge = holding.filter((h) => h.gate === 'merge');
   const signOff = holding.filter((h) => h.gate === 'sign_off');
-  const parts = signOff.find((h) => h.parts !== undefined)?.parts;
-  const others = signOff.filter((h) => h.parts === undefined);
   return [
     ...(start.length === 0 ? [] : [`waiting on ${start.map(named).join(', ')}`]),
     ...(merge.length === 0 ? [] : [`merge waits on ${merge.map(named).join(', ')}`]),
-    ...(parts === undefined ? [] : [`${String(parts.merged)}/${String(parts.total)} parts merged`]),
-    ...(others.length === 0 ? [] : [`sign-off waits on ${others.map(named).join(', ')}`]),
+    ...(signOff.length === 0 ? [] : [`sign-off waits on ${signOff.map(named).join(', ')}`]),
   ].join('; ');
 };
 
@@ -167,7 +164,7 @@ export const whoseMove = (
     return { holder: 'machine', reason: lead.kind.replace(/_/g, ' '), since: lead.state === 'queued' ? lead.startedAt : (lead.lastProgressAt ?? lead.startedAt) };
   }
 
-  // 3. Waiting: an unmet relation (another glob, a decision, split parts), checks, a deploy, an unseen upload, a merge held for
+  // 3. Waiting: an unmet relation (another glob, a decision), checks, a deploy, an unseen upload, a merge held for
   // a relation, or a rollout the glob's steps wait on.
   const waits = machineSteps.filter((s) => isWaitingStep(s) && isInFlight(s));
   const rollouts = humanSteps.filter((s) => s.state === 'pending' && s.blocks.length > 0);

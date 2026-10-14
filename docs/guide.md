@@ -32,7 +32,7 @@ These buttons answer "who works on this now?".
 - **Pick up** makes you the implementer instead of a routine. Use it when a glob failed, or you want to do the work yourself. On a super parked in Planning the button reads Pick up to pair. If a run is active, taking over asks for confirmation and ends that run. When you pick up, slop writes a short hand-over note saying why a person is needed and what to do first.
 - **Retry** runs a failed sub or same again on its existing branch.
 - **Start again** (shown as Discard and restart) throws the current attempt away, closing the pull request and deleting the branch, and starts the glob from scratch. Use it when the existing attempt is the problem.
-- **Start now** overrides a hold: use it to start a glob that is waiting for another glob, or for an unanswered oversized flag, when you know it is safe.
+- **Start now** overrides a hold: use it to start a glob that is waiting for another glob when you know it is safe. An oversized flag is only advice and never holds a glob, so there is nothing to override for it.
 
 ## Relations and gates
 
@@ -42,11 +42,15 @@ A relation holds one glob back until another reaches a state. Each relation has 
 - **merge:** the glob cannot be merged until the other one has merged.
 - **sign_off:** the glob cannot be signed off until the other one has.
 
-Use a start relation when order matters, such as a glob that builds on another's code. Relations come from people, agents, splits, and slop's own inference from the plans (which you can dismiss). Start now overrides inferred start holds only; it never overrides a merge or sign-off gate.
+Use a start relation when order matters, such as a glob that builds on another's code. Relations come from people, agents, and slop's own inference from the plans (which you can dismiss). Start now overrides inferred start holds only; it never overrides a merge or sign-off gate.
 
 ## Splits and oversized globs
 
-Slop checks the size of a glob when it is created or its plan changes. A glob is flagged **oversized** when it looks like more than one pull request of work and parts of it could be built at the same time. A serial plan stays whole, however long. On a flagged glob you can **Split** it into two to ten parts, each with its own plan and the parts it needs merged first, or **Keep whole** if you disagree. Only a glob in Planning with no branch, run or pull request can be split. The original becomes part one and cannot be signed off until all parts have merged. Slop learns the threshold from how kept-whole and unflagged globs turn out.
+Slop checks the size of a glob when it is created or its plan changes. A glob is flagged **oversized** when it looks like more than one pull request of work and parts of it could be built at the same time. A serial plan stays whole, however long.
+
+The flag **advises and never holds**. A flagged glob can start at once, and slop's proposal for it is a set of **workstreams**: shares of the work (a name, a goal, the files, its share of the plan and which workstreams it builds on) that the run builds in parallel inside the glob's one pull request. A glob is sized for review: one pull request, one QA pass and one sign-off. A flagged sub is made a same, so a person reviews it before it merges, and starts as usual. Slop learns the threshold from how flagged and unflagged globs turn out.
+
+A **split** is a scope cut, not a way to parallelise: use it when the work holds pieces that could each ship alone. It turns one glob in Planning (no branch, run or pull request) into **independent globs**, each with its own plan, and with no parent. There is no gate between the parts and the original does not wait for them: part one keeps the original's ID and signs off on its own, like any glob. A part has needs only when you name them (the earlier parts it needs merged first); those are ordinary start relations that you can dismiss. Each part's plan says "Split from" the original, and the cards link them.
 
 ## Decision globs and Suggest
 

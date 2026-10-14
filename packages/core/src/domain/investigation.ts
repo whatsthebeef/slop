@@ -8,8 +8,8 @@ import type { RiskTier } from './knowledge.js';
 import { contextSectionList } from './intake-learning.js';
 import { RELATION_GATES, RELATION_UNTILS } from './types.js';
 import type { RelationGate, RelationUntil } from './types.js';
-import { MAX_PROPOSED_PARTS } from './size-check.js';
-import type { ProposedPart, SizeProposal, SizeThreshold } from './size-check.js';
+import { MAX_PROPOSED_PARTS, goalOf, splitShape } from './size-check.js';
+import type { SizeProposal, SizeThreshold, Workstream } from './size-check.js';
 
 export const CHANGE_KINDS = ['create', 'modify', 'delete'] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
@@ -297,37 +297,19 @@ const bullets = (items: readonly string[]): string => items.map((i) => `- ${i}`)
 
 const lowered = (text: string): string => text.toLowerCase();
 
-/** The card title: `<original title> <i>/<n>: <part title>`, the original cut so the whole stays within 120 characters. */
-const partTitle = (
-  original: string,
-  index: number,
-  count: number,
-  part: InvestigationPart,
-): string => {
-  const label = (part.title ?? part.name).trim();
-  const position = ` ${String(index + 1)}/${String(count)}: `;
-  const room = 120 - position.length - Math.min(label.length, 60);
-  const head = original.trim();
-  const prefix = head.length > room ? `${head.slice(0, Math.max(room - 1, 1)).trimEnd()}…` : head;
-  return `${prefix}${position}${label}`.slice(0, 120);
-};
-
 /**
- * A split proposal from the investigation's parts, in split_glob's shape; null when they can't be cut into 2 to 10 parts.
- * Each part's title is the original glob's title with its position and the part's own title; its plan is its
- * own, with the plan's context sections it lacks carried in (as `buildProposal` does). A part without them (an older
- * investigation) gets the name-based title and the whole original plan.
+ * The workstreams of the investigation's parts; null when they can't be cut into 2 to 10. Each workstream's plan is its own,
+ * with the plan's context sections it lacks carried in (as `buildProposal` does). A part without one (an older investigation)
+ * gets the name-based goal and the whole original plan. `title` is unused now that a workstream is not a glob of its own.
  */
 export const proposalFromParts = (
   parts: readonly InvestigationPart[],
   plan: string,
-  title = '',
 ): SizeProposal | null => {
   const sorted = ordered(parts);
   if (sorted === null || sorted.length < 2 || sorted.length > MAX_PROPOSED_PARTS) return null;
   const context = contextSectionList(plan);
-  const original = title.trim() === '' ? 'Part' : title;
-  const built: ProposedPart[] = sorted.map((part, index) => {
+  const built: Workstream[] = sorted.map((part) => {
     const own = part.plan?.trim() ?? '';
     const missing = context.filter((section) => !lowered(own).includes(lowered(section.heading)));
     const carried = [
@@ -335,15 +317,17 @@ export const proposalFromParts = (
       ...missing.map((section) => `## ${section.heading}\n\n${section.body}`),
     ].join('\n\n');
     return {
-      title: partTitle(original, index, sorted.length, part),
+      name: (part.title ?? part.name).trim().slice(0, 120),
+      goal: own === '' ? `Scope: ${part.name}` : goalOf(own),
+      files: part.files,
       plan:
         own === ''
-          ? `${index === 0 ? 'This part stays the original glob.' : 'A part split out of the original glob.'} Scope: ${part.name}\n\nFiles:\n${bullets(part.files)}\n\nOriginal plan (keep only this part's share of its tasks and "Done when" lines):\n\n${plan.trim()}`
-          : `${index === 0 ? 'This part stays the original glob.' : 'A part split out of the original glob.'}\n\n${carried}\n\nFiles:\n${bullets(part.files)}`,
-      after: part.needs.map((n) => sorted.findIndex((p) => p.name === n)).sort((a, b) => a - b),
+          ? `Scope: ${part.name}\n\nFiles:\n${bullets(part.files)}\n\nOriginal plan (keep only this workstream's share of its tasks and "Done when" lines):\n\n${plan.trim()}`
+          : `${carried}\n\nFiles:\n${bullets(part.files)}`,
+      needs: part.needs.map((n) => sorted.findIndex((p) => p.name === n)).filter((n) => n >= 0).sort((a, b) => a - b),
     };
   });
-  return { parts: built };
+  return { workstreams: built, ...splitShape(built) };
 };
 
 /**
@@ -354,7 +338,6 @@ export const oversizeOf = (
   investigation: Investigation,
   threshold: SizeThreshold,
   plan: string,
-  title = '',
 ): { reasons: string[]; proposal: SizeProposal | null } | null => {
   const count = investigation.parts.length;
   if (count < 2 || count < threshold.maxParts) return null;
@@ -362,6 +345,6 @@ export const oversizeOf = (
     reasons: [
       `${String(count)} independent parts in the investigation (the board's limit is ${String(threshold.maxParts)})`,
     ],
-    proposal: proposalFromParts(investigation.parts, plan, title),
+    proposal: proposalFromParts(investigation.parts, plan),
   };
 };

@@ -75,7 +75,7 @@ export const DOMAIN_EVENT_TYPES = [
   'OverlapAdded',
   /** A predicted overlap edge no longer holds and was dropped (data: the other glob and why). */
   'OverlapDropped',
-  /** A glob was cut into parts (`split_glob`): on every part, with the source, its place and the other parts' IDs. */
+  /** A glob's scope was cut into independent globs (`split_glob`): on every part, with the source, its place and the other parts' IDs. */
   'GlobSplit',
   /** A running sub was escalated to a same because a human should check it (reason and evidence in the data). */
   'Escalated',

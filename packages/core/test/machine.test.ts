@@ -3,7 +3,6 @@ import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
-import { NO_RELATIONS } from '../src/domain/relations.js';
 import { NOW, admin, board, ctx, dev, glob, other, po, relationFacts, run } from './fixtures.js';
 import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
@@ -1166,13 +1165,10 @@ describe('field changes and type changes (row 26)', () => {
       expect(m.allowedActions(held, dev, { relations: relationFacts(held.id, [['s1t9', 'merged']]) })).toContain('start');
     });
 
-    it('a glob held only for its oversized flag offers Start now with the dependencies loaded', () => {
-      const held = glob({ type: 'sub', status: 'planning', waiting: { since: NOW } });
-      expect(m.allowedActions(held, dev, { relations: NO_RELATIONS })).not.toContain('start_anyway');
-      expect(m.allowedActions(held, dev, { relations: NO_RELATIONS, sizeHeld: true })).toContain('start_anyway');
-      const t = value(m.startAnyway(held, ctx()));
+    it('an oversized flag holds nothing: a sub that waits for nothing is created implementing, with its run queued', () => {
+      const t = value(m.create({ id: 's1t1', boardId: 1, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false }, board, ctx()));
       expect(t.glob.status).toBe('implementing');
-      expect(t.glob.waiting).toBeNull();
+      expect(t.glob.waiting ?? null).toBeNull();
       expect(t.glob.runs.at(-1)?.state).toBe('queued');
     });
 

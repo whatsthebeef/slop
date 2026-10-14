@@ -90,7 +90,7 @@ export interface GlobView extends Glob {
   readonly relations?: RelationsView;
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
-  /** True while the size check flagged the glob oversized and nobody has split it or kept it whole (the card's chip). */
+  /** True while the size check flagged the glob oversized and it hasn't started (advice only; the card's chip). */
   readonly oversized?: boolean;
   /** The size check: why it was flagged, its evidence and the proposed split (single-glob reads only). */
   readonly sizeCheck?: SizeCheck;
@@ -756,9 +756,6 @@ export const api = {
   /** Admins: puts one context setting back on its default (the history keeps the reset). */
   resetContextSetting: (boardId: number, key: string) =>
     request<ContextSettingsView>('POST', `/api/boards/${boardId}/context-settings/${encodeURIComponent(key)}/reset`, {}),
-  /** Keep whole: the glob stays one glob; a glob held for the flag starts. */
-  reproposeSplit: (id: string) => request<{ running: boolean }>('POST', `/api/globs/${id}/actions/repropose-split`, {}),
-  keepWhole: (id: string) => request<GlobView>('POST', `/api/globs/${id}/keep-whole`, {}),
   /** Whether the board has an active integration token (members); the secret is never returned here. */
   integrationToken: (boardId: number) =>
     request<{ active: boolean; createdAt: string | null }>('GET', `/api/boards/${boardId}/integration-token`),

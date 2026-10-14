@@ -260,7 +260,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
           holding: [
             hold('s1t2', { reason: 'uses the endpoint it adds', source: 'inferred' }),
             hold('s1k4', { toIsDecision: true, until: 'decided', state: 'planning' }),
-            hold('s1t5', { gate: 'sign_off', source: 'split', parts: { merged: 3, total: 5 } }),
+            hold('s1t5', { gate: 'start', source: 'split' }),
           ],
           holdsBack: [{ relationId: 'rel_h', from: 's1t8', fromTitle: 'Later work', gate: 'merge', until: 'merged', reason: null, source: 'person' }],
           done: [{ relationId: 'rel_d', to: 's1t0', toTitle: 'Earlier', gate: 'start', until: 'merged', reason: null, source: 'learned', how: 'met' }],
@@ -271,8 +271,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('related-holding').textContent).toContain('uses the endpoint it adds');
     expect(screen.getByTestId('related-holding').textContent).toContain('inferred by slop');
     expect(screen.getByTestId('related-decisions').textContent).toContain("can't start until decided");
-    expect(screen.getByTestId('related-parts').textContent).toContain("can't sign off until merged");
-    expect(screen.getByTestId('related-parts-merged').textContent).toBe('3/5 parts merged');
+    expect(screen.getByTestId('related-parts').textContent).toContain("can't start until merged");
     expect(screen.getByTestId('related-holds-back').textContent).toContain("can't merge until this is merged");
     const done = screen.getByTestId('related-done');
     expect(done.tagName).toBe('DETAILS');

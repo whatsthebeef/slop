@@ -450,7 +450,7 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
 /** The size check's flag: the glob looks like more than one PR's worth of work and nobody has answered it yet. */
 export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) =>
   glob.oversized === true ? (
-    <Tip text='Intake judged this more than one PR of work. Open it to split it as proposed, edit the split, or keep it whole'>
+    <Tip text='Intake judged this more than one PR of work. It is advice only: open it to see the size workstreams, or cut its scope with a split'>
       <ChipButton onOpen={onOpen} className='font-mono text-[11px] font-semibold text-required' testId='oversized-chip'>
         Oversized
       </ChipButton>

@@ -149,7 +149,7 @@ export interface Tx {
   listSizeChecks(boardId: number): Promise<SizeCheck[]>;
   /** Writes the glob's size check, replacing an earlier one. */
   upsertSizeCheck(check: SizeCheck): Promise<void>;
-  /** Writes a re-assessment of the glob's size check without touching its decision columns (a concurrent Keep whole survives). */
+  /** Writes a re-assessment of the glob's size check without touching its decision columns (a concurrent split decision survives). */
   updateSizeAssessment(check: SizeCheck): Promise<void>;
   /** The board's learned size threshold (the default until it has moved). */
   getSizeThreshold(boardId: number): Promise<SizeThreshold>;

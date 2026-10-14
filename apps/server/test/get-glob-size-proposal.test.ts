@@ -9,7 +9,7 @@ import { buildServer } from '../src/mcp/server.js';
 import type { McpDeps } from '../src/mcp/server.js';
 import { createTestDatabase } from './support/database.js';
 
-/** `get_glob` over MCP: a split proposal's plans are summarised by default and returned whole with `include: ['size_proposal']`. */
+/** `get_glob` over MCP: the size check's workstreams carry a short summary of each plan share, whether or not the flag was answered; the flag never holds the glob. */
 
 const DEV = 'dev@example.com';
 const NOW = '2026-10-14T12:00:00.000Z';
@@ -19,15 +19,19 @@ const unwrap = <T>(result: Result<T>): T => {
   return result.value;
 };
 
-interface Part {
-  title: string;
-  after: number[];
+interface Workstream {
+  name: string;
+  goal: string;
+  files: string[];
+  needs: number[];
   plan?: string;
   planSummary?: string;
   planChars?: number;
 }
 interface GlobBody {
-  sizeCheck: { reasons: string[]; decision: string | null; proposal: { criticalPath: number; parts: Part[] } };
+  oversized?: boolean;
+  allowedActions: string[];
+  sizeCheck: { reasons: string[]; decision: string | null; proposal: { criticalPath: number; workstreams: Workstream[] } };
 }
 
 const PLAN_A = `## Tasks\n1. ${'migration and a long description of it. '.repeat(250)}\nDone when: it works.`;
@@ -75,9 +79,9 @@ describe('get_glob with a size-check proposal', () => {
       proposal: {
         criticalPath: 2,
         maxParallel: 1,
-        parts: [
-          { title: 'Data', plan: PLAN_A, after: [] },
-          { title: 'Web', plan: PLAN_B, after: [0] },
+        workstreams: [
+          { name: 'Data', goal: 'the table', files: ['apps/server/drizzle/1.sql'], plan: PLAN_A, needs: [] },
+          { name: 'Web', goal: 'the card', files: [], plan: PLAN_B, needs: [0] },
         ],
       },
       decision,
@@ -102,38 +106,37 @@ describe('get_glob with a size-check proposal', () => {
     await drop();
   });
 
-  it('summarises each part plan by default, keeping the title, needs and plan length', async () => {
+  it('summarises each workstream plan share, keeping its name, goal, files, needs and plan length', async () => {
     const { body } = await call({ id: globId });
-    const [data, web] = body.sizeCheck.proposal.parts;
-    expect(data).toEqual({ title: 'Data', after: [], planSummary: PLAN_A.replace(/\s+/g, ' ').slice(0, 200), planChars: PLAN_A.length });
+    const [data, web] = body.sizeCheck.proposal.workstreams;
+    expect(data).toEqual({
+      name: 'Data',
+      goal: 'the table',
+      files: ['apps/server/drizzle/1.sql'],
+      needs: [],
+      planSummary: PLAN_A.replace(/\s+/g, ' ').slice(0, 200),
+      planChars: PLAN_A.length,
+    });
     expect(web?.plan).toBeUndefined();
     expect(web?.planSummary).toHaveLength(200);
     expect(web?.planSummary).not.toMatch(/\s{2}/);
-    expect(web).toMatchObject({ title: 'Web', after: [0], planChars: PLAN_B.length });
+    expect(web).toMatchObject({ name: 'Web', needs: [0], planChars: PLAN_B.length });
     expect(body.sizeCheck).toMatchObject({ reasons: ['6 tasks'], decision: 'split' });
     expect(body.sizeCheck.proposal.criticalPath).toBe(2);
   });
 
-  it('returns the plans whole while the glob is held for an unanswered oversized flag, which is what split_glob takes', async () => {
-    const { body } = await call({ id: heldId });
-    expect(body.sizeCheck.proposal.parts).toEqual([
-      { title: 'Data', plan: PLAN_A, after: [] },
-      { title: 'Web', plan: PLAN_B, after: [0] },
-    ]);
+  it('is just as compact for a glob whose flag nobody answered: it is not held, and the plans are not sent', async () => {
+    const { body, text } = await call({ id: heldId });
+    expect(body.oversized).toBe(true);
+    expect(body.allowedActions).toContain('start');
+    expect(body.sizeCheck.proposal.workstreams.map((w) => w.plan)).toEqual([undefined, undefined]);
+    expect(text.length).toBeLessThan((PLAN_A.length + PLAN_B.length) / 2);
   });
 
-  it("returns the plans whole with include: ['size_proposal']", async () => {
-    const { body } = await call({ id: globId, include: ['size_proposal'] });
-    expect(body.sizeCheck.proposal.parts).toEqual([
-      { title: 'Data', plan: PLAN_A, after: [] },
-      { title: 'Web', plan: PLAN_B, after: [0] },
-    ]);
-  });
-
-  it('is far smaller by default than with the plans included', async () => {
-    const compact = await call({ id: globId });
-    const full = await call({ id: globId, include: ['size_proposal'] });
-    expect(full.text.length - compact.text.length).toBeGreaterThan(PLAN_A.length + PLAN_B.length - 600);
-    expect(compact.text.length).toBeLessThan(full.text.length / 2);
+  it("no longer takes include: ['size_proposal']", async () => {
+    const result = await client.callTool({ name: 'get_glob', arguments: { id: globId, include: ['size_proposal'] } });
+    const [first] = result.content as { text: string }[];
+    const body = JSON.parse(first?.text ?? 'null') as GlobBody;
+    expect(body.sizeCheck.proposal.workstreams.every((w) => w.plan === undefined)).toBe(true);
   });
 });

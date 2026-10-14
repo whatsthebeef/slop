@@ -337,8 +337,8 @@ const codeClones = new CodeClones({
 });
 const codeIndex = new CodeIndex(db);
 const codeView = new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github });
-// The size check: the intake model judges a plan's independent parts and proposes a split; a failing model leaves the text estimate.
-const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeHold(id) });
+// The size check: the intake model judges a plan's independent parts and proposes workstreams; a failing model leaves the text estimate.
+const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeCheck(id) });
 // Slop builds each glob's dependency tree with the intake model: at create, and again when a plan is saved or an investigation pushed.
 const dependencyInference = new DependencyInferenceService({
   store,
@@ -413,7 +413,7 @@ const chat = new ChatService({
     };
   },
 });
-// An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
+// An arriving investigation escalates a sub that needs a human and raises the oversize flag with workstreams.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
 const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
@@ -514,7 +514,6 @@ const app = createApp({
   globs,
   hub,
   outbox,
-  sizeCheck,
   spend,
   ...(attachments === null ? {} : { attachments }),
   onBoardCreated: async (email, boardId) => {
@@ -633,7 +632,6 @@ mountMcp(app, {
   intake,
   inbox,
   ...(attachments === null ? {} : { attachments }),
-  sizeCheck,
   publicUrl: config.PUBLIC_URL,
   publicUrlAliases: config.PUBLIC_URL_ALIASES,
   agentSetValues,
