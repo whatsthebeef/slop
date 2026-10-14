@@ -186,6 +186,13 @@ export class OutboxRunner {
             { state, lastError, attempts: sql`${schema.outbox.attempts} - 1`, runAfter: new Date(Date.now() + retryAfterMs) },
       )
       .where(eq(schema.outbox.id, job.id));
+    // A run waiting for its branch fires as soon as the branch exists, not at its next retry slot.
+    if (effect.kind === 'provision' && state === 'done') {
+      await this.db
+        .update(schema.outbox)
+        .set({ runAfter: new Date() })
+        .where(and(eq(schema.outbox.kind, 'fire_routine'), eq(schema.outbox.globId, effect.globId), eq(schema.outbox.state, 'pending')));
+    }
     // A wait that only repeats itself (the same reason) is no news.
     if (state !== 'pending' || retryAfterMs === null || lastError !== job.lastError) this.onSettled?.(effect, state);
   }

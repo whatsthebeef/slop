@@ -1,7 +1,10 @@
 import { BoardService, GlobService, NotificationService } from '@slop/core';
 import type { Board, Glob, Result } from '@slop/core';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { codeHostExecutors } from '../src/codehost-executors.js';
+import * as schema from '../src/db/schema.js';
+import { OutboxRunner } from '../src/jobs/outbox.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { FileRoutines } from '../src/routines.js';
@@ -149,5 +152,42 @@ describe('a glob whose branch cannot be created', () => {
     const id = await newSub('Works now');
     expect(await provision(id)).toBe('done');
     expect(await bar()).toHaveLength(0);
+  });
+
+  it('a run waiting for its branch retries shortly without spending an attempt', async () => {
+    const id = await newSub('Not provisioned yet');
+    const glob = await globs.peek(id);
+    const run = glob?.runs.at(-1);
+    const fire = executors.fire_routine;
+    if (glob === null || run === undefined || fire === undefined) throw new Error('setup');
+    const effect = { kind: 'fire_routine', globId: id, generation: glob.generation, runId: run.id, routineOwner: DEV } as const;
+    const outcome = await fire(effect, glob, { globs });
+    expect(outcome).toMatchObject({ state: 'pending', retryAfterMs: 3_000 });
+  });
+
+  it('a finished provision brings the waiting fire forward, and a failed one leaves it', async () => {
+    const jobs = database.db.select().from(schema.outbox);
+    const fireOf = async (id: string) => {
+      const [row] = await jobs.where(and(eq(schema.outbox.globId, id), eq(schema.outbox.kind, 'fire_routine')));
+      if (row === undefined) throw new Error('no fire_routine queued');
+      return row;
+    };
+    const defer = (id: number) =>
+      database.db.update(schema.outbox).set({ runAfter: new Date(Date.now() + 160_000) }).where(eq(schema.outbox.id, id));
+    const runner = () =>
+      new OutboxRunner(database.db, { globs }, { provision: executors.provision, fire_routine: () => Promise.resolve('done') }, () => undefined, 'default');
+
+    host.failure = null;
+    const ok = await newSub('Provisions fine');
+    await defer((await fireOf(ok)).id);
+    await runner().drain(ok);
+    expect((await fireOf(ok)).state).toBe('done');
+
+    host.failure = hostError(502, 'Bad Gateway');
+    const bad = await newSub('Provision keeps failing');
+    await defer((await fireOf(bad)).id);
+    await runner().drain(bad);
+    expect((await fireOf(bad)).state).toBe('pending');
+    host.failure = null;
   });
 });
