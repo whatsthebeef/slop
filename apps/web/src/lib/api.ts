@@ -1,4 +1,7 @@
 import type {
+  ChatFeedback,
+  ChatFeedbackRating,
+  ChatTestCase,
   Action,
   MachineStep,
   Move,
@@ -644,6 +647,12 @@ export const api = {
   /** Save to knowledge: the answer goes to the proposal queue; `glob` is the source when the answer cites none. */
   saveChatAnswer: (boardId: number, chat: number, message: number, glob?: string) =>
     request<{ id: string }>('POST', `/api/boards/${boardId}/chats/${chat}/messages/${message}/save`, glob === undefined ? {} : { glob }),
+  /** 👍/👎 on an answer; rating again replaces the verdict. The note is kept only on a 👎. */
+  rateChatAnswer: (boardId: number, chat: number, message: number, input: { rating: ChatFeedbackRating; note?: string; page?: { type: string; id?: string } }) =>
+    request<{ feedback: ChatFeedback }>('POST', `/api/boards/${boardId}/chats/${chat}/messages/${message}/feedback`, input).then((r) => r.feedback),
+  myChatFeedback: (boardId: number, chat: number) => request<{ feedback: ChatFeedback[] }>('GET', `/api/boards/${boardId}/chats/${chat}/feedback`).then((r) => r.feedback),
+  /** The board's 👎 answers (admins only). */
+  chatTestCases: (boardId: number) => request<{ cases: ChatTestCase[] }>('GET', `/api/boards/${boardId}/chat-feedback`).then((r) => r.cases),
   askChat: (boardId: number, input: ChatQuestion, stream?: ChatStream) => (stream === undefined ? request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input) : askChatStream(boardId, input, stream)),
   globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),

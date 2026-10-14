@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MAX_QUERY_LENGTH } from '@slop/core';
-import { History, Maximize2, Minimize2, Pin, PinOff, Plus, Square, Trash2, X } from 'lucide-react';
+import { CHAT_FEEDBACK_NOTE_MAX, MAX_QUERY_LENGTH } from '@slop/core';
+import type { ChatFeedback, ChatFeedbackRating } from '@slop/core';
+import { History, Maximize2, ThumbsDown, ThumbsUp, Minimize2, Pin, PinOff, Plus, Square, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, SyntheticEvent } from 'react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
@@ -16,7 +17,7 @@ import type { PageContext } from '@/lib/page-context';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
 import { Button } from './ui/button';
-import { Textarea } from './ui/input';
+import { Input, Textarea } from './ui/input';
 
 const day = (iso: string) => iso.slice(0, 10);
 
@@ -215,12 +216,84 @@ const Actions = ({
   );
 };
 
+/** 👍 and 👎 under an answer. A 👎 offers a one-line "what was wrong"; rating again replaces the verdict. */
+export const Rating = ({ boardId, chatId, message, page, given }: { boardId: number; chatId: number; message: ChatMessage; page: PageContext; given: ChatFeedback | undefined }) => {
+  const toast = useToast();
+  const client = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState('');
+  const send = useMutation({
+    mutationFn: (v: { rating: ChatFeedbackRating; note?: string }) =>
+      api.rateChatAnswer(boardId, chatId, message.id, { ...v, page: { type: page.type, ...(page.id === undefined ? {} : { id: page.id }) } }),
+    onSuccess: (saved) => {
+      client.setQueryData<ChatFeedback[]>(['chat-feedback', boardId, chatId], (old) => [...(old ?? []).filter((f) => f.messageId !== saved.messageId), saved]);
+      setAsking(false);
+      setNote('');
+    },
+    onError: (e) => toast(e instanceof RequestError ? e.body.message : 'Could not save your feedback'),
+  });
+  const rating = given?.rating;
+  return (
+    <div className='mt-1 grid gap-1' data-testid='chat-rating'>
+      <div className='flex items-center gap-1'>
+        <button
+          className={cn('rounded p-1 hover:bg-muted', rating === 'up' && 'bg-muted text-emerald-600')}
+          aria-label='Good answer'
+          aria-pressed={rating === 'up'}
+          title='Good answer'
+          disabled={send.isPending}
+          onClick={() => {
+            setAsking(false);
+            send.mutate({ rating: 'up' });
+          }}
+        >
+          <ThumbsUp className='h-3.5 w-3.5' />
+        </button>
+        <button
+          className={cn('rounded p-1 hover:bg-muted', rating === 'down' && 'bg-muted text-destructive')}
+          aria-label='Bad answer'
+          aria-pressed={rating === 'down'}
+          title='Bad answer'
+          disabled={send.isPending}
+          onClick={() => {
+            if (rating === 'down') return;
+            send.mutate({ rating: 'down' }, { onSuccess: () => setAsking(true) });
+          }}
+        >
+          <ThumbsDown className='h-3.5 w-3.5' />
+        </button>
+        {rating === 'down' && !asking && (
+          <button className='rounded px-1 text-xs text-muted-foreground hover:bg-muted' onClick={() => { setNote(given?.note ?? ''); setAsking(true); }}>
+            {given?.note == null ? 'Say what was wrong' : 'Edit note'}
+          </button>
+        )}
+      </div>
+      {asking && (
+        <form
+          className='flex items-center gap-1'
+          onSubmit={(e) => {
+            e.preventDefault();
+            send.mutate({ rating: 'down', ...(note.trim() === '' ? {} : { note: note.trim() }) });
+          }}
+        >
+          <Input aria-label='What was wrong' placeholder='What was wrong? (optional)' value={note} maxLength={CHAT_FEEDBACK_NOTE_MAX} onChange={(e) => setNote(e.target.value)} />
+          <Button type='submit' size='sm' variant='outline' disabled={send.isPending}>
+            Send
+          </Button>
+        </form>
+      )}
+      {rating === 'down' && !asking && given?.note != null && <p className={cn(WRAP_LONG, 'text-xs text-muted-foreground')}>{given.note}</p>}
+    </div>
+  );
+};
+
 const Message = ({
   boardId,
   chatId,
   message,
   asked,
   page,
+  given,
   onNavigate,
   onReask,
 }: {
@@ -229,6 +302,7 @@ const Message = ({
   message: ChatMessage;
   asked: string | undefined;
   page: PageContext;
+  given: ChatFeedback | undefined;
   onNavigate: () => void;
   onReask: (question: string, options: { think?: boolean; lookAtCode?: boolean }) => void;
 }) => {
@@ -250,6 +324,7 @@ const Message = ({
           {citations.length > 0 && <Sources citations={citations} />}
           {message.tools != null && message.tools.length > 0 && <Tools tools={message.tools} />}
           <Actions boardId={boardId} chatId={chatId} message={message} asked={asked} page={page} onNavigate={onNavigate} onReask={onReask} />
+          <Rating boardId={boardId} chatId={chatId} message={message} page={page} given={given} />
         </>
       )}
     </article>
@@ -293,6 +368,7 @@ export const ChatPanel = ({
   const messagesKey = ['chat', boardId, chatId] as const;
   const chats = ['chats', boardId] as const;
   const messages = useQuery({ queryKey: messagesKey, queryFn: () => (chatId === null ? Promise.resolve([]) : api.chatMessages(boardId, chatId)), enabled: chatId !== null });
+  const mine = useQuery({ queryKey: ['chat-feedback', boardId, chatId], queryFn: () => (chatId === null ? Promise.resolve([]) : api.myChatFeedback(boardId, chatId)), enabled: chatId !== null });
   const past = useQuery({ queryKey: chats, queryFn: () => api.chats(boardId) });
   const [showPast, setShowPast] = useState(false);
   const [question, setQuestion] = useState('');
@@ -475,7 +551,7 @@ export const ChatPanel = ({
           )}
           {chatId !== null &&
             shown.map((m, i) => (
-              <Message key={m.id} boardId={boardId} chatId={chatId} message={m} asked={shown[i - 1]?.role === 'user' ? shown[i - 1]?.content : undefined} page={scope} onNavigate={followed} onReask={(q, options) => void ask(q, options)} />
+              <Message key={m.id} boardId={boardId} chatId={chatId} message={m} asked={shown[i - 1]?.role === 'user' ? shown[i - 1]?.content : undefined} page={scope} given={mine.data?.find((f) => f.messageId === m.id)} onNavigate={followed} onReask={(q, options) => void ask(q, options)} />
             ))}
           {pending !== null && (
             <>
