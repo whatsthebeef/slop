@@ -673,6 +673,16 @@ if (runs('llm') || runs('kb')) {
       }
     })
     .catch((error: unknown) => logError('rollout', error instanceof Error ? error.message : String(error)));
+  // Cleanup: inferred relations that hold a glob behind a KB learning are dismissed. Idempotent.
+  void store
+    .transaction((tx) => tx.listAllBoards())
+    .then(async (all) => {
+      for (const b of all) {
+        const dismissed = await dependencyInference.dismissLearningHolds(b.id);
+        if (dismissed > 0) console.log(`[relations] dismissed ${String(dismissed)} inferred relation(s) to KB learnings on board ${String(b.id)}`);
+      }
+    })
+    .catch((error: unknown) => logError('relations', error instanceof Error ? error.message : String(error)));
   // Backfill: open decision globs get a group by the rule new ones follow. Idempotent: only group-less ones are written.
   void store
     .transaction((tx) => tx.listAllBoards())

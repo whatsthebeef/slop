@@ -38,13 +38,14 @@ describe('dependency inference', () => {
     },
   };
   const edges = (
-    ...items: { id: string; kind: string; reason?: string; files?: string[]; symbol?: string; addedBy?: string; confidence?: number }[]
+    ...items: { id: string; kind: string; reason?: string; files?: string[]; symbol?: string; addedBy?: string; confidence?: number; question?: string }[]
   ): (() => string) => () =>
     JSON.stringify({
       edges: items.map((i) => ({
         reason: 'uses humanSteps() from it',
         files: ['a.ts'],
         ...(i.kind === 'needs' ? { symbol: 'humanSteps', addedBy: i.id, confidence: 0.9 } : {}),
+        ...(i.kind !== 'overlaps' ? { question: 'Which store holds the widgets: Postgres or DynamoDB?' } : {}),
         ...i,
       })),
     });
@@ -90,7 +91,7 @@ describe('dependency inference', () => {
       status: 'planning',
       pr: null,
       provisioning: 'none',
-      attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'submitted' }, channel: 'agent', outcome: null, ...attributes },
+      attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'manual' }, channel: 'agent', outcome: null, ...attributes },
       ...patch,
     });
     store.state.globs.set(id, { glob: g, creationKey: null });
@@ -447,6 +448,65 @@ describe('dependency inference', () => {
       const system = prompts.at(-1)?.system ?? '';
       expect(system).toContain('NEVER a need');
       expect(system).toContain('Activity log displays relations');
+    });
+  });
+
+  describe('only real decisions hold a glob', () => {
+    it('never offers a KB learning or a hotspot decision as a candidate', async () => {
+      const real = await decision('s1k1', 'Which store holds the widgets: Postgres or DynamoDB?', {}, { origin: { kind: 'manual' } });
+      await decision('s1k2', 'Escalate less for design decisions', {}, { origin: { kind: 'submitted' } });
+      await decision('s1k3', 'New document: build_test_lint', {}, { origin: { kind: 'mined' } });
+      await decision('s1k4', 'Refactor the hotspot file', {}, { origin: { kind: 'hotspot', path: 'a.ts' } });
+      answer = edges({ id: real.id, kind: 'decision', reason: 'the store is open' });
+      await create();
+      const shown = prompts.at(-1)?.prompt ?? '';
+      expect(shown).toContain('decision s1k1');
+      for (const id of ['s1k2', 's1k3', 's1k4']) expect(shown).not.toContain(`decision ${id} `);
+    });
+
+    it('an edge to a learning the model names anyway is dropped', async () => {
+      const learning = await decision('s1k2', 'Escalate less for design decisions: may affect the escalation policy', {}, { origin: { kind: 'submitted' } });
+      answer = edges({ id: learning.id, kind: 'decision', reason: 'may affect the escalation policy' });
+      const made = await create({ plan: 'Split an oversized sub into a same when the size check flags it, with a test for the escalation.' });
+      expect(edgesOf(made)).toEqual([]);
+    });
+
+    it('a decision edge needs a quoted question that is in the decision', () => {
+      const open = new Set(['s1k1']);
+      const evidence = { own: 'x', others: new Map([['s1k1', 'Which store holds the widgets: Postgres or DynamoDB?']]) };
+      const parse = (question?: string) =>
+        parseEdges(JSON.stringify({ edges: [{ id: 's1k1', kind: 'decision', reason: 'open', ...(question === undefined ? {} : { question }) }] }), open, open, evidence);
+      expect(parse()).toEqual([]);
+      expect(parse('may affect the plan')).toEqual([]);
+      expect(parse('Which store holds the widgets: Postgres or DynamoDB?')).toHaveLength(1);
+      expect(parse('which  store holds the widgets')).toHaveLength(1);
+    });
+
+    it('the prompt names the "may affect" holds as wrong and asks for the question', async () => {
+      await decision('s1k1', 'Which store holds the widgets: Postgres or DynamoDB?');
+      await create();
+      const system = prompts.at(-1)?.system ?? '';
+      expect(system).toContain('may affect');
+      expect(system).toContain('"question"');
+    });
+
+    it('the cleanup dismisses inferred relations to learnings only, not a person-made one or one to a real decision', async () => {
+      const learning = await decision('s1k2', 'A learning', {}, { origin: { kind: 'mined' } });
+      const manual = await decision('s1k3', 'A learning held by a person', {}, { origin: { kind: 'submitted' } });
+      const real = await decision('s1k1', 'Which store holds the widgets: Postgres or DynamoDB?');
+      const held = await create();
+      const base = { boardId, dismissedPlanHash: null, from: held.id, gate: 'start' as const, until: 'decided' as const, reason: null, evidence: [], createdAt: '2026-10-05T12:00:00.000Z', dismissedAt: null, overriddenAt: null };
+      let n = 0;
+      await store.transaction(async (tx) => {
+        for (const [to, source] of [[learning.id, 'inferred'], [manual.id, 'person'], [real.id, 'inferred']] as const)
+          await tx.insertRelation({ ...base, id: `rel-${String(++n)}`, to, source });
+      });
+      expect(await inference.dismissLearningHolds(boardId)).toBe(1);
+      const by = (to: string) => [...store.state.relations.values()].find((r) => r.from === held.id && r.to === to);
+      expect(by(learning.id)?.dismissedAt).not.toBeNull();
+      expect(by(manual.id)?.dismissedAt).toBeNull();
+      expect(by(real.id)?.dismissedAt).toBeNull();
+      expect(await inference.dismissLearningHolds(boardId)).toBe(0);
     });
   });
 });
