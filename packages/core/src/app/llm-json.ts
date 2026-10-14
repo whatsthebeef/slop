@@ -9,8 +9,30 @@ export const parseJson = (text: string): unknown => {
   try {
     return JSON.parse(text.slice(start, end + 1));
   } catch {
-    return null;
+    return firstObject(text, start);
   }
+};
+
+/** The first balanced `{...}` from `start` (prose or a second object after it, braces inside strings ignored), else null. */
+const firstObject = (text: string, start: number): unknown => {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      try {
+        return JSON.parse(text.slice(start, i + 1));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
 };
 
 export const field = (value: unknown, key: string): unknown => {

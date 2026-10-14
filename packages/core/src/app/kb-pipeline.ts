@@ -213,6 +213,8 @@ interface Dedupe {
   readonly contradicts: readonly KbContradiction[];
 }
 
+const DEDUPE_MAX_TOKENS = 4_000;
+
 const NO_MATCH: Dedupe = { suppressedBy: null, duplicateOf: null, coveredBy: null, possiblyCoveredBy: null, contradicts: [] };
 
 interface Drafted {
@@ -425,8 +427,9 @@ export class KbPipeline {
         await this.complete(this.deps.route, {
           system: DEDUPE_SYSTEM,
           prompt: dedupePrompt(learning, snapshot, routing.target, targetText),
-          // The fact and up to five relations come before the answer.
-          maxTokens: 1_000,
+          // The fact, up to five relations and whole-sentence quotes come before the answer; a long statement
+          // overran 1,000 tokens and the JSON was cut off.
+          maxTokens: DEDUPE_MAX_TOKENS,
           spend,
         }),
         learningStatement(learning.glob, learning.artifacts),
@@ -434,7 +437,8 @@ export class KbPipeline {
         routing.target,
         targetText,
       );
-      return dedupe === null ? { failure: 'The dedupe answer was not usable JSON' } : { routing, dedupe };
+      // Dedupe is an optimisation: a missed duplicate costs an admin a minute, a failed item loses the learning.
+      return { routing, dedupe: dedupe ?? NO_MATCH };
     } catch (error) {
       if (error instanceof LlmUnavailable) return { unavailable: error };
       return { failure: error instanceof Error ? error.message : String(error) };
