@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
-import { FILTER_TEXT_ID, FILTER_TOGGLE_ID, FilterPane, FilterToggle, useFilterPaneOpen } from '@/components/board-filter-pane';
+import { FILTER_TEXT_ID, FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/components/board-filter-pane';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
 import type { CardMove } from '@/components/glob-card';
@@ -22,9 +22,7 @@ import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
 import type { CardPending } from '@/lib/card-pending';
-import { activeCount, matchesFilters, parseFilters, writeFilters } from '@/lib/board-filters';
-import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
-import type { FilterValues } from '@/lib/board-filters';
+import { matchesFilters } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
 import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
 import type { GlobTarget } from '@/lib/glob-section';
@@ -215,28 +213,7 @@ export const BoardPage = () => {
   // A link to one glob (`?glob=<id>`, e.g. a KB item's evidence) opens its page.
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  // Filters live in the URL so a filtered board can be linked; whether their pane is open is the viewer's own preference.
-  const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
-  const filtering = activeCount(filters);
-  const setFilters = (values: FilterValues) => {
-    // Back to the defaults forgets the memory first, so the restore below doesn't bring the old filters back.
-    if (activeCount(values) === 0) clearFilterMemory(browserStore(), boardId);
-    setSearchParams((params) => writeFilters(params, values), { replace: true });
-  };
-  // The board remembers its filters: a URL with filters wins and is saved; a bare URL (back from a glob, another tab or
-  // board, a reload) gets the remembered ones.
-  const query = searchParams.toString();
-  useEffect(() => {
-    const store = browserStore();
-    if (hasFilterParams(searchParams)) {
-      saveFilterMemory(store, boardId, searchParams);
-      return;
-    }
-    const saved = loadFilterMemory(store, boardId);
-    if (saved === null) return;
-    setSearchParams((params) => new URLSearchParams([...params, ...saved]), { replace: true });
-  }, [boardId, query]);
-  const [filterOpen, setFilterOpen] = useFilterPaneOpen();
+  const { filters, filtering, setFilters, filterOpen, setFilterOpen } = useBoardFilters(boardId);
   // `/` opens the filter pane if needed and focuses the text filter, selecting what is in it. Only while this page is
   // the current one: with a glob open over the board the page context is the glob's and `/` does nothing.
   const currentPage = useCurrentPage();
@@ -428,7 +405,7 @@ export const BoardPage = () => {
   }
 
   // A rejected or closed decision (archived) never shows.
-  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters));
+  const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters, { now: new Date().toISOString(), viewer }));
   const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
   const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
