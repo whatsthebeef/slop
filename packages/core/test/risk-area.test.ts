@@ -240,7 +240,7 @@ describe('RiskAreaService', () => {
     const clock = { now: () => now };
     const globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) } });
     const created = unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Change charge',
         plan: 'Change apps/billing/src/charge.ts.\n\nDone when: it works.',

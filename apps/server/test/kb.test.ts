@@ -58,7 +58,7 @@ describe('KB items in Postgres', () => {
       return board.id;
     });
     globId = unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Source',
         type: 'super',

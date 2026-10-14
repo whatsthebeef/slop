@@ -203,7 +203,7 @@ describe('the relation service: gates, resumes and the relations API', () => {
   let runs: number;
 
   const create = async (patch: Record<string, unknown> = {}): Promise<Glob> =>
-    unwrap(await globs.create(DEV, { boardId, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, ...patch }));
+    unwrap(await globs.create(ADMIN, { boardId, title: 'Work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, ...patch }));
   const rows = (from?: string): Relation[] => [...store.state.relations.values()].filter((r) => from === undefined || r.from === from);
   const merge = async (id: string) => unwrap(await globs.applyEvent(id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
   const current = async (id: string): Promise<Glob> => {

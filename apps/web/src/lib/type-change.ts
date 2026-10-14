@@ -1,6 +1,9 @@
-import { isValidCombination, machine, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
+import { canChooseType, isValidCombination, machine, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
 import type { Category, EditFailure, Role, SlopType } from '@slop/core';
 import type { GlobChanges, GlobView } from './api';
+
+/** Shown beside the type choices a non-admin can't make. */
+export const CHOOSE_TYPE_TOOLTIP = 'Only board admins can choose sub or super';
 
 /** Who acts for each type, for the icons beside it. */
 const ACTORS: Record<SlopType, { readonly machine: boolean; readonly human: boolean }> = {
@@ -45,6 +48,7 @@ const consequenceFor = (to: SlopType, via: TypeVia, glob: Pick<GlobView, 'after'
 /** Why a type can't be chosen now, in the words the server's refusal would use. */
 const blockerFor = (glob: GlobView, role: Role, to: SlopType): string => {
   if (!isValidCombination(to, glob.category)) return `A ${glob.category} cannot be a ${to}`;
+  if (!canChooseType(role, to)) return CHOOSE_TYPE_TOOLTIP;
   if (to === 'super' && (role === 'qa' || role === 'po')) return 'QA and PO members cannot create supers';
   const from = glob.type;
   if (from === 'sub' && to === 'same') return 'A sub can only become a same before it merges';
@@ -65,13 +69,13 @@ const blockerFor = (glob: GlobView, role: Role, to: SlopType): string => {
  * old type implied (deescalate, make_super).
  */
 export const typeOptions = (glob: GlobView, role: Role): TypeOption[] => {
-  const allowed = machine.allowedTypeChanges(glob, role).map((c) => c.to);
+  const allowed = machine.allowedTypeChanges(glob, role).map((c) => c.to).filter((to) => canChooseType(role, to));
   const actions = glob.allowedActions ?? [];
   return SLOP_TYPES.map((to): TypeOption => {
     const base = { to, description: DESCRIPTIONS[to], ...ACTORS[to], current: to === glob.type };
     if (base.current) return { ...base, via: null, consequence: null, reason: null };
     const viaAction: TypeVia | null =
-      glob.status === 'planning'
+      glob.status === 'planning' || !canChooseType(role, to)
         ? null
         : to === 'sub' && glob.escalation != null && actions.includes('deescalate')
           ? 'deescalate'

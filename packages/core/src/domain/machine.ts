@@ -3,6 +3,7 @@
  * returns the next state plus the domain events to log and the effects to queue, or a
  * domain error. The numbered rows refer to the transition table in the spec.
  */
+import { canChooseType } from '../app/access.js';
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
@@ -3006,13 +3007,14 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   }
   if (
     !restricted &&
+    canChooseType(actor.role, 'sub') &&
     glob.escalation != null &&
     glob.type === 'same' &&
     ['implementing', 'in_progress', 'pr_open'].includes(glob.status)
   ) {
     actions.push('deescalate');
   }
-  if (actor.role !== 'qa' && actor.role !== 'po' && needsPairing(glob) && !hasBusyRun(glob))
+  if (actor.role !== 'qa' && actor.role !== 'po' && canChooseType(actor.role, 'super') && needsPairing(glob) && !hasBusyRun(glob))
     actions.push('make_super');
   actions.push('delete');
   return actions;

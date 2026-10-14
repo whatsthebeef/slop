@@ -63,7 +63,7 @@ describe('hotspot decisions', () => {
   };
   const work = async (patch: Partial<CreateGlobInput> = {}): Promise<Glob> =>
     unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Work',
         type: 'same',

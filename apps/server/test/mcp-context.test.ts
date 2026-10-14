@@ -61,7 +61,7 @@ describe('MCP get_context include and get_artifact', () => {
         environments: [],
         sensitivePaths: [],
       });
-      await tx.upsertMember({ boardId: board.id, email: DEV, role: 'dev' });
+      await tx.upsertMember({ boardId: board.id, email: DEV, role: 'admin' });
       return board.id;
     });
     globId = unwrap(

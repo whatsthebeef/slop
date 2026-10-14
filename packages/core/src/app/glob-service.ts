@@ -1,5 +1,6 @@
 import { err, forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import { canChooseType, CHOOSE_TYPE_REFUSAL } from './access.js';
 import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
 import { groupFromTitle } from '../domain/group.js';
@@ -90,6 +91,11 @@ export interface CreateGlobInput {
   readonly boardId: number;
   readonly title: string;
   readonly type: SlopType;
+  /**
+   * False when the caller didn't choose the type (a default, or intake's proposal): a member who may only create sames then
+   * gets a same. An explicit sub or super from them is refused (default true).
+   */
+  readonly typeChosen?: boolean;
   readonly category: Category;
   readonly group: string | null;
   readonly environment: string | null;
@@ -921,7 +927,32 @@ export class GlobService {
     }
   }
 
-  private async createWithItem(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
+  /**
+   * Only board admins choose sub or super (access.ts). A type nobody chose becomes a same for anyone else; a chosen one is
+   * refused. Non-members and unknown boards fall through to the checks in the transaction.
+   */
+  private async resolveType(email: string, input: CreateGlobInput): Promise<Result<CreateGlobInput>> {
+    if (input.type === 'same' || input.category === 'decision') return ok(input);
+    const actor = await this.deps.store.transaction((tx) => this.actorFor(tx, email, input.boardId));
+    if (!actor.ok || canChooseType(actor.value.role, input.type)) return ok(input);
+    if (input.typeChosen === false) return ok({ ...input, type: 'same' });
+    return forbidden(CHOOSE_TYPE_REFUSAL);
+  }
+
+  /** A person changing a glob to sub or super must be an admin (access.ts); null when allowed or when other checks will answer. */
+  private async refuseTypeChoice(email: string, id: string, to: SlopType): Promise<Result<never> | null> {
+    if (to === 'same') return null;
+    const actor = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return glob === null || glob.type === to ? null : this.actorFor(tx, email, glob.boardId);
+    });
+    return actor === null || !actor.ok || canChooseType(actor.value.role, to) ? null : forbidden(CHOOSE_TYPE_REFUSAL);
+  }
+
+  private async createWithItem(email: string, wanted: CreateGlobInput): Promise<Result<Glob>> {
+    const resolved = await this.resolveType(email, wanted);
+    if (!resolved.ok) return resolved;
+    const input = resolved.value;
     // Decisions come from knowledge proposals, the inbox and the backfill: never through the work form.
     if (input.category === 'decision') return invalidInput('A decision glob is created from a knowledge proposal or an inbox item, not directly');
     // A glob about to start waits for open globs that may change the same exclusive paths (read before the transaction:
@@ -1349,6 +1380,10 @@ export class GlobService {
       if (!checked.ok) return checked;
     }
     const { after: wanted, relations: stated, relationsBy, ...fields } = changes;
+    if (changes.type !== undefined) {
+      const refused = await this.refuseTypeChoice(email, id, changes.type);
+      if (refused !== null) return refused;
+    }
     // A same becoming a sub is about to start: the merge policy may hold it.
     const holds = changes.type === 'sub' ? await this.holdsFor(id) : [];
     const edit: { value: { readonly from: string[]; readonly to: string[] } | undefined } = { value: undefined };
@@ -1686,12 +1721,16 @@ export class GlobService {
   }
 
   /** A person makes an escalated glob a sub again. */
-  deescalate(email: string, id: string, version: number) {
+  async deescalate(email: string, id: string, version: number) {
+    const refused = await this.refuseTypeChoice(email, id, 'sub');
+    if (refused !== null) return refused;
     return this.command(email, id, version, (glob, ctx) => machine.deescalate(glob, ctx));
   }
 
   /** Make it a super: a person takes over a failed sub or same whose routine asked for pairing. Counts as a type correction. */
   async makeSuper(email: string, id: string, version: number) {
+    const refused = await this.refuseTypeChoice(email, id, 'super');
+    if (refused !== null) return refused;
     const before: { type: SlopType | null } = { type: null };
     const result = await this.command(email, id, version, (glob, ctx) => {
       before.type = glob.type;
