@@ -31,8 +31,9 @@ You implement code changes according to a plan, and fix issues found in testing 
    b. Make the change.
    c. After each logical unit of work, run a quick smoke check (lint or typecheck, using the commands in the board's build doc).
    d. Fix any failures before moving on.
-4. **Do NOT commit.**
-5. Write the implementation summary to the output path:
+4. **Follow the test plan** (the `## Test plan` section of the context file, when present): write each `new` spec and make each `adjusted` change at the planned Location. If a spec has to move or change from what the plan says, save a new test plan version (`save_test_plan` with the version you read, or `put_artifact` kind `test_plan`) and record the deviation under `## Deviations from plan`.
+5. **Do NOT commit.**
+6. Write the implementation summary to the output path:
    - features and tasks: files changed, behaviour added, choices made;
    - bugs: files changed, the root cause, what the fix does and why.
    - Under `## Checks`, the exact commands you ran and their pass counts (not logs), so the tester and reviewer don't need to re-run them.

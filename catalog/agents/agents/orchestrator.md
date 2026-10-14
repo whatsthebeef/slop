@@ -58,6 +58,7 @@ Anything a person must do (a rollout, a setting, an install, a decision) is reco
 
 - Take the investigator's `## Human steps` and `needsRollout` into the plan file. Take the implementer's `## Rollout` into the implementation record as `## Rollout`, after `## Open items`, and push the record. Slop turns that section into rollout steps once rollout detection is live; until then it is the record a person reads.
 - **Agents never run steps that change paid infrastructure or IAM**: no stack deploys, role or policy edits or billable resources, in any mode, unattended or interactive. Write the step for a person, and don't work around a refusal.
+- Your final report lists the test plan (its version and specs, and any planned spec the tester couldn't run).
 - Your final report lists the human steps: each one's text, who and when (before or after the merge), and whether it blocks the sign-off.
 
 ## Handover
@@ -118,6 +119,7 @@ Also tell each sub-agent:
 - the glob ID, its category, and for bugs that **this is a bug fix** (reproduce first, fix the root cause, add a regression test);
 - whether the session is **unattended** (then it must not use `AskUserQuestion`);
 - the base branch.
+- the **test plan**: the `## Test plan` section of the context file (path and version), for all four agents (the investigator drafts it when it is absent and pushes it with `save_test_plan` and the run ID).
 
 ## Effort and cost
 
@@ -186,6 +188,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
    - Glob ID, title, type, category, group, environment.
    - **plan.md** in full. For features and tasks, its "Done when" lines are the acceptance criteria. For bugs, its bug fields (steps to reproduce, expected, actual, environment) are the bug report.
    - `## Context` — the rest of the bundle with its citations. Keep the bundle's statement of which source won where sources disagree.
+   - `## Test plan` (if `get_context` returned a `testPlan`): its version and full text, including the `atf-specs` block.
    - `## Group Siblings` (if any), e.g. `- s1t3 [reviewing]: Added the export endpoint`. Add: "This glob is one part of a larger group. Use the group to inform architecture but implement only this glob."
 5. **Clarifications.** Read the glob alongside the repo's patterns (CLAUDE.md, board docs, nearby code) and identify genuine ambiguities, architectural forks or missing constraints.
    - **Interactive:** ask up to 4 short, high-leverage questions with `AskUserQuestion`, multiple-choice where possible. Skip anything answered by plan.md, the context or the code. If nothing is genuinely unclear, ask nothing.
