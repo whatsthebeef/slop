@@ -24,6 +24,7 @@ export const ESCALATION_CRITERIA = [
   'agent_instructions',
   'scope_beyond_plan',
   'open_findings',
+  'size',
   'other',
 ] as const;
 export type EscalationCriterion = (typeof ESCALATION_CRITERIA)[number];
@@ -41,6 +42,7 @@ export const CRITERION_TEXT: Record<EscalationCriterion, string> = {
   agent_instructions: 'changed agent instructions',
   scope_beyond_plan: 'scope well beyond the plan',
   open_findings: 'in-scope review findings still open after the allowed rounds',
+  size: 'a sub the size check flagged as too big for one pull request',
   other: 'another concrete reason',
 };
 

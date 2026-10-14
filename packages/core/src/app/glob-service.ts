@@ -142,6 +142,14 @@ export interface SplitPart {
 
 export const MAX_SPLIT_PARTS = 10;
 
+/** The escalation a flagged sub gets: the size check's reasons and evidence, for the `size` criterion. */
+const sizeEscalationInput = (check: { readonly reasons: readonly string[]; readonly evidence: readonly string[] }) => ({
+  reason: `Flagged oversized: ${check.reasons.join('; ')}`,
+  evidence: check.evidence.join('\n'),
+  criterion: 'size',
+  by: 'slop',
+});
+
 /** What a split decided about one part's escalation; `change` is null when the part had none before and has none now. */
 interface PartEscalation {
   readonly type: SlopType;
@@ -171,13 +179,19 @@ export const splitEscalations = (
   actor: string,
   now: string,
 ): PartEscalation[] => {
-  const before = original.escalation ?? null;
+  const escalated = original.escalation ?? null;
+  // The size escalation is the split's own doing to undo: the parts are judged on their own, and none carries it over.
+  const sizeOnly = escalated?.criterion === 'size';
+  const before = sizeOnly ? null : escalated;
   const matches = parts.map((p) => (p.type === 'super' ? null : matchRiskAreas(areas, p.plan)));
   const anyMatch = matches.some((m) => m !== null && m.areas.length > 0);
   return parts.map((part, index): PartEscalation => {
     const match = matches[index];
-    const had = index === 0 ? before : null;
-    if (match === null || match === undefined) return { type: part.type, escalation: had, change: null };
+    const had = index === 0 ? escalated : null;
+    if (match === null || match === undefined) {
+      const lifted = sizeOnly && had !== null ? { kind: 'Deescalated' as const, data: { reason: had.reason } } : null;
+      return { type: part.type, escalation: sizeOnly ? null : had, change: lifted };
+    }
     if (match.areas.length > 0) {
       const reason = `Touches the board's risk areas: ${match.areas.map((a) => a.name).join(', ')}`;
       return escalatedAs({ reason, criterion: before?.criterion ?? 'risk_area', evidence: splitEvidence(original.id, match), by: actor, at: now }, 'same');
@@ -1045,7 +1059,16 @@ export class GlobService {
       const implied = mergeImplied(holds, []);
       const createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(sizeHold === undefined ? {} : { sizeHold }) };
       const ctx = await this.context(actor.value, board);
-      const transition = machine.create(createInput, board, ctx, relations);
+      const created0 = machine.create(createInput, board, ctx, relations);
+      if (!created0.ok) return created0;
+      // A sub the size check flagged is a same from the start: too big for one clean PR to merge without a person's review.
+      // It is still held in Planning for the split decision.
+      let transition: Result<Transition> = created0;
+      if (size !== null && size.flagged && created0.value.glob.type === 'sub') {
+        const escalated = machine.escalateToSame(created0.value.glob, sizeEscalationInput(size), ctx);
+        if (!escalated.ok) return escalated;
+        transition = ok({ ...escalated.value, events: [...created0.value.events, ...escalated.value.events], effects: created0.value.effects });
+      }
       if (!transition.ok) return transition;
       const glob = { ...transition.value.glob, version: 1 };
       if (!(await tx.insertGlob(glob, input.idempotencyKey))) {
@@ -1209,9 +1232,11 @@ export class GlobService {
 
       // Each part's own risk: the board's risk areas against that part's plan, not the whole feature's.
       const areas = await tx.listRiskAreas(board.id);
+      // A sub that was made a same by the size check splits into subs again, unless a part says otherwise.
+      const splitDefaultType: SlopType = original.escalation?.criterion === 'size' ? 'sub' : original.type;
       const escalations = splitEscalations(
         original,
-        wanted.map((part) => ({ plan: fillPartIds(part.plan, ids), type: part.type ?? original.type })),
+        wanted.map((part) => ({ plan: fillPartIds(part.plan, ids), type: part.type ?? splitDefaultType })),
         areas.length > 0 ? areas : defaultAreas(board.id, ctx.now),
         email,
         ctx.now,
@@ -1284,7 +1309,7 @@ export class GlobService {
             id: partId,
             boardId: board.id,
             title: part.title,
-            type: escalations[index]?.type ?? part.type ?? original.type,
+            type: escalations[index]?.type ?? part.type ?? splitDefaultType,
             category: part.category ?? original.category,
             group,
             environment: original.environment,
@@ -1903,11 +1928,16 @@ export class GlobService {
    * is always waiting on something.
    */
   async reconcileSizeHold(id: string): Promise<void> {
-    const lift = await this.deps.store.transaction(async (tx) => {
-      const glob = await tx.getGlob(id);
-      return glob !== null && glob.status === 'planning' && glob.type === 'sub' && glob.waiting != null && !unresolved(await tx.getSizeCheck(id));
-    });
-    if (lift) await this.release(id);
+    const read = await this.deps.store.transaction(async (tx) => ({ glob: await tx.getGlob(id), check: await tx.getSizeCheck(id) }));
+    const { glob, check } = read;
+    const heldInPlanning = glob !== null && glob.status === 'planning' && glob.waiting != null;
+    if (heldInPlanning && check !== null && unresolved(check) && glob.type === 'sub') {
+      // Newly flagged on a recheck: the sub becomes a same, with the size check's reasons.
+      await this.command(null, id, null, (g, ctx) => machine.escalateToSame(g, sizeEscalationInput(check), ctx));
+    } else if (heldInPlanning && !unresolved(check) && (glob.type === 'sub' || glob.escalation?.criterion === 'size')) {
+      // No longer flagged: the glob held for it starts (a size-escalated same stays a same).
+      await this.release(id);
+    }
     // The plan was re-judged: a glob that now looks big is investigated (a no-op when it already was).
     await this.autoInvestigate(id);
   }

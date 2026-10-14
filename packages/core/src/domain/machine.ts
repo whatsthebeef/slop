@@ -2485,6 +2485,8 @@ export const escalateToSame = (
     evidence?: string | null;
     criterion?: string | null;
     runId?: string | null;
+    /** Who escalated when there is no actor (slop itself, for the size check). */
+    by?: string;
   },
   ctx: Context,
 ): Result<Transition> => {
@@ -2510,7 +2512,7 @@ export const escalateToSame = (
     reason,
     criterion,
     ...(evidence === '' ? {} : { evidence }),
-    by: ctx.actor?.email ?? 'routine',
+    by: input.by ?? ctx.actor?.email ?? 'routine',
     at: ctx.now,
     ...(runId === null ? {} : { runId }),
   };
