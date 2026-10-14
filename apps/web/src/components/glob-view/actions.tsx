@@ -795,7 +795,6 @@ export const GlobReset = ({
   const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
   return (
     <div className="grid gap-2 rounded border border-destructive/50 p-3" data-testid="reset-area">
-      <div className="text-xs font-medium text-destructive">Reset</div>
       <div className="flex flex-wrap gap-2">
         {resetActions.map((action) => (
           <Tip key={action} text={tipOf(action, glob)}>

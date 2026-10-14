@@ -361,6 +361,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
       // Artifacts don't bump the glob's version, so always refetch (the view carries their summaries).
       void client.invalidateQueries({ queryKey: ['artifact', id] });
       void client.invalidateQueries({ queryKey: ['plan', id] });
+      void client.invalidateQueries({ queryKey: ['test-plan', id] });
     } else {
       const known = client.getQueryData<GlobView[]>(globsKey(boardId))?.find((g) => g.id === id);
       if (known !== undefined && hint.version !== undefined && known.version >= hint.version) return;

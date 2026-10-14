@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, RequestError } from '@/lib/api';
-import type { BoardView, GlobView } from '@/lib/api';
+import type { BoardView, GlobSpecResult, GlobView } from '@/lib/api';
 import { deploysKey, globDeploysKey, globEnvironmentsKey, globTestsKey } from '@/lib/live';
 import { useToast } from '@/toast';
 import { atfLine } from './glob-card';
@@ -165,17 +165,56 @@ export const EnvironmentsSection = ({ board, glob }: { board: BoardView; glob: G
   );
 };
 
+
+/** One planned spec's latest result, in words and a tone. A spec nothing has reported says so rather than showing as passed. */
+const specResult = (r: GlobSpecResult): { text: string; tone: string } => {
+  switch (r.status) {
+    case 'passed':
+      return { text: 'passed', tone: 'text-signal-strong' };
+    case 'failed':
+      return { text: 'failed', tone: 'text-red' };
+    case 'skipped':
+      return { text: 'skipped', tone: 'text-muted-foreground' };
+    case 'missing':
+      return { text: 'missing (not found at run time)', tone: 'text-required' };
+    case null:
+      return { text: 'no result yet', tone: 'text-muted-foreground' };
+  }
+};
+
 /**
- * The glob's ATF runs in the glob view: its branch runs, and the runs against the release and integration commits that
- * hold it. A failure is a flag only. Hidden until there is a run.
+ * The glob's ATF in the glob view: each spec its test plan lists with the latest result and a link to the run, then its
+ * branch runs and the runs against the release and integration commits that hold it. A failure is a flag only. Hidden
+ * until there is a run or a planned spec.
  */
 export const TestsSection = ({ glob }: { glob: GlobView }) => {
-  const query = useQuery({ queryKey: globTestsKey(glob.id), queryFn: () => api.globTests(glob.id) });
-  const runs = query.data ?? [];
-  if (runs.length === 0) return null;
+  // Under the runs-only key's prefix, so the same live invalidation reaches it.
+  const query = useQuery({ queryKey: [...globTestsKey(glob.id), 'view'], queryFn: () => api.globTestsView(glob.id) });
+  const runs = query.data?.value ?? [];
+  const specs = query.data?.specs ?? [];
+  if (runs.length === 0 && specs.length === 0) return null;
   return (
     <section className='grid gap-2' aria-label='Tests' data-testid='tests'>
       <h3 className='text-xs font-semibold text-muted-foreground'>Tests</h3>
+      {specs.length > 0 && (
+        <ul className='grid gap-1 font-mono text-[11px]' aria-label='Planned specs' data-testid='spec-results'>
+          {specs.map((r) => {
+            const result = specResult(r);
+            return (
+              <li key={r.spec} className='flex flex-wrap gap-x-2' data-testid='spec-result' data-status={r.status ?? 'none'}>
+                <span className='break-all'>{r.spec}</span>
+                <span className={result.tone}>{result.text}</span>
+                {r.at != null && <span className='text-muted-foreground'>{when(r.at)}</span>}
+                {r.url != null && (
+                  <a className='underline' href={r.url} target='_blank' rel='noreferrer'>
+                    run
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
       <ul className='grid gap-1 font-mono text-[11px]'>
         {runs.map((run, i) => (
           <li key={run.id ?? `${run.scope}:${run.environment ?? ''}:${run.sha}:${run.at}:${String(i)}`} className='flex flex-wrap gap-x-2' data-testid='test-run'>

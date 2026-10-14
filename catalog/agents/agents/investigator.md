@@ -48,6 +48,16 @@ You will receive:
 
 **Hotspots:** the `hotspots` field of `get_context` lists the files that keep conflicting on this board (path, conflicts, globs, merges, size). Check it against the files you plan to touch. If one is hot, say so in the investigation (under `## Risks / Unknowns`) with its numbers. If a refactor glob is open or proposed for it, recommend a start relation on that glob (`relations`), so this one starts once the file is quiet; if none exists, recommend keeping the edit to the hotspot minimal and putting new code in a new module.
 
+### 2b. The test plan
+
+The glob's **test plan** is a second document next to plan.md: which end-to-end specs cover the change. Read it from `get_context`'s `testPlan` field.
+
+- **If `testPlan` is present**, keep it: check its rows against the code and note any that look wrong under `## Risks / Unknowns`. Don't replace a person's test plan.
+- **If it is absent, draft one.** Search the repo for its end-to-end (ATF, Playwright or similar) specs and for the board's testing docs. Write a matrix with the columns `Name | Status | Location | Description`, where Status is `new` (to be written), `existing` (already covers the change) or `adjusted` (exists, needs a change; say which in Description). Follow it with a fenced block, ```` ```atf-specs ````, holding a `specs:` list of repo-relative spec paths (every Location) and a `grep:` line (a title filter, or `null`).
+- **Respect the board's choices.** If a choice says no new end-to-end specs unless asked, mark rows `existing` wherever a spec already covers the behaviour, and use `new` only where nothing does.
+- **Flag specs that don't exist.** A Location that is not in the repo and whose Status is not `new` is a mistake: fix the row, or list it under `## Risks / Unknowns`.
+- **Push v1** with `save_test_plan(id, content, version: 0, runId)` (or `put_artifact(id, kind: 'test_plan', …, runId)`), so the person reviews it in Planning. Use the version `get_context` gave you when one exists. A test plan is not a commit: investigate-only runs push it too.
+
 ### 3. Produce proposals
 
 Write one or more **high-level proposals** to the output path. If only one approach makes sense, present just that one. If there are meaningfully different approaches (not minor variations), present up to 3. Always include a recommendation: in unattended mode it is the one that will be implemented.

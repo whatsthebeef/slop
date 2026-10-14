@@ -29,6 +29,7 @@ const board = (
   defaultRoutineOwner: null,
   environments: [],
   sensitivePaths: [],
+  atf: null,
   readinessTicks: {},
   deploy: null,
   agentSetVersion: 0,

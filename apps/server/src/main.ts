@@ -34,6 +34,8 @@ import { HostBranchFiles } from './branch-files.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
+import { atfExecutors } from './atf-executors.js';
+import { CodeBuildAtfStarter } from './atf-starter.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
@@ -43,6 +45,7 @@ import { CapabilityReader, CapabilityWatch } from './capabilities.js';
 import { reviewExecutors } from './review-executors.js';
 import { makeRunReview } from './review-runner.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
+import { mountAtfSpecs } from './http/atf-specs.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
 import { LocalFollowWatch } from './local-follow.js';
@@ -165,6 +168,7 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
       logError,
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
+    ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(), boardOf, log: logError }),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
     // `rolloutService` is built below and only called once a job runs.
     ...rolloutExecutors(
@@ -530,6 +534,7 @@ mountSkillZip(app, {
   uploadHost: config.ATTACHMENTS_BUCKET === undefined ? null : `${config.ATTACHMENTS_BUCKET}.s3.${config.ATTACHMENTS_REGION}.amazonaws.com`,
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
+mountAtfSpecs(app, { testRuns, boards, tokens: integrationTokens });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
 mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, contextTuning, hotspots, contextReport, knowledgePage, agentSetCommit, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.

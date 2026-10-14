@@ -1,5 +1,5 @@
 import { EFFECT_CHECK_GLOBS_MAX, EFFECT_CHECK_GLOBS_MIN, ENVIRONMENT_ROLES, recentPeriods, ROLES } from '@slop/core';
-import type { AgentKbApproval, DependencyCause, DeployIntegration, Environment, RiskAreaCause, Role, SizeOutcome, SubLimitChange } from '@slop/core';
+import type { AgentKbApproval, AtfIntegration, DependencyCause, DeployIntegration, Environment, RiskAreaCause, Role, SizeOutcome, SubLimitChange } from '@slop/core';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -44,6 +44,7 @@ export const SettingsPage = () => {
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<Role>('dev');
   const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
+  const [atf, setAtf] = useState<AtfIntegration | null>(null);
   const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
   const [agentKbApproval, setAgentKbApproval] = useState<AgentKbApproval>('docs');
   const [autoInvestigate, setAutoInvestigate] = useState(true);
@@ -56,6 +57,8 @@ export const SettingsPage = () => {
     setBaseBranch(board.data.baseBranch);
     setRepo(board.data.repo ?? '');
     setDeploy(board.data.deploy);
+    // Optional: an older server doesn't send it.
+    setAtf(board.data.atf ?? null);
     setEffectCheckGlobs(String(board.data.effectCheckGlobs));
     setAgentKbApproval(board.data.agentKbApproval);
     setAutoInvestigate(board.data.autoInvestigate);
@@ -71,6 +74,7 @@ export const SettingsPage = () => {
         baseBranch,
         repo: repo.trim() === '' ? null : repo.trim(),
         deploy,
+        atf,
         agentKbApproval,
         autoInvestigate,
         review: reviewSettingsOfForm(review),
@@ -371,6 +375,7 @@ export const SettingsPage = () => {
           disabled={!admin}
           onChange={setDeploy}
         />
+        <AtfSettings atf={atf} disabled={!admin} onChange={setAtf} />
         {admin && (
           <div className='flex gap-2'>
             <Button variant='outline' size='sm' onClick={() => setEnvs([...envs, { name: '', allowBranchDeploy: true }])}>
@@ -1303,6 +1308,76 @@ const DeploySettings = ({
         Workflow file
         <Input value={deploy.workflow} disabled={disabled} onChange={(e) => onChange({ ...deploy, workflow: e.target.value })} />
       </Label>
+    )}
+  </div>
+);
+
+const ATF_PUSH_DEFAULT: AtfIntegration = { provider: 'codebuild', region: 'us-east-1', project: '', mode: 'push' };
+
+/**
+ * How the board's ATF stage learns which specs to run after a deploy. Pull (the default, nothing to set): the pipeline's
+ * `.sstor/atf-specs.sh` asks slop. Push: slop starts the board's CodeBuild project itself with the list in environment
+ * variables. A person sets up the project and the role; slop creates nothing in AWS.
+ */
+const AtfSettings = ({
+  atf,
+  disabled,
+  onChange,
+}: {
+  atf: AtfIntegration | null;
+  disabled: boolean;
+  onChange: (atf: AtfIntegration | null) => void;
+}) => (
+  <div className='grid gap-2' data-testid='atf-settings'>
+    <h3 className='text-xs font-semibold text-muted-foreground'>Acceptance tests after a deploy</h3>
+    <Label>
+      The ATF stage gets its spec list
+      <Select
+        value={atf?.mode === 'push' ? 'push' : 'pull'}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === 'push' ? (atf ?? ATF_PUSH_DEFAULT) : null)}
+      >
+        <option value='pull'>By asking slop (the pipeline calls the spec list endpoint)</option>
+        <option value='push'>From slop starting the CodeBuild project</option>
+      </Select>
+    </Label>
+    {atf?.mode === 'push' && (
+      <>
+        <div className='grid grid-cols-2 gap-3'>
+          <Label>
+            Region
+            <Input value={atf.region} disabled={disabled} onChange={(e) => onChange({ ...atf, region: e.target.value })} />
+          </Label>
+          <Label>
+            ATF project
+            <Input value={atf.project} disabled={disabled} onChange={(e) => onChange({ ...atf, project: e.target.value })} />
+          </Label>
+        </div>
+        <Label>
+          Role slop assumes to start it (blank: slop's own role)
+          <Input
+            value={atf.roleArn ?? ''}
+            disabled={disabled}
+            placeholder='arn:aws:iam::123456789012:role/slop-start-atf'
+            onChange={(e) => {
+              const roleArn = e.target.value.trim();
+              onChange({
+                provider: atf.provider,
+                region: atf.region,
+                project: atf.project,
+                mode: atf.mode,
+                ...(roleArn === '' ? {} : { roleArn }),
+              });
+            }}
+          />
+        </Label>
+        <p className='text-xs text-muted-foreground'>
+          After each checked deploy slop starts the project with <code>SLOP_ATF_SPECS</code>, <code>SLOP_ATF_GREP</code>,{' '}
+          <code>SLOP_ENVIRONMENT</code> and <code>SLOP_SHA</code>. Someone with AWS access must allow{' '}
+          <code>codebuild:StartBuild</code> on the project for slop's role (or for the role above, which must trust slop's
+          role for <code>sts:AssumeRole</code>). A failed start never blocks anything.
+        </p>
+      </>
     )}
   </div>
 );

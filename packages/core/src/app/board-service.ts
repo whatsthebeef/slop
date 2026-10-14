@@ -44,6 +44,7 @@ export type BoardSettings = {
     | 'autoInvestigate'
     | 'knowledgePageIntervalMinutes'
     | 'deploy'
+    | 'atf'
     | 'readinessTicks'
   >
 >;
@@ -151,6 +152,10 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   }
   if (deploy?.provider === 'github_actions' && deploy.workflow.trim() === '') {
     return invalidInput('GitHub Actions deploys need a workflow file');
+  }
+  const atf = settings.atf;
+  if (atf !== undefined && atf !== null && (atf.region.trim() === '' || atf.project.trim() === '')) {
+    return invalidInput('ATF needs a region and a CodeBuild project');
   }
   return ok(null);
 };

@@ -26,9 +26,11 @@ export interface EnvironmentDeploy {
   readonly at: string;
   /** The reporter's event ID: a redelivered event is recorded once per board. */
   readonly eventId: string;
+  /** When slop finished the containment check for this deploy (`recordContainment`); null until then. */
+  readonly checkedAt: string | null;
 }
 
-export type NewEnvironmentDeploy = Omit<EnvironmentDeploy, 'id'>;
+export type NewEnvironmentDeploy = Omit<EnvironmentDeploy, 'id' | 'checkedAt'>;
 
 /** Whether an environment held a glob when it was last checked. */
 export interface GlobPresence {

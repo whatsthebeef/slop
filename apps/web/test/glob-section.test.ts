@@ -5,15 +5,26 @@ const parse = (query: string) => parseGlobTarget(new URLSearchParams(query));
 
 describe('parseGlobTarget', () => {
   it('reads section, artifact and label', () => {
-    expect(parse('section=artifacts&artifact=attachment&label=Decisions')).toEqual({ section: 'artifacts', artifact: 'attachment', label: 'Decisions' });
+    expect(parse('section=artifacts&artifact=attachment&label=Decisions')).toEqual({ section: 'artifacts', artifact: 'attachment', label: 'Decisions', tab: null });
   });
   it('keeps an artifact without a section (older links)', () => {
-    expect(parse('artifact=independent_review')).toEqual({ section: null, artifact: 'independent_review', label: null });
+    expect(parse('artifact=independent_review')).toEqual({ section: null, artifact: 'independent_review', label: null, tab: null });
   });
   it('ignores an unknown or empty section', () => {
     expect(parse('section=nope').section).toBeNull();
     expect(parse('section=').section).toBeNull();
     expect(parse('').section).toBeNull();
+  });
+});
+
+describe('the tab inside a section', () => {
+  it('is read, written and passed on: ?section=plan&tab=test-plan', () => {
+    expect(parse('section=plan&tab=test-plan')).toEqual({ section: 'plan', artifact: null, label: null, tab: 'test-plan' });
+    expect(parse('section=plan&tab=').tab).toBeNull();
+    expect(globPath(15, 's15f94', { section: 'plan', tab: 'test-plan' })).toBe('/boards/15/globs/s15f94?section=plan&tab=test-plan');
+    expect(globQuery({ section: 'plan', tab: '' })).toBe('?section=plan');
+    expect(globTargetOf(new URLSearchParams('glob=s1t1&section=plan&tab=test-plan'))).toEqual({ section: 'plan', tab: 'test-plan' });
+    expect(boardGlobHref(3, 's3f1', { section: 'plan', tab: 'test-plan' })).toBe('/boards/3?glob=s3f1&section=plan&tab=test-plan');
   });
 });
 
@@ -29,7 +40,7 @@ describe('globPath', () => {
   });
   it('round-trips through parseGlobTarget', () => {
     const target = { section: 'findings' as const, artifact: 'independent_review' };
-    expect(parse(globQuery(target))).toEqual({ ...target, label: null });
+    expect(parse(globQuery(target))).toEqual({ ...target, label: null, tab: null });
   });
 });
 

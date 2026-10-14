@@ -42,6 +42,7 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   'refresh_base_checks',
   'recheck_overlaps',
   'check_environment',
+  'start_atf',
   // The KB pipeline's jobs name a KB item; the executor re-checks the item itself.
   'kb_route',
   'kb_draft',
