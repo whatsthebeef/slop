@@ -81,6 +81,8 @@ export const DocEditor = ({
   // The saved content the draft started from: live updates refetch the plan, and a change
   // underneath a draft is flagged rather than allowed to wipe it.
   const [base, setBase] = useState<string | null>(null);
+  // The version the draft started from: a save sends this, never the latest fetched, so Keep editing cannot overwrite a newer one.
+  const [baseVersion, setBaseVersion] = useState(0);
   // Always opens in preview; Edit switches to the editor, Save or Discard returns to preview.
   const [editing, setEditing] = useState(false);
   useEffect(() => {
@@ -92,14 +94,17 @@ export const DocEditor = ({
   const changedUnderneath = draft !== null && saved !== base;
 
   const edit = (text: string) => {
-    if (draft === null) setBase(saved);
+    if (draft === null) {
+      setBase(saved);
+      setBaseVersion(current?.version ?? 0);
+    }
     setDraft(text);
   };
 
   const save = useMutation({
     // The test plan checks the version it was read at, so a save over a newer one is refused instead of overwriting it.
     mutationFn: (content: string) =>
-      kind === 'plan' ? api.savePlan(globId, content) : api.saveTestPlan(globId, content, current?.version ?? 0),
+      kind === 'plan' ? api.savePlan(globId, content) : api.saveTestPlan(globId, content, baseVersion),
     onSuccess: () => {
       setDraft(null);
       setEditing(false);
@@ -134,6 +139,7 @@ export const DocEditor = ({
   // "Write one": the template is the draft, so Save is offered at once.
   const startWriting = () => {
     setBase(saved);
+    setBaseVersion(current?.version ?? 0);
     setDraft(template ?? '');
     setEditing(true);
   };
