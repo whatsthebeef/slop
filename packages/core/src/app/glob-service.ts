@@ -3,7 +3,8 @@ import type { Result } from '../domain/errors.js';
 import { canChooseType, CHOOSE_TYPE_REFUSAL } from './access.js';
 import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
-import { groupFromTitle } from '../domain/group.js';
+import { groupFromTitle, normaliseGroup } from '../domain/group.js';
+import { inGroup } from '../domain/group-view.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
@@ -79,7 +80,13 @@ export interface RelationInput {
   readonly gate?: RelationGate;
   readonly until?: RelationUntil;
   readonly reason?: string | null;
+  /** Set when the relation is one of a group-wide decision's (see `holdGroup`): the group it was set for. */
+  readonly group?: string | null;
 }
+
+/** Whether a glob is already past a gate, so a relation on that gate holds nothing: started, merged or signed off. */
+const pastGate = (glob: Glob, gate: RelationGate): boolean =>
+  gate === 'start' ? glob.status !== 'planning' : gate === 'merge' ? hasMerged(glob) : glob.status === 'signed_off';
 
 /** The longest reason a relation keeps. */
 export const MAX_RELATION_REASON = 300;
@@ -933,7 +940,10 @@ export class GlobService {
   // -------------------------------------------------------------------------
   // Commands from people (each carries the version the client read)
 
-  async create(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
+  async create(email: string, wanted: CreateGlobInput): Promise<Result<Glob>> {
+    // A glob created in a group gets the group-wide decisions still open on it, so a sub can't start before they are decided.
+    const inherited = wanted.group === null || wanted.category === 'decision' ? [] : await this.groupRelationsFor(wanted.boardId, wanted.group);
+    const input = inherited.length === 0 ? wanted : { ...wanted, relations: [...inherited, ...(wanted.relations ?? [])] };
     try {
       return await this.createWithItem(email, input);
     } catch (e) {
@@ -1035,7 +1045,7 @@ export class GlobService {
         if (!shape.ok) return shape;
         const reason = (r.reason ?? '').trim();
         if (reason.length > MAX_RELATION_REASON) return invalidInput(`A reason is limited to ${MAX_RELATION_REASON} characters`);
-        explicit.push({ to: r.to, gate: r.gate ?? 'start', until, reason: reason === '' ? null : reason, evidence: [], source: by });
+        explicit.push({ to: r.to, gate: r.gate ?? 'start', until, reason: reason === '' ? null : reason, evidence: [], source: by, group: r.group ?? null });
       }
       const needs: NewRelation[] = [
         ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: by })),
@@ -1392,7 +1402,16 @@ export class GlobService {
       });
       if (!checked.ok) return checked;
     }
-    const { after: wanted, relations: stated, relationsBy, ...fields } = changes;
+    const { after: wanted, relations: statedHere, relationsBy, ...fields } = changes;
+    // A glob joining a group gets the group-wide decisions still open on it, in the same write that moves it.
+    let stated = statedHere;
+    if (changes.group !== undefined && changes.group !== null) {
+      const now = await this.peek(id);
+      if (now !== null && now.category !== 'decision' && !inGroup(now, changes.group)) {
+        const inherited = await this.groupRelationsFor(now.boardId, changes.group, now);
+        if (inherited.length > 0) stated = [...inherited, ...(statedHere ?? [])];
+      }
+    }
     if (changes.type !== undefined) {
       const refused = await this.refuseTypeChoice(email, id, changes.type);
       if (refused !== null) return refused;
@@ -1457,7 +1476,7 @@ export class GlobService {
     const list = [...new Map(wanted.map((w) => [`${w.to.trim()}|${w.gate ?? 'start'}`, { ...w, to: w.to.trim() }])).values()].filter((w) => w.to !== '');
     const found = new Map((await tx.getGlobs([...new Set(list.map((w) => w.to))])).map((g) => [g.id, g]));
     const add: NewRelation[] = [];
-    const update: { readonly id: string; readonly patch: { readonly until: RelationUntil; readonly reason: string | null } }[] = [];
+    const update: { readonly id: string; readonly patch: { readonly until: RelationUntil; readonly reason: string | null; readonly group?: string } }[] = [];
     const remove: string[] = [];
     let growing: Relation[] = [...board];
     for (const w of list) {
@@ -1475,13 +1494,13 @@ export class GlobService {
       if (!checked.ok) return checked;
       if (mine !== undefined && isActive(mine) && isExplicit(mine)) {
         if (mine.until === until && (reason === '' || mine.reason === reason)) continue;
-        const patch = { until, reason: reason === '' ? mine.reason : reason };
+        const patch = { until, reason: reason === '' ? mine.reason : reason, ...(w.group === undefined || w.group === null ? {} : { group: w.group }) };
         update.push({ id: mine.id, patch });
         growing = [...rest, { ...mine, ...patch }];
         continue;
       }
       if (mine !== undefined) remove.push(mine.id);
-      const draft: NewRelation = { to: w.to, gate, until, reason: reason === '' ? null : reason, evidence: [], source: by };
+      const draft: NewRelation = { to: w.to, gate, until, reason: reason === '' ? null : reason, evidence: [], source: by, group: w.group ?? null };
       add.push(draft);
       growing = [...rest, draftOf(glob.boardId, glob.id, draft)];
     }
@@ -1575,6 +1594,62 @@ export class GlobService {
     if (result.value.status === 'planning' && result.value.waiting != null) await this.release(id);
     const resumed = await this.gateReleased(id);
     return resumed.ok ? resumed : result;
+  }
+
+  /**
+   * The group-wide relations still open on a group, one per decision (or glob) and gate, as relations a glob joining the group
+   * should get: the ones set for the group that are active and whose `to` has not reached `until`.
+   */
+  private async groupRelationsFor(boardId: number, group: string, joiner: Glob | null = null): Promise<RelationInput[]> {
+    return this.deps.store.transaction(async (tx) => {
+      // A glob that joins keeps its own relation state: any row it already has to the same glob and gate (dismissed ones too) stands.
+      const own = joiner === null ? [] : await tx.listRelationsFrom([joiner.id]);
+      const open = (await tx.listRelations(boardId)).filter((r) => r.group !== null && isActive(r) && normaliseGroup(r.group) === normaliseGroup(group));
+      const targets = new Map((await tx.getGlobs([...new Set(open.map((r) => r.to))])).map((g) => [g.id, g]));
+      const wanted = new Map<string, RelationInput>();
+      for (const r of open) {
+        const target = targets.get(r.to);
+        if (target === undefined || isMet(r, toState(target)) || wanted.has(`${r.to}|${r.gate}`)) continue;
+        if (joiner !== null && (r.to === joiner.id || own.some((o) => o.to === r.to && o.gate === r.gate) || pastGate(joiner, r.gate))) continue;
+        wanted.set(`${r.to}|${r.gate}`, { to: r.to, gate: r.gate, until: r.until, reason: r.reason, group });
+      }
+      return [...wanted.values()];
+    });
+  }
+
+  /**
+   * Group-wide relation: every work glob in `group` can't pass `gate` until `id` (usually a decision) reaches `until`. One
+   * relation per glob (the usual rows, each marked with the group), so the decision's `holdsBack` lists them as usual; a glob
+   * that joins the group later gets it too while it is open. Globs already past the gate, decisions and `id` itself are
+   * left out. Returns the globs now held and those that failed with why (an error when none could be held). The per-glob rows are
+   * the only record: if none was written (every member past the gate), globs joining later get nothing.
+   */
+  async holdGroup(
+    email: string,
+    id: string,
+    group: string,
+    input: Omit<RelationInput, 'to' | 'group'>,
+    by: RelationsBy = 'person',
+  ): Promise<Result<{ readonly held: readonly string[]; readonly failed: readonly { readonly id: string; readonly message: string }[] }>> {
+    const source = await this.peek(id);
+    if (source === null) return notFound(`No glob ${id}`);
+    const actor = await this.deps.store.transaction((tx) => this.actorFor(tx, email, source.boardId));
+    if (!actor.ok) return actor;
+    const members = (await this.peekAll(source.boardId, {})).filter((g) => inGroup(g, group) && g.category !== 'decision' && g.id !== id);
+    if (members.length === 0) return notFound(`No group ${group} on board ${source.boardId}`);
+    const gate = input.gate ?? 'start';
+    const name = members[0]?.group ?? group;
+    const held: string[] = [];
+    const failed: { id: string; message: string }[] = [];
+    for (const glob of members) {
+      if (pastGate(glob, gate)) continue;
+      const added = await this.addRelation(email, id, null, { ...input, to: glob.id, group: name, reason: input.reason ?? `Group ${name} waits for this decision` }, 'holds_back', by);
+      if (added.ok) held.push(glob.id);
+      else failed.push({ id: glob.id, message: added.error.message });
+    }
+    // Nothing held because every attempt failed: say why instead of reporting success.
+    if (held.length === 0 && failed.length > 0) return invalidInput(`No glob of ${name} could be held: ${failed[0]?.id ?? ''}: ${failed[0]?.message ?? ''}`);
+    return ok({ held, failed });
   }
 
   /**

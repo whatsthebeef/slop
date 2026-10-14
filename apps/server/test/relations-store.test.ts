@@ -20,6 +20,7 @@ const relation = (patch: Partial<Relation> & Pick<Relation, 'id' | 'from' | 'to'
   reason: null,
   evidence: [],
   source: 'person',
+  group: null,
   dismissedAt: null,
   dismissedPlanHash: null,
   overriddenAt: null,
