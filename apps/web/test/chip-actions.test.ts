@@ -90,8 +90,9 @@ describe('card markup', () => {
     onMove: () => undefined,
     onArrow: () => undefined,
   };
-  it('renders Your turn as a button named for its action', () => {
+  it('renders Your turn as the corner status button only, with no separate button', () => {
     const html = renderToStaticMarkup(createElement(GlobCard, { ...props, glob: ready({ allowedActions: ['merge'] }), repo: 'a/b' }));
-    expect(html).toMatch(/<button[^>]*aria-label="Your turn: Merge PR #289"[^>]*data-testid="your-turn-chip"/);
+    expect(html).toMatch(/<button[^>]*data-testid="position"/);
+    expect(html).not.toContain('your-turn-chip');
   });
 });

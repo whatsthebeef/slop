@@ -180,9 +180,9 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     ]);
   }
   if (status !== null && status.kind === 'ready') {
-    // Your turn only ever opens the glob view from here; Merge and Done are run by the actions row's button.
+    // Merge and Done (an `act` click) are run by the corner itself unless something blocks; any other step opens the glob view.
     const turn = yourTurnClick(status, glob);
-    const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
+    const click: ChipClick = turn.kind === 'act' && hasBlocker(glob, now, viewer) ? { kind: 'section', target: cardTargets.actions() } : turn;
     return make('ready', 'human', status.text, status.tone, click, [status.tip]);
   }
   if (status !== null && position?.holder === 'machine' && (status.conflict === true || status.kind === 'checks' || status.kind === 'stuck' || status.kind === 'behind')) {
@@ -239,18 +239,4 @@ export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (position?.holder === 'stalled') return true;
   if (isEscalated(glob) || status?.turn === 'decide') return true;
   return status !== null && ['provisioning', 'base-red', 'checks', 'stuck'].includes(status.kind);
-};
-
-/** The Your turn step the card runs itself: Merge (after a confirming click) or Done. Anything else needs input in the glob view. */
-export const turnButton = (
-  glob: GlobView,
-  now: string,
-  viewer: HumanStepViewer | undefined,
-  blocked: boolean,
-): { readonly status: StatusLine; readonly click: Extract<ChipClick, { kind: 'act' }> } | null => {
-  if (blocked || decisionOf(glob) !== null) return null;
-  const status = statusLine(glob, now, viewer);
-  if (status === null || status.kind !== 'ready') return null;
-  const click = yourTurnClick(status, glob);
-  return click.kind === 'act' ? { status, click } : null;
 };
