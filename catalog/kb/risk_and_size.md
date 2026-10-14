@@ -53,7 +53,7 @@ Don't escalate for size alone (a large mechanical change, a rename across many f
 
 A part is a piece of the work that could ship and be reviewed on its own: it has its own files, its own "Done when", and the rest of the work doesn't need it merged first, or only needs it merged first (then it `needs` that part).
 
-- Count separate parts for the investigation block's `parts` and for `## Size`. Work that only makes sense as one change is **one part**, however many files it touches.
+- Count separate parts for the investigation block's `parts` and for `## Workstreams`. Work that only makes sense as one change is **one part**, however many files it touches.
 - Server, web and LLM work in one plan, several migrations, or large sections with no "Done when" are usually separate parts.
-- **Too big for one PR**: more than 3 independent parts, or more than 5 tasks. Say so under `## Size` with the cut you would make.
+- **Too big for one PR**: more than 3 independent parts, or more than 5 tasks. Cut it into workstreams under `## Workstreams` (built in parallel inside one run and one PR; not a board split).
 - Parts that share files or build on one another are chained with `needs`; parts that touch different code run in parallel.
