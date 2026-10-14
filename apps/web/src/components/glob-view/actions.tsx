@@ -454,16 +454,15 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   const moreRunning =
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
-  // The ▾ is the other half of the main button: with no main button there is nothing to attach it to, so nothing shows
-  // (the status in the header says what the machine is doing).
+  // The ▾ joins the main button; with none it stands alone (icon only, never a "More" label) so Pick up stays reachable.
   const hasMain = main !== null || stepTurn !== null;
-  const hasMenu = hasMain && moreActions.length + disabled.length > 0;
+  const hasMenu = moreActions.length + disabled.length > 0;
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          className="rounded-l-none border-l-primary-foreground/40 px-1.5"
+          className={hasMain ? 'rounded-l-none border-l-primary-foreground/40 px-1.5' : 'px-1.5'}
           disabled={busy}
           aria-label="More actions"
           data-testid="more-actions"
@@ -508,7 +507,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   ) : undefined;
   return (
     <>
-      {hasMain && (
+      {(hasMain || hasMenu) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {main === null && stepTurn !== null && (
@@ -536,6 +535,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
                 {menu}
               </div>
             )}
+            {!hasMain && menu}
           </div>
           {state.confirmingReady && (
             <div

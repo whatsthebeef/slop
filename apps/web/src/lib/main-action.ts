@@ -2,27 +2,24 @@ import type { Action } from '@slop/core';
 import { actionPresentation } from './action-presentation';
 import type { GlobView } from './api';
 
-type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> & Partial<Pick<GlobView, 'runs'>>;
+type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
+  Partial<Pick<GlobView, 'runs'>>;
 
-/** The machine failed this many runs in a row for the same cause: another retry is unlikely to help, so a person steps in. */
+/** The machine has failed this many runs in a row (a retry included, whatever the cause): another retry is unlikely to help, so a person steps in. */
 export const REPEATED_FAILURES = 2;
 
 /**
- * Whether the glob's latest runs all failed for the same cause since the last one that didn't. The cause is the kind of run
- * (an implementing run, a conflict fix, an investigation): a conflict fix that fails again is the same failure.
- * A run that ended without an outcome, or with a different one, breaks the streak.
+ * Whether the glob's latest runs failed back to back since the last one that didn't: a Retry was used and failed again.
+ * Superseded runs are skipped; a run that ended another way, or one still in progress, ends the streak.
  */
 export const failedRepeatedly = (glob: Pick<Subject, 'runs'>): boolean => {
   const runs = glob.runs ?? [];
   // A run in progress is the machine working: nothing is failing right now.
   if (runs.at(-1)?.state !== 'ended') return false;
-  const ended = runs.filter((run) => run.state === 'ended');
-  const last = ended.at(-1);
-  if (last === undefined || last.outcome !== 'failed') return false;
   let streak = 0;
-  for (const run of [...ended].reverse()) {
+  for (const run of [...runs].reverse()) {
     if (run.outcome === 'superseded') continue;
-    if (run.outcome !== 'failed' || run.purpose !== last.purpose) break;
+    if (run.outcome !== 'failed') break;
     streak += 1;
   }
   return streak >= REPEATED_FAILURES;

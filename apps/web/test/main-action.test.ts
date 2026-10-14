@@ -80,7 +80,7 @@ describe('mainAction after repeated failures', () => {
     expect(pick(['retrigger', 'pick_up'], glob({ status: 'in_progress', runs: [run('failed')] }))).toBe('retrigger');
   });
 
-  it('makes Pick up main once a retry failed the same way', () => {
+  it('makes Pick up main once a retry failed again', () => {
     expect(pick(['retrigger', 'pick_up'], failed)).toBe('pick_up');
     expect(pick(['resolve_conflict', 'pick_up'], glob({ status: 'in_progress', runs: [run('failed', 'resolve_conflict'), run('failed', 'resolve_conflict')] }))).toBe('pick_up');
   });
@@ -90,8 +90,8 @@ describe('mainAction after repeated failures', () => {
     expect(pick(['retrigger'], failed)).toBe('retrigger');
   });
 
-  it('counts only failures of the same kind since the last success', () => {
-    expect(failedRepeatedly({ runs: [run('failed', 'resolve_conflict'), run('failed')] })).toBe(false);
+  it('counts failures of any cause since the last success', () => {
+    expect(failedRepeatedly({ runs: [run('failed', 'resolve_conflict'), run('failed')] })).toBe(true);
     expect(failedRepeatedly({ runs: [run('failed'), run('completed'), run('failed')] })).toBe(false);
     expect(failedRepeatedly({ runs: [run('failed'), run('superseded'), run('failed')] })).toBe(true);
   });
