@@ -10,6 +10,8 @@ import type { Result } from './errors.js';
  * - `sizeIgnoredPaths`: path globs left out when a sub's size is measured (read by the sub gate, not here).
  * - `rolloutPaths`: path globs whose change usually needs a person after the merge (infrastructure, server settings):
  *   a merge touching one with no `## Rollout` in its implementation record is flagged (`rolloutPathsOf` has the defaults).
+ * - `subGateCheck`: the name of the check run a sub waits for before slop applies the policy and merges it
+ *   (`subGateCheckOf` has the default). A board whose repo still reports a differently named gate sets it here.
  *
  * `{}` is a valid policy: it exists, and nothing is configured.
  */
@@ -17,7 +19,15 @@ export interface MergePolicy {
   readonly exclusivePaths?: readonly string[];
   readonly sizeIgnoredPaths?: readonly string[];
   readonly rolloutPaths?: readonly string[];
+  readonly subGateCheck?: string;
 }
+
+/** The check a sub waits for when the policy names none: the repo's `checks` workflow, which runs on every PR. */
+export const DEFAULT_SUB_GATE_CHECK = 'checks';
+
+/** The gate check's name: the policy's own, or the default when it has none. */
+export const subGateCheckOf = (policy: { readonly subGateCheck?: string } | null | undefined): string =>
+  policy?.subGateCheck !== undefined && policy.subGateCheck !== '' ? policy.subGateCheck : DEFAULT_SUB_GATE_CHECK;
 
 /**
  * The rollout paths a board gets when its policy lists none: what the image deploy alone doesn't ship. Drizzle
@@ -31,14 +41,20 @@ export const DEFAULT_ROLLOUT_PATHS: readonly string[] = ['infra/**', 'apps/serve
 export const rolloutPathsOf = (policy: { readonly rolloutPaths?: readonly string[] } | null | undefined): readonly string[] =>
   policy?.rolloutPaths !== undefined && policy.rolloutPaths.length > 0 ? policy.rolloutPaths : DEFAULT_ROLLOUT_PATHS;
 
+/** Where the workflow reporting `check` lives by convention (`checks` in `checks.yml`); the default's file for a name that isn't a plain file name. */
+export const subGateWorkflowPath = (check: string): string =>
+  `.github/workflows/${/^[\w.-]+$/.test(check) ? check : DEFAULT_SUB_GATE_CHECK}.yml`;
+
 /** The one row's name. */
 export const MERGE_POLICY_NAME = 'merge-policy';
 /** Longest path glob, in characters. */
 export const MERGE_POLICY_PATH_MAX = 200;
 /** Most globs in one list. */
 export const MERGE_POLICY_PATHS_MAX = 50;
+/** Longest gate check name, in characters. */
+export const MERGE_POLICY_CHECK_MAX = 100;
 
-const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths'] as const;
+const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths', 'subGateCheck'] as const;
 type PolicyKey = (typeof KEYS)[number];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -64,7 +80,18 @@ const pathList = (policy: Record<string, unknown>, key: PolicyKey): Result<reado
   return ok(paths);
 };
 
-/** Checks an already-parsed value: an object with only the known lists, each a list of plain path globs. */
+const checkName = (policy: Record<string, unknown>): Result<string | undefined> => {
+  const value = policy.subGateCheck;
+  if (value === undefined) return ok(undefined);
+  if (typeof value !== 'string') return invalidInput('subGateCheck must be a check name (a string)');
+  const name = value.trim();
+  if (name === '') return invalidInput('subGateCheck must not be empty');
+  if (name.length > MERGE_POLICY_CHECK_MAX) return invalidInput(`subGateCheck is longer than ${MERGE_POLICY_CHECK_MAX} characters`);
+  if (/[\0\r\n]/.test(name)) return invalidInput('subGateCheck must be one line (no newlines or NUL)');
+  return ok(name);
+};
+
+/** Checks an already-parsed value: an object with only the known keys: path-glob lists and the gate check's name. */
 export const checkMergePolicy = (value: unknown): Result<MergePolicy> => {
   if (!isRecord(value)) return invalidInput('The merge policy must be a JSON object');
   const unknown = Object.keys(value).filter((k) => !(KEYS as readonly string[]).includes(k));
@@ -75,10 +102,13 @@ export const checkMergePolicy = (value: unknown): Result<MergePolicy> => {
   if (!ignored.ok) return ignored;
   const rollout = pathList(value, 'rolloutPaths');
   if (!rollout.ok) return rollout;
+  const gate = checkName(value);
+  if (!gate.ok) return gate;
   return ok({
     ...(exclusive.value === undefined ? {} : { exclusivePaths: exclusive.value }),
     ...(ignored.value === undefined ? {} : { sizeIgnoredPaths: ignored.value }),
     ...(rollout.value === undefined ? {} : { rolloutPaths: rollout.value }),
+    ...(gate.value === undefined ? {} : { subGateCheck: gate.value }),
   });
 };
 
@@ -100,6 +130,7 @@ export const renderMergePolicy = (policy: MergePolicy): string =>
       ...(policy.exclusivePaths === undefined ? {} : { exclusivePaths: policy.exclusivePaths }),
       ...(policy.sizeIgnoredPaths === undefined ? {} : { sizeIgnoredPaths: policy.sizeIgnoredPaths }),
       ...(policy.rolloutPaths === undefined ? {} : { rolloutPaths: policy.rolloutPaths }),
+      ...(policy.subGateCheck === undefined ? {} : { subGateCheck: policy.subGateCheck }),
     },
     null,
     2,

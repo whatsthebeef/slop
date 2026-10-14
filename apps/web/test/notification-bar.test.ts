@@ -93,7 +93,7 @@ describe('the notification bar', () => {
     });
 
     it('reads as one quiet line linking to the checklist', () => {
-      const [raised] = readinessNotifications(3, 'slop', [item('build_doc', 'Build doc', 'missing'), item('environments', 'Environments', 'missing'), item('sub_gate', 'Sub-gate workflow', 'ok')]);
+      const [raised] = readinessNotifications(3, 'slop', [item('build_doc', 'Build doc', 'missing'), item('environments', 'Environments', 'missing'), item('sub_gate', 'Checks workflow', 'ok')]);
       expect(raised).toMatchObject({
         severity: 'info',
         title: 'slop board setup: 2 items to do',

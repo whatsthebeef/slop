@@ -20,9 +20,9 @@ const unwrap = <T>(result: Result<T>): T => {
   return result.value;
 };
 
-/** A code host whose `sub-gate` check run on the head may already have completed. */
+/** A code host whose gate check run on the head may already have completed. */
 class FakeHost extends FakeCodeHost {
-  /** The completed `sub-gate` run on HEAD, or null while it is still running. */
+  /** The completed gate check run on HEAD, or null while it is still running. */
   subGate: { passed: boolean } | null = null;
   readonly lookups: string[] = [];
   diff: DiffSummary = { changedLines: 10, files: ['src/a.ts'] };

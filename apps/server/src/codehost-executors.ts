@@ -1,11 +1,11 @@
 import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { isRepoAccessFailure, isSetupFailure, machine, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, isSetupFailure, machine, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
-import { SUB_GATE_CHECK, repoOf } from './codehost.js';
+import { repoOf } from './codehost.js';
 
 /** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
 const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
@@ -40,6 +40,8 @@ export const codeHostExecutors = (
   objects: Pick<ObjectStore, 'delete'> | null = null,
   /** Milliseconds the glob's pending file uploads can still arrive (0: none); a run waits for them. Absent: file attachments are off. */
   pendingFiles: ((globId: string) => Promise<number>) | null = null,
+  /** The board's merge policy's `subGateCheck` (undefined: none set, so the default applies). */
+  subGateCheck: (boardId: number) => Promise<string | undefined> = () => Promise.resolve(undefined),
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -52,7 +54,7 @@ export const codeHostExecutors = (
    */
   const lookUpSubGate = async (repo: Repo, glob: Glob, sha: string, globs: GlobService) => {
     if (glob.type !== 'sub' || glob.status !== 'pr_open') return;
-    const check = await host.completedCheckRun(repo, sha, SUB_GATE_CHECK);
+    const check = await host.completedCheckRun(repo, sha, subGateCheckOf({ subGateCheck: await subGateCheck(glob.boardId) }));
     // Not finished yet: its webhook will come.
     if (check === null) return;
     await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCheckCompleted(g, check, ctx));

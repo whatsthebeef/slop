@@ -14,7 +14,8 @@ const ready: ReadinessFacts = {
   },
   repoConnected: true,
   installUrl: null,
-  subGateWorkflow: true,
+  gateCheck: 'checks',
+  checksWorkflow: true,
   claudeWorkflow: true,
   slopBot: 'slop[bot]',
   claudeAllowsSlop: true,
@@ -79,12 +80,20 @@ describe('board readiness', () => {
     expect(Object.values(stateOf(ready)).every((s) => s === 'ok')).toBe(true);
   });
 
+  it("names a board's own gate check and the workflow that reports it", () => {
+    const item = readiness({ ...ready, gateCheck: 'sub-gate', checksWorkflow: false }).find((i) => i.key === 'sub_gate');
+    expect(item?.detail).toMatch(/\.github\/workflows\/sub-gate\.yml \(reporting `sub-gate`\)/);
+    expect(item?.fix).toMatchObject({ href: 'https://github.com/acme/app/new/main?filename=.github/workflows/sub-gate.yml' });
+    const odd = readiness({ ...ready, gateCheck: 'CI / checks', checksWorkflow: false }).find((i) => i.key === 'sub_gate');
+    expect(odd?.fix).toMatchObject({ href: 'https://github.com/acme/app/new/main?filename=.github/workflows/checks.yml' });
+  });
+
   it('says what is missing, with a fix', () => {
     const items = readiness({
       ...ready,
       repoConnected: false,
       installUrl: 'https://github.com/apps/slop/installations/new?state=1',
-      subGateWorkflow: false,
+      checksWorkflow: false,
       committedAgentSetVersion: 2,
       missingCoreAreas: ['build', 'architecture'],
       board: { ...ready.board, environments: [{ name: 'dev', allowBranchDeploy: true }] },
@@ -92,7 +101,9 @@ describe('board readiness', () => {
     });
     const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
     expect(byKey.repo_app).toMatchObject({ state: 'missing', fix: { kind: 'link', href: 'https://github.com/apps/slop/installations/new?state=1' } });
-    expect(byKey.sub_gate?.fix).toMatchObject({ kind: 'link', href: 'https://github.com/acme/app/new/main?filename=.github/workflows/sub-gate.yml' });
+    expect(byKey.sub_gate?.fix).toMatchObject({ kind: 'link', href: 'https://github.com/acme/app/new/main?filename=.github/workflows/checks.yml' });
+    expect(byKey.sub_gate).toMatchObject({ title: 'Checks workflow', state: 'missing' });
+    expect(byKey.sub_gate?.detail).toMatch(/`checks`/);
     expect(byKey.agent_set?.detail).toMatch(/version 2; the board's is 3/);
     expect(byKey.build_doc).toMatchObject({ state: 'missing', fix: { kind: 'knowledge' } });
     expect(byKey.architecture_doc).toMatchObject({ state: 'missing', fix: { kind: 'knowledge' } });
@@ -103,7 +114,7 @@ describe('board readiness', () => {
   });
 
   it('marks unknown what slop cannot check yet', () => {
-    const states = stateOf({ ...ready, repoConnected: null, subGateWorkflow: null, committedAgentSetVersion: 'unknown' });
+    const states = stateOf({ ...ready, repoConnected: null, checksWorkflow: null, committedAgentSetVersion: 'unknown' });
     expect(states.repo_app).toBe('unknown');
     expect(states.sub_gate).toBe('unknown');
     expect(states.agent_set).toBe('unknown');
@@ -149,7 +160,8 @@ describe('stuck hints on cards', () => {
     glob({ type: 'sub', status: 'pr_open', updatedAt: NOW, pr: { number: 3, state: 'ready', headSha: head }, ...patch });
 
   it('flags a ready sub with no gate result after a while', () => {
-    expect(stuckHint(sub({ headChecks: null }), later)).toMatch(/No sub-gate result/);
+    expect(stuckHint(sub({ headChecks: null }), later)).toMatch(/No `checks` result after 15 minutes: is \.github\/workflows\/checks\.yml/);
+    expect(stuckHint(sub({ headChecks: null }), later, 'sub-gate')).toMatch(/No `sub-gate` result .*sub-gate\.yml/);
     expect(stuckHint(sub({ headChecks: null }), NOW)).toBeNull();
   });
 
