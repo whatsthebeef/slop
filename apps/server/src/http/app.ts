@@ -760,23 +760,27 @@ export const createApp = (deps: AppDeps) => {
       });
       const open = () => !stream.aborted;
       await stream.writeSSE({ event: 'ready', data: '{}' });
-      while (open()) {
-        const next = queue.shift();
-        if (next !== undefined) {
-          await stream.writeSSE({ event: 'hint', data: next });
-          continue;
+      try {
+        while (open()) {
+          const next = queue.shift();
+          if (next !== undefined) {
+            await stream.writeSSE({ event: 'hint', data: next });
+            continue;
+          }
+          // Wait for a hint, or send a `ping` event every 25 seconds. It is a named event, not an SSE comment,
+          // because the browser's EventSource hides comments, so the page couldn't tell a quiet stream from a dead one.
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, deps.pingMs ?? 25_000);
+            notify = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          });
+          notify = null;
+          if (queue.length === 0 && open()) await stream.writeSSE({ event: 'ping', data: '{}' });
         }
-        // Wait for a hint, or send a `ping` event every 25 seconds. It is a named event, not an SSE comment,
-        // because the browser's EventSource hides comments, so the page couldn't tell a quiet stream from a dead one.
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, deps.pingMs ?? 25_000);
-          notify = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        });
-        notify = null;
-        if (queue.length === 0 && open()) await stream.writeSSE({ event: 'ping', data: '{}' });
+      } finally {
+        unsubscribe();
       }
     });
   });
