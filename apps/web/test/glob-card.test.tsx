@@ -17,23 +17,49 @@ afterEach(cleanup);
 const head = 'd16d563aaaa';
 const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), ...patch }) as GlobView;
 const prOpen = (patch: Partial<GlobView> = {}) =>
-  view({ type: 'same', status: 'pr_open', pr: { number: 289, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...patch });
+  view({
+    type: 'same',
+    status: 'pr_open',
+    pr: { number: 289, state: 'ready', headSha: head },
+    headChecks: { sha: head, state: 'passed' },
+    ...patch,
+  });
 const files = ['apps/web/src/components/glob-dialog.tsx', 'apps/web/src/pages/board.tsx'];
 const stalledByConflict = () =>
   view({
     status: 'failed',
-    failure: { reason: `Merge conflict with main in ${files.join(', ')}`, at: NOW, kind: 'merge', conflict: { base: 'main', files } },
+    failure: {
+      reason: `Merge conflict with main in ${files.join(', ')}`,
+      at: NOW,
+      kind: 'merge',
+      conflict: { base: 'main', files },
+    },
   });
-const conflicting = () => prOpen({ implementer: 'dev@example.com', conflict: { base: 'main', files, since: 's1t9', at: NOW } });
+const conflicting = () =>
+  prOpen({
+    implementer: 'dev@example.com',
+    conflict: { base: 'main', files, since: 's1t9', at: NOW },
+  });
 const waitingOn = () =>
   view({
     status: 'planning',
-    blockedBy: ['s1t1', 's1t2', 's1t3', 's1t4'].map((id, i) => ({ id, state: 'open' as const, status: 'implementing' as const, depth: i + 1 })),
+    blockedBy: ['s1t1', 's1t2', 's1t3', 's1t4'].map((id, i) => ({
+      id,
+      state: 'open' as const,
+      status: 'implementing' as const,
+      depth: i + 1,
+    })),
     nextStartable: 's1t9',
   });
 const move = (action: 'start' | 'pick_up', g: GlobView): CardMove => {
   const { label, tip, icon } = actionPresentation(action, g);
-  return { action, direction: 'right', label: `${label} ▸`, description: `${label} ${g.id}: ${tip}`, icon };
+  return {
+    action,
+    direction: 'right',
+    label: `${label} ▸`,
+    description: `${label} ${g.id}: ${tip}`,
+    icon,
+  };
 };
 
 const base = () => ({
@@ -50,7 +76,7 @@ const base = () => ({
 const markup = (g: GlobView, moves: readonly CardMove[] = []) =>
   renderToStaticMarkup(
     <MemoryRouter>
-      <GlobCard {...base()} moves={moves} glob={g} repo='a/b' />
+      <GlobCard {...base()} moves={moves} glob={g} repo="a/b" />
     </MemoryRouter>,
   );
 const dom = (html: string) => {
@@ -59,20 +85,32 @@ const dom = (html: string) => {
   return root;
 };
 /** What a person reads on the card: the markup without the tooltips' hidden text. */
-const visible = (html: string) => (dom(html).querySelector('[data-glob-id]')?.cloneNode(true) as HTMLElement | null)?.textContent ?? '';
-const withoutTips = (html: string) => visible(html.replace(/<span id="[^"]+" class="sr-only">[\s\S]*?<\/span>/g, ''));
+const visible = (html: string) =>
+  (dom(html).querySelector('[data-glob-id]')?.cloneNode(true) as HTMLElement | null)?.textContent ??
+  '';
+const withoutTips = (html: string) =>
+  visible(html.replace(/<span id="[^"]+" class="sr-only">[\s\S]*?<\/span>/g, ''));
 
 describe('card rows', () => {
   it('renders the header, title, status line, chips and actions in that order', () => {
     const root = dom(markup(prOpen({ allowedActions: ['merge'] })));
-    const order = ['card-header', 'card-title', 'status-line', 'card-chips', 'card-actions'].map((id) => {
-      const el = root.querySelector(`[data-testid="${id}"]`);
-      expect(el, id).not.toBeNull();
-      return el;
-    });
+    const order = ['card-header', 'card-title', 'status-line', 'card-chips', 'card-actions'].map(
+      (id) => {
+        const el = root.querySelector(`[data-testid="${id}"]`);
+        expect(el, id).not.toBeNull();
+        return el;
+      },
+    );
     for (let i = 1; i < order.length; i++) {
       const [before, el] = [order[i - 1], order[i]];
-      expect(before !== null && before !== undefined && el !== null && el !== undefined && (before.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0, String(i)).toBe(true);
+      expect(
+        before !== null &&
+          before !== undefined &&
+          el !== null &&
+          el !== undefined &&
+          (before.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        String(i),
+      ).toBe(true);
     }
   });
 
@@ -96,8 +134,12 @@ describe('card rows', () => {
     const header = root.querySelector('[data-testid="card-header"]');
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
-    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
-    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('corner-marker');
+    expect(
+      corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label'),
+    ).toBe('task');
+    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe(
+      'corner-marker',
+    );
     expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
     expect(header?.firstElementChild?.className).toContain('truncate');
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
@@ -116,8 +158,15 @@ describe('card rows', () => {
       expect(avatar(g)?.lastElementChild?.textContent).toContain('AN');
       expect(avatar(g)?.textContent).toContain('Planner');
     });
-    it('shows nothing when the machine is implementing', () => {
-      const bottom = avatar(view({ implementer: null, generation: 1, runs: [run()] }));
+    it('shows the planner when the machine is implementing', () => {
+      const bottom = avatar(
+        view({ implementer: null, planner: 'ann@x.com', generation: 1, runs: [run()] }),
+      );
+      expect(bottom?.textContent).toContain('Planner: ann@x.com');
+      expect(bottom?.lastElementChild?.textContent).toContain('AN');
+    });
+    it('shows nothing for a slop-planned glob', () => {
+      const bottom = avatar(view({ implementer: null, planner: 'slop', runs: [] }));
       expect(bottom?.textContent).not.toMatch(/Planner|Implementer/);
     });
   });
@@ -127,12 +176,25 @@ describe('card rows', () => {
       ['a failure', () => view({ status: 'failed', failure: { reason: 'Run failed', at: NOW } })],
       ['a stall', stalledByConflict],
       ['a conflict', conflicting],
-      ['a handover', () => prOpen({ handover: { why: ['Checks failed'], next: 'Fix them', detail: [] } as unknown as GlobView['handover'] })],
+      [
+        'a handover',
+        () =>
+          prOpen({
+            handover: {
+              why: ['Checks failed'],
+              next: 'Fix them',
+              detail: [],
+            } as unknown as GlobView['handover'],
+          }),
+      ],
     ];
     /** Every key the glob view would store for this glob's messages, built the way the glob view builds them. */
     const keysOf = (g: GlobView): string[] => {
       const line = statusLine(g, NOW);
-      return [...(line === null ? [] : [statusKey(g, line)]), ...(g.handover == null ? [] : [handoverKey(g.handover)])];
+      return [
+        ...(line === null ? [] : [statusKey(g, line)]),
+        ...(g.handover == null ? [] : [handoverKey(g.handover)]),
+      ];
     };
 
     it.each(states)('renders no dismiss control on the card for %s', (_name, make) => {
@@ -141,12 +203,15 @@ describe('card rows', () => {
       expect(withoutTips(html)).not.toMatch(/[×✕]/);
     });
 
-    it.each(states)('shows the same short label for %s whether or not it was dismissed in the glob view', (_name, make) => {
-      const g = make();
-      const keys = keysOf(g);
-      expect(keys.length).toBeGreaterThan(0);
-      expect(markup({ ...g, dismissedKeys: keys })).toBe(markup(g));
-    });
+    it.each(states)(
+      'shows the same short label for %s whether or not it was dismissed in the glob view',
+      (_name, make) => {
+        const g = make();
+        const keys = keysOf(g);
+        expect(keys.length).toBeGreaterThan(0);
+        expect(markup({ ...g, dismissedKeys: keys })).toBe(markup(g));
+      },
+    );
   });
 
   it('shows a merge-conflict stall once, short, with no file names; the tooltip has the full reason', () => {
@@ -176,14 +241,21 @@ describe('card rows', () => {
     const root = dom(html);
     const waiting = root.querySelector('[data-testid="waiting-on"]');
     expect(waiting?.textContent).toBe('waiting on s1t1, s1t2 +2 · next: s1t9');
-    expect([...(waiting?.querySelectorAll('a') ?? [])].map((a) => a.textContent)).toEqual(['s1t1', 's1t2', 's1t9']);
+    expect([...(waiting?.querySelectorAll('a') ?? [])].map((a) => a.textContent)).toEqual([
+      's1t1',
+      's1t2',
+      's1t9',
+    ]);
     expect(html).not.toMatch(/blocked by/i);
     expect(html).not.toContain('after-chip');
     expect(html).toContain('Waits for, in order: s1t1 (Doing)');
   });
 
   it('puts the split chip in the chips row as a pill with the branch icon, not in the title or status line', () => {
-    const g = view({ status: 'planning', split: { source: 's1t5', part: 1, parts: ['s1t5', 's1t1'] } });
+    const g = view({
+      status: 'planning',
+      split: { source: 's1t5', part: 1, parts: ['s1t5', 's1t1'] },
+    });
     const root = dom(markup(g));
     const chip = root.querySelector('[data-testid="split-chip"]');
     expect(root.querySelector('[data-testid="card-chips"]')?.contains(chip ?? null)).toBe(true);
@@ -200,8 +272,18 @@ describe('card rows', () => {
   });
 
   it('keeps chip text on one line', () => {
-    const root = dom(markup(view({ status: 'planning', group: 'a-rather-long-group-name', clash: { with: 's1t2', paths: ['a.ts'] } })));
-    expect(root.querySelector('[data-testid="clash-chip"]')?.className).toContain('whitespace-nowrap');
+    const root = dom(
+      markup(
+        view({
+          status: 'planning',
+          group: 'a-rather-long-group-name',
+          clash: { with: 's1t2', paths: ['a.ts'] },
+        }),
+      ),
+    );
+    expect(root.querySelector('[data-testid="clash-chip"]')?.className).toContain(
+      'whitespace-nowrap',
+    );
     expect(root.querySelector('[data-testid="card-chips"]')?.className).toContain('flex-wrap');
     // The clash's paths live in the glob view, not in the card's tooltip.
     expect(root.innerHTML).not.toContain('a.ts');
@@ -242,7 +324,9 @@ describe('independent review icon', () => {
 
   it('says outdated when a later push left the review behind', () => {
     const root = dom(markup(reviewed(1, 'old0000')));
-    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toContain('(outdated)');
+    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toContain(
+      '(outdated)',
+    );
   });
 });
 
@@ -255,10 +339,13 @@ describe('card actions', () => {
   });
 
   it('shows no buttons with any blocker, and no empty actions row', () => {
-    const planning = (patch: Partial<GlobView>) => view({ type: 'same', status: 'planning', ...patch });
+    const planning = (patch: Partial<GlobView>) =>
+      view({ type: 'same', status: 'planning', ...patch });
     const blockers: Record<string, GlobView> = {
       'unmerged needs': waitingOn(),
-      escalation: planning({ escalation: { reason: 'billing', at: NOW } as GlobView['escalation'] }),
+      escalation: planning({
+        escalation: { reason: 'billing', at: NOW } as GlobView['escalation'],
+      }),
       stall: planning({ provisioning: 'failed' }),
     };
     for (const [name, g] of Object.entries(blockers)) {
@@ -271,7 +358,9 @@ describe('card actions', () => {
   });
 
   it('offers Merge when nothing blocks it', () => {
-    expect(markup(prOpen({ allowedActions: ['merge'] }))).toMatch(/<button[^>]*aria-label="Your turn: Merge PR #289"[^>]*data-testid="your-turn-chip"/);
+    expect(markup(prOpen({ allowedActions: ['merge'] }))).toMatch(
+      /<button[^>]*aria-label="Your turn: Merge PR #289"[^>]*data-testid="your-turn-chip"/,
+    );
   });
 });
 
@@ -281,7 +370,7 @@ describe('card interaction', () => {
     const onAct = vi.fn();
     render(
       <MemoryRouter>
-        <GlobCard {...props} glob={g} onAct={onAct} repo='a/b' {...extra} />
+        <GlobCard {...props} glob={g} onAct={onAct} repo="a/b" {...extra} />
       </MemoryRouter>,
     );
     return { ...props, onAct };
@@ -328,7 +417,12 @@ describe('card interaction', () => {
     expect(onOpenSection).toHaveBeenCalledWith({ section: 'actions' });
     expect(onAct).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
-    expect(screen.getByTestId('status-line').parentElement?.querySelector('.sr-only')?.textContent.endsWith('Opens the glob')).toBe(true);
+    expect(
+      screen
+        .getByTestId('status-line')
+        .parentElement?.querySelector('.sr-only')
+        ?.textContent.endsWith('Opens the glob'),
+    ).toBe(true);
   });
 
   it('opens the glob view at the section from the status line without running anything', async () => {
