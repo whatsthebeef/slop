@@ -27,6 +27,12 @@ export const mainStep = (
   return step === null ? null : { step, label: step.kind === 'rollout' ? 'Rollout' : step.title };
 };
 
+/** What the glob view says in place of a predicted rollout's title, state and actions: the run writes the real steps. */
+export const PREDICTED_ROLLOUT_TEXT = 'Rollout predicted: the run writes the steps';
+
+/** What a step is called in a sentence: a predicted rollout reads as a prediction, not as its placeholder title. */
+const stepName = (step: Pick<ListedHumanStep, 'title' | 'predicted'>): string => (step.predicted === true ? PREDICTED_ROLLOUT_TEXT : step.title);
+
 /** What a due step's main button does: copy its command, tick it, or wait (disabled, with why). Never just scroll to the section. */
 export type StepMain =
   | { readonly kind: 'copy'; readonly label: string; readonly then: string }
@@ -63,7 +69,7 @@ export const rolloutLine = (
   const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
   return {
     text: 'rollout',
-    tip: `Merged; ${String(progress.total - progress.open)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${first.title}`}`,
+    tip: `Merged; ${String(progress.total - progress.open)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${stepName(first)}`}`,
     turn,
   };
 };
@@ -74,7 +80,7 @@ export const approveHold = (glob: Glob & { readonly humanSteps?: readonly Listed
   const steps = glob.humanSteps ?? [];
   if (blockProgress(steps, 'sign_off').open === 0) return null;
   const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
-  return `Waits for the rollout${first === undefined ? '' : `: ${first.title}`}`;
+  return `Waits for the rollout${first === undefined ? '' : `: ${stepName(first)}`}`;
 };
 
 /** One key for every glob: the viewer's last toggle of the Human steps section. */
@@ -84,9 +90,6 @@ export const writeStepsOpen = (open: boolean): void => writeSectionOpen(STORAGE_
 
 /** Starts expanded while a step is still to do (or the link asked for it); an all-done or empty list starts collapsed. */
 export const defaultStepsOpen = (steps: readonly ListedHumanStep[]): boolean => steps.some((s) => s.state === 'due' || s.state === 'pending');
-
-/** What the glob view says in place of a predicted rollout's title, state and actions: the run writes the real steps. */
-export const PREDICTED_ROLLOUT_TEXT = 'Rollout predicted: the run writes the steps';
 
 /** Who a step is for, in words. */
 export const whoText = (who: string): string => (who === 'anyone' ? 'anyone' : who.includes('@') ? who : `the ${who}`);

@@ -224,14 +224,14 @@ describe('section markup', () => {
     expect(html(merged([]))).toContain('Add step');
   });
 
-  it('shows a predicted rollout as a muted prediction with no tick, dismiss or turn', () => {
+  it('shows a predicted rollout as a muted prediction with no tick or turn, but it can still be dismissed', () => {
     const predicted = step({ id: 'hs_p', title: 'Rollout: steps to be written', state: 'pending', who: 'anyone', predicted: true });
     const out = html(merged([predicted], { status: 'planning', pr: null }));
     expect(out).toContain('Rollout predicted: the run writes the steps');
     expect(out).not.toContain('Rollout: steps to be written');
     expect(out).toContain('predicted by the investigator');
     expect(out).not.toContain('step-tick');
-    expect(out).not.toContain('step-dismiss');
+    expect(out).toContain('step-dismiss');
     expect(out).not.toContain('Your turn');
   });
 

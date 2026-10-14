@@ -39,7 +39,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
   const [reason, setReason] = useState('');
   const [copied, setCopied] = useState(false);
   const predicted = step.predicted === true;
-  const work = isWorkStep(step) && !predicted;
+  const work = isWorkStep(step);
   const open = step.state === 'due' || step.state === 'pending';
   const script = step.script ?? null;
   const copy = async () => {
@@ -56,7 +56,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
       data-predicted={predicted ? 'true' : undefined}
     >
       <div className='flex flex-wrap items-center gap-2'>
-        {work && (
+        {work && !predicted && (
           <input
             type='checkbox'
             aria-label={`Done: ${step.title}`}

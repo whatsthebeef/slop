@@ -10,6 +10,7 @@ import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { cornerStatus, hasBlocker } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
+import { PREDICTED_ROLLOUT_TEXT } from '@/lib/human-steps';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { OUTCOME_TEXT } from './decision-section';
@@ -520,7 +521,7 @@ const UpcomingStepsChip = ({ glob, onOpen }: { glob: GlobView; onOpen: () => voi
   const [first, ...more] = upcoming.kinds;
   const tip = steps
     .filter((s) => s.state === 'pending')
-    .map((s) => (s.predicted === true ? 'Rollout predicted: the run writes the steps' : `${s.title}: due ${dueText(s.due)}`))
+    .map((s) => (s.predicted === true ? PREDICTED_ROLLOUT_TEXT : `${s.title}: due ${dueText(s.due)}`))
     .join('\n');
   return (
     <Tip text={tip}>
