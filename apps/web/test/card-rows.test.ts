@@ -85,6 +85,20 @@ describe('cornerStatus', () => {
     expect(at(g)?.tip).toContain('run failed · 18 min');
   });
 
+  it('says "signed off" with the date in the tooltip', () => {
+    const status = at(view({ status: 'signed_off', signedOffAt: NOW }));
+    expect(status).toMatchObject({ kind: 'signed-off', icon: 'check', text: 'signed off', click: null });
+    expect(status?.tip).toContain(new Date(NOW).toLocaleString());
+    expect(status?.text).not.toMatch(/\d/);
+  });
+
+  it('says "provisioning failed" in the corner, opening the actions', () => {
+    const status = at(view({ status: 'planning', provisioning: 'failed' }));
+    expect(status).toMatchObject({ kind: 'stalled', text: 'provisioning failed', icon: 'alert' });
+    expect(status?.tip).toContain('slop could not create the branch and draft PR');
+    expect(status?.click).toEqual({ kind: 'section', target: { section: 'actions' } });
+  });
+
   it('puts standby in a stall\'s tooltip, not a second status', () => {
     const g = view({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, ...live('watching') });
     const status = at(g);
