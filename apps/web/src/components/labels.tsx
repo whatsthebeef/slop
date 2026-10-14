@@ -102,16 +102,14 @@ export const LabelPopover = ({
         <div className="grid gap-2">
           {present.map((name) => {
             const state = glob.labels[name] ?? 'required';
+            const items = itemsOf(glob, name);
             return (
               <div key={name} className="flex items-center justify-between gap-3 text-sm">
                 <span className="grid">
-                  <span>
-                    <span className="font-semibold">{name}</span>{' '}
-                    <span className="text-muted-foreground">{LABEL_TITLES[name]}</span>
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {stateText(state, itemsOf(glob, name))}
-                  </span>
+                  <span className="font-semibold">{name}</span>
+                  {(state !== 'required' || items.length > 0) && (
+                    <span className="text-xs text-muted-foreground">{stateText(state, items)}</span>
+                  )}
                 </span>
                 <span className="flex shrink-0 items-center gap-1">
                   <Button size="sm" variant="ghost" onClick={() => onOpenReview(name)}>
@@ -140,7 +138,7 @@ export const LabelPopover = ({
             );
           })}
           <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => onOpenReview()}>
-            Open review checklists…
+            Open review checklist
           </Button>
         </div>
       </PopoverContent>
