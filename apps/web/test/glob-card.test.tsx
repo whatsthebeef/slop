@@ -117,7 +117,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1, s1t2 +2 · next: s1t9', 'Waits for, in order: s1t1 (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1 +3', 'Waits for, in order: s1t1 (Doing)'],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Waiting'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -257,7 +257,7 @@ describe('card rows', () => {
     const html = markup(waitingOn());
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
-    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1, s1t2 +2 · next: s1t9');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1 +3');
     expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);

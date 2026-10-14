@@ -72,8 +72,11 @@ const shortProblem = (status: StatusLine, glob: GlobView): string => {
   }
 };
 
-const waitingText = (parts: BlockedParts): string =>
-  `waiting on ${parts.ids.join(', ')}${parts.more > 0 ? ` +${String(parts.more)}` : ''}${parts.next === null ? '' : ` · next: ${parts.next}`}`;
+/** "waiting on s15f82 +2": the nearest prerequisite and how many more; the chain and the next glob are in the tooltip. */
+const waitingText = (parts: BlockedParts): string => {
+  const more = parts.ids.length - 1 + parts.more;
+  return `waiting on ${parts.ids[0] ?? ''}${more > 0 ? ` +${String(more)}` : ''}`;
+};
 
 /** Why a Planning glob waits, from what slop learned of its needs, for the tooltip. */
 const learnedReasons = (glob: GlobView): string[] =>
@@ -158,7 +161,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make('machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
   if (status !== null) {
-    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : 'alert';
+    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : status.kind === 'rollout' ? 'human' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
   if (awaitingSignOff(glob) && position === null) {
@@ -174,6 +177,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   if (blocked !== null) {
     return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.prerequisites() }, [
       `Waits for, in order: ${chainTip(glob)}`,
+      ...(blocked.next === null ? [] : [`Next to start: ${blocked.next}`]),
       ...learnedReasons(glob),
     ]);
   }

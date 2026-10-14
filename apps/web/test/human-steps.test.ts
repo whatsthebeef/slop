@@ -85,12 +85,13 @@ describe('main step action', () => {
 
 describe('rollout status line', () => {
   const steps = [step({ id: 'a', state: 'done' }), step({ id: 'b' }), step({ id: 'c', state: 'pending' }), step({ id: 'd', state: 'dismissed' })];
-  it('counts done against all steps that are not dismissed, with Your turn for the viewer', () => {
-    expect(statusLine(merged(steps), NOW, admin)).toMatchObject({ kind: 'ready', text: 'Merged; rollout 1/3 (Your turn)', turn: 'rollout', work: true });
+  it('is just "rollout"; the count and first step are in the tooltip', () => {
+    expect(statusLine(merged(steps), NOW, admin)).toMatchObject({ kind: 'ready', text: 'rollout', turn: 'rollout', work: true });
+    expect(rolloutLine(merged(steps), steps, admin)?.tip).toMatch(/^Merged; 1 of 3 rollout steps done/);
   });
   it('is a quiet line when the due step is for somebody else', () => {
-    expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'Merged; rollout 1/3' });
-    expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'Merged; rollout 1/3' });
+    expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'rollout' });
+    expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'rollout' });
   });
   it('says nothing before the merge or once the steps are done', () => {
     expect(rolloutLine(glob(), steps, admin)).toBeNull();
