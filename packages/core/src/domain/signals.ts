@@ -48,6 +48,7 @@ export const SIGNAL_KINDS = [
   'choice_in_use',
   'knowledge_page',
   'chat_feedback',
+  'workstream_pattern',
 ] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
@@ -1021,6 +1022,70 @@ const chatFeedbackSignal = define({
   },
 });
 
+/** One workstream of a fanned-out glob's latest `WorkstreamsRecorded` event: its name, failed state and conflicted files. */
+interface RecordedWorkstream {
+  readonly name: string;
+  readonly failed: boolean;
+  readonly conflicts: readonly string[];
+}
+
+/** The fanned-out globs' workstreams, read from the latest `WorkstreamsRecorded` event per glob (s15f146's block). */
+const fannedOutWorkstreams = (activity: BoardActivity): Map<string, RecordedWorkstream[]> => {
+  const latest = new Map<string, DomainEvent>();
+  for (const e of activity.events) if (e.type === 'WorkstreamsRecorded') latest.set(e.globId, e);
+  const result = new Map<string, RecordedWorkstream[]>();
+  for (const [globId, e] of latest) {
+    const list = field(e, 'workstreams');
+    if (field(e, 'fannedOut') !== true || !Array.isArray(list)) continue;
+    const parsed: RecordedWorkstream[] = [];
+    for (const w of list as readonly JsonValue[]) {
+      if (typeof w !== 'object' || w === null || Array.isArray(w)) continue;
+      const item = w as { readonly [key: string]: JsonValue | undefined };
+      const name = item['name'];
+      const conflicts = item['conflicts'];
+      if (typeof name !== 'string') continue;
+      parsed.push({
+        name,
+        failed: item['state'] === 'failed',
+        conflicts: Array.isArray(conflicts) ? conflicts.filter((c): c is string => typeof c === 'string') : [],
+      });
+    }
+    result.set(globId, parsed);
+  }
+  return result;
+};
+
+const workstreamPattern = define({
+  kind: 'workstream_pattern',
+  agent: 'orchestrator',
+  type: 'agent-behaviour',
+  suggestedTarget: 'risk_and_size',
+  threshold: 'the same file conflicting when workstreams were integrated, or a workstream of the same name failing, in at least 2 fanned-out globs',
+  eligibleGlobs: (activity) => new Set(fannedOutWorkstreams(activity).keys()),
+  tallies: (activity) => {
+    const fanned = fannedOutWorkstreams(activity);
+    const tallies = new Tallies();
+    for (const [globId, workstreams] of fanned) {
+      for (const file of new Set(workstreams.flatMap((w) => w.conflicts))) {
+        tallies.hit(`workstream_pattern:conflict:${file}`, `${file} conflicting when workstreams were integrated`, globId, `${globId}: ${file} conflicted`);
+      }
+      for (const w of workstreams) {
+        if (w.failed) tallies.hit(`workstream_pattern:failed:${w.name.toLowerCase()}`, `workstream "${w.name}" failing`, globId, `${globId}: workstream ${w.name} failed`);
+      }
+    }
+    return tallies.done(fanned.size);
+  },
+  crosses: (t) => t.affected >= 2,
+  statement: (m) => {
+    const [, how = '', ...rest] = m.key.split(':');
+    const what = rest.join(':');
+    const n = `${String(m.figures.affected)} of ${String(m.figures.eligible)} fanned-out globs`;
+    return how === 'conflict'
+      ? `Workstreams keep conflicting in ${what}: ${n} ${WINDOW_WORDS}. The cut gave one workstream no owner for it, or it should belong to W0; say in the risk and size guidance how to cut around it.`
+      : `A workstream named "${what}" keeps failing: ${n} ${WINDOW_WORDS}. Say in the risk and size guidance when such work should not be a workstream of its own, or what it needs from W0.`;
+  },
+});
+
 /** Every mined signal, in the order the spec lists them. */
 export const SIGNALS: readonly SignalDefinition[] = [
   finding,
@@ -1038,6 +1103,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
   choiceInUseSignal,
   knowledgePageSignal,
   chatFeedbackSignal,
+  workstreamPattern,
 ];
 
 export const signalKindOf = (key: string): SignalKind | null => {
