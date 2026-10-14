@@ -8,6 +8,8 @@ import type { SearchHit } from '../domain/search.js';
 import type { BoardNotification } from '../domain/notifications.js';
 import { startIds } from '../domain/relations.js';
 import type { Glob, Relation } from '../domain/types.js';
+import { isOperationalQuestion, opsStateText } from '../domain/ops-state.js';
+import type { OpsHealth } from '../domain/ops-state.js';
 import type { Clock, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import type { CodeViewService } from './code-view.js';
@@ -32,6 +34,7 @@ const SMALL_TALK_MAX_TOKENS = 300;
 /** The board's live state is one source among the numbered ones, so it is kept short. */
 export const BOARD_STATE_MAX_CHARS = 4000;
 const BOARD_STATE_TITLE = 'Board state (now)';
+const OPS_STATE_TITLE = 'Slop status (now)';
 /** What the log keeps of a reply the chat could not use. */
 const LOG_REPLY_CHARS = 200;
 /** What one code-view result may put in front of the model; the rest is cut. */
@@ -50,6 +53,7 @@ Rules:
 - When the sources do not answer, give a short best answer from general knowledge and say plainly that it is not from the board's records. Never invent facts about the board: no glob IDs, decisions, statuses or dates that are not in the sources. Reply with exactly ${CHAT_DONT_KNOW} only when you have nothing useful to say at all.
 - Prefer current decisions over superseded ones. When a decision you rely on is marked superseded, say so and name what replaced it.
 - The source titled "Board state (now)" is the board's live state (open globs, their status and failures, active notifications), not a record of decisions: use it for questions about what is happening now.
+- The source titled "Slop status (now)" is slop's own health (AI models, integrations, capabilities, slow requests, outbox backlog) plus this board's failures and deploys in the last 24 hours. For "why isn't X working", "why hasn't <glob> started" or "is slop down" questions, read it first: say what is down, failing or slow, with the fix it gives, and cite it. When everything in it is healthy, say so and point at the next thing to check (the glob's own failure or checks, the code). Never repeat anything from it that looks like a secret or a token.
 - Earlier conversation turns are only for understanding follow-up questions; they are not evidence.
 - When the person is viewing a page (given after the sources), "this" in their question means that page.
 Reply in short Markdown (a few sentences, lists where they help). Mention a glob by its ID, like s15f25.
@@ -218,6 +222,18 @@ const citationOf = (hit: SearchHit, n: number): ChatCitation => ({
   supersededBy: hit.supersededBy,
 });
 
+const opsStateCitation = (boardId: number, now: string, n: number): ChatCitation => ({
+  n,
+  source: 'ops_state',
+  sourceLabel: 'Slop status',
+  title: OPS_STATE_TITLE,
+  date: now,
+  link: `/boards/${String(boardId)}`,
+  globId: null,
+  status: 'active',
+  supersededBy: null,
+});
+
 const boardStateCitation = (boardId: number, now: string, n: number): ChatCitation => ({
   n,
   source: 'board_state',
@@ -278,6 +294,11 @@ export class ChatService {
       rewriteTimeoutMs?: number;
       /** The board's code, read through a capped loop of model-chosen calls; without one chat answers from records alone. */
       code?: Pick<CodeViewService, 'tree' | 'read' | 'grep' | 'history' | 'imports'>;
+      /**
+       * Slop's own health (the facts `/api/health` reports); `admin` is whether the asker is a board admin, who also sees request
+       * timing and the outbox. Without it the status source says health is not available. The board's failures and deploys are read here.
+       */
+      opsHealth?: (admin: boolean) => Promise<OpsHealth>;
       /** Sends an answer to the board's proposal queue (the knowledge service's `submitLearning`). */
       submitLearning?: (email: string, boardId: number, learning: NewLearning) => Promise<Result<{ id: string }>>;
       /** The most extra steps a miss may try (see `CHAT_EXTRA_STEPS`); left out, a miss ends the question as before. */
@@ -482,11 +503,16 @@ export class ChatService {
     const state = await this.boardState(request.boardId);
     const stateN = state === '' ? 0 : hits.length + 1;
     if (stateN > 0) tools.push('Read the board\'s live state');
+    // Slop's own health and the board's recent failures and deploys go in when the question is about something not working.
+    const ops = isOperationalQuestion(question) || isOperationalQuestion(query) ? await this.opsState(email, request.boardId) : '';
+    const opsN = ops === '' ? 0 : hits.length + (stateN > 0 ? 1 : 0) + 1;
+    if (opsN > 0) tools.push("Checked slop's status (health, recent failures, deploys)");
+    const extras = (stateN > 0 ? 1 : 0) + (opsN > 0 ? 1 : 0);
     const page = await this.pageLine(request.boardId, request.page);
 
     // Chat reads the code only for a board with a repository.
     const codeOn = await this.codeReadable(request.boardId);
-    const missFacts = { query, records: recordsFound, help: helpFound, state: stateN > 0, codeAvailable: codeOn };
+    const missFacts = { query, records: recordsFound, help: helpFound, state: stateN > 0 || opsN > 0, codeAvailable: codeOn };
     const deepOffered = request.thinkHarder !== true && this.deps.deepLlm !== undefined;
     // A true miss names what was searched and offers what could still help; the model never asks for these buttons.
     const miss = (codeLooked: boolean): Composed => {
@@ -499,19 +525,19 @@ export class ChatService {
       return { question, answer: searched, citations: [], tools, actions: offered, uncited: false, miss: true, answered: false, searched };
     };
     // With nothing to show the model (no hits, no live state, no code view) the model is not called: there is nothing to answer from.
-    if (hits.length === 0 && stateN === 0 && !codeOn) return ok(miss(false));
+    if (hits.length === 0 && stateN === 0 && opsN === 0 && !codeOn) return ok(miss(false));
     const deep = request.thinkHarder === true && this.deps.deepLlm !== undefined;
     if (deep) tools.push('Thought harder (stronger model)');
     const llm = deep && this.deps.deepLlm !== undefined ? this.deps.deepLlm : this.deps.llm;
     const lookHint = codeOn && request.lookAtCode === true ? '\n\nThe person asked you to look at the code: use the code view before you answer.' : '';
-    const llmRequest: Omit<LlmRequest, 'signal'> = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) + lookHint : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS, spend: { boardId: request.boardId, source: 'chat' } };
+    const llmRequest: Omit<LlmRequest, 'signal'> = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) + lookHint : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, ops, recent, page), maxTokens: CHAT_MAX_TOKENS, spend: { boardId: request.boardId, source: 'chat' } };
     const timeout = deep ? (this.deps.deepTimeoutMs ?? CHAT_THINK_TIMEOUT_MS) : (this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS);
     let raw: string;
     const read: CodeSource[] = [];
     const toolsBefore = tools.length;
     try {
       raw = codeOn
-        ? await this.generateWithCode(email, request, llm, llmRequest, timeout, hits.length + (stateN > 0 ? 1 : 0), read, tools, onText)
+        ? await this.generateWithCode(email, request, llm, llmRequest, timeout, hits.length + extras, read, tools, onText)
         : await this.generate(llm, llmRequest, timeout, onText === undefined ? undefined : withoutActionsTag(onText), request.signal);
     } catch (error) {
       if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
@@ -523,7 +549,7 @@ export class ChatService {
     const parsed = parseActions(raw);
     const text = parsed.text;
     // A number outside 1..n is the model's invention: dropped, never linked.
-    const total = hits.length + (stateN > 0 ? 1 : 0) + read.length;
+    const total = hits.length + extras + read.length;
     const used = citedNumbers(text).filter((n) => n >= 1 && n <= total);
     if (text.startsWith(CHAT_NO_CODE)) {
       // The question needed the code and it could not be read: said as it is, with no sources.
@@ -550,7 +576,11 @@ export class ChatService {
         citations.push(boardStateCitation(request.boardId, this.deps.clock.now(), n));
         continue;
       }
-      const file = read[n - hits.length - (stateN > 0 ? 1 : 0) - 1];
+      if (n === opsN) {
+        citations.push(opsStateCitation(request.boardId, this.deps.clock.now(), n));
+        continue;
+      }
+      const file = read[n - hits.length - extras - 1];
       if (file !== undefined) {
         citations.push(codeCitation(file, n, this.deps.clock.now()));
         continue;
@@ -758,6 +788,31 @@ export class ChatService {
     }
   }
 
+  /**
+   * Slop's status as one source: the server's health plus this board's recent failures and deploys, read by board so another
+   * board's globs cannot appear. A failure to read any of it leaves the source out; it never fails the question.
+   */
+  private async opsState(email: string, boardId: number): Promise<string> {
+    try {
+      const board = await this.deps.store.transaction(async (tx) => {
+        const actor = await memberOf(tx, email, boardId);
+        if (!actor.ok) return null;
+        // Request timing and the outbox are admin-only (stricter than /api/health, which gates them on any board's admin role).
+        return { admin: actor.value.role === 'admin', globs: await tx.listGlobs(boardId, {}), notifications: await tx.listNotifications(boardId), deploys: await tx.listDeploys(boardId, { limit: 20 }) };
+      });
+      if (board === null) return '';
+      let health: OpsHealth | null = null;
+      try {
+        health = (await this.deps.opsHealth?.(board.admin)) ?? null;
+      } catch {
+        // Health is context only: the failures and deploys still answer.
+      }
+      return opsStateText({ health, globs: board.globs, deploys: board.deploys, notifications: board.notifications, now: this.deps.clock.now() });
+    } catch {
+      return '';
+    }
+  }
+
   private async boardState(boardId: number): Promise<string> {
     try {
       return await this.deps.store.transaction(async (tx) =>
@@ -835,11 +890,15 @@ export class ChatService {
     return ok(chat);
   }
 
-  private prompt(question: string, hits: readonly SearchHit[], state: string, recent: readonly ChatMessage[], page: string): string {
+  private prompt(question: string, hits: readonly SearchHit[], state: string, ops: string, recent: readonly ChatMessage[], page: string): string {
     const turns = recent.map((m) => `${m.role === 'user' ? 'Asker' : 'Assistant'}: ${clip(m.content)}`).join('\n');
     return [
       'Sources:',
-      [...hits.map((hit, i) => sourceBlock(hit, i + 1)), ...(state === '' ? [] : [`[${hits.length + 1}] ${BOARD_STATE_TITLE}\n${state}`])].join('\n\n'),
+      [
+        ...hits.map((hit, i) => sourceBlock(hit, i + 1)),
+        ...(state === '' ? [] : [`[${hits.length + 1}] ${BOARD_STATE_TITLE}\n${state}`]),
+        ...(ops === '' ? [] : [`[${hits.length + (state === '' ? 0 : 1) + 1}] ${OPS_STATE_TITLE}\n${ops}`]),
+      ].join('\n\n'),
       turns === '' ? '' : `Earlier in this conversation:\n${turns}`,
       page,
       `Question: ${question}`,
