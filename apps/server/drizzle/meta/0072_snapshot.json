@@ -1,5 +1,5 @@
 {
-  "id": "30a2c434-525d-428d-821f-52303795f4d3",
+  "id": "e5f70461-6d9f-4ccb-b6e3-8e0b8253f7c8",
   "prevId": "a3c4045d-7908-4254-be44-910df51555b5",
   "version": "7",
   "dialect": "postgresql",
@@ -5660,6 +5660,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "group": {
+          "name": "group",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "dismissed_at": {
           "name": "dismissed_at",
           "type": "timestamp with time zone",
@@ -6748,20 +6754,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "from_parallel": {
-          "name": "from_parallel",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 2
-        },
-        "to_parallel": {
-          "name": "to_parallel",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 2
-        },
         "outcome": {
           "name": "outcome",
           "type": "text",
@@ -6846,13 +6838,6 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true
-        },
-        "min_parallel": {
-          "name": "min_parallel",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 2
         }
       },
       "indexes": {},

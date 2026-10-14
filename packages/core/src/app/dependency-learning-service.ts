@@ -230,6 +230,7 @@ export class DependencyLearningService {
           reason: evidence,
           evidence: paths,
           source: 'learned',
+          group: null,
           dismissedAt: null,
           dismissedPlanHash: null,
           overriddenAt: null,
