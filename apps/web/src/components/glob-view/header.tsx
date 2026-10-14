@@ -15,7 +15,7 @@ import type { NowState } from './status';
 /** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
 export const HEADER_HEIGHT_VAR = '--glob-header-height';
 
-/** The sticky bar, a fixed compact height: back to the board, the glob's ID, and the status at the top right. */
+/** The sticky bar, a compact single row (small vertical padding, no fixed height): back to the board, the glob's ID, and the status at the top right. */
 export const GlobHeader = ({
   ctx,
   onClose,
@@ -39,7 +39,7 @@ export const GlobHeader = ({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
-  // The bar's measured height is published for the sections' scroll margin (it stays fixed, but the font size can change it).
+  // The bar's measured height is published for the sections' scroll margin (the font size can change it).
   const barRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const bar = barRef.current;
@@ -59,13 +59,13 @@ export const GlobHeader = ({
       <div ref={topRef} aria-hidden className="h-0" />
       <div
         ref={barRef}
-        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex h-10 items-center gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
+        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex items-center gap-3 py-1 leading-5 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
         data-testid="glob-header"
       >
         <Tip text="Back to the board (Esc)">
           <Link
             to={`/boards/${String(glob.boardId)}`}
-            className="rounded p-1 hover:bg-muted"
+            className="rounded p-1.5 hover:bg-muted"
             aria-label="Back to the board"
             data-testid="glob-back"
             onClick={(e) => {
