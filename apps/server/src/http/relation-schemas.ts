@@ -38,10 +38,13 @@ export const addRelationSchema = z
     version: z.number().int().optional(),
     to: z.string().min(1).optional(),
     holdsBack: z.string().min(1).optional(),
+    holdsBackGroup: z.string().min(1).optional(),
     gate: z.enum(RELATION_GATES).optional(),
     until: z.enum(RELATION_UNTILS).optional(),
     reason: z.string().max(MAX_RELATION_REASON).nullable().optional(),
   })
   .strict()
-  .refine((b) => (b.to === undefined) !== (b.holdsBack === undefined), { message: 'Give exactly one of `to` (the glob holds this one back) or `holdsBack` (this glob holds that one back)' })
+  .refine((b) => [b.to, b.holdsBack, b.holdsBackGroup].filter((v) => v !== undefined).length === 1, {
+    message: 'Give exactly one of `to` (the glob holds this one back), `holdsBack` (this glob holds that one back) or `holdsBackGroup` (this glob holds every glob of that group back)',
+  })
   .refine((b) => b.to === undefined || b.version !== undefined, { message: '`version` is required when adding a relation to this glob' });

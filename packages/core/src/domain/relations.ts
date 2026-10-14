@@ -168,6 +168,8 @@ export interface NewRelation {
   readonly reason: string | null;
   readonly evidence: readonly string[];
   readonly source: RelationSource;
+  /** The group it is set for, when it is one of a group-wide decision's relations. */
+  readonly group?: string | null;
 }
 
 /** The changes to one glob's relations. Every relation write bumps the glob's version and logs an event on it. */
@@ -190,6 +192,7 @@ export const draftOf = (boardId: number, from: string, n: NewRelation, now = '')
   boardId,
   from,
   ...n,
+  group: n.group ?? null,
   dismissedAt: null,
   dismissedPlanHash: null,
   overriddenAt: null,
@@ -208,6 +211,7 @@ export const applyWrite = (
       boardId: made.boardId,
       from: made.from,
       ...n,
+      group: n.group ?? null,
       dismissedAt: null,
       dismissedPlanHash: null,
       overriddenAt: null,

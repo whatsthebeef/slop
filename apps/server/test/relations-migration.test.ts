@@ -172,6 +172,7 @@ describe('needs and splits become relations (migration 0067)', () => {
       reason: r.reason,
       evidence: r.evidence,
       source: 'person',
+      group: null,
       dismissedAt: null,
       dismissedPlanHash: null,
       overriddenAt: null,
