@@ -4,6 +4,7 @@ import { isInvestigateEvent } from '../domain/events.js';
 import type { GlobOutcome } from '../domain/intake-learning.js';
 import type { DomainEvent } from '../domain/events.js';
 import { parseInvestigation } from '../domain/investigation.js';
+import { parseWorkstreams } from '../domain/workstreams.js';
 import { areasMatching } from '../domain/risk-area.js';
 import { safeGrepPattern, safeRepoPath } from '../domain/review-tools.js';
 import type { BoardJobResult } from '../domain/signals.js';
@@ -579,9 +580,16 @@ export class SizeCheckService implements SizeAssessor {
         if (forecast === undefined || record !== null) return null;
         const artifact = (await tx.artifactVersions(outcome.globId, 'investigation', '')).at(-1);
         const parsed = artifact === undefined ? null : parseInvestigation(artifact.content);
+        const recorded = (await tx.artifactVersions(outcome.globId, 'implementation_plan', '')).at(-1);
+        const workstreams = recorded === undefined ? null : parseWorkstreams(recorded.content);
         const summaries = await tx.changeCandidates({ boardId, query: '', mode: 'all_time', globId: outcome.globId }, 5);
         const files = summaries.map((c) => parseFilesLine(c.text)).find((f) => f !== null) ?? null;
-        return { forecast, investigation: parsed?.ok === true ? parsed.investigation : null, files };
+        return {
+          forecast,
+          investigation: parsed?.ok === true ? parsed.investigation : null,
+          files,
+          workstreams: workstreams?.kind === 'ok' ? workstreams.block : null,
+        };
       });
       if (gathered === null) continue;
       const events = byGlob.get(outcome.globId) ?? [];
@@ -593,6 +601,7 @@ export class SizeCheckService implements SizeAssessor {
         investigation: gathered.investigation,
         outcome,
         files: gathered.files,
+        workstreams: gathered.workstreams,
         events,
         hoursOpen: prHoursOf(events),
       });
