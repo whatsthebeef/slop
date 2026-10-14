@@ -113,9 +113,9 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
           position.holder === 'stalled' && seen?.dismissed === true
             ? `Stalled · ${seen.label}`
             : position.holder === 'stalled' || position.holder === 'machine'
-              ? capitalised(nowHeadline(position.holder, position.label))
+              ? capitalised(nowHeadline(position.holder, position.label, position.queued))
               : capitalised(headlineReason(position.text))
-        }${minutes !== null && minutes > 0 ? ` · ${String(minutes)} min` : ''}`
+        }${minutes !== null && minutes > 0 && !(position.holder === 'machine' && position.queued) ? ` · ${String(minutes)} min` : ''}`
       : problem !== null
         ? seen?.dismissed === true
           ? capitalised(seen.label)
@@ -131,7 +131,7 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
       data-holder={move?.holder ?? 'none'}
       onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
     >
-      {position?.holder === 'machine' && turn === null && <MachineIcon className="mr-1 inline" decorative />}
+      {position?.holder === 'machine' && turn === null && <MachineIcon className="mr-1 inline" working={position.spinning} decorative />}
       {text}
     </button>
   );

@@ -32,7 +32,12 @@ interface TextFilter extends FilterBase {
   placeholder: string;
 }
 
-export type BoardFilter = ChipsFilter | TextFilter;
+/** Has no permanent control: the pane shows it as a removable chip only while it is set (a group tag was clicked). */
+interface TagFilter extends FilterBase {
+  control: 'tag';
+}
+
+export type BoardFilter = ChipsFilter | TextFilter | TagFilter;
 
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
@@ -68,6 +73,15 @@ export const BOARD_FILTERS: BoardFilter[] = [
         tokens(phrase).some((t) => id.includes(t) || title.includes(t)) || title.includes(phrase)
       );
     },
+  },
+  {
+    key: 'group',
+    label: 'Group',
+    control: 'tag',
+    // Kept as given apart from surrounding space; off when blank.
+    normalize: (raw) => raw.trim(),
+    // Exact match on the name; globs with no group never match.
+    matches: (glob, value) => glob.group === value,
   },
 ];
 
