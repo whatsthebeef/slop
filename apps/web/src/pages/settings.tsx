@@ -8,6 +8,7 @@ import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/c
 import type { BoardShellContext } from '@/components/board-shell';
 import { GlobCard } from '@/components/glob-card';
 import { globPath } from '@/lib/glob-section';
+import { ChatTestCases } from '@/components/chat-test-cases';
 import { ContextSection } from '@/components/context-report';
 import { JobStatus } from '@/components/job-status';
 import { ReadinessChecklist } from '@/components/readiness';
@@ -426,6 +427,7 @@ export const SettingsPage = () => {
           </form>
         )}
       </section>
+      {admin && <ChatTestCases boardId={boardId} />}
     </main>
   );
 };
