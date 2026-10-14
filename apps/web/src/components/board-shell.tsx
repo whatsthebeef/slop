@@ -152,9 +152,12 @@ export const BoardShell = () => {
   return (
     <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
-      <BoardBar current={isBoard ? boardId : undefined} />
-      {isBoard && <NotificationBar boardId={boardId} />}
-      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
+      {/* On a phone the chat is a layer over these; they must not take keyboard focus from behind it. */}
+      <div className='contents' inert={showChat && narrow}>
+        <BoardBar current={isBoard ? boardId : undefined} />
+        {isBoard && <NotificationBar boardId={boardId} />}
+        {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
+      </div>
       <div className='flex min-h-0 flex-1'>
         <div className={MAIN_AREA_CLASS} inert={showChat && coversView} data-testid='main-area'>
           <Outlet context={{ headerActions } satisfies BoardShellContext} />
