@@ -3,47 +3,30 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { GroupChip } from '../glob-card';
-import { GlobTitle } from '../glob-title';
-import { rolloutLine } from '@/lib/human-steps';
 import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
-import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
 import { EscalationChip } from './escalation';
 import type { GlobActionsState } from './actions';
-
-const STATUS_TEXT: Record<GlobView['status'], string> = {
-  planning: 'Planning',
-  implementing: 'A routine is implementing',
-  in_progress: 'In progress',
-  failed: 'Failed',
-  pr_open: 'PR open for review',
-  merging: 'Merging',
-  reviewing: 'Merged; awaiting sign-off',
-  signed_off: 'Signed off',
-};
-
-/** A decision glob uses the same lists for a different journey: it is decided in Doing and signed off once accepted. */
-const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
-  in_progress: 'Doing: being decided',
-  reviewing: 'Decided; awaiting sign-off',
-};
+import { HeaderStatus } from './status';
+import type { NowState } from './status';
 
 /** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
 export const HEADER_HEIGHT_VAR = '--glob-header-height';
 
-/** The sticky header: back to the board and the title (editable until signed off). */
+/** The sticky bar, a fixed compact height: back to the board, the glob's ID, and the status at the top right. */
 export const GlobHeader = ({
   ctx,
   onClose,
-  onReload,
+  state,
 }: {
   ctx: GlobViewContext;
   onClose: () => void;
-  onReload: () => Promise<void>;
+  state: NowState;
 }) => {
-  const { glob, onUpdate } = ctx;
+  const { glob } = ctx;
+  const decision = decisionOf(glob) !== null;
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -76,7 +59,7 @@ export const GlobHeader = ({
       <div ref={topRef} aria-hidden className="h-0" />
       <div
         ref={barRef}
-        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex min-h-10 items-start py-1.5 gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
+        className={`sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex h-10 items-center gap-3 border-b bg-background px-5 ${scrolled ? 'border-border' : 'border-transparent'}`}
         data-testid="glob-header"
       >
         <Tip text="Back to the board (Esc)">
@@ -93,19 +76,16 @@ export const GlobHeader = ({
             <ArrowLeft className="h-4 w-4" />
           </Link>
         </Tip>
-        <GlobTitle
-          id={glob.id}
-          title={glob.title}
-          editable={glob.status !== 'signed_off'}
-          onUpdate={onUpdate}
-          onReload={onReload}
-        />
+        <span className="shrink-0 self-center font-mono text-base font-semibold text-muted-foreground" data-testid="glob-id">
+          {glob.id}
+        </span>
+        <HeaderStatus glob={glob} decision={decision} state={state} />
       </div>
     </>
   );
 };
 
-/** The chips under the title: status, type, activity, group, labels, branch and version. */
+/** The chips under the title: type, escalation, group and labels. */
 export const GlobChips = ({
   ctx,
   actions,
@@ -113,15 +93,10 @@ export const GlobChips = ({
   ctx: GlobViewContext;
   actions: GlobActionsState;
 }) => {
-  const { board, glob } = ctx;
+  const { glob } = ctx;
   const decision = decisionOf(glob) !== null;
-  // A merged glob whose rollout holds back its sign-off says so, as its card does, instead of "awaiting sign-off".
-  const rollout = decision ? null : rolloutLine(glob, glob.humanSteps ?? [], undefined);
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="rounded bg-muted px-2 py-0.5" title={rollout?.tip}>
-        {rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]}
-      </span>
       {decision ? (
         <span className="rounded border px-2 py-0.5 text-xs" data-testid="glob-type">
           decision
@@ -132,28 +107,6 @@ export const GlobChips = ({
       <EscalationChip ctx={ctx} />
       {glob.group !== null && <GroupChip name={glob.group} />}
       {!decision && <LabelChips glob={glob} />}
-      <span className="ml-auto text-xs text-muted-foreground">
-        {!decision && (
-          <>
-            branch{' '}
-            {board.repo === null ? (
-              <span className="font-mono">{glob.branch}</span>
-            ) : (
-              <a
-                className="font-mono underline-offset-2 hover:underline"
-                href={`https://github.com/${board.repo}/compare/${board.baseBranch}...${glob.branch}`}
-                target="_blank"
-                rel="noreferrer"
-                title={`Compare ${glob.branch} with ${board.baseBranch} on GitHub`}
-              >
-                {glob.branch}
-              </a>
-            )}{' '}
-            ·{' '}
-          </>
-        )}
-        v{glob.version}
-      </span>
     </div>
   );
 };

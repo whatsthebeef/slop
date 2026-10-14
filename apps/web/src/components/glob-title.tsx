@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import type { GlobChanges } from '@/lib/api';
 import { useTitleEdit } from '@/lib/title-edit';
 
-/** The glob's ID and title as the page heading: the title wraps over as many lines as it needs and edits in place (a textarea) when `editable`. */
+/** The glob's title as the page heading (its ID is in the bar): the title wraps over as many lines as it needs and edits in place (a textarea) when `editable`. */
 export const GlobTitle = ({
   id,
   title,
@@ -36,8 +36,7 @@ export const GlobTitle = ({
 
   if (!editing) {
     return (
-      <h1 className='group flex min-w-0 flex-1 items-baseline gap-1.5 text-base font-semibold' data-testid='glob-title'>
-        <span className='shrink-0 font-mono text-muted-foreground'>{id}</span>
+      <h1 className='group flex min-w-0 flex-1 items-baseline gap-1.5 text-xl font-semibold' data-testid='glob-title'>
         {editable ? (
           <button
             type='button'
@@ -57,8 +56,7 @@ export const GlobTitle = ({
   }
   return (
     <div className='relative min-w-0 flex-1'>
-      <h1 className='flex items-start gap-1.5 text-base font-semibold'>
-        <span className='shrink-0 font-mono text-muted-foreground'>{id}</span>
+      <h1 className='flex items-start gap-1.5 text-xl font-semibold'>
         <textarea
           ref={field}
           rows={1}
@@ -68,7 +66,7 @@ export const GlobTitle = ({
           aria-label='Title'
           aria-invalid={emptyRefused || error !== null}
           data-testid='glob-title-input'
-          className='block min-w-0 flex-1 resize-none overflow-hidden rounded border bg-card px-1 text-base leading-snug font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          className='block min-w-0 flex-1 resize-none overflow-hidden rounded border bg-card px-1 text-xl leading-snug font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring'
           onChange={(e) => change(e.target.value)}
           onBlur={commit}
           onKeyDown={onKeyDown}
