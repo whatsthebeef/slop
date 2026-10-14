@@ -87,7 +87,7 @@ describe('card rows', () => {
     expect(status?.className).toContain('min-w-0');
     expect(status?.className).toContain('shrink');
     expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
-    expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-[0.2]');
+    expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-0');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('task');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
     expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
@@ -159,7 +159,7 @@ describe('card rows', () => {
     expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
     expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('card-status');
     expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
-    expect(header?.firstElementChild?.className).toContain('truncate');
+    expect(header?.firstElementChild?.className).toContain('shrink-0');
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
   });
 

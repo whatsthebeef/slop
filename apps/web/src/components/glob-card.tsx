@@ -731,8 +731,8 @@ export const GlobCard = ({
       data-testid={`card-${glob.id}`}
     >
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
-        {/* The ID gives way last: the status truncates first (it shrinks faster), the category icon never moves. */}
-        <span className='min-w-0 shrink-[0.2] truncate whitespace-nowrap' data-testid='card-id'>
+        {/* The ID never truncates: the status text gives way first, the category icon never moves. */}
+        <span className='shrink-0 whitespace-nowrap' data-testid='card-id'>
           {glob.id} · {decision ? 'decision' : glob.type}
           {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
