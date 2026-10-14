@@ -14,6 +14,7 @@ import {
   needsInvestigation,
   nextThreshold,
   oversizedReasons,
+  parseWorkstream,
   prHoursOf,
   prRangeOf,
   proposalOfStored,
@@ -225,6 +226,31 @@ describe('workstream shape', () => {
     expect(splitShape([{ needs: [] }, { needs: [0] }, { needs: [0] }, { needs: [0] }])).toEqual({ criticalPath: 2, maxParallel: 3 });
     expect(splitShape([{ needs: [] }, { needs: [0] }, { needs: [1] }])).toEqual({ criticalPath: 3, maxParallel: 1 });
     expect(splitShape([{ needs: [] }, { needs: [] }])).toEqual({ criticalPath: 1, maxParallel: 2 });
+  });
+});
+
+describe('workstream schema', () => {
+  it('reads a valid workstream as it is', () => {
+    const w = { name: 'A', goal: 'g', files: ['x.ts'], plan: 'p', needs: [0, 1] };
+    expect(parseWorkstream(w, 2)).toEqual(w);
+  });
+  it('needs a name and a plan, and an object', () => {
+    expect(parseWorkstream(null, 0)).toBeNull();
+    expect(parseWorkstream('A', 0)).toBeNull();
+    expect(parseWorkstream({ name: ' ', plan: 'p' }, 0)).toBeNull();
+    expect(parseWorkstream({ name: 'A', plan: '' }, 0)).toBeNull();
+    expect(parseWorkstream({ name: 'A' }, 0)).toBeNull();
+  });
+  it('defaults the goal from the plan, and files and needs to empty', () => {
+    expect(parseWorkstream({ name: ' A ', plan: '# H\n\nWhat it does.' }, 0)).toEqual({ name: 'A', goal: 'What it does.', files: [], plan: '# H\n\nWhat it does.', needs: [] });
+  });
+  it('keeps only non-empty distinct file strings, and distinct needs of earlier workstreams, sorted', () => {
+    const w = parseWorkstream({ name: 'A', plan: 'p', files: ['a.ts', ' a.ts ', '', 3, null, 'b.ts'], needs: [2, 0, 0, -1, 1.5, 3, 'x', 1] }, 3);
+    expect(w?.files).toEqual(['a.ts', 'b.ts']);
+    expect(w?.needs).toEqual([0, 1, 2]);
+  });
+  it('lets the first workstream need nothing', () => {
+    expect(parseWorkstream({ name: 'A', plan: 'p', needs: [0] }, 0)?.needs).toEqual([]);
   });
 });
 

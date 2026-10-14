@@ -4,9 +4,9 @@ import { SplitGlob, canSplit } from '@/components/split-glob';
 import type { GlobView } from '@/lib/api';
 import type { GlobViewContext } from './context';
 
-/** Whether the actions menu offers Split… on a glob that isn't flagged oversized (an oversized one has its own moves). */
+/** Whether the actions menu offers Split… on a glob (an oversized flag only advises, so it doesn't change this). */
 export const splittable = (glob: GlobView, decision: boolean): boolean =>
-  !decision && canSplit(glob) && (glob.allowedActions ?? []).includes('delete') && !isOversized(glob);
+  !decision && canSplit(glob) && (glob.allowedActions ?? []).includes('delete');
 
 /** The size section: a flagged glob's explanation, and the split form that Split… and Edit split in the actions open. */
 export const SizeSection = ({
