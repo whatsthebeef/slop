@@ -350,6 +350,19 @@ describe('investigate runs', () => {
     expect(line?.tone).not.toBe('text-red');
   });
 
+  it('says a Start queued behind the investigation waits for it, with the session', () => {
+    const r = run({ state: 'active', purpose: 'investigate', sessionUrl: 'https://claude.ai/code/s' });
+    const g = planning(r);
+    const queued = { ...g, waiting: { since: NOW, investigation: { runId: r.id, by: 'dev@x.com' } } } as GlobView;
+    const line = statusLine(queued, NOW);
+    expect(line?.kind).toBe('start-queued');
+    expect(line?.full).toBe('Investigating — starts after');
+    expect(line?.tone).not.toBe('text-red');
+    expect(line?.sessionUrl).toBe('https://claude.ai/code/s');
+    // Without a queued Start the investigation alone is not a problem line.
+    expect(statusLine(g, NOW)).toBeNull();
+  });
+
   it('leaves an implementation run unchanged', () => {
     const r = run({ state: 'active' });
     expect(positionOf(view({ status: 'in_progress', runs: [r], currentRun: r }), NOW)?.text).toBe('implementing');

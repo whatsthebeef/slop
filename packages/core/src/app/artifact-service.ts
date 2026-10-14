@@ -18,7 +18,7 @@ import { handoverBrief, openFindings, resumePhase } from '../domain/handover.js'
 import type { Handover } from '../domain/handover.js';
 import { humanSteps } from '../domain/human-steps.js';
 import type { HumanStep } from '../domain/human-steps.js';
-import { currentRun } from '../domain/machine.js';
+import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
@@ -134,6 +134,11 @@ export interface GlobContext {
    * `get_artifact(id, 'investigation')`.
    */
   readonly investigation?: InvestigationSummary;
+  /**
+   * Present while an investigate-only run is still working on the glob: the orchestrator waits for it (polling `get_glob`,
+   * every 2 minutes at most, up to 20) and reuses its result, instead of investigating again.
+   */
+  readonly investigationRunning?: { readonly runId: string; readonly since: string; readonly sessionUrl: string | null };
   /** Why a person is needed on this glob and what to do first (a hand-over brief); null when nothing is wrong. */
   readonly handover: Handover | null;
   /** Which source wins when sources disagree (the spec's order of authority). */
@@ -556,6 +561,7 @@ export class ArtifactService {
         .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
         .slice(0, CONTEXT_DECISIONS);
       const sizeCheck = await tx.getSizeCheck(globId);
+      const running = investigationRunning(glob);
       const scopedDecisions = await governingDecisions(tx, glob);
       const inbox = (await tx.listInboxForGlob(globId)).map((i) => ({
         id: i.id,
@@ -614,6 +620,7 @@ export class ArtifactService {
         ],
         ...(related === undefined ? {} : { related }),
         ...(investigation === null ? {} : { investigation: investigationSummary(investigation) }),
+        ...(running === null ? {} : { investigationRunning: running }),
         decisions,
         inbox,
         handover: await handoverOf(tx, this.deps.clock, glob),

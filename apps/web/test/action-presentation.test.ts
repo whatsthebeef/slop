@@ -42,6 +42,14 @@ describe('actionPresentation', () => {
     }
   });
 
+  it('reads Start as Start after investigation while an investigation is running', () => {
+    const g = view({ type: 'same', status: 'planning' });
+    const investigating = { ...g, currentRun: { ...glob().runs[0], purpose: 'investigate', state: 'active' } } as GlobView;
+    expect(actionPresentation('start', investigating)).toMatchObject({ label: 'Start after investigation', placement: 'main' });
+    const ended = { ...investigating, currentRun: { ...investigating.currentRun, state: 'ended' } } as GlobView;
+    expect(actionPresentation('start', ended).label).toBe('Start');
+  });
+
   it('names and places the standard actions', () => {
     const g = view({ type: 'same', status: 'planning', pr });
     expect(actionPresentation('start', g)).toMatchObject({
