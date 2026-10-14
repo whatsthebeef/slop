@@ -753,7 +753,11 @@ export const createApp = (deps: AppDeps) => {
         queue.push(JSON.stringify(hint));
         notify?.();
       });
-      stream.onAbort(unsubscribe);
+      // Unsubscribe once, and wake the loop so it ends now instead of when the ping timer fires.
+      stream.onAbort(() => {
+        unsubscribe();
+        notify?.();
+      });
       const open = () => !stream.aborted;
       await stream.writeSSE({ event: 'ready', data: '{}' });
       while (open()) {
@@ -774,7 +778,6 @@ export const createApp = (deps: AppDeps) => {
         notify = null;
         if (queue.length === 0 && open()) await stream.writeSSE({ event: 'ping', data: '{}' });
       }
-      unsubscribe();
     });
   });
 
