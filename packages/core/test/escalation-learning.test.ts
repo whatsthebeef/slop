@@ -97,6 +97,14 @@ describe('escalation outcomes (pure)', () => {
     expect(run([glob('s1t1')], [size, event('Deescalated', 's1t1', at(3), { reason: 'x' })])).toEqual([]);
   });
 
+  it("ignores an escalation slop's own risk-area cleanup lifted (no person de-escalated it)", () => {
+    const lifted = event('FieldsChanged', 's1t1', at(3), { type: { from: 'same', to: 'sub' }, note: 'dropped' });
+    expect(run([glob('s1t1', { status: 'signed_off' })], [escalated('s1t1', at(2), 'risk_area'), lifted, event('Merged', 's1t1', at(4))])).toEqual([]);
+    // A person's retype (with an actor) is not slop's cleanup.
+    const byPerson = event('FieldsChanged', 's1t1', at(3), { type: { from: 'same', to: 'sub' } }, 'dev@example.com');
+    expect(run([glob('s1t1', { status: 'signed_off' })], [escalated('s1t1', at(2), 'risk_area'), byPerson, event('Merged', 's1t1', at(4))])).toHaveLength(1);
+  });
+
   it('waits for the sign-off or the window before calling a merged escalation unnecessary', () => {
     const events = [escalated('s1t1', at(2)), event('Merged', 's1t1', at(18))];
     expect(run([glob('s1t1', { status: 'reviewing' })], events)).toEqual([]);

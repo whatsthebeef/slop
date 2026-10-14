@@ -42,7 +42,7 @@ export class RiskAreaService {
       /** Null without a code host: a merged sub's paths come from its plan only. */
       changes?: ChangeSource | null;
       /**
-       * De-escalates the globs in Planning that were escalated only for the named (dropped) risk areas, and returns how many.
+       * De-escalates the globs in Planning that were escalated only for the named (gone) risk areas, and returns how many.
        * Absent: the cleanup drops areas but leaves the globs as they are.
        */
       lift?: (boardId: number, names: readonly string[]) => Promise<number>;
@@ -76,7 +76,7 @@ export class RiskAreaService {
   /** Admins: removes one learned area (a default is reset instead); the history keeps why it was there. */
   async remove(email: string, boardId: number, name: string): Promise<Result<RiskAreaView>> {
     const now = this.deps.clock.now();
-    return this.deps.store.transaction(async (tx) => {
+    const removed = await this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
       if ((await tx.getBoard(boardId)) === null) return notFound(`No board ${boardId}`);
@@ -87,12 +87,26 @@ export class RiskAreaService {
       await tx.insertRiskAreaChange({ boardId, at: now, areaName: name, kind: 'removed', globId: null, cause: 'reset' });
       return ok(await this.read(tx, boardId));
     });
+    if (removed.ok) await this.lift(boardId);
+    return removed;
+  }
+
+  /** De-escalates the unstarted globs escalated only for areas that no longer exist (every pass, so a failed one is retried). */
+  private async lift(boardId: number): Promise<void> {
+    const lift = this.deps.lift;
+    if (lift === undefined) return;
+    const gone = await this.deps.store.transaction(async (tx) => {
+      const present = new Set((await tx.listRiskAreas(boardId)).map((a) => a.name));
+      const names = (await tx.listRiskAreaChanges(boardId)).flatMap((c) => (c.kind === 'removed' && c.areaName !== null && !present.has(c.areaName) ? [c.areaName] : []));
+      return [...new Set(names)];
+    });
+    if (gone.length > 0) await lift(boardId, gone);
   }
 
   /**
    * Drops the learned areas that break the rule for them (a package or app root, or fewer than `MIN_EVIDENCE_GLOBS` separate
    * globs of evidence in the history), keeping a `removed` row for each in the history, then de-escalates the globs in
-   * Planning that were escalated only for a dropped area. Idempotent. Returns the dropped names.
+   * Planning that were escalated only for an area that is gone (retried on every pass). Idempotent. Returns the dropped names.
    */
   async cleanup(boardId: number): Promise<string[]> {
     const now = this.deps.clock.now();
@@ -108,7 +122,7 @@ export class RiskAreaService {
       }
       return names;
     });
-    if (dropped.length > 0) await this.deps.lift?.(boardId, dropped);
+    await this.lift(boardId);
     return dropped;
   }
 

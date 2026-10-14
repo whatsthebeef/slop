@@ -44,7 +44,8 @@ const LEARNED = 'Learned: apps/billing/src/payments';
 const outcome = (kind: RiskOutcome['kind'], paths: readonly string[] = FILES, globId = 's1t1'): RiskOutcome => ({ kind, globId, paths, at: NOW });
 
 type Applied = ReturnType<typeof applyOutcome>;
-const history = (...applied: Applied[]) => applied.flatMap((a) => a.changes);
+/** The changes so far, newest first like the store lists them. */
+const history = (...applied: Applied[]) => applied.flatMap((a) => a.changes).reverse();
 
 describe('risk areas (pure)', () => {
   const defaults = defaultAreas(1, NOW);
@@ -99,6 +100,15 @@ describe('risk areas (pure)', () => {
     // Deep files in one module share the module directory.
     const deep = applyOutcome(1, defaults, outcome('reverted', ['packages/core/src/domain/x.ts', 'packages/core/src/domain/y.ts'], 's1t4'));
     expect(deep.changes).toEqual([expect.objectContaining({ areaName: 'Learned: packages/core/src/domain', kind: 'candidate' })]);
+  });
+
+  it('forgets the evidence of an area once it is removed, so one new outcome only makes a candidate', () => {
+    const first = applyOutcome(1, defaults, outcome('reverted'));
+    const second = applyOutcome(1, defaults, outcome('reverted', FILES, 's1t2'), history(first));
+    const removed = { boardId: 1, at: NOW, areaName: LEARNED, kind: 'removed' as const, globId: null, cause: 'reset' as const };
+    const after = applyOutcome(1, defaults, outcome('reverted', FILES, 's1t3'), [removed, ...history(first, second)]);
+    expect(after.put).toEqual([]);
+    expect(after.changes).toEqual([expect.objectContaining({ kind: 'candidate', globId: 's1t3' })]);
   });
 
   it('tells narrow patterns from wide ones', () => {
@@ -323,6 +333,25 @@ describe('RiskAreaService', () => {
       const events = store.state.events.filter((e) => e.globId === 's1t10');
       expect(events.map((e) => e.type)).not.toContain('Deescalated');
       expect(events.find((e) => e.type === 'FieldsChanged')?.data).toMatchObject({ type: { from: 'same', to: 'sub' }, note: expect.stringContaining('dropped') as unknown });
+    });
+
+    it('retries the de-escalation on a later pass when the first one failed', async () => {
+      const calls: string[][] = [];
+      let fail = true;
+      const flaky = new RiskAreaService({
+        store,
+        clock: { now: () => now },
+        changes,
+        lift: (_b, names) => {
+          calls.push([...names]);
+          return fail ? Promise.reject(new Error('lost')) : Promise.resolve(0);
+        },
+      });
+      await put(learnedArea('Learned: apps/web/src', 'apps/web/src/**'));
+      await expect(flaky.cleanup(boardId)).rejects.toThrow('lost');
+      fail = false;
+      expect(await flaky.cleanup(boardId)).toEqual([]);
+      expect(calls).toEqual([['Learned: apps/web/src'], ['Learned: apps/web/src']]);
     });
 
     it('lets an admin remove a learned area, but not a default', async () => {

@@ -198,15 +198,17 @@ const BAD_CHANGE_KINDS: readonly RiskAreaChangeKind[] = ['added', 'strengthened'
 
 /**
  * The separate globs whose bad outcomes are evidence for a learned area: those the history names it for with a change that
- * adds or strengthens it (or notes it as a candidate), not the clean ones.
+ * adds or strengthens it (or notes it as a candidate), not the clean ones. `history` is newest first; evidence older than the
+ * area's last removal, or the last reset, is gone with it.
  */
-export const evidenceGlobs = (history: readonly Pick<RiskAreaChange, 'areaName' | 'kind' | 'globId' | 'cause'>[], areaName: string): string[] => [
-  ...new Set(
-    history
-      .filter((c) => c.areaName === areaName && c.globId !== null && BAD_CHANGE_KINDS.includes(c.kind) && !isClean(c.cause))
-      .map((c) => c.globId as string),
-  ),
-];
+export const evidenceGlobs = (history: readonly Pick<RiskAreaChange, 'areaName' | 'kind' | 'globId' | 'cause'>[], areaName: string): string[] => {
+  const globs = new Set<string>();
+  for (const c of history) {
+    if (c.kind === 'reset' || (c.kind === 'removed' && c.areaName === areaName)) break;
+    if (c.areaName === areaName && c.globId !== null && BAD_CHANGE_KINDS.includes(c.kind) && !isClean(c.cause)) globs.add(c.globId);
+  }
+  return [...globs];
+};
 
 const outcomeWeight = (kind: RiskOutcomeKind): number => (kind === 'type_to_same' || kind === 'type_to_sub' ? CORRECTION_WEIGHT : 1);
 const isClean = (kind: RiskAreaCause): boolean => kind === 'clean' || kind === 'type_to_sub';
