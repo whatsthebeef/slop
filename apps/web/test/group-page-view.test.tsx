@@ -135,14 +135,16 @@ describe('card group label', () => {
       </MemoryRouter>,
     );
 
-  it('shows progress and links to the group page, with the filter kept beside it', async () => {
+  it('shows progress and links to the group page, with no separate filter button', async () => {
     const onFilterGroup = vi.fn();
     card({ groupHref: '/boards/1/groups/board-chat', groupProgress: '3/5', onFilterGroup });
     const chip = screen.getByTestId('group-chip');
     expect(chip.textContent).toBe('board-chat 3/5');
     expect(chip.getAttribute('href')).toBe('/boards/1/groups/board-chat');
-    await userEvent.setup().click(screen.getByTestId('group-filter'));
-    expect(onFilterGroup).toHaveBeenCalledWith('board-chat');
+    expect(screen.queryByTestId('group-filter')).toBeNull();
+    expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
+    await userEvent.setup().click(chip);
+    expect(onFilterGroup).not.toHaveBeenCalled();
   });
 
   it('keeps a plain name without progress', () => {
