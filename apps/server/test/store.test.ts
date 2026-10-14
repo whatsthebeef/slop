@@ -277,4 +277,18 @@ describe('PgStore', () => {
     expect(await store.transaction((tx) => tx.listChatMessages(mine.id, 50))).toEqual([]);
     expect((await store.transaction((tx) => tx.listChatMessages(theirs.id, 50))).map((m) => m.content)).toEqual(['theirs']);
   });
+  it('round-trips the uncited and miss reply flags on chat messages (s15f137)', async () => {
+    const at = '2026-10-05T12:00:00.000Z';
+    const chat = await store.transaction((tx) => tx.createChat({ boardId: 1, email: 'flags@example.com', title: 'flags', createdAt: at }));
+    const base = { chatId: chat.id, boardId: 1, email: 'flags@example.com', createdAt: at, role: 'assistant' as const, citations: null };
+    await store.transaction(async (tx) => {
+      await tx.addChatMessage({ ...base, content: 'plain' });
+      await tx.addChatMessage({ ...base, content: 'uncited', uncited: true });
+      await tx.addChatMessage({ ...base, content: 'miss', miss: true });
+    });
+    const [plain, uncited, miss] = await store.transaction((tx) => tx.listChatMessages(chat.id, 10));
+    expect([plain?.uncited, plain?.miss]).toEqual([undefined, undefined]);
+    expect([uncited?.uncited, uncited?.miss]).toEqual([true, undefined]);
+    expect([miss?.uncited, miss?.miss]).toEqual([undefined, true]);
+  });
 });

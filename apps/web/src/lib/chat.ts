@@ -98,7 +98,7 @@ export const suggestionsFor = (page: PageContext): string[] => {
   }
 };
 
-export type AnswerAction = 'create_glob' | 'attach' | 'save' | 'open_glob';
+export type AnswerAction = 'create_glob' | 'attach' | 'save' | 'open_glob' | 'think_harder' | 'look_at_code';
 
 /** The globs an answer cites, then the page's, in order and without repeats. */
 export const citedGlobs = (message: Pick<ChatMessage, 'citations'>, page: PageContext): string[] => {
@@ -124,10 +124,15 @@ export const openGlobOf = (message: Pick<ChatMessage, 'citations' | 'content'>, 
  * The buttons under an answer, only where they fit. *Create glob* and *Save to knowledge* are what the answering model
  * asked for (`actions`; saving also needs a glob to point at, one the answer cites or the page's). *Attach* adds the
  * open inbox item to the globs the answer cites; *Open in glob view* is for an answer about one glob (mentions count only
- * when they are among `boardGlobs`, see `openGlobOf`). An answer with
- * no sources (small talk, "couldn't find") gets nothing.
+ * when they are among `boardGlobs`, see `openGlobOf`). A miss (`miss`: nothing answered) shows the buttons the server
+ * offered (*Think harder*, *Look at the code*, *Create glob*); any other answer with no sources (small talk, text that is
+ * not from the records) gets nothing.
  */
-export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content' | 'actions'>, page: PageContext, boardGlobs?: ReadonlySet<string>): AnswerAction[] => {
+export const actionsFor = (message: Pick<ChatMessage, 'citations' | 'content' | 'actions'> & { readonly miss?: boolean }, page: PageContext, boardGlobs?: ReadonlySet<string>): AnswerAction[] => {
+  if (message.miss === true) {
+    const offered = message.actions ?? [];
+    return (['think_harder', 'look_at_code', 'create_glob'] as const).filter((a) => offered.includes(a));
+  }
   const cited = message.citations ?? [];
   if (cited.length === 0) return [];
   const asked = message.actions ?? [];
@@ -160,6 +165,7 @@ export const sourceTone = (source: ChatCitation['source']): string => {
     case 'kb_doc':
     case 'learning':
       return 'border-violet-600/60 bg-violet-500/10';
+    case 'slop_help':
     case 'board_state':
       return 'border-foreground/40 bg-muted';
     case 'code':

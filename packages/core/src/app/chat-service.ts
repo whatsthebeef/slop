@@ -1,4 +1,4 @@
-import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, CHAT_HISTORY_LIMIT, CHAT_LIST_LIMIT, CHAT_NO_CODE, CHAT_TITLE_MAX, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutActionsTag, withoutCodeRequests } from '../domain/chat.js';
+import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, chatMissText, CHAT_HISTORY_LIMIT, CHAT_LIST_LIMIT, CHAT_NO_CODE, CHAT_TITLE_MAX, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutActionsTag, withoutCodeRequests } from '../domain/chat.js';
 import type { ChatAction, ChatCitation, ChatCodeCall, ChatMessage, ChatThread, PageContext } from '../domain/chat.js';
 import { invalidInput, llmUnavailable, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
@@ -41,15 +41,15 @@ const RECENT_TURNS = 6;
 /** A long earlier answer would crowd out the sources. */
 const TURN_CHARS = 800;
 
-const SYSTEM = `You answer questions about a software board using ONLY the numbered sources you are given: plans, decisions, implementation records, reviews and knowledge documents.
+const SYSTEM = `You answer questions about a software board using the numbered sources you are given: plans, decisions, implementation records, reviews and knowledge documents, and slop's own help (sources labelled "Slop help", which explain how slop itself works: globs, labels, relations, decision globs, watch signals and so on).
 Rules:
-- Use nothing but the sources. If they do not answer the question, reply with exactly: ${CHAT_DONT_KNOW}
-- Cite every claim with its source number in square brackets, like [2] or [2][3].
+- Answer from the sources when they answer the question, and cite every claim with its source number in square brackets, like [2] or [2][3].
+- Questions about how to use slop are answered from the "Slop help" sources. Facts about the board (glob IDs, decisions, statuses, what was built) come only from the board's own sources.
+- When the sources do not answer, give a short best answer from general knowledge and say plainly that it is not from the board's records. Never invent facts about the board: no glob IDs, decisions, statuses or dates that are not in the sources. Reply with exactly ${CHAT_DONT_KNOW} only when you have nothing useful to say at all.
 - Prefer current decisions over superseded ones. When a decision you rely on is marked superseded, say so and name what replaced it.
 - The source titled "Board state (now)" is the board's live state (open globs, their status and failures, active notifications), not a record of decisions: use it for questions about what is happening now.
 - Earlier conversation turns are only for understanding follow-up questions; they are not evidence.
 - When the person is viewing a page (given after the sources), "this" in their question means that page.
-- If the sources do not answer, the reply names what you looked for: ${CHAT_DONT_KNOW}
 Reply in short Markdown (a few sentences, lists where they help). Mention a glob by its ID, like s15f25.
 After the answer, you may add one last line naming the buttons worth showing under it, as <actions>create_glob, save</actions>:
 - create_glob only when the answer points at work that is not on the board yet (a gap, a bug, a follow-up) or the person asked for something to be done;
@@ -71,7 +71,7 @@ const NO_CODE_INSTRUCTIONS = `
 If the question needs the board's code to be answered (where something is implemented, how it works) and you cannot read the code, reply with exactly: ${CHAT_NO_CODE}`;
 
 const SMALL_TALK_SYSTEM = `You are the chat of a software board. The person's message is not a question about the board's records (a greeting, thanks, or a question about the chat itself), so answer it like a friendly colleague in one or two short sentences.
-If they ask what you can do: you answer questions about the board's plans, decisions, implementation records, reviews and knowledge, with their sources; you know what is open on the board right now; and answers can lead to creating a glob, saving something to the knowledge base or opening a glob. Mention what fits the page they are on.
+If they ask what you can do: you answer questions about the board's plans, decisions, implementation records, reviews and knowledge, with their sources; you also answer how-to questions about slop itself from slop's help, cited; you know what is open on the board right now; and answers can lead to creating a glob, saving something to the knowledge base or opening a glob. Mention what fits the page they are on.
 Never claim facts about the board's contents, and do not say you cannot find anything.`;
 
 const REWRITE_SYSTEM = `You rewrite a question about a software board into a search query for its records (plans, decisions, implementation records, reviews, knowledge documents).
@@ -92,6 +92,8 @@ export interface ChatRequest {
   readonly page?: PageContext;
   /** One answer from the stronger model. */
   readonly thinkHarder?: boolean;
+  /** The person asked to look at the code ("Look at the code" under a miss): the model is told to use the code view. */
+  readonly lookAtCode?: boolean;
   /** Fired when the person stops the answer: the model call ends and nothing is stored. */
   readonly signal?: AbortSignal;
 }
@@ -103,9 +105,29 @@ export interface ChatAnswer {
   readonly chat: ChatThread;
   readonly question: ChatMessage;
   readonly reply: ChatMessage;
-  /** False when the board's records didn't answer. */
+  /** False when the answer cites nothing (a miss, or text that is not from the records: `reply.uncited`). */
   readonly answered: boolean;
 }
+
+/** What `compose` returns: the reply as it is stored, with how it came about. */
+interface Composed {
+  readonly question: string;
+  readonly answer: string;
+  readonly citations: ChatCitation[];
+  readonly tools: string[];
+  readonly actions: ChatAction[];
+  /** Text from the model that cites no source (shown as not from the records). */
+  readonly uncited: boolean;
+  /** Nothing answered: `answer` names what was searched. */
+  readonly miss: boolean;
+  /** Whether the reply answers the question (small talk does, a miss or uncited text does not). */
+  readonly answered: boolean;
+  /** What the miss sentence would say here (what was searched); the MCP answer uses it when the model's text cites nothing. */
+  readonly searched: string;
+}
+
+/** The most slop-help chunks the chat adds to the board's hits, so a how-to question always has them. */
+const HELP_HITS = 3;
 
 const sourceBlock = (hit: SearchHit, n: number): string => {
   const c = hit.citation;
@@ -258,7 +280,7 @@ export class ChatService {
     const composed = await this.compose(email, request, recent.value, onText);
     if (!composed.ok) return composed;
     if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
-    const { question, answer, citations, tools, actions } = composed.value;
+    const { question, answer, citations, tools, actions, uncited, miss, answered } = composed.value;
     // Nothing is stored for a failed call: the person asks again.
     return this.deps.store.transaction(async (tx) => {
       // Membership could have been removed while the model ran.
@@ -277,17 +299,21 @@ export class ChatService {
       }
       const base = { chatId: chat.id, boardId: request.boardId, email, createdAt: now };
       const asked = await tx.addChatMessage({ ...base, role: 'user', content: question, citations: null });
-      const reply = await tx.addChatMessage({ ...base, role: 'assistant', content: answer, citations, tools, actions });
-      return ok({ chat, question: asked, reply, answered: answer !== CHAT_DONT_KNOW });
+      const reply = await tx.addChatMessage({ ...base, role: 'assistant', content: answer, citations, tools, actions, ...(uncited ? { uncited } : {}), ...(miss ? { miss } : {}) });
+      return ok({ chat, question: asked, reply, answered });
     });
   }
 
   /** A one-off question (the MCP tool): same retrieval and citations, but no conversation is read or stored. */
-  async answer(email: string, request: ChatRequest): Promise<Result<{ answer: string; answered: boolean; citations: readonly ChatCitation[] }>> {
+  async answer(
+    email: string,
+    request: ChatRequest,
+  ): Promise<Result<{ answer: string; answered: boolean; citations: readonly ChatCitation[]; uncitedAnswer?: string }>> {
     const composed = await this.compose(email, request, []);
     if (!composed.ok) return composed;
-    const { answer, citations } = composed.value;
-    return ok({ answer, answered: answer !== CHAT_DONT_KNOW, citations });
+    const { answer, citations, uncited, answered, searched } = composed.value;
+    // Text that cites nothing is not the records' answer: it is returned apart, so an agent can tell.
+    return ok(uncited ? { answer: searched, answered, citations, uncitedAnswer: answer } : { answer, answered, citations });
   }
 
   private async compose(
@@ -295,7 +321,7 @@ export class ChatService {
     request: ChatRequest,
     recent: readonly ChatMessage[],
     onText?: ChatDelta,
-  ): Promise<Result<{ question: string; answer: string; citations: ChatCitation[]; tools: string[]; actions: ChatAction[] }>> {
+  ): Promise<Result<Composed>> {
     const question = request.question.trim();
     if (question === '') return invalidInput('question must not be empty');
     if (question.length > MAX_QUERY_LENGTH) return invalidInput(`question must be at most ${MAX_QUERY_LENGTH} characters`);
@@ -329,7 +355,14 @@ export class ChatService {
         return llmUnavailable('The search did not complete', 'Try again shortly');
       }
     }
-    tools.push(`Searched the board's records (${allTime ? 'all time, including history' : 'current'}${request.globId === undefined ? '' : `, ${request.globId} only`}): ${String(hits.length)} found`);
+    // Slop's own help is indexed on every board; a second search over it alone makes sure a how-to question has it, whatever the records rank above it.
+    const helpCount = (hs: readonly SearchHit[]) => hs.filter((h) => h.citation.source === 'slop_help').length;
+    const helpHits = await this.searchHelp(email, request.boardId, query, hits);
+    hits = [...hits, ...helpHits];
+    const helpFound = helpCount(hits);
+    const recordsFound = hits.length - helpFound;
+    tools.push(`Searched the board's records (${allTime ? 'all time, including history' : 'current'}${request.globId === undefined ? '' : `, ${request.globId} only`}): ${String(recordsFound)} found`);
+    if (helpFound > 0) tools.push(`Searched slop's help: ${String(helpFound)} found`);
 
     // The live state is built from the store, not from search, and goes in every question; it is last so a source
     // number from search keeps its place. With no open globs and no notifications there is nothing to add.
@@ -340,70 +373,97 @@ export class ChatService {
 
     // Chat reads the code only for a board with a repository.
     const codeOn = await this.codeReadable(request.boardId);
-    let answer = CHAT_DONT_KNOW;
-    let actions: ChatAction[] = [];
-    const citations: ChatCitation[] = [];
-    if (hits.length > 0 || stateN > 0 || codeOn) {
-      const deep = request.thinkHarder === true && this.deps.deepLlm !== undefined;
-      if (deep) tools.push('Thought harder (stronger model)');
-      const llm = deep && this.deps.deepLlm !== undefined ? this.deps.deepLlm : this.deps.llm;
-      const llmRequest: Omit<LlmRequest, 'signal'> = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS, spend: { boardId: request.boardId, source: 'chat' } };
-      const timeout = deep ? (this.deps.deepTimeoutMs ?? CHAT_THINK_TIMEOUT_MS) : (this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS);
-      let raw: string;
-      const read: CodeSource[] = [];
-      try {
-        raw = codeOn
-          ? await this.generateWithCode(email, request, llm, llmRequest, timeout, hits.length + (stateN > 0 ? 1 : 0), read, tools, onText)
-          : await this.generate(llm, llmRequest, timeout, onText === undefined ? undefined : withoutActionsTag(onText), request.signal);
-      } catch (error) {
-        if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
-        if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
-        // Throttling and timeouts are ordinary errors from the adapter: nothing the asker did wrong, and it passes.
-        return llmUnavailable('The model did not answer', 'Try again shortly');
-      }
-      const parsed = parseActions(raw);
-      const text = parsed.text;
-      // A number outside 1..n is the model's invention: dropped, never linked.
-      const total = hits.length + (stateN > 0 ? 1 : 0) + read.length;
-      const used = citedNumbers(text).filter((n) => n >= 1 && n <= total);
-      if (text.startsWith(CHAT_NO_CODE)) {
-        // The question needed the code and it could not be read: said as it is, with no sources.
-        tools.push("Couldn't read the code");
-        return ok({ question, answer: CHAT_NO_CODE, citations: [], tools, actions: [] });
-      }
-      if (text === '' || (used.length === 0 && !text.startsWith(CHAT_DONT_KNOW))) {
-        this.deps.warn?.(
-          `chat: unusable reply on board ${String(request.boardId)} (${String(hits.length)} hits, ${text === '' ? 'empty' : 'no source used'}): ${raw.slice(0, LOG_REPLY_CHARS)}`,
-        );
-      }
-      if (used.length > 0) {
-        answer = text;
-        // Nothing is offered under "couldn't find"; saving needs sources to point at.
-        if (!text.startsWith(CHAT_DONT_KNOW)) actions = parsed.actions;
-        const seen = new Set<number>();
-        const cited: SearchHit[] = [];
-        for (const n of [...used].sort((a, b) => a - b)) {
-          if (n === stateN) {
-            citations.push(boardStateCitation(request.boardId, this.deps.clock.now(), n));
-            continue;
-          }
-          const file = read[n - hits.length - (stateN > 0 ? 1 : 0) - 1];
-          if (file !== undefined) {
-            citations.push(codeCitation(file, n, this.deps.clock.now()));
-            continue;
-          }
-          const hit = hits[n - 1];
-          if (hit === undefined || seen.has(hit.itemId)) continue;
-          seen.add(hit.itemId);
-          citations.push(citationOf(hit, n));
-          cited.push(hit);
-        }
-        // A choice the answer cites was returned to chat: counted once per answer, on the glob the question is about.
-        await this.deps.store.transaction((tx) => this.deps.search.recordUse(tx, request.boardId, cited, request.globId ?? null));
-      }
+    const missFacts = { query, records: recordsFound, help: helpFound, state: stateN > 0, codeAvailable: codeOn };
+    const deepOffered = request.thinkHarder !== true && this.deps.deepLlm !== undefined;
+    // A true miss names what was searched and offers what could still help; the model never asks for these buttons.
+    const miss = (codeLooked: boolean): Composed => {
+      const searched = chatMissText({ ...missFacts, codeLooked });
+      const offered: ChatAction[] = [
+        ...(deepOffered ? (['think_harder'] as const) : []),
+        ...(codeOn && request.lookAtCode !== true ? (['look_at_code'] as const) : []),
+        'create_glob',
+      ];
+      return { question, answer: searched, citations: [], tools, actions: offered, uncited: false, miss: true, answered: false, searched };
+    };
+    // With nothing to show the model (no hits, no live state, no code view) the model is not called: there is nothing to answer from.
+    if (hits.length === 0 && stateN === 0 && !codeOn) return ok(miss(false));
+    const deep = request.thinkHarder === true && this.deps.deepLlm !== undefined;
+    if (deep) tools.push('Thought harder (stronger model)');
+    const llm = deep && this.deps.deepLlm !== undefined ? this.deps.deepLlm : this.deps.llm;
+    const lookHint = codeOn && request.lookAtCode === true ? '\n\nThe person asked you to look at the code: use the code view before you answer.' : '';
+    const llmRequest: Omit<LlmRequest, 'signal'> = { system: SYSTEM + (codeOn ? codeInstructions(CHAT_CODE_MAX_CALLS) + lookHint : NO_CODE_INSTRUCTIONS), prompt: this.prompt(question, hits, state, recent, page), maxTokens: CHAT_MAX_TOKENS, spend: { boardId: request.boardId, source: 'chat' } };
+    const timeout = deep ? (this.deps.deepTimeoutMs ?? CHAT_THINK_TIMEOUT_MS) : (this.deps.llmTimeoutMs ?? CHAT_LLM_TIMEOUT_MS);
+    let raw: string;
+    const read: CodeSource[] = [];
+    const toolsBefore = tools.length;
+    try {
+      raw = codeOn
+        ? await this.generateWithCode(email, request, llm, llmRequest, timeout, hits.length + (stateN > 0 ? 1 : 0), read, tools, onText)
+        : await this.generate(llm, llmRequest, timeout, onText === undefined ? undefined : withoutActionsTag(onText), request.signal);
+    } catch (error) {
+      if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
+      if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
+      // Throttling and timeouts are ordinary errors from the adapter: nothing the asker did wrong, and it passes.
+      return llmUnavailable('The model did not answer', 'Try again shortly');
     }
-    if (citations.length === 0) actions = [];
-    return ok({ question, answer, citations, tools, actions });
+    const codeLooked = tools.length > toolsBefore;
+    const parsed = parseActions(raw);
+    const text = parsed.text;
+    // A number outside 1..n is the model's invention: dropped, never linked.
+    const total = hits.length + (stateN > 0 ? 1 : 0) + read.length;
+    const used = citedNumbers(text).filter((n) => n >= 1 && n <= total);
+    if (text.startsWith(CHAT_NO_CODE)) {
+      // The question needed the code and it could not be read: said as it is, with no sources.
+      tools.push("Couldn't read the code");
+      return ok({ question, answer: CHAT_NO_CODE, citations: [], tools, actions: [], uncited: false, miss: false, answered: true, searched: CHAT_NO_CODE });
+    }
+    // A model that still asks for the code after its looks ran out has said nothing: that is a miss, not an answer.
+    if (text === '' || text.startsWith(CHAT_DONT_KNOW) || parseCodeCall(text) !== null) {
+      if (text === '') {
+        this.deps.warn?.(`chat: unusable reply on board ${String(request.boardId)} (${String(hits.length)} hits, empty): ${raw.slice(0, LOG_REPLY_CHARS)}`);
+      }
+      return ok(miss(codeLooked));
+    }
+    if (used.length === 0) {
+      // Text that uses no source is kept, but shown (and returned) as not from the records. No buttons: there is nothing cited to act on.
+      this.deps.warn?.(`chat: reply without a source on board ${String(request.boardId)} (${String(hits.length)} hits): ${raw.slice(0, LOG_REPLY_CHARS)}`);
+      return ok({ question, answer: text, citations: [], tools, actions: [], uncited: true, miss: false, answered: false, searched: chatMissText({ ...missFacts, codeLooked }) });
+    }
+    const citations: ChatCitation[] = [];
+    const seen = new Set<number>();
+    const cited: SearchHit[] = [];
+    for (const n of [...used].sort((a, b) => a - b)) {
+      if (n === stateN) {
+        citations.push(boardStateCitation(request.boardId, this.deps.clock.now(), n));
+        continue;
+      }
+      const file = read[n - hits.length - (stateN > 0 ? 1 : 0) - 1];
+      if (file !== undefined) {
+        citations.push(codeCitation(file, n, this.deps.clock.now()));
+        continue;
+      }
+      const hit = hits[n - 1];
+      if (hit === undefined || seen.has(hit.itemId)) continue;
+      seen.add(hit.itemId);
+      citations.push(citationOf(hit, n));
+      cited.push(hit);
+    }
+    // A choice the answer cites was returned to chat: counted once per answer, on the glob the question is about.
+    await this.deps.store.transaction((tx) => this.deps.search.recordUse(tx, request.boardId, cited, request.globId ?? null));
+    return ok({ question, answer: text, citations, tools, actions: citations.length === 0 ? [] : parsed.actions, uncited: false, miss: false, answered: citations.length > 0, searched: '' });
+  }
+
+  /** The best slop-help chunks for a query that the board's own hits don't already hold; a failed search adds none. */
+  private async searchHelp(email: string, boardId: number, query: string, have: readonly SearchHit[]): Promise<SearchHit[]> {
+    try {
+      const found = await this.deps.search.board(email, { boardId, query, mode: 'all_time', sourceTypes: ['slop_help'] });
+      if (!found.ok) return [];
+      const key = (h: SearchHit) => `${String(h.itemId)}|${h.header}`;
+      const held = new Set(have.map(key));
+      return found.value.hits.filter((h) => !held.has(key(h))).slice(0, HELP_HITS);
+    } catch {
+      return [];
+    }
   }
 
   /** True when the board has a repository and chat has a code view to read it with. */
@@ -510,7 +570,7 @@ export class ChatService {
     question: string,
     request: ChatRequest,
     onText?: ChatDelta,
-  ): Promise<Result<{ question: string; answer: string; citations: ChatCitation[]; tools: string[]; actions: ChatAction[] }>> {
+  ): Promise<Result<Composed>> {
     const page = await this.pageLine(request.boardId, request.page);
     const prompt = `${question}${page === '' ? '' : `\n\n${page}`}`;
     let raw: string;
@@ -522,7 +582,7 @@ export class ChatService {
       return llmUnavailable('The model did not answer', 'Try again shortly');
     }
     const answer = raw.trim();
-    return ok({ question, answer: answer === '' ? 'Hello! Ask me about this board.' : answer, citations: [], tools: [], actions: [] });
+    return ok({ question, answer: answer === '' ? 'Hello! Ask me about this board.' : answer, citations: [], tools: [], actions: [], uncited: false, miss: false, answered: true, searched: '' });
   }
 
   /** One model call, streamed when the adapter can and someone is listening; the deadline and the person's stop both end it. */
@@ -640,7 +700,8 @@ export class ChatService {
     });
     if (!found.ok) return found;
     const { reply, asked } = found.value;
-    if (reply.content === CHAT_DONT_KNOW) return invalidInput('There is nothing to save: the board had no answer');
+    if (reply.miss === true || reply.content === CHAT_DONT_KNOW) return invalidInput('There is nothing to save: the board had no answer');
+    if (reply.uncited === true) return invalidInput('There is nothing to save: the answer is not from the board\'s records');
     const sourceGlobId = reply.citations?.find((c) => c.globId !== null)?.globId ?? pageGlobId;
     if (sourceGlobId === undefined) return invalidInput('This answer cites no glob; open a glob and save from there');
     const sources = (reply.citations ?? []).map((c) => `[${String(c.n)}] ${c.sourceLabel}: ${c.title} (${c.date.slice(0, 10)})`).join('\n');

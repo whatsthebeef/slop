@@ -7,6 +7,7 @@ import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
 import { JOBS, loadConfig, type Job } from './config.js';
+import { loadHelpCorpus } from './help-corpus.js';
 import * as schema from './db/schema.js';
 import { connect, PgStore, runMigrations } from './db/store.js';
 import { createApp } from './http/app.js';
@@ -357,12 +358,17 @@ const searchLlm = trackLlm(
   new BedrockLlm({ id: config.SEARCH_MODEL, configKey: 'SEARCH_MODEL' }, config.BEDROCK_REGION, recordUsage),
   config.SEARCH_MODEL,
 );
+// Slop's own help, indexed on every board; read once here (the files ship in the image).
+const helpDocs = await loadHelpCorpus({ docsDir: config.DOCS_DIR, catalogDir: config.CATALOG_DIR }, (message) => {
+  console.warn(`[help] ${message}`);
+});
 const searchIndexer = new SearchIndexer({
   store,
   clock,
   embedder,
   changes: new CodeHostChanges(github, logError),
   llm: searchLlm,
+  help: helpDocs,
 });
 const search = new SearchService({ store, clock, embedder });
 const codeIndexer = new CodeIndexer({ store, clones: codeClones, index: codeIndex });

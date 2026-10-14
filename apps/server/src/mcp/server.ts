@@ -920,7 +920,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'ask_board',
     {
       description:
-        "Ask a question about the board in plain words (e.g. \"why did we decide X?\") and get an answer written only from the board's own records, with `citations` (source, title, date, link, glob, status; a replaced choice names what replaced it). `answered` is false, with \"I couldn't find anything about that in the board's records.\", when the records don't answer. Current material is preferred; pass `globId` to scope it to one glob. One-off: nothing is added to the person's chat panel. Fails with llm_unavailable while the chat model is busy or down; use search_text then. Member of the board required.",
+        "Ask a question about the board in plain words (e.g. \"why did we decide X?\") and get an answer written from the board's own records and slop's help, with `citations` (source, title, date, link, glob, status; a replaced choice names what replaced it; slop's own help is the source \"Slop help\"). `answered` is false when the answer cites nothing: then `answer` says what was searched, and when the model still had something to say it is returned in `uncitedAnswer`, which is NOT from the records (treat it as a general best guess, never as a board fact). Current material is preferred; pass `globId` to scope it to one glob. One-off: nothing is added to the person's chat panel. Fails with llm_unavailable while the chat model is busy or down; use search_text then. Member of the board required.",
       inputSchema: {
         board: searchFields.board,
         question: z.string().min(1).max(MAX_QUERY_LENGTH),

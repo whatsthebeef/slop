@@ -63,6 +63,8 @@ const schema = z.object({
   GITHUB_APP_NAME: z.string().default('slop-dev'),
   /** slop's generic catalog (`catalog/` in the repo). */
   CATALOG_DIR: z.string().default('../../catalog'),
+  /** The repository's `docs/` folder: the spec and feature guide indexed as slop's help. */
+  DOCS_DIR: z.string().default('../../docs'),
   /** The folder with the Claude app skills (`slop-attach/`), served as zips. */
   SKILLS_DIR: z.string().default('../../skills'),
   /** The Cognito app client Claude Code uses; filled into the agent set's `.mcp.json`. */

@@ -1,0 +1,2 @@
+ALTER TABLE "board_chat_messages" ADD COLUMN IF NOT EXISTS "uncited" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "board_chat_messages" ADD COLUMN IF NOT EXISTS "miss" boolean DEFAULT false NOT NULL;

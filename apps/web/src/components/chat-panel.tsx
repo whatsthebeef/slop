@@ -125,14 +125,19 @@ const Actions = ({
   boardId,
   chatId,
   message,
+  asked,
   page,
   onNavigate,
+  onReask,
 }: {
   boardId: number;
   chatId: number;
   message: ChatMessage;
+  /** The question this reply answers. */
+  asked: string | undefined;
   page: PageContext;
   onNavigate: () => void;
+  onReask: (question: string, options: { think?: boolean; lookAtCode?: boolean }) => void;
 }) => {
   const navigate = useNavigate();
   const toast = useToast();
@@ -163,13 +168,24 @@ const Actions = ({
   const openGlob = openGlobOf(message, page, boardGlobs);
   return (
     <div className='mt-1 flex flex-wrap gap-1 pt-1' data-testid='chat-actions'>
+      {actions.includes('think_harder') && asked !== undefined && (
+        <Button size='sm' variant='outline' onClick={() => onReask(asked, { think: true })}>
+          Think harder
+        </Button>
+      )}
+      {actions.includes('look_at_code') && asked !== undefined && (
+        <Button size='sm' variant='outline' onClick={() => onReask(asked, { lookAtCode: true })}>
+          Look at the code
+        </Button>
+      )}
       {actions.includes('create_glob') && (
         <Button
           size='sm'
           variant='outline'
           onClick={() => {
             onNavigate();
-            void navigate(`/boards/${String(boardId)}`, { state: { createFrom: message.content.slice(0, 1500) } });
+            // A miss has nothing to start a glob from but the question.
+            void navigate(`/boards/${String(boardId)}`, { state: { createFrom: (message.miss === true ? (asked ?? message.content) : message.content).slice(0, 1500) } });
           }}
         >
           Create glob
@@ -203,14 +219,18 @@ const Message = ({
   boardId,
   chatId,
   message,
+  asked,
   page,
   onNavigate,
+  onReask,
 }: {
   boardId: number;
   chatId: number;
   message: ChatMessage;
+  asked: string | undefined;
   page: PageContext;
   onNavigate: () => void;
+  onReask: (question: string, options: { think?: boolean; lookAtCode?: boolean }) => void;
 }) => {
   const citations = message.citations ?? [];
   const user = message.role === 'user';
@@ -220,11 +240,16 @@ const Message = ({
         <p className={cn(WRAP_LONG, 'whitespace-pre-wrap text-sm')}>{message.content}</p>
       ) : (
         <>
+          {message.uncited === true && (
+            <p className='text-xs text-muted-foreground' data-testid='chat-uncited'>
+              Not from the board's records
+            </p>
+          )}
           <Answer text={message.content} citations={citations} onNavigate={onNavigate} />
           <GlobCards boardId={boardId} ids={mentionedGlobs(message.content)} onNavigate={onNavigate} />
           {citations.length > 0 && <Sources citations={citations} />}
           {message.tools != null && message.tools.length > 0 && <Tools tools={message.tools} />}
-          <Actions boardId={boardId} chatId={chatId} message={message} page={page} onNavigate={onNavigate} />
+          <Actions boardId={boardId} chatId={chatId} message={message} asked={asked} page={page} onNavigate={onNavigate} onReask={onReask} />
         </>
       )}
     </article>
@@ -286,7 +311,7 @@ export const ChatPanel = ({
   // Closing the panel ends an answer in progress; nothing is stored for it.
   useEffect(() => () => stop.current?.abort(), []);
 
-  const ask = async (text: string) => {
+  const ask = async (text: string, options: { think?: boolean; lookAtCode?: boolean } = {}) => {
     const q = text.trim();
     if (q === '' || pending !== null) return;
     const controller = new AbortController();
@@ -299,7 +324,8 @@ export const ChatPanel = ({
       ...(includeHistory ? { history: true } : {}),
       ...(globScope(scope) === undefined ? {} : { glob: globScope(scope) }),
       page: { type: scope.type, ...(scope.id === undefined ? {} : { id: scope.id }) },
-      ...(thinkHarder ? { think: true } : {}),
+      ...(thinkHarder || options.think === true ? { think: true } : {}),
+      ...(options.lookAtCode === true ? { lookAtCode: true } : {}),
     };
     setQuestion((current) => (current.trim() === q ? '' : current));
     try {
@@ -437,7 +463,7 @@ export const ChatPanel = ({
           {messages.error !== null && <p className='text-destructive'>{messages.error.message}</p>}
           {(chatId === null || shown.length === 0) && pending === null && (
             <div className='grid gap-2'>
-              <p className='text-muted-foreground'>Ask why something was decided or built. Answers come only from the board's records, with their sources.</p>
+              <p className='text-muted-foreground'>Ask why something was decided or built. Answers come from the board's records and slop's own help, with their sources.</p>
               <div className='flex flex-wrap gap-1' data-testid='chat-suggestions'>
                 {suggestionsFor(scope).map((s) => (
                   <button key={s} className='rounded-full border px-2 py-1 text-xs hover:bg-muted' onClick={() => void ask(s)}>
@@ -448,7 +474,9 @@ export const ChatPanel = ({
             </div>
           )}
           {chatId !== null &&
-            shown.map((m) => <Message key={m.id} boardId={boardId} chatId={chatId} message={m} page={scope} onNavigate={followed} />)}
+            shown.map((m, i) => (
+              <Message key={m.id} boardId={boardId} chatId={chatId} message={m} asked={shown[i - 1]?.role === 'user' ? shown[i - 1]?.content : undefined} page={scope} onNavigate={followed} onReask={(q, options) => void ask(q, options)} />
+            ))}
           {pending !== null && (
             <>
               <article className='ml-8 rounded-md bg-muted p-2' data-testid='chat-user'>

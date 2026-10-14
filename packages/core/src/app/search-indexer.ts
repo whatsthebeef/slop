@@ -5,7 +5,7 @@ import { learningDecision, learningDocument, learningEvidence, learningFacts, le
 import { parseFrontmatter } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind } from '../domain/knowledge.js';
 import { PIPELINE_OWNED_SOURCES, SOURCE_TYPES } from '../domain/search.js';
-import type { AuthorityTier, KnowledgeItem, NewChunk, NewKnowledgeItem, SourceType } from '../domain/search.js';
+import type { AuthorityTier, HelpDoc, KnowledgeItem, NewChunk, NewKnowledgeItem, SourceType } from '../domain/search.js';
 import type { Board, Glob } from '../domain/types.js';
 import type { ChangeSource, Clock, Embedder, Store, Tx } from '../ports.js';
 import { LlmBusy, LlmUnavailable } from './intake-service.js';
@@ -28,6 +28,8 @@ const TEXT_LIMIT = 100_000;
 const FILES_LINE_LIMIT = 1_500;
 const PLAN_PROMPT_LIMIT = 6_000;
 const SUMMARY_MAX_TOKENS = 400;
+/** Help is not an event in a board's history; one fixed date keeps its content hash, and so the index, stable between deploys. */
+const HELP_DATE = '2026-01-01T00:00:00.000Z';
 const SINCE_ALWAYS = '1970-01-01T00:00:00.000Z';
 
 export const CHANGE_SUMMARY_SYSTEM = `You write one short note for a software project's search index, saying why a change was made, from the plan of the work and the files the change touched.
@@ -113,6 +115,8 @@ const authorityOf = (source: SourceType): AuthorityTier => {
     case 'meeting':
     case 'thread':
     case 'doc':
+    case 'slop_help':
+      // Slop's own help ranks below the board's records, so a question about the board finds them first.
       return 'discussion';
     case 'decision':
       return 'decision';
@@ -166,6 +170,8 @@ export class SearchIndexer {
       llm: Llm;
       /** Deadline for each model call; defaults to LLM_TIMEOUT_MS. */
       llmTimeoutMs?: number;
+      /** Slop's own help (guide, spec, agent catalog), read by the host at startup: indexed on every board as `slop_help`. */
+      help?: readonly HelpDoc[];
     },
   ) {}
 
@@ -294,6 +300,19 @@ export class SearchIndexer {
         globGroup: null,
         externalUrl: `/boards/${String(board.id)}/knowledge`,
         text: `${learningStatement(glob, artifacts)}\n\nEvidence: ${learningEvidence(glob, artifacts)}`,
+      });
+    }
+    for (const doc of this.deps.help ?? []) {
+      push({
+        sourceType: 'slop_help',
+        externalRef: `help:${doc.ref}`,
+        title: doc.title,
+        occurredAt: HELP_DATE,
+        authority: authorityOf('slop_help'),
+        globIds: [],
+        globGroup: null,
+        externalUrl: doc.url,
+        text: doc.text,
       });
     }
     return out;

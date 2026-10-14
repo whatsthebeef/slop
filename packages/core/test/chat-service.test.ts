@@ -6,6 +6,7 @@ import type { Llm, LlmRequest } from '../src/app/intake-service.js';
 import { BoardService } from '../src/app/board-service.js';
 import { CodeViewService } from '../src/app/code-view.js';
 import type { CodeView } from '../src/app/code-view.js';
+import { SearchIndexer } from '../src/app/search-indexer.js';
 import { SearchService } from '../src/app/search-service.js';
 import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, CHAT_NO_CODE, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutCodeRequests } from '../src/domain/chat.js';
 import type { PageContext } from '../src/domain/chat.js';
@@ -134,7 +135,8 @@ describe('ChatService', () => {
     expect(reply).toMatchObject({ content: 'Use backoff [1]', actions: ['create_glob', 'save'] });
     streaming.next = `${CHAT_DONT_KNOW}\n<actions>create_glob</actions>`;
     streaming.pieces = [];
-    expect(unwrap(await ask()).reply).toMatchObject({ content: CHAT_DONT_KNOW, actions: [] });
+    expect(unwrap(await ask()).reply).toMatchObject({ actions: ['create_glob'], miss: true });
+    expect(unwrap(await ask()).reply.content).toContain('I couldn\'t find an answer to that');
   });
 
   it('numbers citations by their [n] in the prompt, one per item', async () => {
@@ -158,12 +160,11 @@ describe('ChatService', () => {
     expect(multi.map((c) => [c.n, c.title])).toEqual([[1, 'Multi']]);
   });
 
-  it('drops a source number the model invented, and knows nothing when none is left', async () => {
+  it('drops a source number the model invented: a reply left with no citation is shown as not from the records', async () => {
     await seed('a', 'retry backoff is exponential');
     llm.next = 'Made up [9]';
     const reply = unwrap(await ask()).reply;
-    expect(reply.content).toBe(CHAT_DONT_KNOW);
-    expect(reply.citations).toEqual([]);
+    expect(reply).toMatchObject({ content: 'Made up [9]', citations: [], uncited: true, actions: [] });
     llm.next = 'Real [1] and made up [7]';
     const mixed = unwrap(await ask()).reply;
     expect(mixed.citations).toHaveLength(1);
@@ -174,16 +175,20 @@ describe('ChatService', () => {
     const result = unwrap(await ask('zebra quantum'));
     expect(llm.requests).toHaveLength(0);
     expect(result.answered).toBe(false);
-    expect(result.reply).toMatchObject({ role: 'assistant', content: CHAT_DONT_KNOW, citations: [] });
+    expect(result.reply).toMatchObject({ role: 'assistant', citations: [], miss: true });
+    expect(result.reply.content).toContain('"zebra quantum" (0 found)');
+    expect(result.reply.content).toContain("slop's help (0 found)");
   });
 
-  it('treats an unusable answer, or one that uses no source, as not knowing', async () => {
+  it('keeps an answer that uses no source, flagged as not from the records, with no buttons', async () => {
     await seed('a', 'retry backoff is exponential');
     llm.next = 'sure, it is exponential';
-    expect(unwrap(await ask()).reply.content).toBe(CHAT_DONT_KNOW);
-    llm.next = 'I cannot tell';
-    const none = unwrap(await ask()).reply;
-    expect(none).toMatchObject({ content: CHAT_DONT_KNOW, citations: [] });
+    const result = unwrap(await ask());
+    expect(result.answered).toBe(false);
+    expect(result.reply).toMatchObject({ content: 'sure, it is exponential', citations: [], uncited: true, actions: [] });
+    expect(result.reply.miss).toBeUndefined();
+    llm.next = 'I cannot tell\n<actions>create_glob, save</actions>';
+    expect(unwrap(await ask()).reply).toMatchObject({ content: 'I cannot tell', uncited: true, actions: [] });
   });
 
   it('labels a superseded decision with the newer one, and shows the current one first', async () => {
@@ -377,6 +382,76 @@ describe('ChatService', () => {
     expect(llm.requests[2]?.prompt).not.toContain('The person is viewing');
   });
 
+  describe('slop help and misses', () => {
+    const help = [{ ref: 'docs/guide.md#watch-signals', title: 'Slop guide: Watch signals', text: 'Watch signals tell a decision glob to keep watching something after it merges. Use them when a choice can only be judged later.', url: 'https://github.com/whatsthebeef/slop/blob/main/docs/guide.md' }];
+    const indexHelp = () => new SearchIndexer({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder(), changes: { mergedDiff: () => Promise.resolve(null) }, llm, help }).syncBoard(boardId);
+
+    it('answers a how-to question from slop help, cited as Slop help, even when the board has other records', async () => {
+      await seed('d1', 'unrelated retry decision', { title: 'Retry' });
+      await indexHelp();
+      // Which number the help source got is read from the prompt the model saw.
+      llm.next = 'unset';
+      unwrap(await ask('Should I use watch signals?'));
+      const n = Number(/\[(\d)\] Slop help: Slop guide: Watch signals/.exec(llm.requests[0]?.prompt ?? '')?.[1]);
+      expect(n).toBeGreaterThan(0);
+      llm.next = `Use them when a choice can only be judged later [${n}].`;
+      const result = unwrap(await ask('Should I use watch signals?'));
+      expect(result.answered).toBe(true);
+      expect(result.reply.tools).toContain("Searched slop's help: 1 found");
+      expect(result.reply.citations).toEqual([
+        expect.objectContaining({ source: 'slop_help', sourceLabel: 'Slop help', title: 'Slop guide: Watch signals', link: 'https://github.com/whatsthebeef/slop/blob/main/docs/guide.md' }),
+      ]);
+    });
+
+    it('still finds slop help when the question is scoped to a glob', async () => {
+      await indexHelp();
+      llm.next = 'x';
+      unwrap(await ask('watch signals', { globId: 's1t1' }));
+      expect(llm.requests[0]?.prompt).toContain('Slop help: Slop guide: Watch signals');
+    });
+
+    it('returns uncited text apart from the records for a one-off answer', async () => {
+      await seed('a', 'retry backoff is exponential');
+      llm.next = 'Probably exponential';
+      const one = unwrap(await chat.answer(DEV, { boardId, question: 'retry backoff' }));
+      expect(one).toMatchObject({ answered: false, uncitedAnswer: 'Probably exponential', citations: [] });
+      expect(one.answer).toContain('I couldn\'t find an answer to that');
+      llm.next = 'Yes [1]';
+      expect(unwrap(await chat.answer(DEV, { boardId, question: 'retry backoff' })).uncitedAnswer).toBeUndefined();
+    });
+
+    it('names what was searched on a miss and offers Think harder and Create a glob, not Look at the code without a repo', async () => {
+      const deep = new FakeLlm();
+      chat = new ChatService({ store, clock: { now: () => NOW }, search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }), llm, deepLlm: deep });
+      await seed('a', 'retry backoff is exponential');
+      llm.next = CHAT_DONT_KNOW;
+      const missed = unwrap(await ask());
+      expect(missed.answered).toBe(false);
+      expect(missed.reply).toMatchObject({ miss: true, citations: [], actions: ['think_harder', 'create_glob'] });
+      expect(missed.reply.content).toContain('"retry backoff" (1 found)');
+      expect(missed.reply.content).toContain("slop's help (0 found)");
+      expect(missed.reply.content).toContain('no code I can read');
+      // Once the stronger model has been tried, it is not offered again.
+      deep.next = CHAT_DONT_KNOW;
+      expect(unwrap(await ask('retry backoff', { thinkHarder: true })).reply.actions).toEqual(['create_glob']);
+    });
+
+    it('does not let the model ask for the miss buttons', () => {
+      expect(parseActions('x [1]\n<actions>think_harder, look_at_code, create_glob</actions>').actions).toEqual(['create_glob']);
+    });
+
+    it('does not save a miss or text that is not from the records', async () => {
+      chat = new ChatService({ store, clock: { now: () => NOW }, search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }), llm, submitLearning: () => Promise.resolve({ ok: true, value: { id: 's1k1' } }) });
+      await seed('a', 'retry backoff is exponential');
+      llm.next = 'Maybe exponential';
+      const uncited = unwrap(await ask());
+      expect(errorCode(await chat.saveToKnowledge(DEV, boardId, uncited.chat.id, uncited.reply.id, 's1t9'))).toBe('invalid_input');
+      llm.next = CHAT_DONT_KNOW;
+      const miss = unwrap(await ask());
+      expect(errorCode(await chat.saveToKnowledge(DEV, boardId, miss.chat.id, miss.reply.id, 's1t9'))).toBe('invalid_input');
+    });
+  });
+
   describe('save to knowledge', () => {
     const learnings: { email: string; board: number; learning: NewLearning }[] = [];
     beforeEach(() => {
@@ -496,12 +571,12 @@ describe('ChatService', () => {
       expect(block).toMatch(/more open globs not shown/);
     });
 
-    it('logs an unreadable reply and still says it does not know', async () => {
+    it('logs a reply that uses no source, and keeps it as not from the records', async () => {
       await seed('a', 'retry backoff is exponential');
       llm.next = 'sure, exponential, I think';
-      expect(unwrap(await ask()).reply.content).toBe(CHAT_DONT_KNOW);
+      expect(unwrap(await ask()).reply).toMatchObject({ content: 'sure, exponential, I think', uncited: true });
       llm.next = 'Something';
-      expect(unwrap(await ask()).reply.content).toBe(CHAT_DONT_KNOW);
+      expect(unwrap(await ask()).reply).toMatchObject({ content: 'Something', uncited: true });
       expect(warnings).toHaveLength(2);
       expect(warnings[0]).toContain(`board ${boardId}`);
       expect(warnings[0]).toContain('sure, exponential');
@@ -630,8 +705,19 @@ describe('ChatService reading the code', () => {
     expect(view.calls).toHaveLength(CHAT_CODE_MAX_CALLS);
     expect(llm.requests).toHaveLength(CHAT_CODE_MAX_CALLS + 1);
     expect(llm.requests[CHAT_CODE_MAX_CALLS]?.prompt).toContain('You may not look at the code any more');
-    expect(answer.reply.content).toBe(CHAT_DONT_KNOW);
-    expect(answer.reply.citations).toEqual([]);
+    expect(answer.reply).toMatchObject({ miss: true, citations: [] });
+    expect(answer.reply.content).toContain('I also looked at the code.');
+  });
+
+  it('offers Look at the code on a miss for a board with a repo, and tells the model to use it once asked', async () => {
+    await seedRecord(repoBoard);
+    const miss = unwrap(await ask(serviceWith(new ScriptedLlm([CHAT_DONT_KNOW]))));
+    expect(miss.reply).toMatchObject({ miss: true, actions: ['look_at_code', 'create_glob'] });
+    expect(miss.reply.content).toContain("I didn't look at the code.");
+    const again = new ScriptedLlm([CHAT_DONT_KNOW]);
+    const asked = unwrap(await serviceWith(again).ask(DEV, { boardId: repoBoard, question: 'where is the retry helper implemented?', lookAtCode: true }));
+    expect(again.requests[0]?.system).toContain('The person asked you to look at the code');
+    expect(asked.reply.actions).toEqual(['create_glob']);
   });
 
   it('answers without looking when the model chooses to', async () => {

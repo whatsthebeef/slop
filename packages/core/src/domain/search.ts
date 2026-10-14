@@ -25,6 +25,7 @@ export const SOURCE_TYPES = [
   'meeting',
   'thread',
   'doc',
+  'slop_help',
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
@@ -45,14 +46,25 @@ export const SOURCE_LABELS: Readonly<Record<SourceType, string>> = {
   meeting: 'Meeting',
   thread: 'Thread',
   doc: 'Document',
+  slop_help: 'Slop help',
 };
+
+/** One section of slop's own documentation, as the host reads it from the repository and hands to the indexer. */
+export interface HelpDoc {
+  /** Stable per section: `<path>#<slug>`; it becomes the item's `help:` ref. */
+  readonly ref: string;
+  readonly title: string;
+  readonly text: string;
+  /** Where a citation points (the doc on the code host). */
+  readonly url: string | null;
+}
 
 /**
  * Sources that belong to one glob and go with it when it is deleted. A decision taken from a knowledge item has no
  * glob link, so only decisions taken on a glob are matched.
  */
 export const GLOB_OWNED_SOURCES: readonly SourceType[] = SOURCE_TYPES.filter(
-  (s) => s !== 'kb_doc' && s !== 'learning' && s !== 'meeting' && s !== 'thread' && s !== 'doc',
+  (s) => s !== 'kb_doc' && s !== 'learning' && s !== 'meeting' && s !== 'thread' && s !== 'doc' && s !== 'slop_help',
 );
 
 /**

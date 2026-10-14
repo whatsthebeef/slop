@@ -249,6 +249,8 @@ export interface ChatQuestion {
   readonly page?: { readonly type: PageContext['type']; readonly id?: string };
   /** One answer from the stronger model. */
   readonly think?: boolean;
+  /** Re-ask with the model told to use the code view ("Look at the code" under a miss). */
+  readonly lookAtCode?: boolean;
 }
 
 /** One of the person's conversations on a board. */
@@ -259,7 +261,7 @@ export interface ChatThread {
   readonly updatedAt: string;
 }
 
-/** The chat's reply to a question (`answered` false: the board's records don't answer it). */
+/** The chat's reply to a question (`answered` false: nothing cited; the reply says which with `uncited` or `miss`). */
 export interface ChatReply {
   readonly chat: ChatThread;
   readonly question: ChatMessage;

@@ -1236,6 +1236,10 @@ export const boardChatMessages = pgTable(
     citations: jsonb('citations').$type<ChatCitation[]>(),
     tools: jsonb('tools').$type<string[]>(),
     actions: jsonb('actions').$type<ChatAction[]>(),
+    /** The model's text cited no source: shown as not from the board's records. */
+    uncited: boolean('uncited').notNull().default(false),
+    /** Nothing answered: the text names what was searched. */
+    miss: boolean('miss').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [index('board_chat_messages_chat_idx').on(t.chatId, t.id)],
