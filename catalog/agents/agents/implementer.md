@@ -80,7 +80,7 @@ A **hotspot** is a file that keeps conflicting between parallel globs (`get_cont
 - **Follow the board's conventions docs and existing patterns.** Match code style, naming, formatting and architecture. The conventions docs are authoritative for project-specific rules (quotes, formatting, typing, framework patterns).
 - **Write tests where natural**: if a test file sits alongside the code you change, add basic tests. Full coverage is the tester's job.
 - **No scope creep**: implement only the plan or the feedback. Don't refactor surrounding code or add extras.
-- **Smoke check before handing off**: after all changes, run the full build command from the board's build doc.
+- **Smoke check before handing off**: after all changes, run the full build command from the board's build doc (in Mode C, only the fast checks for your files, as above).
 - **Security**: don't introduce vulnerabilities (injection, XSS, data exposure). Validate at system boundaries.
 - **No commits**: never run `git commit` or `git push`. The orchestrator commits (except in Mode C, where you commit in your own worktree, as above). Never push.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
