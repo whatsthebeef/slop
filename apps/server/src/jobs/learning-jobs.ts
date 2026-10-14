@@ -31,8 +31,8 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
       return `${result.backfilled} snapshots backfilled, ${result.embedded} embedded, ${result.recorded} outcomes recorded, ${result.refreshed} refreshed`;
     case 'size_threshold':
       return [
-        `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts`,
-        ...result.changes.map((c) => `${c.globId} ${c.outcome.replace(/_/g, ' ')}: ${c.from.maxTasks}/${c.from.maxParts} to ${c.to.maxTasks}/${c.to.maxParts}`),
+        `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, fan-out from ${result.threshold.minParallel} parallel`,
+        ...result.changes.map((c) => `${c.globId} ${c.outcome.replace(/_/g, ' ')}: ${c.from.maxTasks}/${c.from.maxParts}/${c.from.minParallel} to ${c.to.maxTasks}/${c.to.maxParts}/${c.to.minParallel}`),
       ].join('; ');
     case 'context_tuning':
       return [

@@ -109,7 +109,7 @@ describe('The learned size check in Postgres', () => {
     expect(sub.status).toBe('implementing');
     expect(sub.type).toBe('same');
     const check = await store.transaction((tx) => tx.getSizeCheck(sub.id));
-    expect(check).toMatchObject({ flagged: true, decision: null, threshold: { maxTasks: 5, maxParts: 3 } });
+    expect(check).toMatchObject({ flagged: true, decision: null, threshold: { maxTasks: 5, maxParts: 3, minParallel: 2 } });
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 4, partsSource: 'model' });
     expect(check?.proposal?.workstreams.map((w) => w.name)).toEqual(['Data', 'Web', 'CLI']);
     expect(check?.proposal?.workstreams.map((w) => w.needs)).toEqual([[], [0], [0]]);
@@ -132,22 +132,35 @@ describe('The learned size check in Postgres', () => {
   });
 
   it('moves the threshold with a compare-and-set, and records each outcome once', async () => {
-    const start = { maxTasks: 5, maxParts: 3 };
-    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, { maxTasks: 9, maxParts: 9 }, start))).toBe(false);
+    const start = { maxTasks: 5, maxParts: 3, minParallel: 2 };
+    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, { maxTasks: 9, maxParts: 9, minParallel: 2 }, start))).toBe(false);
     const glob = await create('same', BIG);
     await store.transaction((tx) => tx.upsertGlobOutcome(outcome(glob.id)));
     const first = await jobs.runNow(DEV, boardId, 'size_threshold');
     // Not an admin of nothing: the creator of the board is its admin, so the run starts.
     const run = unwrap(first);
     const finished = await run.finished;
-    expect(finished.lastResult).toMatchObject({ kind: 'size_threshold', threshold: { maxTasks: 6, maxParts: 4 } });
-    expect(await store.transaction((tx) => tx.getSizeThreshold(boardId))).toEqual({ maxTasks: 6, maxParts: 4 });
+    expect(finished.lastResult).toMatchObject({ kind: 'size_threshold', threshold: { maxTasks: 6, maxParts: 4, minParallel: 2 } });
+    expect(await store.transaction((tx) => tx.getSizeThreshold(boardId))).toEqual({ maxTasks: 6, maxParts: 4, minParallel: 2 });
     const again = await (unwrap(await jobs.runNow(DEV, boardId, 'size_threshold'))).finished;
     expect(again.lastResult).toMatchObject({ kind: 'size_threshold', changes: [] });
     const view = unwrap(await size.view(DEV, boardId));
-    expect(view.history).toMatchObject([{ globId: glob.id, outcome: 'kept_whole_clean', from: start, to: { maxTasks: 6, maxParts: 4 } }]);
+    expect(view.history).toMatchObject([{ globId: glob.id, outcome: 'kept_whole_clean', from: start, to: { maxTasks: 6, maxParts: 4, minParallel: 2 } }]);
     // A stale write is refused.
-    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, { maxTasks: 4, maxParts: 2 }))).toBe(false);
+    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, { maxTasks: 4, maxParts: 2, minParallel: 2 }))).toBe(false);
+  });
+
+  it('stores the fan-out floor with the threshold and in its history, and refuses a stale floor', async () => {
+    const start = { maxTasks: 5, maxParts: 3, minParallel: 2 };
+    const raised = { ...start, minParallel: 3 };
+    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, raised))).toBe(true);
+    expect(await store.transaction((tx) => tx.getSizeThreshold(boardId))).toEqual(raised);
+    // Same task and part limits, but another floor: a compare-and-set on the old floor loses.
+    expect(await store.transaction((tx) => tx.setSizeThreshold(boardId, start, { ...start, minParallel: 4 }))).toBe(false);
+    await store.transaction((tx) =>
+      tx.insertSizeThresholdChange({ boardId, at: '2026-09-20T00:00:00.000Z', from: start, to: raised, outcome: 'fanout_stalled', globId: 's1f77', evidence: 'conflicted' }),
+    );
+    expect(unwrap(await size.view(DEV, boardId)).history).toMatchObject([{ outcome: 'fanout_stalled', from: start, to: raised }]);
   });
 
   it('keeps the forecast in the estimate and stores the calibration, its history and the three-point record', async () => {

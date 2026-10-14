@@ -37,8 +37,8 @@ export const jobSummary = (result: BoardJobResult): string => {
       return `limit ${result.limit.toLocaleString('en')} lines, ${result.changes.length} outcomes recorded (${moved} moved it)${result.waiting > 0 ? `, ${result.waiting} waiting` : ''}${(result.gaveUp ?? 0) > 0 ? `, ${result.gaveUp} bug references skipped without a usable answer` : ''}`;
     }
     case 'size_threshold': {
-      const moved = result.changes.filter((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts).length;
-      return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, ${result.changes.length} outcomes recorded (${moved} moved it)`;
+      const moved = result.changes.filter((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts || c.from.minParallel !== c.to.minParallel).length;
+      return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, fan-out from ${result.threshold.minParallel} parallel, ${result.changes.length} outcomes recorded (${moved} moved it)`;
     }
     case 'context_tuning':
       return `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved, ${result.held} left as they were`;

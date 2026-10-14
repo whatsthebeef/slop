@@ -180,8 +180,8 @@ const toSizeThresholdChange = (row: typeof schema.sizeThresholdChanges.$inferSel
   id: row.id,
   boardId: row.boardId,
   at: row.at.toISOString(),
-  from: { maxTasks: row.fromTasks, maxParts: row.fromParts },
-  to: { maxTasks: row.toTasks, maxParts: row.toParts },
+  from: { maxTasks: row.fromTasks, maxParts: row.fromParts, minParallel: row.fromParallel },
+  to: { maxTasks: row.toTasks, maxParts: row.toParts, minParallel: row.toParallel },
   outcome: oneOf(SIZE_OUTCOMES, row.outcome),
   globId: row.globId,
   evidence: row.evidence,
@@ -1043,19 +1043,19 @@ export class PgStore implements Store {
       },
       getSizeThreshold: async (boardId) => {
         const [row] = await t.select().from(schema.sizeThresholds).where(eq(schema.sizeThresholds.boardId, boardId));
-        return row === undefined ? DEFAULT_SIZE_THRESHOLD : { maxTasks: row.maxTasks, maxParts: row.maxParts };
+        return row === undefined ? DEFAULT_SIZE_THRESHOLD : { maxTasks: row.maxTasks, maxParts: row.maxParts, minParallel: row.minParallel };
       },
       setSizeThreshold: async (boardId, from, to) => {
         const s = schema.sizeThresholds;
-        const values = { maxTasks: to.maxTasks, maxParts: to.maxParts };
+        const values = { maxTasks: to.maxTasks, maxParts: to.maxParts, minParallel: to.minParallel };
         // A board with no row holds the default, so the insert is the first move; an existing row moves only from `from`.
         const [existing] = await t.select().from(s).where(eq(s.boardId, boardId));
-        const held = existing === undefined ? DEFAULT_SIZE_THRESHOLD : { maxTasks: existing.maxTasks, maxParts: existing.maxParts };
-        if (held.maxTasks !== from.maxTasks || held.maxParts !== from.maxParts) return false;
+        const held = existing === undefined ? DEFAULT_SIZE_THRESHOLD : { maxTasks: existing.maxTasks, maxParts: existing.maxParts, minParallel: existing.minParallel };
+        if (held.maxTasks !== from.maxTasks || held.maxParts !== from.maxParts || held.minParallel !== from.minParallel) return false;
         const rows = await t
           .insert(s)
           .values({ boardId, ...values })
-          .onConflictDoUpdate({ target: s.boardId, set: values, setWhere: and(eq(s.maxTasks, from.maxTasks), eq(s.maxParts, from.maxParts)) })
+          .onConflictDoUpdate({ target: s.boardId, set: values, setWhere: and(eq(s.maxTasks, from.maxTasks), eq(s.maxParts, from.maxParts), eq(s.minParallel, from.minParallel)) })
           .returning({ boardId: s.boardId });
         return rows.length === 1;
       },
@@ -1063,7 +1063,7 @@ export class PgStore implements Store {
         const { from, to, ...rest } = change;
         const rows = await t
           .insert(schema.sizeThresholdChanges)
-          .values({ ...rest, at: new Date(change.at), fromTasks: from.maxTasks, toTasks: to.maxTasks, fromParts: from.maxParts, toParts: to.maxParts })
+          .values({ ...rest, at: new Date(change.at), fromTasks: from.maxTasks, toTasks: to.maxTasks, fromParts: from.maxParts, toParts: to.maxParts, fromParallel: from.minParallel, toParallel: to.minParallel })
           .onConflictDoNothing()
           .returning({ id: schema.sizeThresholdChanges.id });
         return rows.length === 1;

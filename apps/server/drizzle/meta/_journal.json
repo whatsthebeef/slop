@@ -505,6 +505,13 @@
       "when": 1792003628739,
       "tag": "0071_split_scope_cut",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1792016663271,
+      "tag": "0072_size_min_parallel",
+      "breakpoints": true
     }
   ]
 }

@@ -629,7 +629,7 @@ describe('glob view: split moves in the action ▾', () => {
       reasoning: null,
     },
     evidence: ['6 tasks'],
-    threshold: { maxParts: 3, maxTasks: 5 },
+    threshold: { maxParts: 3, maxTasks: 5, minParallel: 2 },
     flagged: true,
     reasons: ['6 tasks'],
     proposal: proposal ? { workstreams: [stream('One'), stream('Two', [0])] } : null,

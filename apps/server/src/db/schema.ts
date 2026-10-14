@@ -763,6 +763,7 @@ export const sizeThresholds = pgTable('size_thresholds', {
     .references(() => boards.id, { onDelete: 'cascade' }),
   maxTasks: integer('max_tasks').notNull(),
   maxParts: integer('max_parts').notNull(),
+  minParallel: integer('min_parallel').notNull().default(2),
 });
 
 /** A board's risk areas (spec, Intake): kinds of work that need a review; defaults are seeded lazily, learned ones come from outcomes. */
@@ -857,6 +858,8 @@ export const sizeThresholdChanges = pgTable(
     toTasks: integer('to_tasks').notNull(),
     fromParts: integer('from_parts').notNull(),
     toParts: integer('to_parts').notNull(),
+    fromParallel: integer('from_parallel').notNull().default(2),
+    toParallel: integer('to_parallel').notNull().default(2),
     outcome: text('outcome', { enum: SIZE_OUTCOMES }).notNull(),
     globId: text('glob_id').notNull(),
     evidence: text('evidence').notNull(),
