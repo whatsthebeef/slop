@@ -97,7 +97,7 @@ export const ActivityLog = ({
   const listed = steps.length > 1;
   const now = Date.now();
   return (
-    <section id={ACTIVITY_ID} className="grid scroll-mt-[calc(var(--glob-header-height,2.5rem)+0.5rem)] gap-1.5 text-sm" data-testid="activity" data-holder={move?.holder ?? 'none'}>
+    <section id={ACTIVITY_ID} className="grid scroll-mt-[calc(var(--glob-header-height,2.25rem)+0.5rem)] gap-1.5 text-sm" data-testid="activity" data-holder={move?.holder ?? 'none'}>
       <h3 className="text-xs font-semibold text-muted-foreground">Activity</h3>
       <div className="grid gap-2" data-testid="activity-pinned">
         {turn !== null && turn.reason !== '' && (
