@@ -32,6 +32,17 @@ describe('card label popover', () => {
     expect(text).not.toContain('Waiting for review');
   });
 
+  it('sizes to its content with compact padding', async () => {
+    await open();
+    const content = screen
+      .getByRole('button', { name: 'Open review checklist' })
+      .closest('[class*="p-2"]');
+    expect(content?.className).toContain('w-auto');
+    expect(content?.className).toContain('p-2');
+    expect(content?.className).not.toContain('w-80');
+    expect(content?.querySelectorAll(':scope *:empty:not(button *)').length).toBe(0);
+  });
+
   it('keeps the Open review checklist link', async () => {
     const onOpenReview = await open();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Open review checklist' }));

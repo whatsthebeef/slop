@@ -50,7 +50,9 @@ const CHIP_TIPS: Record<LabelState, string> = {
 
 const Chip = ({ name, state }: { name: LabelName; state: LabelState }) => (
   <Tip text={`${LABEL_TITLES[name]}: ${CHIP_TIPS[state]}`}>
-    <span className={cn('rounded-sm border px-1.5 font-mono text-[10px] font-semibold', chip(state))}>
+    <span
+      className={cn('rounded-sm border px-1.5 font-mono text-[10px] font-semibold', chip(state))}
+    >
       {name}
     </span>
   </Tip>
@@ -98,14 +100,17 @@ export const LabelPopover = ({
           <Chip key={name} name={name} state={glob.labels[name] ?? 'required'} />
         ))}
       </PopoverTrigger>
-      <PopoverContent className="w-80" onClick={(e) => e.stopPropagation()}>
-        <div className="grid gap-2">
+      <PopoverContent
+        className="w-auto min-w-max max-w-[20rem] p-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="grid gap-1">
           {present.map((name) => {
             const state = glob.labels[name] ?? 'required';
             const items = itemsOf(glob, name);
             return (
-              <div key={name} className="flex items-center justify-between gap-3 text-sm">
-                <span className="grid">
+              <div key={name} className="flex items-center justify-between gap-1.5 text-sm">
+                <span className="flex items-baseline gap-1.5">
                   <span className="font-semibold">{name}</span>
                   {(state !== 'required' || items.length > 0) && (
                     <span className="text-xs text-muted-foreground">{stateText(state, items)}</span>
@@ -137,7 +142,12 @@ export const LabelPopover = ({
               </div>
             );
           })}
-          <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => onOpenReview()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 justify-self-start px-1 text-xs"
+            onClick={() => onOpenReview()}
+          >
             Open review checklist
           </Button>
         </div>
@@ -313,7 +323,12 @@ const LabelReview = ({
             Re-open review
           </Button>
         ) : (
-          <Button size="sm" disabled={busy || hold !== null} title={hold ?? undefined} onClick={() => void act({ kind: 'approve' })}>
+          <Button
+            size="sm"
+            disabled={busy || hold !== null}
+            title={hold ?? undefined}
+            onClick={() => void act({ kind: 'approve' })}
+          >
             Approve
           </Button>
         )}
