@@ -7,7 +7,7 @@ import { groupFromTitle } from '../domain/group.js';
 import { formatId, letterOf } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
-import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
+import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
 import { isCapabilityName } from '../domain/capabilities.js';
 import type { Capabilities } from '../domain/capabilities.js';
 import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
@@ -313,9 +313,6 @@ const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
   ARTIFACT_KINDS.indexOf(a.kind) - ARTIFACT_KINDS.indexOf(b.kind) || a.label.localeCompare(b.label);
 
 type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
-
-/** The placeholder the investigator leaves when it predicts a rollout: the implementer replaces it with the real steps. */
-export const PREDICTED_ROLLOUT_TITLE = 'Rollout: steps to be written';
 
 /** A work step as a person or agent writes it; what is left out gets the kind's defaults. */
 export interface NewHumanStep {
@@ -696,14 +693,19 @@ export class GlobService {
         save.push(dismissed);
         note(dismissed, 'dismissed');
       }
-      if (parsed.length > 0) {
-        for (const step of stored) {
-          const placeholder = step.origin === 'investigation' && step.title === PREDICTED_ROLLOUT_TITLE;
-          if (!(placeholder || step.origin === ROLLOUT_PATHS_ORIGIN) || step.state !== 'open') continue;
-          const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'Replaced by the steps in the implementation record' };
-          save.push(dismissed);
-          note(dismissed, 'dismissed');
-        }
+      for (const step of stored) {
+        const placeholder = step.origin === 'investigation' && step.title === PREDICTED_ROLLOUT_TITLE;
+        if (step.state !== 'open') continue;
+        // A record pushed for a commit that has no rollout ends the prediction; the record started in Phase 2 (no commit yet) doesn't.
+        const noRollout = placeholder && parsed.length === 0 && source.commitSha !== null;
+        if (!(parsed.length > 0 && (placeholder || step.origin === ROLLOUT_PATHS_ORIGIN)) && !noRollout) continue;
+        const dismissed: StoredHumanStep = {
+          ...step,
+          state: 'dismissed',
+          dismissedReason: noRollout ? 'The implementation record needs no rollout' : 'Replaced by the steps in the implementation record',
+        };
+        save.push(dismissed);
+        note(dismissed, 'dismissed');
       }
       if (save.length > 0) await tx.saveHumanSteps(save);
       if (events.length > 0) await tx.appendEvents(events);
