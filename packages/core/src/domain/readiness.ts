@@ -4,6 +4,7 @@ import { missingCoreDocNotice } from './core-docs.js';
 import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
 import type { Board, CheckFailure, Glob } from './types.js';
+import { isMergeHeld } from './relations.js';
 
 /**
  * Board readiness: what a board needs before slop can run its globs end to end, checked where slop
@@ -591,6 +592,8 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
     return `Checks failed on the head ${String(Math.floor(unreacted))} minutes ago and the routine hasn't pushed or reported since. Fix: pick it up (sstor --glob ${glob.id})${session === null ? '' : ` or open the run's session: ${session}`}`;
   }
   if (glob.type !== 'sub' || glob.status !== 'pr_open') return null;
+  // Held for a `merge` relation: waiting for another glob, not stuck.
+  if (isMergeHeld(glob)) return null;
   const minutes = (Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000;
   if (minutes < STUCK_MINUTES) return null;
   const head = glob.pr?.headSha ?? null;

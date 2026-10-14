@@ -28,8 +28,17 @@ const conflicting = () => prOpen({ implementer: 'dev@example.com', conflict: { b
 const waitingOn = () =>
   view({
     status: 'planning',
-    blockedBy: ['s1t1', 's1t2', 's1t3', 's1t4'].map((id, i) => ({ id, state: 'open' as const, status: 'implementing' as const, depth: i + 1 })),
-    nextStartable: 's1t9',
+    holding: ['s1t1', 's1t2', 's1t3', 's1t4'].map((to) => ({
+      relationId: `rel_${to}`,
+      to,
+      toTitle: null,
+      toIsDecision: false,
+      gate: 'start' as const,
+      until: 'merged' as const,
+      state: 'open' as const,
+      reason: null,
+      source: 'person' as const,
+    })),
   });
 const move = (action: 'start' | 'pick_up', g: GlobView): CardMove => {
   const { label, tip, icon } = actionPresentation(action, g);
@@ -117,7 +126,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1, s1t2 +2 · next: s1t9', 'Waits for, in order: s1t1 (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1, s1t2 +2', 'Waits for: s1t1 (Doing)'],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Waiting'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -257,12 +266,12 @@ describe('card rows', () => {
     const html = markup(waitingOn());
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
-    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1, s1t2 +2 · next: s1t9');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1, s1t2 +2');
     expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
     expect(html).not.toContain('after-chip');
-    expect(html).toContain('Waits for, in order: s1t1 (Doing)');
+    expect(html).toContain('Waits for: s1t1 (Doing)');
   });
 
   it('puts the split chip in the chips row as a pill with the branch icon, not in the title or status line', () => {

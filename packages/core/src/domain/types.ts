@@ -348,6 +348,11 @@ export interface Glob {
   /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
   readonly waiting?: { readonly since: string } | null;
   /**
+   * Set while a merge that would have started is held back by an unmet `merge` relation (an armed merge-when-green whose checks
+   * passed, or a sub whose gate passed): `sha` is the head it would merge. `gateReleased` resumes it; cleared on merge, disarm or a new head.
+   */
+  readonly mergeHold?: { readonly since: string; readonly sha: string; readonly for: readonly string[] } | null;
+  /**
    * A same that starts its routine by itself when what it waits for merges (set on the parts of a split that need another
    * part; subs always do). A person turns it off, which ends the wait and leaves the needs in place.
    */

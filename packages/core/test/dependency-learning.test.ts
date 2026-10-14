@@ -271,7 +271,7 @@ describe('dependency learning', () => {
     const other = await create({ type: 'same' });
     const made = await create({ type: 'same' });
     inferNeed(made.id, other.id, { reason: 'both touch the migrations', evidence: [MIGRATION] });
-    unwrap(await globs.dismissEdge(DEV, made.id, made.version, other.id));
+    unwrap(await globs.dismissRelation(DEV, made.id, made.version, relationsOf(made.id).find((r) => r.to === other.id)?.id ?? ''));
     await merge(made.id);
     const history = await store.transaction((tx) => tx.listDependencyRuleChanges(boardId));
     expect(history.map((h) => [h.cause, h.pattern])).toEqual([['edge_dismissed', PATTERN]]);

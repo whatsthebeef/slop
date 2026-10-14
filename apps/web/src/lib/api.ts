@@ -4,7 +4,6 @@ import type {
   Move,
   AttachmentFile,
   AwaitedDependency,
-  BlockedBy,
   AgentSetEntry,
   AgentSetFileView,
   ArtifactKind,
@@ -65,7 +64,10 @@ import type {
   CompactHumanStep,
   HumanStep,
   DependencyRulesView,
-  Edge,
+  Holding,
+  RelationGate,
+  RelationUntil,
+  RelationsView,
   TargetChange,
 } from '@slop/core';
 import type { PageContext } from './page-context';
@@ -84,11 +86,10 @@ export interface GlobView extends Glob {
   /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
   readonly waitingFor?: readonly AwaitedDependency[];
   readonly waitedOnBy?: readonly string[];
-  /** Everything unmerged ahead of the glob, transitively (absent when nothing is), and the one to start next. */
-  /** Every dependency edge with its kind (needs block the start, overlaps only order merges), source and evidence; absent on an older server. */
-  readonly edges?: readonly Edge[];
-  readonly blockedBy?: readonly BlockedBy[];
-  readonly nextStartable?: string | null;
+  /** Every relation of the glob that still holds something back (any gate), with the title of what it points at; computed on the server for the board list and the glob read (read with `?.`: absent on an older API). */
+  readonly holding?: readonly Holding[];
+  /** The glob's relations in groups: holding it back, held back by it, and no longer holding (single-glob reads only). */
+  readonly relations?: RelationsView;
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
   /** True while the size check flagged the glob oversized and nobody has split it or kept it whole (the card's chip). */
@@ -406,9 +407,14 @@ export interface SplitPartInput {
   type?: SlopType;
   /** Indexes of earlier parts this one starts after. */
   after?: number[];
-  /** Indexes of earlier parts that may change the same files (merge order only). */
-  overlaps?: number[];
 }
+
+/** A relation to add: this glob can't pass `gate` (default start) until `to` reaches `until` (default merged; decided for a decision). */
+export type AddRelationInput = {
+  readonly gate?: RelationGate;
+  readonly until?: RelationUntil;
+  readonly reason?: string;
+} & ({ readonly to: string; readonly version: number } | { readonly holdsBack: string });
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'group' | 'environment'>> & {
   /** A decision's scope, the only attribute a person edits. */
@@ -843,9 +849,11 @@ export const api = {
   /** "Got it" / ×: the viewer has read the status message `key` (dismiss) or wants it back (Show again). Answers the glob. */
   setDismissed: (id: string, key: string, dismiss: boolean) =>
     request<GlobView>(dismiss ? 'POST' : 'DELETE', `/api/globs/${id}/dismiss`, { key }),
-  /** The ✕ on a Dependencies row: the edge to `edgeId` is not a dependency. */
-  dismissEdge: (id: string, edgeId: string, version: number) =>
-    request<GlobView>('POST', `/api/globs/${id}/edges/${edgeId}/dismiss`, { version }),
+  /** The ✕ on a relation: it is not a dependency. */
+  dismissRelation: (id: string, relationId: string, version: number) =>
+    request<GlobView>('POST', `/api/globs/${id}/relations/${relationId}/dismiss`, { version }),
+  /** Adds a relation: `to` holds this glob back (needs its version), or `holdsBack` is held back by this one (a decision's "Holds back"). */
+  addRelation: (id: string, relation: AddRelationInput) => request<GlobView>('POST', `/api/globs/${id}/relations`, relation),
 };
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {

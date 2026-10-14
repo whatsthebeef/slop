@@ -139,7 +139,11 @@ export class DependencyLearningService {
       for (const e of events.filter((ev) => (ev.type === 'EdgeDismissed' || ev.type === 'RelationDismissed') && ev.data['source'] === 'inferred')) {
         const id = typeof e.data['edgeId'] === 'string' ? e.data['edgeId'] : typeof e.data['to'] === 'string' ? e.data['to'] : null;
         if (id === null) continue;
-        const paths = mine.find((r) => r.to === id)?.evidence ?? [];
+        // Only a dismissed need teaches the file patterns: a decision or a merge or sign-off relation says nothing about overlaps.
+        if (e.data['gate'] !== undefined && e.data['gate'] !== 'start') continue;
+        const dismissed = mine.find((r) => r.to === id && r.gate === 'start');
+        if (dismissed?.until === 'decided') continue;
+        const paths = dismissed?.evidence ?? [];
         const evidence = `${glob.id} dismissed the inferred edge to ${id} as not a dependency`;
         const covering = patternsCovering(paths, patterns);
         if (covering.length === 0) {

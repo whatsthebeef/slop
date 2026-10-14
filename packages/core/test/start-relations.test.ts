@@ -6,10 +6,9 @@ import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { isDismissedFor, mergeImplied } from '../src/domain/exclusive-paths.js';
-import { blockingChain, chainRefusal } from '../src/domain/relations.js';
 import type { ToState } from '../src/domain/relations.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { NOW, ctx, dev, glob as fixture, relation, relationFacts } from './fixtures.js';
+import { ctx, dev, glob as fixture, relation, relationFacts } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -156,7 +155,7 @@ describe('start relations', () => {
     const second = await create({ after: [first.id] });
     const refused = await globs.start(DEV, second.id, second.version);
     expect(!refused.ok && refused.error.code).toBe('invalid_transition');
-    expect(!refused.ok && refused.error.message).toContain(`Blocked: 1 ahead, next: ${first.id}`);
+    expect(!refused.ok && refused.error.message).toBe(`Waits for ${first.id} to merge (it is in Planning) (use Start now)`);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.allowedActions).not.toContain('start');
     expect(view.allowedActions).toContain('start_anyway');
@@ -340,7 +339,7 @@ describe('start relations', () => {
       const row = infer(waiting, first.id);
       expect(unwrap(await globs.get(DEV, waiting.id)).waitingFor.map((w) => w.id)).toEqual([first.id]);
 
-      const dismissed = unwrap(await globs.dismissEdge(DEV, waiting.id, waiting.version, first.id));
+      const dismissed = unwrap(await globs.dismissRelation(DEV, waiting.id, waiting.version, row.id));
       expect(dismissed.status).toBe('implementing');
       expect(dismissed.runs).toHaveLength(1);
       const stored = store.state.relations.get(row.id);
@@ -352,22 +351,27 @@ describe('start relations', () => {
       expect(store.state.events.some((e) => e.globId === waiting.id && e.type === 'HoldOverridden')).toBe(false);
     });
 
-    it('refuses a stale version and a person-set need, and a repeat changes nothing', async () => {
+    it('refuses a stale version, an unknown relation and a split part; a person-set one can be dismissed; a repeat changes nothing', async () => {
       const first = await create();
       const other = await create();
       const second = await create({ after: [first.id] });
-      infer(second, other.id);
-      const stale = await globs.dismissEdge(DEV, second.id, second.version + 1, other.id);
+      const row = infer(second, other.id);
+      const stale = await globs.dismissRelation(DEV, second.id, second.version + 1, row.id);
       expect(!stale.ok && stale.error.code).toBe('version_conflict');
-      const explicit = await globs.dismissEdge(DEV, second.id, second.version, first.id);
-      expect(!explicit.ok && explicit.error.code).toBe('invalid_input');
-      const unknown = await globs.dismissEdge(DEV, second.id, second.version, 's1t999');
+      const unknown = await globs.dismissRelation(DEV, second.id, second.version, 'rel_nope');
       expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
-      const once = unwrap(await globs.dismissEdge(DEV, second.id, second.version, other.id));
+      const split = relation(second.id, other.id, { gate: 'sign_off', source: 'split' });
+      store.state.relations.set(split.id, split);
+      const refused = await globs.dismissRelation(DEV, second.id, second.version, split.id);
+      expect(!refused.ok && refused.error.code).toBe('invalid_input');
+      const once = unwrap(await globs.dismissRelation(DEV, second.id, second.version, row.id));
       expect(once.version).toBe(second.version + 1);
-      const twice = unwrap(await globs.dismissEdge(DEV, second.id, once.version, other.id));
+      const twice = unwrap(await globs.dismissRelation(DEV, second.id, once.version, row.id));
       expect(twice.version).toBe(once.version);
       expect(store.state.events.filter((e) => e.type === 'RelationDismissed')).toHaveLength(1);
+      // The person's own relation can be dismissed too (the ✕ on a relation they added).
+      const mine = [...store.state.relations.values()].find((r) => r.from === second.id && r.to === first.id);
+      expect(unwrap(await globs.dismissRelation(DEV, second.id, once.version, mine?.id ?? '')).version).toBe(once.version + 1);
     });
   });
 });
@@ -425,67 +429,14 @@ describe('waiting transitions', () => {
   });
 });
 
-describe('blocking chain', () => {
-  const world = (...globs: Glob[]) => new Map(globs.map((g) => [g.id, g]));
-  /** Each glob starts after the globs listed in `after`. */
-  const waits = (after: Record<string, string[]>) => (id: string) => (after[id] ?? []).map((to) => relation(id, to));
-  const chainOf = (root: Glob, all: Map<string, Glob>, after: Record<string, string[]>) => blockingChain(root.id, waits(after), (id) => all.get(id));
-  const g = (id: string, patch: Partial<Glob> = {}) => fixture({ id, status: 'planning', ...patch });
-
-  it('walks the whole chain, nearest first, and names the deepest startable glob', () => {
-    const a = g('s1t1');
-    const b = g('s1t2');
-    const c = g('s1t3');
-    const root = g('s1t4');
-    const chain = chainOf(root, world(a, b, c), { s1t4: ['s1t3'], s1t3: ['s1t2'], s1t2: ['s1t1'] });
-    expect(chain.blockedBy.map((x) => [x.id, x.depth, x.status])).toEqual([
-      ['s1t3', 1, 'planning'],
-      ['s1t2', 2, 'planning'],
-      ['s1t1', 3, 'planning'],
-    ]);
-    expect(chain.nextStartable).toBe('s1t1');
-    expect(chainRefusal(chain)).toContain('Blocked: 3 ahead, next: s1t1');
-  });
-
-  it('skips merged links and does not walk past them', () => {
-    const oldest = g('s1t1');
-    const merged = g('s1t2', { status: 'reviewing' });
-    const root = g('s1t3');
-    expect(chainOf(root, world(oldest, merged), { s1t3: ['s1t2'], s1t2: ['s1t1'] }).blockedBy).toEqual([]);
-  });
-
-  it('walks a cycle once', () => {
-    const a = g('s1t1');
-    const b = g('s1t2');
-    const chain = chainOf(a, world(a, b), { s1t1: ['s1t2'], s1t2: ['s1t1'] });
-    expect(chain.blockedBy.map((x) => x.id)).toEqual(['s1t2']);
-  });
-
-  it('has no next glob when what is ahead is already in progress, and a deleted one holds nothing', () => {
-    const doing = g('s1t1', { status: 'implementing' });
-    const root = g('s1t2');
-    const chain = chainOf(root, world(doing), { s1t2: ['s1t1', 's1t9'] });
-    expect(chain.blockedBy.map((x) => [x.id, x.state])).toEqual([['s1t1', 'open']]);
-    expect(chain.nextStartable).toBeNull();
-  });
-
-  it('skips a dismissed relation and one Start now overrode', () => {
-    const a = g('s1t1');
-    const b = g('s1t2');
-    const root = g('s1t3');
-    const lifted = (id: string) => [relation(id, 's1t1', { dismissedAt: NOW }), relation(id, 's1t2', { overriddenAt: NOW })];
-    expect(blockingChain(root.id, lifted, (id) => world(a, b).get(id)).blockedBy).toEqual([]);
-  });
-});
-
 describe('Retrigger and the routine fire with prerequisites unmerged', () => {
   const failed = fixture({ status: 'failed' });
-  const chain = { blockedBy: [{ id: 's1t1', state: 'planning' as const, status: 'planning' as const, depth: 1 }], nextStartable: 's1t1' };
+  const unmerged = relationFacts('s1t3', [['s1t1', 'planning']]);
 
-  it('refuses Retrigger with the chain as the reason, and goes ahead anyway without a check on the fire', () => {
-    const refused = machine.retrigger(failed, ctx(dev), chain);
-    expect(!refused.ok && refused.error.message).toContain('Blocked: 1 ahead, next: s1t1');
-    const anyway = machine.retrigger(failed, ctx(dev), chain, true);
+  it('refuses Retrigger with what it waits for as the reason, and goes ahead anyway without a check on the fire', () => {
+    const refused = machine.retrigger(failed, ctx(dev), unmerged);
+    expect(!refused.ok && refused.error.message).toBe('Waits for s1t1 to merge (it is in Planning) (use Start now)');
+    const anyway = machine.retrigger(failed, ctx(dev), unmerged, true);
     expect(anyway.ok && anyway.value.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('checkPrerequisites');
   });
 

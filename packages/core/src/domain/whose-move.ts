@@ -4,11 +4,11 @@ import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
 import type { MachineStep, StallThresholds } from './machine-steps.js';
 import type { Glob } from './types.js';
-import type { AwaitedDependency } from './relations.js';
+import type { Holding } from './relations.js';
 
 /**
  * Whose move it is on a glob: exactly one holder, reduced from the human steps, the machine steps and the glob's
- * dependencies. `you` and `human` are a person's turn (the viewer's, or someone else's), `machine` is slop at work,
+ * relations. `you` and `human` are a person's turn (the viewer's, or someone else's), `machine` is slop at work,
  * `waiting` is blocked on something automated or another glob, `stalled` is nobody moving a glob that isn't finished.
  * `idle` (a Planning glob nobody started) and `done` (signed off) show nothing.
  */
@@ -58,6 +58,43 @@ const personReason = (glob: Glob): string | null =>
 const escalationReason = (glob: Glob): string | null =>
   glob.escalation != null && glob.status !== 'signed_off' && glob.status !== 'failed' ? `Needs a human: ${glob.escalation.reason}` : null;
 
+/**
+ * The holdings that apply to the glob where it stands (the server sends every unmet relation, whatever the gate): a start relation
+ * holds a glob in Planning, a merge relation a PR that is open and neither conflicting nor failing, a sign-off relation a merged
+ * glob whose labels are all approved (until then the reviewer's turn comes first).
+ */
+const appliedHolding = (glob: Glob, holding: readonly Holding[]): Holding[] =>
+  holding.filter((h) => {
+    switch (h.gate) {
+      case 'start':
+        return glob.status === 'planning';
+      case 'merge':
+        return glob.status === 'pr_open' && glob.conflict == null && !(glob.headChecks?.state === 'failed' && glob.headChecks.sha === glob.pr?.headSha);
+      case 'sign_off':
+        return glob.status === 'reviewing' && personReason(glob) === null;
+    }
+  });
+
+const named = (h: Holding): string => (h.toIsDecision ? `decision ${h.to}` : h.to);
+
+/**
+ * What a glob's holdings say, one phrase per gate: "waiting on s15f82, decision s15k190" for a start gate, "merge waits on s15f82",
+ * and "3/5 parts merged" for a split source's sign-off (the parts are grouped, not listed).
+ */
+export const holdingReason = (holding: readonly Holding[]): string => {
+  const start = holding.filter((h) => h.gate === 'start');
+  const merge = holding.filter((h) => h.gate === 'merge');
+  const signOff = holding.filter((h) => h.gate === 'sign_off');
+  const parts = signOff.find((h) => h.parts !== undefined)?.parts;
+  const others = signOff.filter((h) => h.parts === undefined);
+  return [
+    ...(start.length === 0 ? [] : [`waiting on ${start.map(named).join(', ')}`]),
+    ...(merge.length === 0 ? [] : [`merge waits on ${merge.map(named).join(', ')}`]),
+    ...(parts === undefined ? [] : [`${String(parts.merged)}/${String(parts.total)} parts merged`]),
+    ...(others.length === 0 ? [] : [`sign-off waits on ${others.map(named).join(', ')}`]),
+  ].join('; ');
+};
+
 const holderOf = (who: string, glob: Pick<Glob, 'implementer' | 'planner'>): string =>
   who === 'implementer' ? (glob.implementer ?? glob.planner) : who;
 
@@ -101,8 +138,8 @@ export const whoseMove = (
   glob: Glob,
   humanSteps: readonly HumanStep[],
   machineSteps: readonly MachineStep[],
-  /** What the glob still waits for before it starts (its unmet start relations); only a glob in Planning waits. */
-  waitingFor: readonly AwaitedDependency[],
+  /** The glob's unmet relations, every gate (the server computes them: see `holdingOf`); each holds only where the glob stands. */
+  holding: readonly Holding[],
   now: string,
   options: MoveOptions = {},
 ): Move => {
@@ -110,7 +147,10 @@ export const whoseMove = (
   if (glob.status === 'signed_off') return { holder: 'done', reason: 'Signed off', since: glob.signedOffAt };
 
   // 1. A person's turn: a step that is due.
-  const due = humanSteps.filter((s) => s.kind !== 'unstick' && s.state === 'due');
+  const held = appliedHolding(glob, holding);
+  // A merge that waits for a relation is not the person's to press yet: the Merge step isn't due while the gate holds.
+  const mergeWaits = held.some((h) => h.gate === 'merge');
+  const due = humanSteps.filter((s) => s.kind !== 'unstick' && s.state === 'due' && !(mergeWaits && s.kind === 'merge'));
   if (due.length > 0) {
     const mine = options.viewer === undefined ? [] : due.filter((s) => isForViewer(s, glob, options.viewer as HumanStepViewer));
     if (mine.length > 0 && options.viewer !== undefined) return { holder: 'you', reason: mine[0]?.title ?? '', since: null, who: options.viewer.email };
@@ -127,16 +167,29 @@ export const whoseMove = (
     return { holder: 'machine', reason: lead.kind.replace(/_/g, ' '), since: lead.state === 'queued' ? lead.startedAt : (lead.lastProgressAt ?? lead.startedAt) };
   }
 
-  // 3. Waiting: checks, a deploy, an unseen upload, an unmerged need, or a rollout the glob's steps wait on.
+  // 3. Waiting: an unmet relation (another glob, a decision, split parts), checks, a deploy, an unseen upload, a merge held for
+  // a relation, or a rollout the glob's steps wait on.
   const waits = machineSteps.filter((s) => isWaitingStep(s) && isInFlight(s));
-  const awaited = glob.status === 'planning' ? waitingFor : [];
   const rollouts = humanSteps.filter((s) => s.state === 'pending' && s.blocks.length > 0);
-  if (waits.length > 0 || awaited.length > 0) {
-    const on = [...awaited.map((a) => a.id), ...waits.map((s) => (s.kind === 'deploy' ? `deploy:${s.detail ?? ''}` : s.kind))];
+  if (waits.length > 0 || held.length > 0) {
+    const waitsOn = (s: MachineStep): string => (s.kind === 'deploy' ? `deploy:${s.detail ?? ''}` : s.kind);
+    // A held merge is already said by its relations; without them (a caller that has none) its own step names them.
+    const stepWaits = waits.filter((s) => !(s.kind === 'merge_held' && held.length > 0));
+    const on = [...new Set([...held.map((h) => h.to), ...stepWaits.map(waitsOn)])];
     const reason =
-      awaited.length > 0
-        ? `waiting on ${awaited.map((a) => a.id).join(', ')}`
-        : waits.map((s) => (s.kind === 'checks' ? `checks running on ${s.detail ?? 'the head'}` : s.kind === 'deploy' ? `deploying to ${s.detail ?? 'an environment'}` : `waiting for ${s.detail ?? 'the upload'}`)).join('; ');
+      held.length > 0
+        ? holdingReason(held)
+        : stepWaits
+            .map((s) =>
+              s.kind === 'checks'
+                ? `checks running on ${s.detail ?? 'the head'}`
+                : s.kind === 'deploy'
+                  ? `deploying to ${s.detail ?? 'an environment'}`
+                  : s.kind === 'merge_held'
+                    ? `merge waits on ${s.detail ?? 'another glob'}`
+                    : `waiting for ${s.detail ?? 'the upload'}`,
+            )
+            .join('; ');
     return { holder: 'waiting', reason, since: earliest(waits), waitingOn: on };
   }
   if (rollouts.length > 0 && quiet.length === 0 && !machineSteps.some((s) => s.state === 'failed')) {

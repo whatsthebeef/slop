@@ -375,12 +375,12 @@ describe('learned size check', () => {
       expect((await get(glob.id)).status).toBe('implementing');
     });
 
-    it('splits a shared schema and three consumers into part 0 plus three parts that need only part 0; shared files are overlaps', async () => {
+    it('splits a shared schema and three consumers into part 0 plus three parts that need only part 0; shared files make no relation', async () => {
       proposed = contractParts;
       const glob = await create('same', BIG);
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
       expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0], [0]]);
-      expect(check?.proposal?.parts.map((p) => p.overlaps)).toEqual([[], [], [], [1]]);
+      expect(check?.proposal?.parts.every((p) => !('overlaps' in p))).toBe(true);
       // Small, low-risk parts are subs; the 3-task part stays the glob's own type.
       expect(check?.proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', undefined, 'sub']);
       const created = await splitAsProposed(glob);

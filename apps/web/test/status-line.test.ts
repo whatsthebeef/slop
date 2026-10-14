@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
 import {
   blockedLine,
+  chainTip,
   blockedParts,
   dependencySummary,
-  isDismissible,
   mergeWarning,
   statusLine,
   viewStatusLine,
@@ -364,17 +364,21 @@ describe('investigate runs', () => {
   });
 });
 
+const hold = (to: string, patch: Partial<NonNullable<GlobView['holding']>[number]> = {}): NonNullable<GlobView['holding']>[number] => ({
+  relationId: `rel_${to}`,
+  to,
+  toTitle: null,
+  toIsDecision: false,
+  gate: 'start',
+  until: 'merged',
+  state: 'open',
+  reason: null,
+  source: 'person',
+  ...patch,
+});
+
 describe('blocked line', () => {
-  const ahead = (ids: string[], nextStartable: string | null = null) =>
-    view({
-      blockedBy: ids.map((id, i) => ({
-        id,
-        state: 'open' as const,
-        status: 'implementing' as const,
-        depth: i + 1,
-      })),
-      nextStartable,
-    });
+  const ahead = (ids: string[]) => view({ status: 'planning', holding: ids.map((id) => hold(id)) });
 
   it('names one or two blockers', () => {
     expect(blockedLine(ahead(['s1t1']))).toBe('blocked by s1t1');
@@ -382,30 +386,32 @@ describe('blocked line', () => {
   });
 
   it('folds three or more into two names and a count', () => {
+    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3']))).toBe('blocked by s1t1, s1t2, s1t3');
     expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3', 's1t4']))).toBe('blocked by s1t1, s1t2 +2');
   });
 
-  it('lists direct prerequisites before transitive ones', () => {
+  it('names a decision as such, and counts only start relations', () => {
     const g = view({
-      blockedBy: [
-        { id: 's1t3', state: 'open', status: 'implementing', depth: 2 },
-        { id: 's1t1', state: 'open', status: 'implementing', depth: 1 },
-      ],
+      status: 'planning',
+      holding: [hold('s1k4', { toIsDecision: true, until: 'decided' }), hold('s1t7', { gate: 'merge' }), hold('s1t8', { gate: 'sign_off' })],
     });
-    expect(blockedParts(g)?.ids).toEqual(['s1t1', 's1t3']);
+    expect(blockedParts(g)).toEqual({ ids: ['decision s1k4'], more: 0 });
   });
 
-  it('appends the glob to start next unless it is already named', () => {
-    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3'], 's1t3'))).toBe(
-      'blocked by s1t1, s1t2, s1t3',
-    );
-    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t4'))).toBe(
-      'blocked by s1t1, s1t2 +2 · next: s1t4',
-    );
+  it('holds only a glob in Planning (or a failed one Retrigger would refuse)', () => {
+    expect(blockedLine({ ...ahead(['s1t1']), status: 'failed' })).toBe('blocked by s1t1');
+    expect(blockedLine({ ...ahead(['s1t1']), status: 'in_progress' })).toBeNull();
+    expect(blockedLine({ ...ahead(['s1t1']), status: 'pr_open' })).toBeNull();
   });
 
   it('is null with nothing ahead', () => {
     expect(blockedLine(view())).toBeNull();
+    expect(blockedLine(view({ status: 'planning', holding: [] }))).toBeNull();
+  });
+
+  it('the tip says where each one stands and why', () => {
+    const g = view({ status: 'planning', holding: [hold('s1t1', { state: 'planning', reason: 'uses humanSteps()' }), hold('s1k4', { toIsDecision: true, until: 'decided', state: 'planning' })] });
+    expect(chainTip(g)).toBe('s1t1 (Planning): uses humanSteps(), decision s1k4 (Planning)');
   });
 });
 
@@ -414,55 +420,30 @@ describe('dependency summary', () => {
     expect(dependencySummary(view())).toBeNull();
   });
 
-  it('shows a direct need with its status and why, and the chain behind it as also ahead', () => {
-    const summary = dependencySummary(
-      view({
-        waitingFor: [{ id: 's1t1', state: 'open', why: 'Waits for s1t1 to merge' }],
-        blockedBy: [
-          { id: 's1t1', state: 'open', status: 'implementing', depth: 1 },
-          { id: 's1t0', state: 'planning', status: 'planning', depth: 2 },
-        ],
-      }),
-    );
-    expect(summary?.needs).toEqual([
-      { id: 's1t1', status: 'Doing', why: 'Waits for s1t1 to merge', dismissible: false },
-    ]);
-    expect(summary?.alsoAhead.map((b) => b.id)).toEqual(['s1t0']);
+  it('shows a need with where it stands and why, and who waits on this glob', () => {
+    const summary = dependencySummary(view({ status: 'planning', holding: [hold('s1t1', { reason: 'uses humanSteps()' })], waitedOnBy: ['s1t9'] }));
+    expect(summary?.needs).toEqual([{ id: 's1t1', relationId: 'rel_s1t1', status: 'Doing', why: 'uses humanSteps()', dismissible: false }]);
+    expect(summary?.waitedOnBy).toEqual(['s1t9']);
   });
 
-  it('makes recorded rows dismissible, never explicit ones, and hides dismissed overlaps', () => {
+  it('makes slop\'s inferred and learned rows dismissible, never a person\'s or a split\'s', () => {
     const summary = dependencySummary(
       view({
-        waitingFor: [
-          { id: 's1t1', state: 'open', why: 'Waits for s1t1: it adds the endpoint' },
-          { id: 's1t2', state: 'open', why: 'Waits for s1t2 to merge' },
-        ],
-        edges: [
-          { id: 's1t1', kind: 'needs', source: 'inferred', paths: [], evidence: 'it adds the endpoint' },
-          { id: 's1t2', kind: 'needs', source: 'explicit', paths: [] },
-          { id: 's1t5', kind: 'overlaps', source: 'implied', paths: ['a.ts'] },
-          { id: 's1t6', kind: 'overlaps', source: 'inferred', paths: [], overridden: true, dismissedPlanHash: 'h' },
-        ],
+        status: 'planning',
+        holding: [hold('s1t1', { source: 'inferred' }), hold('s1t2', { source: 'person' }), hold('s1t3', { source: 'learned' }), hold('s1t4', { source: 'split' })],
       }),
     );
     expect(summary?.needs.map((n) => [n.id, n.dismissible])).toEqual([
       ['s1t1', true],
       ['s1t2', false],
+      ['s1t3', true],
+      ['s1t4', false],
     ]);
-    expect(summary?.overlaps.map((e) => [e.id, isDismissible(e)])).toEqual([['s1t5', true]]);
   });
 
-  it('lists overlaps and waited-on-by globs', () => {
-    const summary = dependencySummary(
-      view({
-        edges: [
-          { id: 's1t5', kind: 'overlaps', source: 'explicit', paths: ['a.ts'] },
-          { id: 's1t6', kind: 'needs', source: 'explicit', paths: [] },
-        ],
-        waitedOnBy: ['s1t9'],
-      }),
-    );
-    expect(summary?.overlaps.map((e) => e.id)).toEqual(['s1t5']);
+  it('lists only waited-on-by globs when nothing holds this one', () => {
+    const summary = dependencySummary(view({ waitedOnBy: ['s1t9'] }));
+    expect(summary?.needs).toEqual([]);
     expect(summary?.waitedOnBy).toEqual(['s1t9']);
   });
 });

@@ -45,6 +45,7 @@ const DOING: Readonly<Record<MachineStepKind, string>> = {
   rollout_check: 'checking rollout',
   checks: 'checks running',
   upload_wait: 'waiting for an upload',
+  merge_held: 'merge waits for another glob',
 };
 
 const minutesSince = (at: string | null, now: string): number | null =>
@@ -64,7 +65,7 @@ const liveSession = (glob: GlobView): string | null => {
 /** The move for a glob: the server's, else derived here from the glob alone. */
 export const moveOf = (glob: GlobView, now: string, viewer?: HumanStepViewer): Move =>
   glob.move ??
-  whoseMove(glob, deriveHumanSteps(glob, {}, []), glob.machineSteps ?? deriveMachineSteps(glob), glob.waitingFor ?? [], now, {
+  whoseMove(glob, deriveHumanSteps(glob, {}, []), glob.machineSteps ?? deriveMachineSteps(glob), glob.holding ?? [], now, {
     ...(viewer === undefined ? {} : { viewer }),
   });
 

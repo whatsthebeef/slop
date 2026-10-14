@@ -23,7 +23,7 @@ import type { PendingAction } from '@/lib/pending-action';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { handoverConfirmation, handoverOneLine, handoverToShow } from '@/lib/handover';
 import { handoverKey, isDismissed } from '@/lib/dismissals';
-import { chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
+import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { isOversized } from '../oversized-glob';
@@ -164,7 +164,7 @@ export const useGlobActions = ({
       setConfirmingAgain(true);
       return;
     }
-    if (action === 'retrigger' && (glob.blockedBy?.length ?? 0) > 0) {
+    if (action === 'retrigger' && blockedParts(glob) !== null) {
       setConfirmingRetrigger(true);
       return;
     }

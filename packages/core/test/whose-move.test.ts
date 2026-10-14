@@ -8,15 +8,28 @@ import { unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js
 import type { UnstickOptions } from '../src/domain/whose-move.js';
 import type { Move } from '../src/domain/whose-move.js';
 import type { Glob } from '../src/domain/types.js';
-import type { AwaitedDependency } from '../src/domain/relations.js';
+import type { Holding } from '../src/domain/relations.js';
 import { NOW, dev, glob, other, run } from './fixtures.js';
 
 const minutesAgo = (n: number) => new Date(Date.parse(NOW) - n * 60_000).toISOString();
 const head = 'a2a88c8aaaa';
 const viewer = { email: dev.email, role: dev.role };
 
-const move = (g: Glob, facts: MachineFacts = {}, opts: { viewer?: typeof viewer; waiting?: AwaitedDependency[]; stored?: StoredHumanStep[] } = {}): Move =>
+const move = (g: Glob, facts: MachineFacts = {}, opts: { viewer?: typeof viewer; waiting?: Holding[]; stored?: StoredHumanStep[] } = {}): Move =>
   whoseMove(g, humanSteps(g, {}, opts.stored ?? []), machineSteps(g, facts), opts.waiting ?? [], NOW, { ...('viewer' in opts ? (opts.viewer === undefined ? {} : { viewer: opts.viewer }) : { viewer }) });
+
+const hold = (patch: Partial<Holding> = {}): Holding => ({
+  relationId: 'rel_1',
+  to: 's1t9',
+  toTitle: 'Other',
+  toIsDecision: false,
+  gate: 'start',
+  until: 'merged',
+  state: 'open',
+  reason: null,
+  source: 'person',
+  ...patch,
+});
 
 const ready = (patch: Partial<Glob> = {}) =>
   glob({ status: 'pr_open', pr: { number: 49, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, implementer: dev.email, ...patch });
@@ -68,7 +81,7 @@ describe('whoseMove: priority', () => {
 
   it('waiting: a Planning glob whose needs have not merged, and an upload slop has not seen', () => {
     const held = glob({ status: 'planning', waiting: { since: NOW } });
-    expect(move(held, {}, { waiting: [{ id: 's1t9', state: 'open', why: 'Waits for s1t9 to merge' }] })).toMatchObject({ holder: 'waiting', reason: 'waiting on s1t9', waitingOn: ['s1t9'] });
+    expect(move(held, {}, { waiting: [hold({ to: 's1t9' })] })).toMatchObject({ holder: 'waiting', reason: 'waiting on s1t9', waitingOn: ['s1t9'] });
     expect(move(held, {}, { waiting: [] }).holder).toBe('idle');
     expect(move(glob({ status: 'in_progress', implementer: dev.email }), { pendingUploads: [{ key: 'k', fileName: 'a.png', since: NOW }] })).toMatchObject({ holder: 'waiting' });
   });
@@ -288,5 +301,68 @@ describe('whoseMove: a conflict or failed checks on an open PR is never "nobody"
     const g = glob({ status: 'in_progress', implementer: null, pr: { number: 49, state: 'draft', headSha: head }, runs: [run({ state: 'watching' })] });
     const steps = humanSteps(g, { recordAtHead: true }, []);
     expect(whoseMove(g, steps, machineSteps(g, {}), [], NOW, { viewer })).toMatchObject({ reason: 'Mark ready' });
+  });
+});
+
+describe('whoseMove: unmet relations', () => {
+  const held = glob({ status: 'planning', waiting: { since: NOW } });
+
+  it('a start relation to a glob, to a decision, and both: waiting on the IDs', () => {
+    expect(move(held, {}, { waiting: [hold({ to: 's15f82' })] })).toMatchObject({ holder: 'waiting', reason: 'waiting on s15f82', waitingOn: ['s15f82'] });
+    expect(move(held, {}, { waiting: [hold({ to: 's15k190', toIsDecision: true, until: 'decided', state: 'planning' })] })).toMatchObject({
+      holder: 'waiting',
+      reason: 'waiting on decision s15k190',
+      waitingOn: ['s15k190'],
+    });
+    expect(move(held, {}, { waiting: [hold({ to: 's15f82' }), hold({ relationId: 'rel_2', to: 's15k190', toIsDecision: true, until: 'decided' })] })).toMatchObject({
+      reason: 'waiting on s15f82, decision s15k190',
+      waitingOn: ['s15f82', 's15k190'],
+    });
+  });
+
+  it('a start relation holds only a glob in Planning: a started glob is not waiting on it', () => {
+    expect(move(glob({ status: 'in_progress', implementer: dev.email }), {}, { waiting: [hold()] }).holder).not.toBe('waiting');
+  });
+
+  it('split parts: "3/5 parts merged", grouped, for a merged source whose labels are approved', () => {
+    const parts = { merged: 3, total: 5 };
+    const source = glob({ status: 'reviewing', labels: { QA: 'approved' } });
+    const holds = [hold({ to: 's1t2', gate: 'sign_off', source: 'split', parts }), hold({ relationId: 'rel_2', to: 's1t3', gate: 'sign_off', source: 'split', parts })];
+    expect(move(source, {}, { waiting: holds })).toMatchObject({ holder: 'waiting', reason: '3/5 parts merged', waitingOn: ['s1t2', 's1t3'] });
+    // Labels still to approve: the reviewer's turn comes first.
+    const reviewing = glob({ status: 'reviewing', labels: { QA: 'required' } });
+    expect(move(reviewing, {}, { waiting: holds }).reason).toBe('Review needed');
+  });
+
+  it('a sign-off relation to another glob', () => {
+    const source = glob({ status: 'reviewing', labels: { QA: 'approved' } });
+    expect(move(source, {}, { waiting: [hold({ to: 's1t7', gate: 'sign_off', until: 'signed_off' })] })).toMatchObject({ holder: 'waiting', reason: 'sign-off waits on s1t7' });
+  });
+
+  it('a merge relation: the Merge step is not due while it holds, and the move is waiting', () => {
+    const g = ready();
+    expect(move(g).holder).toBe('you');
+    expect(move(g, {}, { waiting: [hold({ to: 's1t7', gate: 'merge' })] })).toMatchObject({ holder: 'waiting', reason: 'merge waits on s1t7', waitingOn: ['s1t7'] });
+    // A conflict or failed checks come before the wait.
+    const conflict = ready({ conflict: { base: 'main', files: [], since: null, at: NOW } });
+    expect(move(conflict, {}, { waiting: [hold({ gate: 'merge' })] }).reason).toBe('Resolve conflict');
+  });
+
+  it('a merge held for a relation (armed, or a sub whose gate passed) is waiting, not stalled and not the machine', () => {
+    const sub = glob({
+      status: 'pr_open',
+      type: 'sub',
+      implementer: null,
+      pr: { number: 49, state: 'ready', headSha: head },
+      headChecks: { sha: head, state: 'passed' },
+      runs: [],
+      mergeHold: { since: NOW, sha: head, for: ['s1t7'] },
+    });
+    expect(machineSteps(sub).map((s) => s.kind)).toContain('merge_held');
+    expect(move(sub, {}, { viewer: undefined })).toMatchObject({ holder: 'waiting', reason: 'merge waits on s1t7' });
+    expect(move(sub, {}, { viewer: undefined, waiting: [hold({ to: 's1t7', gate: 'merge' })] })).toMatchObject({ holder: 'waiting', reason: 'merge waits on s1t7', waitingOn: ['s1t7'] });
+    const armed = glob({ ...sub, type: 'same', mergeMode: 'when_green', implementer: dev.email });
+    expect(machineSteps(armed).find((s) => s.id === 'machine:merge:armed')?.holdsBall).toBe(false);
+    expect(move(armed, {}, { viewer: undefined }).holder).toBe('waiting');
   });
 });

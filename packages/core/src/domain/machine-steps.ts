@@ -1,4 +1,5 @@
 import type { Deploy } from './deploys.js';
+import { isMergeHeld } from './relations.js';
 import type { Board, Glob, Run } from './types.js';
 
 /**
@@ -24,6 +25,7 @@ export const MACHINE_STEP_KINDS = [
   'rollout_check',
   'checks',
   'upload_wait',
+  'merge_held',
 ] as const;
 export type MachineStepKind = (typeof MACHINE_STEP_KINDS)[number];
 
@@ -45,7 +47,7 @@ export interface MachineStep {
 }
 
 /** Steps that only wait on something automated: the glob is Waiting while they run, never Machine. */
-export const WAITING_STEP_KINDS: readonly MachineStepKind[] = ['checks', 'deploy', 'upload_wait'];
+export const WAITING_STEP_KINDS: readonly MachineStepKind[] = ['checks', 'deploy', 'upload_wait', 'merge_held'];
 
 export const isWaitingStep = (step: Pick<MachineStep, 'kind'>): boolean => WAITING_STEP_KINDS.includes(step.kind);
 
@@ -186,11 +188,18 @@ export const machineSteps = (glob: Glob, facts: MachineFacts = {}): MachineStep[
     steps.push(step('checks', 'queued', { detail: short(glob.pr.headSha) }));
   }
   // Merge pressed before the checks passed: slop merges the moment they do. Until then the checks hold the ball.
+  const mergeHeld = isMergeHeld(glob);
   if (glob.mergeMode === 'when_green') {
     const checksPassed = glob.headChecks?.state === 'passed';
-    steps.push(step('merge', 'queued', { id: 'machine:merge:armed', detail: 'merge when checks pass', holdsBall: checksPassed }));
+    // Held for a `merge` relation, the merge waits for another glob, not for slop.
+    steps.push(step('merge', 'queued', { id: 'machine:merge:armed', detail: 'merge when checks pass', holdsBall: checksPassed && !mergeHeld }));
   } else if (glob.mergeMode === 'continue' || glob.status === 'merging') {
     steps.push(step('merge', 'running', { id: 'machine:merge:running' }));
+  }
+
+  // A merge held for a `merge` relation (armed, or a sub whose gate passed) is waiting, not stuck: the release resumes it.
+  if (mergeHeld && glob.mergeHold != null) {
+    steps.push(step('merge_held', 'running', { startedAt: glob.mergeHold.since, detail: glob.mergeHold.for.join(', ') }));
   }
 
   for (const d of facts.deploys ?? []) {

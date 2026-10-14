@@ -72,14 +72,7 @@ const shortProblem = (status: StatusLine, glob: GlobView): string => {
   }
 };
 
-const waitingText = (parts: BlockedParts): string =>
-  `waiting on ${parts.ids.join(', ')}${parts.more > 0 ? ` +${String(parts.more)}` : ''}${parts.next === null ? '' : ` · next: ${parts.next}`}`;
-
-/** Why a Planning glob waits, from what slop learned of its needs, for the tooltip. */
-const learnedReasons = (glob: GlobView): string[] =>
-  (glob.impliedAfter ?? [])
-    .filter((i) => i.overridden !== true && i.kind === 'needs')
-    .map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`);
+const waitingText = (parts: BlockedParts): string => `waiting on ${parts.ids.join(', ')}${parts.more > 0 ? ` +${String(parts.more)}` : ''}`;
 
 /**
  * The status without details: no elapsed times ("run failed · 18 min", "queued 3 min", "queued · 3 min") and no commit SHAs
@@ -117,7 +110,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(status === null ? [] : [status.tip]),
       ...(position === null ? [] : [position.tip]),
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
-      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`, ...learnedReasons(glob)]),
+      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for: ${chainTip(glob)}`]),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
     ];
     const hint =
@@ -173,8 +166,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   }
   if (blocked !== null) {
     return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.prerequisites() }, [
-      `Waits for, in order: ${chainTip(glob)}`,
-      ...learnedReasons(glob),
+      `Waits for: ${chainTip(glob)}`,
     ]);
   }
   if (position !== null) {
@@ -185,7 +177,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       position.label,
       position.tone,
       positionClick(position, glob, repo),
-      [position.tip, ...(waiting ? learnedReasons(glob) : [])],
+      [position.tip],
     );
   }
   if (standby !== null) return make('standby', 'machine', 'standby', 'text-muted-foreground', null, [STANDBY_TIP]);

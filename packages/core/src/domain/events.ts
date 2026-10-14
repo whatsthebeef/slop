@@ -24,6 +24,10 @@ export const DOMAIN_EVENT_TYPES = [
   'MergeFailed',
   'MergeArmed',
   'MergeDisarmed',
+  /** A merge that would have started (merge when checks pass, or a sub whose gate passed) waits for a `merge` relation (data: the globs it waits on, the head). */
+  'MergeHeld',
+  /** A held merge started after its `merge` relations were met (data: the head). */
+  'MergeResumed',
   'MergeReverted',
   'MergeRevertFailed',
   'MergeRevertDeclined',
@@ -90,6 +94,10 @@ export const DOMAIN_EVENT_TYPES = [
   'HumanStepChanged',
   /** The last work step holding back sign-off was done (or dismissed), so the glob moved on. */
   'RolloutDone',
+  /** Every label is approved but a `sign_off` relation is unmet, so the glob stays in Reviewing (data: the globs it waits on). */
+  'SignOffHeld',
+  /** The last `sign_off` relation was met, so a glob with approved labels moved to Signed off. */
+  'SignOffReleased',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 

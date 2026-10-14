@@ -8,7 +8,8 @@
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
 import { isDecisionAttributes } from './attributes.js';
-import type { EdgeKind, EdgeSource, Glob, Relation, RelationGate, RelationPatch, RelationSource, RelationUntil } from './types.js';
+import { RELATION_GATES } from './types.js';
+import type { Glob, Relation, RelationGate, RelationPatch, RelationSource, RelationUntil } from './types.js';
 
 /**
  * Where the glob a relation points at stands. `merged`: Reviewing (a super that merged and continues is still `open`).
@@ -130,7 +131,7 @@ export const waitNote = ({ relation, state }: Unmet): string => {
 };
 
 // ---------------------------------------------------------------------------
-// Adapter for the views that still read "what the glob waits for" (until the whose-move work replaces them)
+// What a glob still waits for before it starts: the start gate's wording, for refusals and the pick-up warning
 
 /** The states a view shows for a held start relation. */
 export type AwaitedState = 'open' | 'planning' | 'rollout';
@@ -159,41 +160,6 @@ export const pickUpWarning = (awaited: readonly AwaitedDependency[]): string | n
 
 /** What a glob waits for, in a form that reads in a refusal: "Waits for s15t7 to merge (use Start now)". */
 export const refusalText = (awaited: readonly AwaitedDependency[]): string => `${waitSummary(awaited)} (use Start now)`;
-
-/** One edge of a glob in the shape the views show: kind, source and evidence. Only needs are edges now; overlaps are not shown. */
-export interface Edge {
-  readonly id: string;
-  readonly kind: EdgeKind;
-  readonly source: EdgeSource;
-  readonly paths: readonly string[];
-  readonly evidence?: string;
-  /** Set when a person chose Start now on it. */
-  readonly overridden?: true;
-  /** Set when a person dismissed it as not a dependency (with the plan hash then). */
-  readonly dismissedPlanHash?: string;
-}
-
-const EDGE_SOURCE: Readonly<Record<Relation['source'], EdgeSource>> = {
-  person: 'explicit',
-  split: 'explicit',
-  agent: 'explicit',
-  inferred: 'inferred',
-  learned: 'learned',
-};
-
-/** The start relations of a glob as edges, for the views that still show them. */
-export const edgesOfRelations = (relations: readonly Relation[]): Edge[] =>
-  relations
-    .filter((r) => r.gate === 'start')
-    .map((r) => ({
-      id: r.to,
-      kind: 'needs',
-      source: EDGE_SOURCE[r.source],
-      paths: r.evidence,
-      ...(r.reason === null ? {} : { evidence: r.reason }),
-      ...(r.overriddenAt !== null || r.dismissedAt !== null ? { overridden: true as const } : {}),
-      ...(r.dismissedPlanHash === null ? {} : { dismissedPlanHash: r.dismissedPlanHash }),
-    }));
 
 // ---------------------------------------------------------------------------
 // Writes: what the service changes on a glob's relations in one transaction
@@ -355,65 +321,124 @@ export const startReaches = (relations: readonly Relation[], from: string, targe
 };
 
 // ---------------------------------------------------------------------------
-// Blocking chain (everything unmerged ahead of a glob)
+// What holds a glob back, as the views and whose-move read it
 
-/** One unmerged glob a glob is blocked by, `depth` links away (1 is a direct prerequisite). */
-export interface BlockedBy {
-  readonly id: string;
-  readonly state: AwaitedState;
-  /** The glob's own status (planning, implementing, failed, pr_open, ...); null when it was deleted. */
-  readonly status: Glob['status'] | null;
-  readonly depth: number;
+/** One unmet relation of a glob, with where `to` stands: the board list and the glob read carry these as `holding`. */
+export interface Holding {
+  readonly relationId: string;
+  readonly to: string;
+  /** The title of `to`; null when it was deleted (a deleted `to` doesn't hold, so this is rare) or unknown. */
+  readonly toTitle: string | null;
+  /** Whether `to` is a decision glob: whose-move says "waiting on decision s15k190". */
+  readonly toIsDecision: boolean;
+  readonly gate: RelationGate;
+  readonly until: RelationUntil;
+  readonly state: ToState;
+  readonly reason: string | null;
+  readonly source: RelationSource;
+  /** Split sign-off relations: how many of the parts have merged, of how many. Repeated on each of the glob's split holdings. */
+  readonly parts?: { readonly merged: number; readonly total: number };
 }
 
-/** Everything unmerged ahead of a glob, nearest first, and which of it can be started now. */
-export interface BlockingChain {
-  readonly blockedBy: readonly BlockedBy[];
-  /** The deepest glob in the chain that is in Planning with nothing unmerged ahead of it: what to start next. */
-  readonly nextStartable: string | null;
-}
-
-export const NO_CHAIN: BlockingChain = { blockedBy: [], nextStartable: null };
-
-/**
- * The glob's whole blocking chain: its unmet start relations, what those globs wait for in turn, and so on. Met ones are
- * skipped (and not walked past), a cycle is walked once, and `lookup` answers undefined for a deleted glob.
- */
-export const blockingChain = (
-  rootId: string,
-  relationsOf: (id: string) => readonly Relation[],
-  lookup: (id: string) => Glob | undefined,
-  held: ReadonlySet<string> = NOT_HELD,
-): BlockingChain => {
-  const seen = new Set<string>([rootId]);
-  const blockedBy: BlockedBy[] = [];
-  const hasUnmergedAhead = new Set<string>();
-  let level: string[] = [rootId];
-  for (let depth = 1; level.length > 0; depth++) {
-    const next: string[] = [];
-    for (const parent of level) {
-      for (const r of relationsOf(parent).filter((x) => x.gate === 'start')) {
-        const glob = lookup(r.to);
-        const state = toState(glob, held);
-        if (isMet(r, state)) continue;
-        hasUnmergedAhead.add(parent);
-        if (seen.has(r.to)) continue;
-        seen.add(r.to);
-        blockedBy.push({ id: r.to, state: awaitedState(state), status: glob?.status ?? null, depth });
-        next.push(r.to);
-      }
-    }
-    level = next;
-  }
-  const startable = blockedBy.filter((b) => b.state === 'planning' && !hasUnmergedAhead.has(b.id));
-  const deepest = Math.max(0, ...startable.map((b) => b.depth));
-  return { blockedBy, nextStartable: startable.find((b) => b.depth === deepest)?.id ?? null };
+/** The merged count of a glob's split sign-off relations: lifted ones are not parts any more. */
+const partsOf = (facts: RelationFacts): { readonly merged: number; readonly total: number } | undefined => {
+  const parts = facts.relations.filter((r) => r.gate === 'sign_off' && r.source === 'split' && !lifted(r) && (facts.states.get(r.to) ?? 'missing') !== 'missing');
+  if (parts.length === 0) return undefined;
+  return { merged: parts.filter((r) => isMet(r, facts.states.get(r.to) ?? 'missing')).length, total: parts.length };
 };
 
-/** "Blocked: 3 ahead, next: s15f38". */
-export const chainSummary = (chain: BlockingChain): string =>
-  `Blocked: ${chain.blockedBy.length} ahead${chain.nextStartable === null ? '' : `, next: ${chain.nextStartable}`}`;
+/**
+ * Every relation of a glob that still holds something back (any gate), in the order they were made. `titles` and `decisions`
+ * come from the globs the relations point at (the service reads them: one `getGlobs` for the ones the list doesn't carry).
+ */
+export const holdingOf = (
+  facts: RelationFacts,
+  titles: ReadonlyMap<string, { readonly title: string; readonly decision: boolean }>,
+): Holding[] => {
+  const parts = partsOf(facts);
+  // Start gates first, then merge, then sign-off: the order a glob meets them.
+  return RELATION_GATES.flatMap((gate) => unmet(facts, gate)).map(({ relation: r, state }): Holding => {
+    const to = titles.get(r.to);
+    return {
+      relationId: r.id,
+      to: r.to,
+      toTitle: to?.title ?? null,
+      toIsDecision: to?.decision ?? false,
+      gate: r.gate,
+      until: r.until,
+      state,
+      reason: r.reason,
+      source: r.source,
+      ...(parts !== undefined && r.gate === 'sign_off' && r.source === 'split' ? { parts } : {}),
+    };
+  });
+};
 
-/** The refusal for starting a glob with a chain ahead of it: the whole chain with each glob's state. */
-export const chainRefusal = (chain: BlockingChain): string =>
-  `${chainSummary(chain)} (${chain.blockedBy.map((b) => `${b.id} ${b.status ?? 'deleted'}`).join(', ')}; use Start now)`;
+/** Whether the glob's merge is held back right now: a merge that would have started waits for a `merge` relation. */
+export const isMergeHeld = (glob: Pick<Glob, 'status' | 'mergeHold' | 'mergeMode' | 'type' | 'pr'>): boolean =>
+  glob.status === 'pr_open' &&
+  glob.mergeHold != null &&
+  glob.mergeHold.sha === glob.pr?.headSha &&
+  (glob.mergeMode === 'when_green' || glob.type === 'sub');
+
+/**
+ * Whether a relation of this shape makes sense: `decided` only waits for a decision glob (a work glob has no outcome), and a
+ * decision glob is never the one held back (it has no start, merge or sign-off gate a relation could guard).
+ */
+export const checkRelationShape = (
+  from: Pick<Glob, 'id' | 'category'>,
+  draft: Pick<RelationDraft, 'to' | 'until'>,
+  to: Pick<Glob, 'category'>,
+): Result<null> => {
+  if (from.category === 'decision') return invalidInput(`${from.id} is a decision: a decision can hold other globs back, but it is not held back`);
+  if (draft.until === 'decided' && to.category !== 'decision') return invalidInput(`${draft.to} is not a decision, so nothing can wait for it to be decided`);
+  return ok(null);
+};
+
+// ---------------------------------------------------------------------------
+// The grouped view of a glob's relations (the glob read, `get_glob`)
+
+/** A relation of another glob that waits for this one: what this glob holds back. */
+export interface HeldBack {
+  readonly relationId: string;
+  readonly from: string;
+  readonly fromTitle: string | null;
+  readonly gate: RelationGate;
+  readonly until: RelationUntil;
+  readonly reason: string | null;
+  readonly source: RelationSource;
+}
+
+/** How a relation of this glob stopped holding: its `to` reached `until` or was deleted, or a person dismissed or overrode it. */
+export type DoneHow = 'met' | 'deleted' | 'dismissed' | 'overridden';
+
+/** A relation of this glob that no longer holds. */
+export interface DoneRelation {
+  readonly relationId: string;
+  readonly to: string;
+  readonly toTitle: string | null;
+  readonly gate: RelationGate;
+  readonly until: RelationUntil;
+  readonly reason: string | null;
+  readonly source: RelationSource;
+  readonly how: DoneHow;
+}
+
+/** The glob's relations in three groups: what holds it back now, what it holds back, and what no longer holds. */
+export interface RelationsView {
+  readonly holding: readonly Holding[];
+  readonly holdsBack: readonly HeldBack[];
+  readonly done: readonly DoneRelation[];
+}
+
+/** The relations of the glob that no longer hold, with how each stopped (dismissals and overrides first, then met and deleted). */
+export const doneOf = (
+  facts: RelationFacts,
+  titles: ReadonlyMap<string, { readonly title: string; readonly decision: boolean }>,
+): DoneRelation[] =>
+  facts.relations.flatMap((r): DoneRelation[] => {
+    const state = facts.states.get(r.to) ?? 'missing';
+    const how: DoneHow | null = r.dismissedAt !== null ? 'dismissed' : r.overriddenAt !== null ? 'overridden' : !isMet(r, state) ? null : state === 'missing' ? 'deleted' : 'met';
+    if (how === null) return [];
+    return [{ relationId: r.id, to: r.to, toTitle: titles.get(r.to)?.title ?? null, gate: r.gate, until: r.until, reason: r.reason, source: r.source, how }];
+  });

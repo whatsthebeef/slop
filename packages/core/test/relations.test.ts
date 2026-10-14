@@ -8,7 +8,6 @@ import {
   applyWrite,
   awaitedOf,
   checkRelation,
-  edgesOfRelations,
   holdWords,
   isMet,
   overrideEdits,
@@ -137,20 +136,6 @@ describe('what a glob waits for', () => {
     expect(note(relation('s1t1', 's1k4', { until: 'decided', reason: 'it picks the schema' }), 'open')).toBe('Waits for s1k4 to be decided before it can start: it picks the schema');
     expect(note(relation('s1t1', 's1t2'), 'rollout')).toBe('Waits for the rollout of s1t2 to be done (it has merged)');
     expect(note(relation('s1t1', 's1t2', { source: 'learned', reason: 'run r1 failed' }), 'open')).toBe('Waits for s1t2: run r1 failed');
-  });
-
-  it('the views still show the start relations as needs edges, with their source and reason', () => {
-    const edges = edgesOfRelations([
-      relation('s1t1', 's1t2', { evidence: ['a.ts'] }),
-      relation('s1t1', 's1t3', { source: 'learned', reason: 'run r1', overriddenAt: NOW }),
-      relation('s1t1', 's1t4', { source: 'inferred', dismissedAt: NOW, dismissedPlanHash: 'h1' }),
-      relation('s1t1', 's1t5', { gate: 'sign_off' }),
-    ]);
-    expect(edges).toEqual([
-      { id: 's1t2', kind: 'needs', source: 'explicit', paths: ['a.ts'] },
-      { id: 's1t3', kind: 'needs', source: 'learned', paths: [], evidence: 'run r1', overridden: true },
-      { id: 's1t4', kind: 'needs', source: 'inferred', paths: [], overridden: true, dismissedPlanHash: 'h1' },
-    ]);
   });
 
   it('startIds lists the active start relations once each', () => {
@@ -442,6 +427,7 @@ describe('the service and relations', () => {
     expect(unwrap(await globs.get(DEV, first.id)).waitedOnBy).toEqual([second.id]);
     const listed = unwrap(await globs.listWithArtifacts(DEV, boardId, {})).find((r) => r.glob.id === second.id);
     expect(awaitedOf(listed?.relations ?? { relations: [], states: new Map() }).map((a) => a.id)).toEqual([first.id]);
-    expect(listed?.chain.blockedBy.map((b) => b.id)).toEqual([first.id]);
+    expect(listed?.holding.map((h) => [h.to, h.toTitle, h.gate, h.until, h.state])).toEqual([[first.id, first.title, 'start', 'merged', 'planning']]);
+    expect(view.holding.map((h) => h.to)).toEqual([first.id]);
   });
 });

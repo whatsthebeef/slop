@@ -17,15 +17,14 @@ import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
-import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, Relation, SlopType } from '../domain/types.js';
+import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, Relation, RelationGate, RelationUntil, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
-import { toImplied } from './dependency-inference-service.js';
 import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
-import { MAX_AFTER, NO_CHAIN, NO_WRITE, applyWrite, draftOf, awaitedOf, blockingChain, checkRelation, hasMerged, isActive, isEmptyWrite, isExplicit, pickUpWarning, startIds, toState } from '../domain/relations.js';
-import type { AwaitedDependency, BlockingChain, NewRelation, RelationFacts, RelationWrite, ToState } from '../domain/relations.js';
+import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, pickUpWarning, startIds, toState } from '../domain/relations.js';
+import type { AwaitedDependency, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, ToState } from '../domain/relations.js';
 import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
@@ -70,6 +69,23 @@ const planOf = (input: Pick<CreateGlobInput, 'plan' | 'title' | 'intake'>): stri
   return input.title.trim();
 };
 
+/**
+ * A relation as a person or an agent states it. `gate` defaults to `start`; `until` to `merged`, or `decided` when `to` is a
+ * decision glob. `needs` and `after` stay as shorthand for start-until-merged.
+ */
+export interface RelationInput {
+  readonly to: string;
+  readonly gate?: RelationGate;
+  readonly until?: RelationUntil;
+  readonly reason?: string | null;
+}
+
+/** The longest reason a relation keeps. */
+export const MAX_RELATION_REASON = 300;
+
+/** Who stated the relations of a request: the source they are recorded with. */
+export type RelationsBy = 'person' | 'agent';
+
 export interface CreateGlobInput {
   readonly boardId: number;
   readonly title: string;
@@ -90,6 +106,9 @@ export interface CreateGlobInput {
   readonly planBy?: Provenance['by'];
   /** Globs on the board to start after (a sub waits in Planning until they merge); merged ones are ignored. Shorthand for start relations until merged. */
   readonly after?: readonly string[];
+  /** Relations stated beside `after` (any gate); `relationsBy` says who states them (default: a person). */
+  readonly relations?: readonly RelationInput[];
+  readonly relationsBy?: RelationsBy;
   /** Files intake guessed the work changes (advisory: with the plan, they decide whether exclusive paths hold it). */
   readonly files?: readonly string[];
   /** What intake saw and decided, for the glob's snapshot; absent when intake didn't run. */
@@ -216,7 +235,15 @@ export interface SplitInfo {
 }
 
 /** What a client may change on a glob: the fields, and the globs it starts after (a list that replaces the person-set ones). */
-export type GlobChanges = Omit<FieldChanges, 'after' | 'impliedAfter'> & { readonly after?: readonly string[] };
+export type GlobChanges = Omit<FieldChanges, 'after' | 'impliedAfter'> & {
+  readonly after?: readonly string[];
+  /** Relations to add or change (any gate): additive, unlike `after`, which replaces the start list. Remove one with `dismissRelation`. */
+  readonly relations?: readonly RelationInput[];
+  readonly relationsBy?: RelationsBy;
+};
+
+/** Where a relation is added from: held back by `other` (the usual), or holding `other` back (a decision's "Holds back"). */
+export type RelationDirection = 'held_by' | 'holds_back';
 
 export interface SplitInput {
   readonly parts: readonly SplitPart[];
@@ -240,8 +267,10 @@ export interface GlobView {
   readonly waitingFor: readonly AwaitedDependency[];
   /** Globs in Planning that wait for this one. */
   readonly waitedOnBy: readonly string[];
-  /** Everything unmerged ahead of the glob, transitively, and which of it can start now. */
-  readonly chain: BlockingChain;
+  /** Every unmet relation of the glob (any gate), with the title of what it points at: what holds it back right now. */
+  readonly holding: readonly Holding[];
+  /** The glob's relations in groups: holding it back, held back by it, and no longer holding. */
+  readonly relationGroups: RelationsView;
   /** The size check (flag, estimate, proposed split); null when none was made. */
   readonly sizeCheck: SizeCheck | null;
   /** Everything a person must do on the glob: steps the machine implies and stored work steps, most pressing first. */
@@ -251,6 +280,10 @@ export interface GlobView {
   /** The status messages the reader dismissed on this glob (their keys); other people's are never shown. */
   readonly dismissedKeys: readonly string[];
 }
+
+/** The title of each glob and whether it is a decision, for the holdings that name them. */
+const titlesOf = (globs: ReadonlyMap<string, Glob>): Map<string, { title: string; decision: boolean }> =>
+  new Map([...globs].map(([id, g]) => [id, { title: g.title, decision: g.category === 'decision' }]));
 
 /** A dismissal key is opaque to the server; the web builds it from the situation (see `lib/dismissals.ts`). */
 const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
@@ -287,8 +320,6 @@ interface CommandOptions {
    * when the step succeeds, in the same transaction, and the glob's version moves even when the step changed nothing else.
    */
   readonly relationPlan?: (tx: Tx, glob: Glob, board: readonly Relation[], now: string) => Promise<Result<RelationWrite>>;
-  /** Read the glob's whole blocking chain into `facts.chain`. */
-  readonly chain?: boolean;
   /** Read the work steps holding back sign-off into `facts.rollout`. */
   readonly rollout?: boolean;
   /** Runs before the step: checks input against the store. */
@@ -300,9 +331,6 @@ interface CommandOptions {
   /** Runs in the transaction after the glob was updated, only when the step changed it: `before` is the glob as it was. */
   readonly record?: (tx: Tx, before: Glob, next: Glob, actor: Actor | null) => Promise<void>;
 }
-
-/** How many globs a cycle check reads at most. */
-const CLOSURE_LIMIT = 200;
 
 /** Integration events retry a few times on concurrent writes; they carry no client version. */
 const EVENT_RETRIES = 5;
@@ -336,7 +364,8 @@ export class GlobService {
         relations: relations.relations,
         waitingFor: awaitedOf(relations),
         waitedOnBy: await this.waitedOnBy(tx, glob.id),
-        chain: await this.chainOf(tx, glob),
+        holding: await this.holdingFor(tx, relations),
+        relationGroups: await this.relationGroupsOf(tx, glob, relations),
         sizeCheck,
         humanSteps: humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored),
         handover: await handoverOf(tx, this.deps.clock, glob),
@@ -514,7 +543,7 @@ export class GlobService {
    * and the globs waiting for its rollout are released. Both are no-ops while a step is still open.
    */
   private async afterStepsChanged(id: string): Promise<void> {
-    const settled = await this.command(null, id, null, (glob, ctx, _board, facts) => machine.rolloutSettled(glob, facts.rollout ?? { open: 0, total: 0 }, ctx), { rollout: true });
+    const settled = await this.command(null, id, null, (glob, ctx, _board, facts) => machine.rolloutSettled(glob, facts.rollout ?? { open: 0, total: 0 }, ctx, facts.relations), { rollout: true, relations: true });
     const glob = settled.ok ? settled.value : await this.deps.store.transaction((tx) => tx.getGlob(id));
     if (glob === null) return;
     this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: glob.version });
@@ -833,7 +862,7 @@ export class GlobService {
     boardId: number,
     filter: GlobFilter,
     shown: (glob: Glob) => boolean = () => true,
-  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; relations: RelationFacts; chain: BlockingChain }[]>> {
+  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; relations: RelationFacts; holding: Holding[] }[]>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await this.actorFor(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -845,24 +874,19 @@ export class GlobService {
       );
       const byGlob = new Map<string, ArtifactSummary[]>();
       for (const summary of summaries) byGlob.set(summary.globId, [...(byGlob.get(summary.globId) ?? []), summary]);
-      // One read of the board's relations and of what the listed globs' relations point at, so the list's allowed actions
-      // agree with a single read. Nothing is walked on the web side: the list carries only the latest signed-off globs.
+      // One read of the board's relations and of the globs they point at (the list carries only the latest signed-off globs, so a
+      // `to` that is old is read here), so the list's allowed actions and holdings agree with a single read. Nothing is walked on
+      // the web side: an old merged `to` there would read as deleted and show a false hold.
       const all = await tx.listRelations(boardId);
       const ownBy = new Map<string, Relation[]>();
       for (const r of all) ownBy.set(r.from, [...(ownBy.get(r.from) ?? []), r]);
-      const states = await this.statesOf(tx, [...new Set(globs.flatMap((g) => (ownBy.get(g.id) ?? []).map((r) => r.to)))]);
-      // The chain only matters where a run could be started (Planning) or started again (failed).
-      const blocked = globs.filter((g) => (g.status === 'planning' || g.status === 'failed') && g.type !== 'super' && startIds(ownBy.get(g.id) ?? []).length > 0);
-      const reach = blocked.length === 0 ? null : await this.closure(tx, blocked.map((g) => g.id), (id) => ownBy.get(id) ?? []);
-      const held = blocked.length === 0 ? undefined : await this.heldDependants(tx, boardId);
-      const chains = new Map(blocked.map((g) => [g.id, blockingChain(g.id, (id) => ownBy.get(id) ?? [], (gid) => reach?.globs.get(gid), held)]));
+      const reach = await this.reachOf(tx, [...new Set(globs.flatMap((g) => (ownBy.get(g.id) ?? []).map((r) => r.to)))]);
+      const titles = titlesOf(reach.globs);
       return ok(
-        globs.map((glob) => ({
-          glob,
-          artifacts: (byGlob.get(glob.id) ?? []).sort(byKind),
-          relations: { relations: ownBy.get(glob.id) ?? [], states },
-          chain: chains.get(glob.id) ?? NO_CHAIN,
-        })),
+        globs.map((glob) => {
+          const facts: RelationFacts = { relations: ownBy.get(glob.id) ?? [], states: reach.states };
+          return { glob, artifacts: (byGlob.get(glob.id) ?? []).sort(byKind), relations: facts, holding: holdingOf(facts, titles) };
+        }),
       );
     });
   }
@@ -889,7 +913,7 @@ export class GlobService {
       const board = await this.deps.store.transaction((tx) => tx.getBoard(input.boardId));
       if (board !== null) {
         const candidate = { id: null, plan: planOf(input), ...(input.files === undefined ? {} : { files: input.files }) };
-        holds = await findHolds(this.deps.store, this.deps.branchFiles, board, candidate, new Set(input.after ?? []), await this.deps.dependencyLearning?.prediction(board.id));
+        holds = await findHolds(this.deps.store, this.deps.branchFiles, board, candidate, new Set([...(input.after ?? []), ...(input.relations ?? []).map((r) => r.to)]), await this.deps.dependencyLearning?.prediction(board.id));
       }
     }
     // The snapshot's embedding is computed here, outside the transaction (it calls a model).
@@ -924,25 +948,51 @@ export class GlobService {
       // The person's needs come first, then slop's inferred needs (a person's win): a glob that went away since is dropped,
       // and so is one that already merged. The new glob has nothing pointing at it yet, so it can't close a cycle.
       const wanted = [...new Set((input.after ?? []).map((a) => a.trim()).filter((a) => a !== ''))];
-      const inferredNeeds = inferred.filter((i) => i.kind === 'needs' && !wanted.includes(i.id));
-      const known = new Map((await tx.getGlobs([...wanted, ...inferredNeeds.map((i) => i.id)])).map((g) => [g.id, g]));
-      for (const a of wanted) {
+      const by = input.relationsBy ?? 'person';
+      // Relations stated beside `after` (any gate): the last of one glob and gate wins, and a start one `after` already names is it.
+      const stated = [...new Map((input.relations ?? []).map((r) => [`${r.to.trim()}|${r.gate ?? 'start'}`, { ...r, to: r.to.trim() }])).values()].filter(
+        (r) => r.to !== '' && !((r.gate ?? 'start') === 'start' && wanted.includes(r.to)),
+      );
+      // Slop's inferred edges: a need (until merged) or an open decision (until decided); a person's statement of the same glob wins.
+      const inferredNeeds = inferred.filter((i) => !wanted.includes(i.id) && !stated.some((r) => (r.gate ?? 'start') === 'start' && r.to === i.id));
+      const known = new Map((await tx.getGlobs([...wanted, ...stated.map((r) => r.to), ...inferredNeeds.map((i) => i.id)])).map((g) => [g.id, g]));
+      for (const a of [...wanted, ...stated.map((r) => r.to)]) {
         if (a === id) return invalidInput('A glob cannot wait for itself');
         if (known.get(a)?.boardId !== board.id) return invalidInput(`No glob ${a} on this board`);
       }
       if (wanted.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
+      const explicit: NewRelation[] = [];
+      for (const r of stated) {
+        const target = known.get(r.to);
+        if (target === undefined) continue;
+        const until = r.until ?? (target.category === 'decision' ? 'decided' : 'merged');
+        const shape = checkRelationShape({ id, category: input.category }, { to: r.to, until }, target);
+        if (!shape.ok) return shape;
+        const reason = (r.reason ?? '').trim();
+        if (reason.length > MAX_RELATION_REASON) return invalidInput(`A reason is limited to ${MAX_RELATION_REASON} characters`);
+        explicit.push({ to: r.to, gate: r.gate ?? 'start', until, reason: reason === '' ? null : reason, evidence: [], source: by });
+      }
       const needs: NewRelation[] = [
-        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: 'person' })),
-        ...inferredNeeds.map((i): NewRelation => ({ to: i.id, gate: 'start', until: 'merged', reason: i.evidence ?? null, evidence: i.paths, source: 'inferred' })),
+        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: by })),
+        ...explicit,
+        ...inferredNeeds.slice(0, Math.max(0, MAX_RELATIONS - wanted.length - explicit.filter((r) => r.gate === 'start').length)).map((i): NewRelation => ({ to: i.id, gate: 'start', until: i.kind === 'decision' ? 'decided' : 'merged', reason: i.reason, evidence: i.files, source: 'inferred' })),
       ].filter((r) => {
         const target = known.get(r.to);
-        return target !== undefined && target.boardId === board.id && !hasMerged(target);
+        if (target === undefined || target.boardId !== board.id) return false;
+        // An inferred edge must match what it points at: a decision for a decision glob, a need for work.
+        if (r.source === 'inferred' && (r.until === 'decided') !== (target.category === 'decision')) return false;
+        // A start relation to a glob that merged already holds nothing and is not recorded; the other gates are kept.
+        return !(r.gate === 'start' && r.until === 'merged' && hasMerged(target));
       });
-      const created = applyWrite([], { add: needs.slice(0, MAX_AFTER), update: [], remove: [] }, { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() });
+      const perGate = (gate: RelationGate): number => needs.filter((r) => r.gate === gate).length;
+      if (perGate('start') > MAX_RELATIONS || perGate('merge') > MAX_RELATIONS || perGate('sign_off') > MAX_RELATIONS) {
+        return invalidInput(`A glob can have at most ${MAX_RELATIONS} relations for one gate`);
+      }
+      const created = applyWrite([], { add: needs, update: [], remove: [] }, { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() });
       const relations: RelationFacts = { relations: created.relations, states: await this.statesOf(tx, created.relations.map((r) => r.to)) };
       const sizeHold = size !== null && size.flagged ? `Oversized: ${size.reasons.join('; ')}. Split it or keep it whole to start it` : undefined;
-      // Predicted overlaps stay on the glob as internal data: merge-policy holds first, then the model's overlaps.
-      const implied = mergeImplied(holds, inferred.filter((i) => i.kind !== 'needs' && !wanted.includes(i.id)));
+      // Predicted overlaps stay on the glob as internal data (the merge policy's holds); they are not shown and not an input.
+      const implied = mergeImplied(holds, []);
       const createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(sizeHold === undefined ? {} : { sizeHold }) };
       const ctx = await this.context(actor.value, board);
       const transition = machine.create(createInput, board, ctx, relations);
@@ -1279,7 +1329,7 @@ export class GlobService {
       });
       if (!checked.ok) return checked;
     }
-    const { after: wanted, ...fields } = changes;
+    const { after: wanted, relations: stated, relationsBy, ...fields } = changes;
     // A same becoming a sub is about to start: the merge policy may hold it.
     const holds = changes.type === 'sub' ? await this.holdsFor(id) : [];
     const edit: { value: { readonly from: string[]; readonly to: string[] } | undefined } = { value: undefined };
@@ -1301,17 +1351,75 @@ export class GlobService {
       {
         applies: 'any',
         relations: true,
-        ...(wanted !== undefined && {
+        ...((wanted !== undefined || (stated?.length ?? 0) > 0) && {
           relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[]): Promise<Result<RelationWrite>> => {
-            const planned = await this.planNeeds(tx, glob, board, wanted);
-            if (planned.ok) edit.value = planned.value.edit;
-            return planned.ok ? ok(planned.value.write) : planned;
+            let write: RelationWrite = NO_WRITE;
+            if (wanted !== undefined) {
+              const planned = await this.planNeeds(tx, glob, board, wanted);
+              if (!planned.ok) return planned;
+              edit.value = planned.value.edit;
+              write = planned.value.write;
+            }
+            if (stated === undefined || stated.length === 0) return ok(write);
+            // The relations stated beside the list see the list's write: what it removes is gone, what it adds is there.
+            const seen = [...board.filter((r) => !write.remove.includes(r.id)), ...write.add.map((n) => draftOf(glob.boardId, glob.id, n))];
+            const more = await this.planRelations(tx, glob, seen, stated, relationsBy ?? 'person');
+            return more.ok ? ok({ add: [...write.add, ...more.value.add], update: more.value.update, remove: [...write.remove, ...more.value.remove] }) : more;
           },
         }),
       },
     );
     if (result.ok && before.type !== null && before.type !== result.value.type) await this.recordRetype(result.value, before.type, email);
     return result;
+  }
+
+  /**
+   * What stating relations `wanted` on a glob does (any gate): each is checked (the other glob is on the board and not this one,
+   * a shape that makes sense, within the limit, no cycle) and then added. A relation a person or agent already set to the same
+   * glob and gate only changes its `until` and reason; an inferred or learned one, or one that was dismissed or overridden,
+   * gives way to a fresh one; a split's stays as it is. Nothing is removed otherwise.
+   */
+  private async planRelations(
+    tx: Tx,
+    glob: Glob,
+    board: readonly Relation[],
+    wanted: readonly RelationInput[],
+    by: RelationsBy,
+  ): Promise<Result<RelationWrite>> {
+    // The last statement of one glob and gate wins.
+    const list = [...new Map(wanted.map((w) => [`${w.to.trim()}|${w.gate ?? 'start'}`, { ...w, to: w.to.trim() }])).values()].filter((w) => w.to !== '');
+    const found = new Map((await tx.getGlobs([...new Set(list.map((w) => w.to))])).map((g) => [g.id, g]));
+    const add: NewRelation[] = [];
+    const update: { readonly id: string; readonly patch: { readonly until: RelationUntil; readonly reason: string | null } }[] = [];
+    const remove: string[] = [];
+    let growing: Relation[] = [...board];
+    for (const w of list) {
+      const target = found.get(w.to);
+      if (target?.boardId !== glob.boardId) return invalidInput(`No glob ${w.to} on this board`);
+      const gate = w.gate ?? 'start';
+      const until = w.until ?? (target.category === 'decision' ? 'decided' : 'merged');
+      const shape = checkRelationShape(glob, { to: w.to, until }, target);
+      if (!shape.ok) return shape;
+      const reason = (w.reason ?? '').trim();
+      if (reason.length > MAX_RELATION_REASON) return invalidInput(`A reason is limited to ${MAX_RELATION_REASON} characters`);
+      const mine = growing.find((r) => r.from === glob.id && r.to === w.to && r.gate === gate);
+      if (mine !== undefined && isActive(mine) && mine.source === 'split') continue;
+      const rest = growing.filter((r) => r.id !== mine?.id);
+      const checked = checkRelation({ from: glob.id, to: w.to, gate, until }, glob.boardId, rest, (gid) => found.get(gid));
+      if (!checked.ok) return checked;
+      if (mine !== undefined && isActive(mine) && isExplicit(mine)) {
+        if (mine.until === until && (reason === '' || mine.reason === reason)) continue;
+        const patch = { until, reason: reason === '' ? mine.reason : reason };
+        update.push({ id: mine.id, patch });
+        growing = [...rest, { ...mine, ...patch }];
+        continue;
+      }
+      if (mine !== undefined) remove.push(mine.id);
+      const draft: NewRelation = { to: w.to, gate, until, reason: reason === '' ? null : reason, evidence: [], source: by };
+      add.push(draft);
+      growing = [...rest, draftOf(glob.boardId, glob.id, draft)];
+    }
+    return ok({ add, update, remove });
   }
 
   /**
@@ -1342,8 +1450,8 @@ export class GlobService {
     const add = kept.filter((to) => !fromIds.includes(to));
     const remove = [
       ...explicit.filter((r) => !kept.includes(r.to)).map((r) => r.id),
-      // An inferred or learned relation to a glob the person now names gives way to theirs.
-      ...mine.filter((r) => !isExplicit(r) && add.includes(r.to)).map((r) => r.id),
+      // An inferred or learned relation to a glob the person now names gives way to theirs, and so does a dismissed one of their own.
+      ...mine.filter((r) => (!isExplicit(r) || !isActive(r)) && add.includes(r.to)).map((r) => r.id),
     ];
     const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
     const adds: NewRelation[] = [];
@@ -1364,9 +1472,8 @@ export class GlobService {
 
   async start(email: string, id: string, version: number) {
     const holds = await this.holdsFor(id);
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.start(glob, ctx, facts.relations, holds, facts.chain), {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.start(glob, ctx, facts.relations, holds), {
       relations: true,
-      chain: true,
     });
   }
 
@@ -1382,25 +1489,56 @@ export class GlobService {
   }
 
   /**
-   * A person says a recorded relation is not a dependency (the ✕ on a Dependencies row). The plan's hash is kept with it so a
-   * changed plan may infer it again. A held glob that waited only for that relation starts, as when its last dependency merges.
+   * A person says a recorded relation is not a dependency (the ✕ on a Related row). The plan's hash is kept with it so a
+   * changed plan may infer it again. A held glob that waited only for that relation starts, as when its last dependency
+   * merges, and a merge or sign-off held for it goes on. A split's relation can't be dismissed: it is how the parts are
+   * tracked.
    */
-  async dismissEdge(email: string, id: string, version: number, edgeId: string) {
-    const planHash = { value: '' };
+  async dismissRelation(email: string, id: string, version: number | null, relationId: string) {
     const result = await this.command(email, id, version, (glob) => ok({ glob, changed: false, events: [], effects: [] }), {
-      applies: 'any',
+      applies: 'work',
       relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[], now: string): Promise<Result<RelationWrite>> => {
-        const found = board.find((r) => r.from === glob.id && r.to === edgeId && r.gate === 'start');
-        if (found === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
-        if (isExplicit(found)) return invalidInput(`${edgeId} was set as a dependency by a person and cannot be dismissed`);
+        const found = board.find((r) => r.id === relationId && r.from === glob.id);
+        if (found === undefined) return invalidInput(`${glob.id} has no relation ${relationId}`);
+        if (found.source === 'split') return invalidInput(`${found.to} is one of ${glob.id}'s split parts: the relation tracks the split and cannot be dismissed`);
         if (found.dismissedAt !== null) return ok(NO_WRITE);
-        planHash.value = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '');
-        return ok({ add: [], update: [{ id: found.id, patch: { dismissedAt: now, dismissedPlanHash: planHash.value } }], remove: [] });
+        const planHash = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '');
+        return ok({ add: [], update: [{ id: found.id, patch: { dismissedAt: now, dismissedPlanHash: planHash } }], remove: [] });
       },
     });
-    if (!result.ok || result.value.status !== 'planning' || result.value.waiting == null) return result;
-    const released = await this.release(id);
-    return released.ok ? released : result;
+    if (!result.ok) return result;
+    // What waited only for it goes on: a held start, a held merge, a sign-off with approved labels.
+    if (result.value.status === 'planning' && result.value.waiting != null) await this.release(id);
+    const resumed = await this.gateReleased(id);
+    return resumed.ok ? resumed : result;
+  }
+
+  /**
+   * Adds one relation. `held_by` (the usual): `id` can't pass `gate` until `other` reaches `until`; `version` is `id`'s.
+   * `holds_back`: `other` can't pass `gate` until `id` reaches `until` (a decision's "Holds back"); `other` is the glob that is
+   * written, so `version` isn't checked (the page doesn't hold `other`'s) and the glob `id` only gets a live hint.
+   */
+  async addRelation(
+    email: string,
+    id: string,
+    version: number | null,
+    input: RelationInput,
+    direction: RelationDirection = 'held_by',
+    by: RelationsBy = 'person',
+  ): Promise<Result<Glob>> {
+    const from = direction === 'held_by' ? id : input.to;
+    const to = direction === 'held_by' ? input.to : id;
+    const result = await this.command(email, from, direction === 'held_by' ? version : null, (glob) => ok({ glob, changed: false, events: [], effects: [] }), {
+      applies: 'any',
+      relationPlan: (tx, glob, board) => this.planRelations(tx, glob, board, [{ ...input, to }], by),
+    });
+    if (!result.ok) return result;
+    const held = await this.gateReleased(from);
+    if (direction === 'holds_back') {
+      const target = await this.peek(id);
+      if (target !== null) this.publish(target);
+    }
+    return held.ok ? held : result;
   }
 
   /** `environment` (optional) is chosen at pick-up; leaving it out keeps the glob's environment. */
@@ -1449,8 +1587,8 @@ export class GlobService {
 
   /** Refused while prerequisites are unmerged, unless `anyway` (a person's choice). */
   retrigger(email: string, id: string, version: number, anyway = false) {
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retrigger(glob, ctx, facts.chain, anyway), {
-      chain: true,
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retrigger(glob, ctx, facts.relations, anyway), {
+      relations: true,
     });
   }
 
@@ -1471,7 +1609,7 @@ export class GlobService {
       id,
       version,
       (glob, ctx, _board, facts) => machine.requestMerge(glob, ctx, { continue: continueAfter, facts }),
-      { facts: continueAfter },
+      { facts: continueAfter, relations: true },
     );
   }
 
@@ -1482,21 +1620,23 @@ export class GlobService {
 
   /** Retry merge: a failed merge (not a conflict) goes back to merging at the head, which already passed. */
   retryMerge(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.retryMerge(glob, ctx));
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retryMerge(glob, ctx, facts.relations), { relations: true });
   }
 
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel(email: string, id: string, version: number, name: LabelName, command: LabelCommand) {
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.reviewLabel(glob, name, command, ctx, facts.rollout ?? null), {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.reviewLabel(glob, name, command, ctx, facts.rollout ?? null, facts.relations), {
       rollout: true,
+      relations: true,
     });
   }
 
   /** Decision globs: sign off an accepted decision (Reviewing to Signed off). */
   signOffDecision(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.signOffDecision(glob, ctx, facts.rollout ?? null), {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.signOffDecision(glob, ctx, facts.rollout ?? null, facts.relations), {
       applies: 'decision',
       rollout: true,
+      relations: true,
     });
   }
 
@@ -1600,6 +1740,8 @@ export class GlobService {
     for (const dependant of released) {
       this.publish(dependant);
       if (dependant.status === 'planning' && dependant.waiting != null) await this.release(dependant.id);
+      // A merge held for it resumes and a sign-off held for it completes.
+      else await this.gateReleased(dependant.id);
     }
     return ok(null);
   }
@@ -1629,8 +1771,13 @@ export class GlobService {
   // -------------------------------------------------------------------------
   // Events from integrations and routines (applied against the current version)
 
-  applyEvent(id: string, step: (glob: Glob, ctx: Context) => Result<Transition>) {
-    return this.command(null, id, null, (glob, ctx) => step(glob, ctx));
+  applyEvent(
+    id: string,
+    step: (glob: Glob, ctx: Context, facts: ActionFacts) => Result<Transition>,
+    /** `relations`: read the glob's relations into the step's facts (checks and the sub gate wait for `merge` relations). */
+    options: { readonly relations?: boolean } = {},
+  ) {
+    return this.command(null, id, null, (glob, ctx, _board, facts) => step(glob, ctx, facts), options.relations === true ? { relations: true } : {});
   }
 
   /**
@@ -1641,17 +1788,35 @@ export class GlobService {
   async releaseDependents(mergedId: string, boardId: number): Promise<string[]> {
     // The merge is also an outcome for the board's dependency rules (its overlaps went cleanly or not); it never blocks the release.
     await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
-    const waiting = await this.deps.store.transaction(async (tx) => {
-      const from = [...new Set((await tx.listRelationsTo([mergedId])).filter((r) => r.gate === 'start' && isActive(r) && r.boardId === boardId).map((r) => r.from))];
-      return from.length === 0 ? [] : (await tx.getGlobs(from)).filter((g) => g.status === 'planning');
+    const dependants = await this.deps.store.transaction(async (tx) => {
+      const rows = (await tx.listRelationsTo([mergedId])).filter((r) => isActive(r) && r.boardId === boardId);
+      const from = [...new Set(rows.map((r) => r.from))];
+      return from.length === 0 ? [] : await tx.getGlobs(from);
     });
     const released: string[] = [];
-    for (const glob of waiting) {
-      if (glob.waiting == null) continue;
-      const result = await this.release(glob.id);
-      if (result.ok && result.value.status !== 'planning') released.push(glob.id);
+    for (const glob of dependants) {
+      // A start relation: a glob held in Planning starts once everything it waits for has merged.
+      if (glob.status === 'planning' && glob.waiting != null) {
+        const result = await this.release(glob.id);
+        if (result.ok && result.value.status !== 'planning') released.push(glob.id);
+      }
+      // A merge or sign-off relation: a held merge resumes, a glob with approved labels moves to Signed off. Idempotent.
+      await this.gateReleased(glob.id);
     }
     return released;
+  }
+
+  /**
+   * A relation of this glob's was met, dismissed or went away (`to` merged, was decided, signed off or was deleted): a merge
+   * held for it resumes, and a Reviewing glob with approved labels and nothing else holding it moves to Signed off. A no-op
+   * otherwise and when already done, so every release path may call it.
+   */
+  async gateReleased(id: string): Promise<Result<Glob>> {
+    return this.command(null, id, null, (glob, ctx, _board, facts) => machine.gateReleased(glob, facts.relations ?? NO_RELATIONS, facts.rollout ?? null, ctx), {
+      relations: true,
+      rollout: true,
+      applies: 'any',
+    });
   }
 
   /** The background size refresh: never awaited, and a rejection (or a throw) is logged, never unhandled. */
@@ -1771,13 +1936,12 @@ export class GlobService {
    * Writes the edges slop inferred for a glob (from its plan and investigation, `refresh` of the inference service). A need
    * of a glob in Planning becomes a start relation (source `inferred`): the ones that would make a cycle are dropped and said so
    * in the log, the rest replace the glob's earlier inferred relations (a person's, a learned one, one Start now overrode and
-   * one dismissed for this plan stay as they are). Overlaps (and the needs of a glob that already started) stay on the glob as
-   * internal data (see `edgesInferred`). A held glob that waited only for a relation now gone starts. A no-op when nothing changed.
+   * one dismissed for this plan stay as they are). An edge is a need (start until merged) or an open decision (start until
+   * decided); a glob that already started holds nothing, so nothing is written. A held glob that waited only for a relation now gone starts. A no-op when nothing changed.
    */
   async applyInferred(id: string, edges: readonly InferredEdge[], planHash: string): Promise<void> {
     const before = await this.peek(id);
     if (before === null) return;
-    const overlaps: ImpliedAfter[] = [];
     const needs: string[] = [];
     let stale = false;
     // Read inside the command's transaction: a plan saved or an edge dismissed while the model answered must not be overwritten,
@@ -1786,11 +1950,10 @@ export class GlobService {
       null,
       id,
       null,
-      (g, ctx) => (stale ? ok({ glob: g, changed: false, events: [], effects: [] }) : machine.edgesInferred(g, { edges: overlaps, notes: [], planHash }, ctx, needs)),
+      (g, ctx) => (stale ? ok({ glob: g, changed: false, events: [], effects: [] }) : machine.edgesInferred(g, { edges: [], notes: [], planHash }, ctx, needs)),
       {
         relations: true,
         relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[]): Promise<Result<RelationWrite>> => {
-          overlaps.length = 0;
           needs.length = 0;
           stale = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '') !== planHash;
           if (stale) return ok(NO_WRITE);
@@ -1801,30 +1964,33 @@ export class GlobService {
           // What stands (a person's, a learned one, one that was overridden or dismissed) wins over an inferred edge to the same glob.
           needs.push(...mine.filter((r) => !replaceable(r)).map((r) => r.to));
           const fresh = edges.filter((e) => e.id !== id);
-          // Overlaps, and a need of a glob that has started (it holds nothing now), are internal data.
-          for (const edge of fresh) if (edge.kind === 'overlaps' || started) overlaps.push(toImplied({ ...edge, kind: 'overlaps' }));
+          // A glob that has started holds nothing now, so there is nothing to hold it with.
           if (started || glob.type === 'super') return ok(NO_WRITE);
           const known = new Map((await tx.getGlobs(fresh.map((e) => e.id))).map((g) => [g.id, g]));
           const remove = mine.filter(replaceable).map((r) => r.id);
           const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
           const add: NewRelation[] = [];
           const lines: string[] = [];
-          for (const edge of fresh.filter((e) => e.kind === 'needs')) {
-            // A person's, a learned or an overridden one to the same glob wins; a deleted or merged glob needs nothing.
+          for (const edge of fresh) {
+            // A person's, a learned or an overridden one to the same glob wins; a deleted or merged glob needs nothing, and a decision
+            // that has been decided holds nothing either. The kind must match what it points at.
             const target = known.get(edge.id);
-            if (target === undefined || target.boardId !== glob.boardId || hasMerged(target)) continue;
+            if (target === undefined || target.boardId !== glob.boardId) continue;
+            const decision = edge.kind === 'decision';
+            if (decision !== (target.category === 'decision')) continue;
+            if (decision ? toState(target) !== 'planning' && toState(target) !== 'open' : hasMerged(target)) continue;
             if (growing.some((r) => r.from === glob.id && r.to === edge.id && r.gate === 'start')) continue;
-            const draft: NewRelation = { to: edge.id, gate: 'start', until: 'merged', reason: edge.reason, evidence: edge.files, source: 'inferred' };
+            const draft: NewRelation = { to: edge.id, gate: 'start', until: decision ? 'decided' : 'merged', reason: edge.reason, evidence: edge.files, source: 'inferred' };
             const checked = checkRelation(draftOf(glob.boardId, glob.id, draft), glob.boardId, growing, (gid) => known.get(gid));
             if (!checked.ok) {
-              lines.push(`Dropped the need on ${edge.id}: ${checked.error.message}`);
+              lines.push(`Dropped the ${decision ? 'decision' : 'need'} on ${edge.id}: ${checked.error.message}`);
               continue;
             }
             growing.push(draftOf(glob.boardId, glob.id, draft));
             add.push(draft);
           }
           // The reason is the model's wording and changes between answers: a need to the same glob stays as it is.
-          const kept = add.filter((a) => mine.some((r) => replaceable(r) && r.to === a.to));
+          const kept = add.filter((a) => mine.some((r) => replaceable(r) && r.dismissedAt === null && r.to === a.to));
           const reAdded = new Set(kept.map((a) => a.to));
           const finalRemove = remove.filter((rid) => !reAdded.has(mine.find((r) => r.id === rid)?.to ?? ''));
           const finalAdd = add.filter((a) => !reAdded.has(a.to));
@@ -1875,13 +2041,43 @@ export class GlobService {
     return findHolds(this.deps.store, branchFiles, read.board, { id, plan: read.plan }, skip, await this.deps.dependencyLearning?.prediction(read.board.id));
   }
 
-  /** The state of each glob in `ids` (a glob that no longer exists is `missing`). */
-  private async statesOf(tx: Tx, ids: readonly string[]): Promise<Map<string, ToState>> {
+  /** What a glob still waits for before it starts (its unmet start relations), for the routine executor's last check before a session is spent. */
+  async startHolds(id: string): Promise<AwaitedDependency[]> {
+    return this.deps.store.transaction(async (tx) => awaitedOf(await this.relationFacts(tx, await tx.listRelationsFrom([id]))));
+  }
+
+  /** The globs in `ids` that still exist, and the state of each (a glob that no longer exists is `missing`). */
+  private async reachOf(tx: Tx, ids: readonly string[]): Promise<{ readonly globs: Map<string, Glob>; readonly states: Map<string, ToState> }> {
     const found = ids.length === 0 ? [] : await tx.getGlobs(ids);
     const byId = new Map(found.map((g) => [g.id, g]));
     const held = new Set<string>();
     for (const boardId of new Set(found.map((g) => g.boardId))) for (const id of await this.heldDependants(tx, boardId)) held.add(id);
-    return new Map(ids.map((id) => [id, toState(byId.get(id), held)]));
+    return { globs: byId, states: new Map(ids.map((id) => [id, toState(byId.get(id), held)])) };
+  }
+
+  /** The state of each glob in `ids` (a glob that no longer exists is `missing`). */
+  private async statesOf(tx: Tx, ids: readonly string[]): Promise<Map<string, ToState>> {
+    return (await this.reachOf(tx, ids)).states;
+  }
+
+  /** The glob's relations in groups: what holds it back, what it holds back, and what no longer holds. */
+  private async relationGroupsOf(tx: Tx, glob: Glob, facts: RelationFacts): Promise<RelationsView> {
+    const reach = await this.reachOf(tx, [...new Set(facts.relations.map((r) => r.to))]);
+    const withStates: RelationFacts = { relations: facts.relations, states: reach.states };
+    const titles = titlesOf(reach.globs);
+    const incoming = await tx.listRelationsTo([glob.id]);
+    const mine = toState(glob, await this.heldDependants(tx, glob.boardId));
+    const open = incoming.filter((r) => isActive(r) && !isMet(r, mine));
+    const others = open.length === 0 ? [] : await tx.getGlobs([...new Set(open.map((r) => r.from))]);
+    const named = new Map(others.map((g) => [g.id, g.title]));
+    const holdsBack: HeldBack[] = open.map((r) => ({ relationId: r.id, from: r.from, fromTitle: named.get(r.from) ?? null, gate: r.gate, until: r.until, reason: r.reason, source: r.source }));
+    return { holding: holdingOf(withStates, titles), holdsBack, done: doneOf(withStates, titles) };
+  }
+
+  /** What holds the glob back: its unmet relations, with the title of what each points at. */
+  private async holdingFor(tx: Tx, facts: RelationFacts): Promise<Holding[]> {
+    const reach = await this.reachOf(tx, [...new Set(facts.relations.map((r) => r.to))]);
+    return holdingOf({ relations: facts.relations, states: reach.states }, titlesOf(reach.globs));
   }
 
   /** A glob's relations with the state of each glob they point at. */
@@ -1899,48 +2095,6 @@ export class GlobService {
   private async heldDependants(tx: Tx, boardId: number): Promise<Set<string>> {
     const open = await tx.listOpenHumanSteps(boardId);
     return new Set(open.filter((s) => s.blocks.includes('dependants')).map((s) => s.globId));
-  }
-
-  /** What the glob is blocked by: its unmerged prerequisites and theirs in turn. */
-  private async chainOf(tx: Tx, glob: Glob): Promise<BlockingChain> {
-    if (glob.type === 'super') return NO_CHAIN;
-    const reach = await this.closure(tx, [glob.id]);
-    return blockingChain(glob.id, (id) => reach.relations.get(id) ?? [], (id) => reach.globs.get(id), await this.heldDependants(tx, glob.boardId));
-  }
-
-  /** The chain of a glob by ID, for the routine executor's last check before a session is spent. */
-  async blockingChainOf(id: string): Promise<BlockingChain> {
-    return this.deps.store.transaction(async (tx) => {
-      const glob = await tx.getGlob(id);
-      return glob === null ? NO_CHAIN : this.chainOf(tx, glob);
-    });
-  }
-
-  /**
-   * The globs the roots start after, and what those start after in turn (bounded), with each glob's relations. `known` reads
-   * relations from memory (the board list has them all); without it they are read as the walk goes.
-   */
-  private async closure(
-    tx: Tx,
-    roots: readonly string[],
-    known?: (id: string) => readonly Relation[],
-  ): Promise<{ readonly globs: Map<string, Glob>; readonly relations: Map<string, readonly Relation[]> }> {
-    const globs = new Map<string, Glob>();
-    const relations = new Map<string, readonly Relation[]>();
-    let frontier = [...new Set(roots)];
-    while (frontier.length > 0 && globs.size < CLOSURE_LIMIT) {
-      if (known === undefined) {
-        const rows = await tx.listRelationsFrom(frontier);
-        for (const id of frontier) relations.set(id, rows.filter((r) => r.from === id));
-      } else {
-        for (const id of frontier) relations.set(id, known(id));
-      }
-      const wanted = [...new Set(frontier.flatMap((id) => startIds(relations.get(id) ?? [])))].filter((id) => !globs.has(id));
-      const found = wanted.length === 0 ? [] : await tx.getGlobs(wanted);
-      for (const glob of found) globs.set(glob.id, glob);
-      frontier = found.map((g) => g.id);
-    }
-    return { globs, relations };
   }
 
   private async command(
@@ -2000,12 +2154,11 @@ export class GlobService {
           options.relations === true
             ? { relations: await this.relationFacts(tx, rows ?? (await tx.listRelationsFrom([glob.id]))) }
             : {};
-        const chain = options.chain === true ? { chain: await this.chainOf(tx, glob) } : {};
         const rollout =
           options.rollout === true
             ? { rollout: storedBlockProgress(await tx.listHumanSteps(glob.boardId, [glob.id]), 'sign_off') }
             : {};
-        const facts: ActionFacts = { ...record, ...relations, ...chain, ...rollout };
+        const facts: ActionFacts = { ...record, ...relations, ...rollout };
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
         const stepped = step(glob, ctx, board, facts);
         if (!stepped.ok) return stepped;

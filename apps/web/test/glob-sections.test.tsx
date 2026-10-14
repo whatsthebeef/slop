@@ -231,15 +231,16 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.queryByText('Waits for (glob IDs)')).toBeNull();
   });
 
-  it('lists an inferred edge with its reason and a ✕, and never an input', () => {
+  it('lists an inferred relation with its reason and a ✕ that dismisses it by its relation, and never an input; no overlaps', () => {
     renderGlob(
       view({
         status: 'planning',
         provisioning: 'none',
-        edges: [{ id: 's1t2', kind: 'overlaps', source: 'inferred', paths: [], evidence: 'both edit glob-dialog.tsx' }],
+        holding: [{ relationId: 'rel_9', to: 's1t2', toTitle: 'Other', toIsDecision: false, gate: 'start', until: 'merged', state: 'open', reason: 'uses the endpoint it adds', source: 'inferred' }],
       }),
     );
-    expect(screen.getByTestId('overlaps').textContent).toContain('both edit glob-dialog.tsx');
+    expect(screen.getByTestId('waits-for').textContent).toContain('uses the endpoint it adds');
+    expect(screen.queryByTestId('overlaps')).toBeNull();
     expect(screen.getByTestId('dismiss-edge-s1t2')).toBeTruthy();
     expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
   });

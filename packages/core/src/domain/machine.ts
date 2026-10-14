@@ -31,15 +31,15 @@ import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
   awaitedOf,
-  chainRefusal,
-  NO_CHAIN,
+  holdWords,
   NO_RELATIONS,
   overrideEdits,
   refusalText,
   startIds,
+  unmet,
   waitSummary,
 } from './relations.js';
-import type { BlockingChain, RelationEdit, RelationFacts } from './relations.js';
+import type { RelationEdit, RelationFacts, Unmet } from './relations.js';
 import { rolloutPending } from './human-steps.js';
 import type { BlockProgress } from './human-steps.js';
 import type {
@@ -131,8 +131,6 @@ export interface ActionFacts {
   readonly recordSha?: string | null;
   /** The glob's relations and the state of every glob they point at (a missing entry reads as deleted); absent when not loaded. */
   readonly relations?: RelationFacts;
-  /** Everything unmerged ahead of the glob, where loaded (Start and Retrigger refuse while it isn't empty). */
-  readonly chain?: BlockingChain;
   /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
   readonly sizeHeld?: boolean;
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
@@ -552,13 +550,11 @@ export const start = (
   relations: RelationFacts = NO_RELATIONS,
   /** Overlaps the board's merge policy predicted for this start (another open glob may change the same exclusive paths). */
   newHolds: readonly ImpliedAfter[] = [],
-  chain: BlockingChain = NO_CHAIN,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
-  if (chain.blockedBy.length > 0) return invalidTransition(glob, actor, chainRefusal(chain));
   const awaited = awaitedOf(relations);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
   // Overlaps the policy predicted never hold the start; they stay on the glob as internal data for conflicts and learning.
@@ -870,7 +866,7 @@ export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
 export const retrigger = (
   glob: Glob,
   ctx: Context,
-  chain: BlockingChain = NO_CHAIN,
+  relations: RelationFacts = NO_RELATIONS,
   anyway = false,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -878,8 +874,8 @@ export const retrigger = (
     return invalidTransition(glob, actor, 'Only a failed sub or same can be retried');
   }
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (chain.blockedBy.length > 0 && !anyway)
-    return invalidTransition(glob, actor, chainRefusal(chain));
+  const awaited = awaitedOf(relations);
+  if (awaited.length > 0 && !anyway) return invalidTransition(glob, actor, refusalText(awaited));
   return new Builder(glob, ctx)
     .bumpGeneration()
     .set({ implementer: null, failure: null })
@@ -1150,11 +1146,22 @@ const headChecksPassed = (glob: Glob): boolean =>
 const headChecksFailed = (glob: Glob): boolean =>
   glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'failed';
 
+/** The unmet `merge` relations of a glob, where its relations were loaded (none otherwise). */
+const mergeGate = (relations: RelationFacts | undefined): Unmet[] => (relations === undefined ? [] : unmet(relations, 'merge'));
+
+/** "Can't merge until s15f82 is merged": what the unmet relations of a gate say, for a refusal. */
+const gateText = (held: readonly Unmet[]): string => {
+  const text = held.map((u) => holdWords(u.relation)).join('; ');
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+};
+
 /** Why Merge can't be pressed on a ready same or super right now (not armed, no conflict, checks not failed), or null. */
-const mergeBlocker = (glob: Glob): string | null => {
+const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
   if (glob.status !== 'pr_open' || glob.type === 'sub')
     return 'Only a same or super with a ready PR can be merged';
   if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
+  const held = mergeGate(relations);
+  if (held.length > 0) return gateText(held);
   // Passing checks say nothing about mergeability once the base has moved: GitHub would refuse and fail the glob.
   if (glob.conflict != null)
     return `Conflicts with the base branch since ${glob.conflict.since ?? 'the last push'}: merge the base into the branch and push before merging`;
@@ -1174,7 +1181,7 @@ export const requestMerge = (
   options: MergeOptions = { continue: false },
 ): Result<Transition> => {
   const actor = requireActor(ctx);
-  const blocked = mergeBlocker(glob);
+  const blocked = mergeBlocker(glob, options.facts?.relations);
   if (blocked !== null) return invalidTransition(glob, actor, blocked);
   const head = glob.pr?.headSha ?? '';
   const passed = headChecksPassed(glob);
@@ -1207,7 +1214,7 @@ export const cancelMerge = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!isMergeArmed(glob)) return invalidTransition(glob, actor, 'Merge is not waiting for checks');
   return new Builder(glob, ctx)
-    .set({ mergeMode: null })
+    .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
     .event('MergeDisarmed', { reason: 'cancelled' })
     .done();
 };
@@ -1223,7 +1230,7 @@ const canRetryMerge = (glob: Glob): boolean =>
   glob.headChecks.state === 'passed';
 
 /** Retry merge: a glob whose merge failed (e.g. GitHub hadn't decided mergeability) goes back to merging. */
-export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
+export const retryMerge = (glob: Glob, ctx: Context, relations?: RelationFacts): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!canRetryMerge(glob))
     return invalidTransition(
@@ -1231,6 +1238,8 @@ export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
       actor,
       'Only a failed merge on a ready PR with passing checks can be retried',
     );
+  const held = mergeGate(relations);
+  if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
   return new Builder(glob, ctx)
     .set({ failure: null, mergeMode: null })
     .status('merging', { retry: true })
@@ -1293,6 +1302,8 @@ export const reviewLabel = (
   ctx: Context,
   /** Work steps holding back sign-off: a merged glob's labels can't be approved until they are done (QA checks the change as rolled out). */
   rollout: BlockProgress | null = null,
+  /** The glob's relations: labels stay approvable while a `sign_off` relation is unmet, but the glob doesn't move to Signed off. */
+  relations?: RelationFacts,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   const from = glob.labels[name];
@@ -1309,8 +1320,10 @@ export const reviewLabel = (
       .set({ labels })
       .event('LabelChanged', { ...detail, label: name, from, to });
     const allApproved = Object.values(labels).every((s) => s === 'approved');
+    const signOffHeld = relations === undefined ? [] : unmet(relations, 'sign_off');
     if (glob.status === 'reviewing' && allApproved && (rollout === null || rollout.open === 0)) {
-      b.set({ signedOffAt: ctx.now }).status('signed_off');
+      if (signOffHeld.length > 0) b.event('SignOffHeld', { for: signOffHeld.map((u) => u.relation.to) });
+      else releaseWaiting(b.set({ signedOffAt: ctx.now }).status('signed_off'), glob);
     } else if (glob.status === 'signed_off' && !allApproved) {
       b.set({ signedOffAt: null }).status('reviewing');
     }
@@ -2097,6 +2110,17 @@ const withConflict = (b: Builder, conflict: MergeConflict | undefined, ctx: Cont
   return b;
 };
 
+/**
+ * A merge that would have started waits for a `merge` relation: the hold is recorded on the glob (once per head and set of
+ * globs, so a repeated webhook adds no event) and the merge stays as it is (armed, or a sub's passed gate).
+ */
+const holdMerge = (b: Builder, glob: Glob, sha: string, held: readonly Unmet[], ctx: Context): Builder => {
+  const waitingFor = held.map((u) => u.relation.to);
+  const same = glob.mergeHold != null && glob.mergeHold.sha === sha && glob.mergeHold.for.join(',') === waitingFor.join(',');
+  if (same) return b;
+  return b.set({ mergeHold: { since: ctx.now, sha, for: waitingFor } }).event('MergeHeld', { for: waitingFor, sha });
+};
+
 /** Required checks finished on a commit; only the PR's current head counts. */
 export const checksCompleted = (
   glob: Glob,
@@ -2113,6 +2137,8 @@ export const checksCompleted = (
     real?: { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null };
   },
   ctx: Context,
+  /** The glob's relations: an armed merge waits while a `merge` relation is unmet. */
+  relations?: RelationFacts,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
   // A conflict on an open PR is not failed checks: it sets `conflict` only, and the head keeps its last real result.
@@ -2160,8 +2186,11 @@ export const checksCompleted = (
         .event('MergeDisarmed', { reason: checks.conflict !== undefined ? 'conflict' : 'checks failed' })
         .done();
     }
+    const held = mergeGate(relations);
+    // Merge when checks pass stays armed while a merge relation is unmet; the release resumes it (`gateReleased`).
+    if (held.length > 0) return holdMerge(b, glob, checks.sha, held, ctx).done();
     return b
-      .set({ mergeMode: null })
+      .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha })
       .done();
@@ -2463,6 +2492,8 @@ export const subGateCompleted = (
     limit?: number;
   },
   ctx: Context,
+  /** The glob's relations: a passed gate waits while a `merge` relation is unmet. */
+  relations?: RelationFacts,
 ): Result<Transition> => {
   if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== gate.sha) {
     return unchanged(glob);
@@ -2478,7 +2509,11 @@ export const subGateCompleted = (
     ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
+    const held = mergeGate(relations);
+    // The sub stays in pr_open with its passed gate: `gateReleased` merges it once the relations are met.
+    if (held.length > 0) return holdMerge(b, glob, gate.sha, held, ctx).done();
     return b
+      .set(glob.mergeHold == null ? {} : { mergeHold: null })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: gate.sha })
       .done();
@@ -2517,6 +2552,7 @@ export const merged = (
         pr: null,
         headChecks: null,
         mergeMode: null,
+        ...(glob.mergeHold == null ? {} : { mergeHold: null }),
         failure: null,
         ...(glob.conflict == null ? {} : { conflict: null }),
       })
@@ -2536,6 +2572,7 @@ export const merged = (
       checklists: {},
       failure: null,
       mergeMode: null,
+      ...(glob.mergeHold == null ? {} : { mergeHold: null }),
       pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
       ...(glob.conflict == null ? {} : { conflict: null }),
     })
@@ -2825,7 +2862,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (isMergeArmed(glob)) {
     if (!restricted) actions.push('cancel_merge');
-  } else if (mergeBlocker(glob) === null) {
+  } else if (mergeBlocker(glob, facts.relations) === null) {
     actions.push('merge');
     if (headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
   }
@@ -3021,6 +3058,13 @@ export interface DecideInput {
 }
 
 /**
+ * What other globs wait for in this one can have been reached (it was decided, or signed off): the outbox's `release_waiting`
+ * starts and resumes them. Idempotent, like the release after a merge.
+ */
+const releaseWaiting = (b: Builder, glob: Glob): Builder =>
+  b.effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
+
+/**
  * Rows D4, D5, D7 and D11. The caller has already applied the knowledge change in the same transaction. Accept goes to
  * Reviewing, reject to Signed off (archived); needs work and retarget stay in Doing (needs work records the linked glob,
  * retarget only an event, since the item is redrafted before it can be accepted).
@@ -3073,6 +3117,8 @@ export const decideDecision = (
     case 'retarget':
       break;
   }
+  // Accepted or rejected: the decision is made, so what waited for it is released (not for needs work or retarget).
+  if (input.outcome === 'accept' || input.outcome === 'accept_with_edits' || input.outcome === 'reject') releaseWaiting(b, glob);
   return b.event('DecisionDecided', { outcome: outcomeJson(outcome) }).done();
 };
 
@@ -3101,7 +3147,7 @@ export const decideReplacement = (
     at: ctx.now,
     ...(reason === '' ? {} : { reason }),
   };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome) })
@@ -3118,7 +3164,7 @@ export const closeReplacement = (
   const attributes = decisionAttributesOf(glob);
   if (attributes.origin.kind !== 'replacement') return unchanged(glob);
   const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome) })
@@ -3140,24 +3186,67 @@ export const decisionWorkLanded = (glob: Glob, ctx: Context): Result<Transition>
 };
 
 /** Row D8: sign off an accepted decision. */
-export const signOffDecision = (glob: Glob, ctx: Context, rollout: BlockProgress | null = null): Result<Transition> => {
+export const signOffDecision = (
+  glob: Glob,
+  ctx: Context,
+  rollout: BlockProgress | null = null,
+  relations?: RelationFacts,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
   if (glob.status !== 'reviewing')
     return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
   if (rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
-  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).status('signed_off').done();
+  const held = relations === undefined ? [] : unmet(relations, 'sign_off');
+  if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
+  return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).status('signed_off').done();
 };
 
 /**
  * The last work step holding back sign-off was done or dismissed: a merged glob whose labels are all approved moves on to
  * Signed off (one still short of approvals just stays in Reviewing, and now shows there). A no-op while any step is open.
  */
-export const rolloutSettled = (glob: Glob, rollout: BlockProgress, ctx: Context): Result<Transition> => {
+export const rolloutSettled = (glob: Glob, rollout: BlockProgress, ctx: Context, relations?: RelationFacts): Result<Transition> => {
   if (rollout.open > 0 || glob.category === 'decision' || glob.status !== 'reviewing') return unchanged(glob);
   if (!Object.values(glob.labels).every((s) => s === 'approved')) return unchanged(glob);
-  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).event('RolloutDone', {}).status('signed_off').done();
+  // A `sign_off` relation still unmet: `gateReleased` moves the glob when the last one is met.
+  if (relations !== undefined && unmet(relations, 'sign_off').length > 0) return unchanged(glob);
+  return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).event('RolloutDone', {}).status('signed_off').done();
+};
+
+/**
+ * A relation of this glob's was met (what it waits for merged, was decided or signed off, or was deleted, dismissed or removed):
+ * resumes a merge held for a `merge` relation, and moves a Reviewing glob with approved labels and nothing else holding it to
+ * Signed off. Idempotent: a no-op while any gate it needs is still unmet and once it has run, so the outbox and every release
+ * path may call it any number of times.
+ */
+export const gateReleased = (
+  glob: Glob,
+  relations: RelationFacts,
+  rollout: BlockProgress | null,
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.category === 'decision') return unchanged(glob);
+  if (glob.status === 'pr_open' && glob.pr?.headSha != null) {
+    const head = glob.pr.headSha;
+    // Merge when checks pass was armed, or a sub's gate passed, and the merge only waited for the relation.
+    const armed = isMergeArmed(glob);
+    const subPassed = glob.type === 'sub' && glob.mergeHold != null && glob.mergeHold.sha === head;
+    if ((!armed && !subPassed) || glob.conflict != null || !headChecksPassed(glob)) return unchanged(glob);
+    if (mergeGate(relations).length > 0) return unchanged(glob);
+    return new Builder(glob, ctx)
+      .set({ mergeMode: null, mergeHold: null })
+      .event('MergeResumed', { sha: head })
+      .status('merging')
+      .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
+      .done();
+  }
+  if (glob.status !== 'reviewing') return unchanged(glob);
+  if (rollout !== null && rollout.open > 0) return unchanged(glob);
+  if (!Object.values(glob.labels).every((s) => s === 'approved')) return unchanged(glob);
+  if (unmet(relations, 'sign_off').length > 0) return unchanged(glob);
+  return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).event('SignOffReleased', {}).status('signed_off').done();
 };
 
 /** Row D9: an accepted decision goes back to Doing, its outcome cleared, to be chosen again. */
@@ -3200,7 +3289,7 @@ export const closeDecision = (
   const links = (glob.links ?? []).filter(
     (l) => link === null || !(l.id === link.id && l.kind === link.kind),
   );
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes, links: link === null ? links : [...links, link], signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', {
@@ -3275,7 +3364,7 @@ export const decisionApproved = (
     at: ctx.now,
     ...(reason === null ? {} : { reason }),
   };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, false) })
     .status('reviewing')
     .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })
@@ -3297,7 +3386,7 @@ export const decisionRejected = (
     at: ctx.now,
     reason: rejection.reason,
   };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })
