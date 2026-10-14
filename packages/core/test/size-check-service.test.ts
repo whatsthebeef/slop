@@ -153,6 +153,12 @@ describe('learned size check', () => {
   it('holds a flagged sub in Planning, not queuing a run, until it is kept whole', async () => {
     const sub = await create('sub', BIG);
     expect(sub.status).toBe('planning');
+    // A glob too big for one clean PR is a same, escalated with the size check's reasons.
+    expect(sub.type).toBe('same');
+    expect(sub.escalation).toMatchObject({ criterion: 'size', by: 'slop' });
+    expect(sub.escalation?.reason).toMatch(/^Flagged oversized: .*more than/);
+    expect(sub.escalation?.evidence).toContain('independent parts');
+    expect(store.state.events.filter((e) => e.globId === sub.id).map((e) => e.type)).toContain('Escalated');
     // Only the automatic investigate-only run: nothing implements it.
     expect(sub.runs.map((r) => r.purpose)).toEqual(['investigate']);
     expect(sub.waiting).not.toBeNull();
@@ -161,6 +167,9 @@ describe('learned size check', () => {
     unwrap(await service.keepWhole(DEV, sub.id));
     const released = unwrap(await globs.release(sub.id));
     expect(released.status).toBe('implementing');
+    // Keeping it whole does not make it a sub again: a person reviews it before it merges.
+    expect(released.type).toBe('same');
+    expect(released.escalation?.criterion).toBe('size');
     // The queued investigation is superseded by the run that implements it.
     expect(released.runs.map((r) => [r.purpose, r.outcome ?? r.state])).toEqual([['investigate', 'superseded'], [undefined, 'queued']]);
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
@@ -176,6 +185,62 @@ describe('learned size check', () => {
     expect(started.implementer).toBeNull();
     expect(started.runs.filter((r) => r.purpose === undefined)).toHaveLength(1);
     expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.decision).toBe('kept_whole');
+  });
+
+  it('a sub that is not flagged stays a sub, and a flagged same or super is not escalated', async () => {
+    const small = await create('sub', SMALL);
+    expect([small.type, small.escalation ?? null]).toEqual(['sub', null]);
+    const same = await create('same', BIG);
+    expect([same.type, same.escalation ?? null]).toEqual(['same', null]);
+  });
+
+  it('a held sub flagged when its plan is saved becomes a same with the reasons', async () => {
+    const first = await create('same', SMALL);
+    const sub = unwrap(
+      await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: SMALL, after: [first.id] }),
+    );
+    expect([sub.type, sub.status]).toEqual(['sub', 'planning']);
+    unwrap(await artifacts.putPlan(DEV, sub.id, BIG));
+    await service.refresh(sub.id);
+    await globs.reconcileSizeHold(sub.id);
+    const flagged = await get(sub.id);
+    expect(flagged.type).toBe('same');
+    expect(flagged.escalation).toMatchObject({ criterion: 'size' });
+    // Reconciling again changes nothing.
+    await globs.reconcileSizeHold(sub.id);
+    expect((await get(sub.id)).version).toBe(flagged.version);
+  });
+
+  it('QA members can answer the flag of the sub they created: keep whole and start', async () => {
+    const QA = 'qa@example.com';
+    await store.transaction((tx) => tx.upsertUser({ email: QA, name: QA, active: true }));
+    unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).setMember(ADMIN, boardId, QA, 'qa'));
+    const sub = await create('sub', BIG);
+    expect(sub.type).toBe('same');
+    unwrap(await service.keepWhole(QA, sub.id));
+    const started = unwrap(await globs.startAnyway(QA, sub.id, sub.version));
+    expect(started.status).toBe('implementing');
+    // A same that was not size-escalated is still the developers' to decide.
+    const plain = await create('same', BIG);
+    expect((await service.keepWhole(QA, plain.id)).ok).toBe(false);
+  });
+
+  it('an admin setting a size-escalated same back to a sub takes the size escalation with it', async () => {
+    const glob = await create('sub', BIG);
+    const back = unwrap(await globs.update(ADMIN, glob.id, glob.version, { type: 'sub' }));
+    expect(back.type).toBe('sub');
+    expect(back.escalation ?? null).toBeNull();
+  });
+
+  it('splitting a sub the size check made a same makes subs again, without the size escalation', async () => {
+    const glob = await create('sub', BIG);
+    expect(glob.type).toBe('same');
+    const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
+    const parts = (check?.proposal?.parts ?? []).map((p) => ({ title: p.title, plan: p.plan, after: p.after }));
+    const created = unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
+    expect(created.map((g) => g.type)).toEqual(['sub', 'sub', 'sub']);
+    expect(created.map((g) => g.escalation ?? null)).toEqual([null, null, null]);
+    expect((await get(glob.id)).escalation ?? null).toBeNull();
   });
 
   it('does not auto-trigger a flagged same, and leaves one without auto-trigger alone', async () => {

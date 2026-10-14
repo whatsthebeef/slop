@@ -655,7 +655,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         id: z.string(),
         reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
         criterion: z
-          .enum(ESCALATION_CRITERIA)
+          .enum(ESCALATION_CRITERIA.filter((c) => c !== 'size') as unknown as [Exclude<(typeof ESCALATION_CRITERIA)[number], 'size'>, ...Exclude<(typeof ESCALATION_CRITERIA)[number], 'size'>[]])
           .optional()
           .describe('Which criterion it is for, so slop can learn from the outcome; `other` when none fits'),
         evidence: z.string().optional().describe('What showed it: files, review findings, the unsettled choice'),

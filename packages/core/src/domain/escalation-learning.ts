@@ -24,6 +24,7 @@ export const ESCALATION_CRITERIA = [
   'agent_instructions',
   'scope_beyond_plan',
   'open_findings',
+  'size',
   'other',
 ] as const;
 export type EscalationCriterion = (typeof ESCALATION_CRITERIA)[number];
@@ -41,6 +42,7 @@ export const CRITERION_TEXT: Record<EscalationCriterion, string> = {
   agent_instructions: 'changed agent instructions',
   scope_beyond_plan: 'scope well beyond the plan',
   open_findings: 'in-scope review findings still open after the allowed rounds',
+  size: 'a sub the size check flagged as too big for one pull request',
   other: 'another concrete reason',
 };
 
@@ -205,6 +207,8 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
     const windowEnd = merged === undefined ? 0 : Date.parse(merged.at) + SUB_LIMIT_WINDOW_DAYS * DAY_MS;
     if (escalated !== undefined) {
       const criterion = criterionOf(escalated.data.criterion, text(escalated.data.reason), text(escalated.data.evidence));
+      // Size escalations are slop's own, made by the size check (it has its own learning): agents never raise them.
+      if (criterion === 'size') continue;
       const deescalated = events.find((e) => e.type === 'Deescalated' && e.at >= escalated.at);
       if (deescalated !== undefined) {
         add({

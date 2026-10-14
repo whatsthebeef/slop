@@ -91,6 +91,12 @@ describe('escalation outcomes (pure)', () => {
     expect(out[0]?.cause).toContain('Unplanned design choice');
   });
 
+  it('ignores size escalations: slop makes them itself, and agents never raise them', () => {
+    const size = event('Escalated', 's1t1', at(2), { reason: 'Flagged oversized: 4 parts', criterion: 'size' });
+    expect(run([glob('s1t1', { status: 'signed_off' })], [size, event('Merged', 's1t1', at(3))])).toEqual([]);
+    expect(run([glob('s1t1')], [size, event('Deescalated', 's1t1', at(3), { reason: 'x' })])).toEqual([]);
+  });
+
   it('waits for the sign-off or the window before calling a merged escalation unnecessary', () => {
     const events = [escalated('s1t1', at(2)), event('Merged', 's1t1', at(18))];
     expect(run([glob('s1t1', { status: 'reviewing' })], events)).toEqual([]);
