@@ -81,8 +81,22 @@ const learnedReasons = (glob: GlobView): string[] =>
     .filter((i) => i.overridden !== true && i.kind === 'needs')
     .map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`);
 
-/** A queued step's "queued 3 min" as "queued · 3 min". */
-const queuedText = (label: string): string => label.replace(/^queued (\d+ min)$/, 'queued · $1');
+/**
+ * The status without details: no elapsed times ("run failed · 18 min", "queued 3 min", "queued · 3 min") and no commit SHAs
+ * ("checks running on abc1234", "merging when checks pass · abc1234"). Those live in the tooltip and the glob view.
+ */
+export const plainText = (text: string): string =>
+  text
+    .replace(/\s*·\s*\d+ min\b/g, '')
+    .replace(/\s+\d+ min\b/g, '')
+    .replace(/\s*·\s*[0-9a-f]{7,40}\b/g, '')
+    .replace(/\s+on [0-9a-f]{7,40}\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Whether the glob is merged and waits for a person's sign-off: a label is still to be approved. */
+const awaitingSignOff = (glob: GlobView): boolean =>
+  glob.status === 'reviewing' && Object.values(glob.labels).some((state) => state !== 'approved');
 
 /**
  * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
@@ -108,18 +122,27 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     ];
     const hint =
       click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's prerequisites" : clickTip(click)];
-    const tip = [...new Set([...lead, ...rest, ...hint].filter((t) => t !== ''))].join('\n');
-    return { kind, icon, text, label: kind === 'needs-human' ? 'Needs a person' : text, tip, tone, click };
+    const shown = plainText(text);
+    // What the text dropped (a time, a commit) stays in the tooltip.
+    const detail = shown === text ? [] : [text];
+    const tip = [...new Set([...lead, ...detail, ...rest, ...hint].filter((t) => t !== ''))].join('\n');
+    return { kind, icon, text: shown, label: kind === 'needs-human' ? 'Needs a person' : shown, tip, tone, click };
   };
 
   if (position?.holder === 'stalled') {
     const cause = specifics(position.label) || specifics(position.text) || 'nobody on it';
     // A cause that already carries its age ("no progress 12 min") is not given it twice.
     const minutes = position.minutes !== null && position.minutes > 0 && !/\d+ min/.test(cause) ? ` · ${String(position.minutes)} min` : '';
+    // The stall's next step is a person's (the viewer's turn): the human outline with that action, not the warning.
+    if (status !== null && status.kind === 'ready') {
+      const turn = yourTurnClick(status, glob);
+      const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
+      return make('ready', 'human', status.text, status.tone, click, [position.tip, `Stalled: ${cause}${minutes}`, status.tip]);
+    }
     return make('stalled', 'alert', `${cause}${minutes}`, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
   if (escalated && escalation != null) {
-    return make('needs-human', 'needs-human', 'needs a human', 'text-required', { kind: 'section', target: cardTargets.escalation() }, [
+    return make('needs-human', 'needs-human', 'needs a', 'text-required', { kind: 'section', target: cardTargets.escalation() }, [
       `Needs a person: ${escalation.reason}. Opens the reason`,
     ]);
   }
@@ -132,16 +155,21 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   if (status !== null && position?.holder === 'machine' && (status.conflict === true || status.kind === 'checks' || status.kind === 'stuck' || status.kind === 'behind')) {
     // Someone is on the problem: say what the machine is doing ("fixing the conflict"), with the problem in the tooltip.
     const icon = position.spinning ? 'machine-spinning' : 'machine';
-    return make('machine', icon, queuedText(position.label), position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
+    return make('machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
   if (status !== null) {
     const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
+  if (awaitingSignOff(glob) && position === null) {
+    return make('sign-off', 'human', 'sign off', 'text-signal-strong', { kind: 'section', target: cardTargets.label() }, [
+      'Merged; the labels are waiting for a person to approve them',
+    ]);
+  }
   if (position?.holder === 'machine') {
     const icon = position.spinning ? 'machine-spinning' : 'machine';
     const isStandby = position.label.toLowerCase() === 'standby';
-    return make(isStandby ? 'standby' : 'machine', icon, queuedText(position.label), position.tone, positionClick(position, glob, repo), [position.tip]);
+    return make(isStandby ? 'standby' : 'machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
   if (blocked !== null) {
     return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.prerequisites() }, [

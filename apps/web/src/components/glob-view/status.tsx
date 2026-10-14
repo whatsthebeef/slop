@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
-import { MachineIcon } from '@/components/actor-icons';
+import { CategoryIcon } from '@/components/glob-card';
+import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
@@ -119,18 +120,22 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
           : (rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]);
   const tone = corner !== null ? corner.tone : turn !== null ? undefined : seen?.dismissed === true ? 'text-muted-foreground' : problem?.tone;
   return (
-    <button
-      type="button"
-      className={cn('ml-auto min-w-0 max-w-[60%] cursor-pointer truncate rounded px-1 text-right text-sm font-medium hover:bg-muted', tone)}
-      title={rollout?.tip ?? position?.tip ?? problem?.full ?? text}
-      data-testid="header-status"
-      data-holder={move?.holder ?? 'none'}
-      onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
-    >
-      {(corner?.icon === 'machine' || corner?.icon === 'machine-spinning') && (
-        <MachineIcon className="mr-1 inline" working={corner.icon === 'machine-spinning'} decorative />
-      )}
-      {text}
-    </button>
+    <span className="ml-auto inline-flex min-w-0 items-center gap-2" data-testid="header-corner">
+      <button
+        type="button"
+        className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', tone)}
+        title={corner?.tip ?? rollout?.tip ?? position?.tip ?? problem?.full ?? text}
+        data-testid="header-status"
+        data-holder={move?.holder ?? 'none'}
+        onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
+      >
+        {/* The text gives way (ellipsis) only when the row is full; the ID before it never shrinks. */}
+        <span className="truncate" data-testid="header-status-text">
+          {text}
+        </span>
+        {corner !== null && <StatusIconView icon={corner.icon} />}
+      </button>
+      <CategoryIcon category={glob.category} />
+    </span>
   );
 };

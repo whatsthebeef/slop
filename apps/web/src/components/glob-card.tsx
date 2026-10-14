@@ -1,6 +1,6 @@
 import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { AlertTriangle, Bug, GitBranch, Hourglass, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bug, GitBranch, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -9,7 +9,8 @@ import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { cornerStatus, hasBlocker, turnButton } from '@/lib/card-rows';
-import type { CornerStatus, StatusIcon } from '@/lib/card-rows';
+import type { CornerStatus } from '@/lib/card-rows';
+import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
@@ -33,7 +34,7 @@ export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: stri
   decision: { icon: Scale, className: 'text-muted-foreground' },
 };
 
-const CategoryIcon = ({ category }: { category: Category }) => {
+export const CategoryIcon = ({ category }: { category: Category }) => {
   const { icon: Icon, className } = CATEGORY_ICON[category];
   return (
     <Tip text={`Category: ${category}`}>
@@ -154,29 +155,14 @@ const CornerStatusView = ({
           dataKind={status.kind}
           ariaLabel={needsHuman ? status.label : undefined}
         >
-          {needsHuman ? (
-            // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
-            <span aria-hidden className='inline-flex items-center gap-1'>
-              needs a <HumanIcon className='h-3 w-3' decorative />
-            </span>
-          ) : (
-            <>
-              <StatusIconView icon={status.icon} />
-              <span className='truncate'>{status.text}</span>
-            </>
-          )}
+          <span className='truncate' data-testid='status-text'>
+            {status.text}
+          </span>
+          <StatusIconView icon={status.icon} />
         </ChipButton>
       </Tip>
     </span>
   );
-};
-
-const StatusIconView = ({ icon }: { icon: StatusIcon }) => {
-  if (icon === 'machine-spinning') return <MachineIcon working className='h-3 w-3 shrink-0' decorative />;
-  if (icon === 'machine') return <ActorIcon actor='machine' className='h-3 w-3 shrink-0' decorative />;
-  if (icon === 'human') return <ActorIcon actor='human' className='h-3 w-3 shrink-0' decorative />;
-  if (icon === 'hourglass') return <Hourglass className='h-3 w-3 shrink-0' aria-hidden />;
-  return <AlertTriangle className='h-3 w-3 shrink-0' aria-hidden />;
 };
 
 /** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */

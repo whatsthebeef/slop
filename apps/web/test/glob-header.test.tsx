@@ -83,6 +83,18 @@ describe('GlobHeader', () => {
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
       ['a problem', () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } })],
     ];
+    it('orders the header corner: text, then the status icon, then the category icon, and lets the text truncate', () => {
+      const { getByTestId } = renderBar(view({ status: 'in_progress', ...live('active') }));
+      const corner = getByTestId('header-corner');
+      const button = getByTestId('header-status');
+      expect(corner.firstElementChild).toBe(button);
+      expect(button.firstElementChild?.getAttribute('data-testid')).toBe('header-status-text');
+      expect(button.firstElementChild?.className).toContain('truncate');
+      expect(button.lastElementChild?.tagName.toLowerCase()).toBe('svg');
+      expect(corner.lastElementChild?.getAttribute('role') ?? corner.lastElementChild?.querySelector('[role="img"]')?.getAttribute('role')).toBe('img');
+      expect(getByTestId('glob-id').className).toContain('shrink-0');
+    });
+
     it.each(cases)('%s: the card status and the header status say the same words', (_name, make) => {
       const g = make();
       const { getByTestId } = renderBar(g);

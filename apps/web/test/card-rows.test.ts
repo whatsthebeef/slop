@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cornerStatus, hasBlocker, specifics, turnButton } from '../src/lib/card-rows';
+import { cornerStatus, hasBlocker, plainText, specifics, turnButton } from '../src/lib/card-rows';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -42,7 +42,8 @@ describe('cornerStatus', () => {
     const waiting = run({ state: 'queued', queuedAt: minutesAgo(3), startedAt: minutesAgo(3), lastProgressAt: minutesAgo(3) });
     const status = at(view({ status: 'in_progress', runs: [waiting], currentRun: waiting }));
     expect(status?.icon).toBe('machine');
-    expect(status?.text).toMatch(/^(queued · 3 min|starting)$/);
+    expect(status?.text).toMatch(/^(queued|starting)$/);
+    expect(status?.text).not.toMatch(/min/);
   });
 
   it('is a warning plus the cause for a stall, never "stalled", with the files and the stall in the tooltip', () => {
@@ -56,9 +57,25 @@ describe('cornerStatus', () => {
     expect(at(failed)?.tip).toContain('A very long reason');
   });
 
-  it('adds how long a stall has lasted', () => {
+  it('has no minutes or commit SHAs in the text, whatever the state', () => {
+    const g = view({ status: 'pr_open', pr: { number: 1, state: 'ready', headSha: 'd16d563aaaa' }, headChecks: { sha: 'd16d563aaaa', state: 'pending' } });
+    expect(plainText('checks running on d16d563')).toBe('checks running');
+    expect(plainText('merging when checks pass · d16d563')).toBe('merging when checks pass');
+    expect(plainText('queued 3 min')).toBe('queued');
+    expect(plainText('queued · 3 min')).toBe('queued');
+    expect(at(g)?.text ?? '').not.toMatch(/\bmin\b|\b[0-9a-f]{7}\b/);
+  });
+
+  it('shows the human outline and "sign off" for a merged glob awaiting sign-off', () => {
+    const g = view({ status: 'reviewing', labels: { CR: 'required', QA: 'approved' } });
+    expect(at(g)).toMatchObject({ kind: 'sign-off', icon: 'human', text: 'sign off' });
+    expect(at(view({ status: 'reviewing', labels: { CR: 'approved' } }))?.kind).not.toBe('sign-off');
+  });
+
+  it('keeps how long a stall has lasted out of the text, in the tooltip', () => {
     const g = view({ status: 'failed', failure: { reason: 'run gave up', at: minutesAgo(18) }, move: { holder: 'stalled', reason: 'run failed', since: minutesAgo(18), minutes: 18 } });
-    expect(at(g)?.text).toBe('run failed · 18 min');
+    expect(at(g)?.text).toBe('run failed');
+    expect(at(g)?.tip).toContain('run failed · 18 min');
   });
 
   it('puts standby in a stall\'s tooltip, not a second status', () => {
@@ -69,7 +86,7 @@ describe('cornerStatus', () => {
   });
 
   it('is "needs a human" for an escalated Planning glob, and a stall beats it with the reason in the tooltip', () => {
-    expect(at(escalated())).toMatchObject({ kind: 'needs-human', icon: 'needs-human', text: 'needs a human' });
+    expect(at(escalated())).toMatchObject({ kind: 'needs-human', icon: 'needs-human', text: 'needs a' });
     const both = at(view({ ...escalated(), status: 'planning', provisioning: 'failed' }));
     expect(both?.kind).toBe('stalled');
     expect(both?.tip).toContain('touches billing');

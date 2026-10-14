@@ -118,7 +118,7 @@ describe('card rows', () => {
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob'],
       ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1, s1t2 +2 · next: s1t9', 'Waits for, in order: s1t1 (Doing)'],
-      ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running on d16d563', 'Waiting'],
+      ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Waiting'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
     it.each(situations)('%s: exactly one status in the header, the icon and the words, the detail in the tip, no row under the title', (_name, make, icon, text, detail) => {
@@ -128,8 +128,9 @@ describe('card rows', () => {
       expect(statuses).toHaveLength(1);
       expect(root.querySelector('[data-testid="card-header"]')?.contains(statuses[0] ?? null)).toBe(true);
       expect(statuses[0]?.getAttribute('data-icon')).toBe(icon);
-      // A stall adds how long it has lasted.
-      expect(statuses[0]?.querySelector('.truncate')?.textContent).toMatch(new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( · \\d+ min)?$`));
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).toBe(text);
+      // No elapsed times and no commit SHAs in the visible text.
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).not.toMatch(/\bmin\b|\b[0-9a-f]{7}\b/);
       expect(statuses[0]?.querySelector('.truncate')?.textContent).not.toMatch(/working|stalled/i);
       expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
       expect(statuses[0]?.querySelector('.sr-only')?.textContent).toContain(detail);
@@ -160,6 +161,23 @@ describe('card rows', () => {
     expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
     expect(header?.firstElementChild?.className).toContain('truncate');
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
+  });
+
+  it('orders the corner: status text, then the status icon, then the category icon', () => {
+    const root = dom(markup(stalledByConflict()));
+    const button = root.querySelector('[data-testid="card-status"] button');
+    const kids = Array.from(button?.children ?? []);
+    expect(kids[0]?.getAttribute('data-testid')).toBe('status-text');
+    expect(kids[1]?.tagName.toLowerCase()).toBe('svg');
+    const corner = root.querySelector('[data-testid="card-corner"]');
+    expect(corner?.children[0]?.getAttribute('data-testid')).toBe('card-status');
+  });
+
+  it('lets only the status text truncate, never the ID', () => {
+    const root = dom(markup(stalledByConflict()));
+    expect(root.querySelector('[data-testid="status-text"]')?.className).toContain('truncate');
+    expect(root.querySelector('[data-testid="card-status"]')?.className).toContain('min-w-0');
+    expect(root.querySelector('[data-testid="card-status"] button')?.className).not.toMatch(/max-w-\[|max-w-\d/);
   });
 
   describe('avatar', () => {
