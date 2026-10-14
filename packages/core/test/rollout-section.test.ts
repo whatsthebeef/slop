@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
-import { GlobService, PREDICTED_ROLLOUT_TITLE } from '../src/app/glob-service.js';
+import { GlobService } from '../src/app/glob-service.js';
 import type { CreateGlobInput } from '../src/app/glob-service.js';
 import { InvestigationService } from '../src/app/investigation-service.js';
 import { CAPABILITY_NAMES } from '../src/domain/capabilities.js';
+import { PREDICTED_ROLLOUT_TITLE } from '../src/domain/human-steps.js';
 import type { Result } from '../src/domain/errors.js';
 import { ROLLOUT_NONE_LABEL, ROLLOUT_NOT_WRITTEN_TITLE, checkRolloutAnswer, parseRollout, rolloutScriptLabel, touchesRolloutPaths } from '../src/domain/rollout.js';
 import { DEFAULT_ROLLOUT_PATHS } from '../src/domain/merge-policy.js';
@@ -254,15 +255,33 @@ describe('the implementation record becomes rollout steps', () => {
     expect(unwrap(await artifacts.versions(DEV, g.id, 'rollout_script', 'rollout: deploy-the-host-stack'))).toHaveLength(1);
   });
 
-  it('replaces the investigator\'s placeholder when real steps arrive, but not when the section is empty', async () => {
+  it('replaces the investigator\'s placeholder when real steps arrive', async () => {
     const g = await newGlob();
     await globs.predictRollout(g.id);
-    await put(g.id, record('## Rollout\n\nNone\n'));
-    expect(stepsOf(g.id).map((s) => [s.title, s.state])).toEqual([[PREDICTED_ROLLOUT_TITLE, 'open']]);
     await put(g.id, record(ROLLOUT));
     const placeholder = stepsOf(g.id).find((s) => s.origin === 'investigation');
     expect(placeholder).toMatchObject({ state: 'dismissed', dismissedReason: 'Replaced by the steps in the implementation record' });
     expect(stepsOf(g.id).filter((s) => s.state === 'open')).toHaveLength(2);
+  });
+
+  it.each([
+    ['an empty section', '## Rollout\n\nNone\n'],
+    ['no section', '# Record\n\nNothing about rollout.\n'],
+  ])('dismisses the placeholder when a record pushed for a commit has %s', async (_name, text) => {
+    const g = await newGlob();
+    await merge(g.id);
+    await globs.predictRollout(g.id);
+    await put(g.id, record(text));
+    expect(stepsOf(g.id).map((s) => [s.title, s.state, s.dismissedReason])).toEqual([[PREDICTED_ROLLOUT_TITLE, 'dismissed', 'The implementation record needs no rollout']]);
+    expect(unwrap(await globs.get(DEV, g.id)).humanSteps.filter((s) => s.state === 'due')).toEqual([]);
+  });
+
+  it('keeps the placeholder while there is no record, or only the one started before any commit', async () => {
+    const g = await newGlob();
+    await globs.predictRollout(g.id);
+    expect(stepsOf(g.id).map((s) => s.state)).toEqual(['open']);
+    unwrap(await artifacts.putArtifact(DEV, g.id, 'implementation_plan', '# Implementation record\n\n## Approach\nTBD\n', { commitSha: null, runId: null, agentSetVersion: 3 }));
+    expect(stepsOf(g.id).map((s) => s.state)).toEqual(['open']);
   });
 
   it('keeps done and dismissed steps, replaces open ones that changed, and dismisses open ones that are gone', async () => {

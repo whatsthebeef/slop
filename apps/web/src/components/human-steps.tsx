@@ -10,6 +10,7 @@ import {
   dismissReason,
   EMPTY_DRAFT,
   isWorkStep,
+  PREDICTED_ROLLOUT_TEXT,
   readStepsOpen,
   scriptArtifactPath,
   scriptCopyText,
@@ -37,6 +38,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
   const [dismissing, setDismissing] = useState(false);
   const [reason, setReason] = useState('');
   const [copied, setCopied] = useState(false);
+  const predicted = step.predicted === true;
   const work = isWorkStep(step);
   const open = step.state === 'due' || step.state === 'pending';
   const script = step.script ?? null;
@@ -51,9 +53,10 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
       data-testid='human-step'
       data-state={step.state}
       data-kind={step.kind}
+      data-predicted={predicted ? 'true' : undefined}
     >
       <div className='flex flex-wrap items-center gap-2'>
-        {work && (
+        {work && !predicted && (
           <input
             type='checkbox'
             aria-label={`Done: ${step.title}`}
@@ -64,11 +67,11 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
           />
         )}
         <HumanIcon decorative />
-        <span className={cn('min-w-0 break-words font-medium [overflow-wrap:anywhere]', (step.state === 'dismissed' || step.state === 'done') && 'text-muted-foreground line-through')} data-testid='step-title'>
-          {step.title}
+        <span className={cn('min-w-0 break-words font-medium [overflow-wrap:anywhere]', (step.state === 'dismissed' || step.state === 'done' || predicted) && 'text-muted-foreground', (step.state === 'dismissed' || step.state === 'done') && 'line-through')} data-testid='step-title'>
+          {predicted ? PREDICTED_ROLLOUT_TEXT : step.title}
         </span>
         <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
-        {mine && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
+        {mine && !predicted && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
       <div className='flex flex-wrap gap-x-3 break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]'>
         <span data-testid='step-who'>for {whoText(step.who)}</span>
@@ -224,7 +227,7 @@ export const HumanSteps = ({
       }
     };
   const wrapped: StepActions = { onAdd: guarded(actions.onAdd), onComplete: guarded(actions.onComplete), onDismiss: guarded(actions.onDismiss) };
-  const left = steps.filter((s) => s.state === 'due' || s.state === 'pending').length;
+  const left = steps.filter((s) => (s.state === 'due' || s.state === 'pending') && s.predicted !== true).length;
   return (
     <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2' aria-label='Human steps' data-testid='human-steps'>
       <div className='flex items-center gap-2'>
