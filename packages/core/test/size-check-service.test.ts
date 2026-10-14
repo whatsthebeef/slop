@@ -346,7 +346,12 @@ describe('learned size check', () => {
     const before = calls.length;
     await service.refresh(glob.id);
     expect(calls.length).toBe(before);
-    unwrap(await globs.start(DEV, glob.id, glob.version));
+    // The big glob is already being investigated: Start waits for that run, which then starts the glob.
+    const started = unwrap(await globs.start(DEV, glob.id, (await get(glob.id)).version));
+    expect(started.status).toBe('planning');
+    const investigation = machine.liveInvestigation(started);
+    expect(investigation).not.toBeNull();
+    unwrap(await globs.applyEvent(glob.id, (g, c) => machine.investigationPushed(g, investigation?.id ?? '', c)));
     expect((await get(glob.id)).status).toBe('implementing');
     expect([...(await globs.oversizedOf(boardId))]).toEqual([]);
   });

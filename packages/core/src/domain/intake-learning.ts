@@ -12,8 +12,8 @@ import type { Category, SlopType } from './types.js';
  * store, the embedder and the jobs are in the services.
  */
 
-/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise. */
-export const INTAKE_PROMPT_VERSION = 6;
+/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise, v7 big settled work stays one glob (the agents split it into workstreams in the run). */
+export const INTAKE_PROMPT_VERSION = 7;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;
@@ -221,6 +221,7 @@ export interface GlobOutcome {
     readonly type: FieldCorrection<SlopType> | null;
     /** A sub the gate converted to a same, and why. */
     readonly subConverted: 'size' | 'sensitive' | null;
+    /** The glob was cut (`GlobSplit`): a scope cut, meaning intake bundled independent features into one request. */
     readonly split: boolean;
   };
   /** The sub gate's changed-line count; null when the glob never went through it. */
@@ -374,7 +375,7 @@ const noteOf = (outcome: GlobOutcome | null): string | null => {
     const lines = outcome.size.changedLines;
     parts.push(`sub converted to same for ${subConverted === 'size' ? `size${lines === null ? '' : `, ${lines} lines`}` : 'a sensitive path'}`);
   }
-  if (outcome.corrections.split) parts.push('split into parts');
+  if (outcome.corrections.split) parts.push('cut down to one feature (intake had bundled independent features)');
   return parts.length === 0 ? null : parts.join('; ');
 };
 

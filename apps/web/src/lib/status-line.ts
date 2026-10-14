@@ -21,6 +21,7 @@ export interface StatusLine {
     | 'checks'
     | 'failure'
     | 'investigation-failed'
+    | 'start-queued'
     | 'stuck'
     | 'behind'
     | 'ready'
@@ -72,6 +73,7 @@ const ALSO = {
   checks: 'checks failed',
   failure: 'the routine run failed',
   'investigation-failed': 'the investigation failed',
+  'start-queued': '',
   stuck: 'looks stuck',
   behind: 'the branch is behind the base',
   ready: '',
@@ -175,6 +177,21 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
         full: `Investigation failed: ${why}`,
         tone: 'text-muted-foreground',
         tip: `Investigation failed: ${why}${session === null ? '' : `\nSession: ${session}`}`,
+        sessionUrl: session,
+      }),
+    );
+  }
+  // Start was pressed during an investigation: the glob starts by itself when that run ends.
+  if (glob.status === 'planning' && glob.waiting?.investigation !== undefined) {
+    const since = run?.startedAt ?? run?.queuedAt;
+    const tip = `Start is queued: the glob starts when its investigation finishes${since === undefined ? '' : ` (running since ${new Date(since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`} and reuses its result${session === null ? '' : `\nSession: ${session}`}`;
+    candidates.push(
+      make({
+        kind: 'start-queued',
+        full: 'Investigating — starts after',
+        tone: 'text-muted-foreground',
+        tip,
+        doing: 'the investigation is running',
         sessionUrl: session,
       }),
     );

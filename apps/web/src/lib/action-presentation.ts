@@ -17,7 +17,7 @@ export interface ActionPresentation {
 }
 
 type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
-  Partial<Pick<GlobView, 'headChecks' | 'artifacts'>>;
+  Partial<Pick<GlobView, 'headChecks' | 'artifacts' | 'currentRun'>>;
 
 /**
  * Whether Review code, when offered, retries slop's automatic review: a merged glob with no after-merge review, or a ready
@@ -53,13 +53,19 @@ export const actionPresentation = (
   viewer?: string,
 ): ActionPresentation => {
   switch (action) {
-    case 'start':
+    case 'start': {
+      // An investigation is running: Start queues behind it, so no second one runs.
+      const run = glob.currentRun;
+      const investigating = run != null && run.purpose === 'investigate' && run.state !== 'ended';
       return {
-        label: 'Start',
+        label: investigating ? 'Start after investigation' : 'Start',
         icon: 'machine',
-        tip: 'The machine implements it',
+        tip: investigating
+          ? 'The machine implements it when the running investigation finishes, and reuses its result'
+          : 'The machine implements it',
         placement: 'main',
       };
+    }
     case 'start_anyway':
       // On a glob a person picked up, it is a hand-over to the machine; in Planning it jumps what the glob waits for.
       return glob.status === 'in_progress'

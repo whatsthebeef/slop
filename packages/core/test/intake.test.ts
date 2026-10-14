@@ -5,7 +5,7 @@ import { IntakeService, LlmUnavailable, waitedForIn } from '../src/app/intake-se
 import { INTAKE_PROMPT_VERSION } from '../src/domain/intake-learning.js';
 import type { Result } from '../src/domain/errors.js';
 import { DEFAULT_RISK_AREAS } from '../src/domain/risk-area.js';
-import { INTAKE_SYSTEM } from '../src/app/intake-service.js';
+import { INTAKE_SYSTEM, boardContextBlock } from '../src/app/intake-service.js';
 import type { LlmRequest } from '../src/app/intake-service.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { glob } from './fixtures.js';
@@ -64,7 +64,15 @@ describe('intake', () => {
       expect(INTAKE_SYSTEM).toMatch(/WHEN A PERSON IS NEEDED/);
       expect(INTAKE_SYSTEM).toMatch(/"super": the plan still has decisions only a person can make/);
       expect(INTAKE_SYSTEM).toMatch(/"same": the plan is settled, but a person must review/);
-      expect(INTAKE_SYSTEM).toMatch(/Big unsettled work is a "super"/);
+      expect(INTAKE_SYSTEM).toMatch(/big settled work stays one glob/);
+      expect(INTAKE_SYSTEM).toMatch(/A "super" is for unsettled work that needs a person to pair/);
+      expect(INTAKE_SYSTEM).not.toMatch(/first output is the split|is split later/);
+    });
+
+    it('the board block keeps settled work beyond the sub size whole instead of splitting it', () => {
+      const block = boardContextBlock([], 300);
+      expect(block).toMatch(/stays one glob, sized for one review/);
+      expect(block).not.toMatch(/split into parts/);
     });
 
     it('a settled small change is a sub, a risk-area change a same, open design questions a super, each with its reason', async () => {

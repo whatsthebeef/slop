@@ -183,6 +183,13 @@ describe('selectExamples', () => {
     expect(picked[0]).toMatchObject({ category: 'bug', corrected: true, note: 'category changed feature -> bug' });
   });
 
+  it('words a split as a scope cut: intake had bundled independent features', () => {
+    const split: GlobOutcome = { ...outcome('s1f4', null), corrections: { ...outcome('s1f4', null).corrections, split: true } };
+    const [picked] = selectExamples([{ snapshot: snapshot({ globId: 's1f4' }), outcome: split, distance: 0.1 }]);
+    expect(picked?.note).toBe('cut down to one feature (intake had bundled independent features)');
+    expect(picked?.note).not.toMatch(/split into parts/);
+  });
+
   it('says the nearest examples disagree when their categories differ', () => {
     expect(examplesDisagree(selectExamples(candidates))).toBe(true);
     expect(examplesDisagree(selectExamples(candidates.slice(0, 2)))).toBe(false);
