@@ -307,6 +307,8 @@ export const request = async <T>(method: string, path: string, body?: unknown): 
 /** Listens to a streamed answer: `onText` gets each piece; `signal` stops it. */
 export interface ChatStream {
   readonly onText: (text: string) => void;
+  /** A line about what the chat is doing while it tries again (the text shown so far is dropped). */
+  readonly onProgress?: (line: string) => void;
   readonly signal?: AbortSignal;
 }
 
@@ -335,6 +337,7 @@ const askChatStream = async (boardId: number, input: ChatQuestion, stream: ChatS
     for (const event of taken.events) {
       const data: unknown = JSON.parse(event.data);
       if (event.event === 'text') stream.onText((data as { text: string }).text);
+      else if (event.event === 'progress') stream.onProgress?.((data as { line: string }).line);
       else if (event.event === 'done') return data as ChatReply;
       else if (event.event === 'error') {
         const failure = data as { status: number; body: ApiError };

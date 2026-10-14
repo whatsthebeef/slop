@@ -108,7 +108,7 @@ export const mountChat = (app: Hono<Env>, deps: ChatRoutesDeps): void => {
       const send = (event: string, data: unknown) => {
         sent = sent.then(() => (stream.aborted ? undefined : stream.writeSSE({ event, data: JSON.stringify(data) }))).catch(() => undefined);
       };
-      const result = await deps.chat.ask(email, { ...request, signal: stop.signal }, (text) => send('text', { text }));
+      const result = await deps.chat.ask(email, { ...request, signal: stop.signal }, (text) => send('text', { text }), (line) => send('progress', { line }));
       if (result.ok) send('done', result.value);
       else send('error', { status: statusOf(result.error), body: errorBody(result.error) });
       await sent;

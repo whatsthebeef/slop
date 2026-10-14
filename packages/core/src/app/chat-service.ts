@@ -28,6 +28,8 @@ export const CHAT_THINK_TIMEOUT_MS = 120_000;
 /** The rewrite is a cheap call that must not hold the question up: past this the original question is searched. */
 export const REWRITE_TIMEOUT_MS = 10_000;
 const REWRITE_MAX_TOKENS = 200;
+/** The most extra steps a miss may try before giving up (second search, code, stronger model); each also keeps the usual timeouts. */
+export const CHAT_EXTRA_STEPS = 4;
 const SMALL_TALK_MAX_TOKENS = 300;
 /** The board's live state is one source among the numbered ones, so it is kept short. */
 export const BOARD_STATE_MAX_CHARS = 4000;
@@ -83,6 +85,15 @@ Fix typos, resolve words like "that", "it" or "the Slack one" from the earlier t
 Also say whether the message is small talk: a greeting, thanks, or a question about the chat itself rather than about the board.
 Reply with one JSON object and nothing else: {"query": string, "smallTalk": boolean}.`;
 
+const REWRITE_ALT_SYSTEM = `A search of a software board's records (plans, decisions, implementation records, reviews, knowledge documents) for a question found nothing useful. Write a different search query for the same question: use synonyms and the key nouns only, and drop filler words. Do not repeat the earlier query.
+Reply with one JSON object and nothing else: {"query": string}.`;
+
+const FILLER = new Set(['about', 'after', 'again', 'also', 'been', 'does', 'from', 'have', 'into', 'just', 'like', 'more', 'only', 'over', 'some', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'what', 'when', 'where', 'which', 'while', 'whom', 'whose', 'will', 'with', 'would', 'could', 'should', 'tell', 'show', 'explain']);
+
+/** The key nouns of a question: a fallback second query when no rewrite model is there to write one. */
+export const keyNouns = (question: string): string =>
+  [...new Set(question.toLowerCase().match(/[a-z0-9][a-z0-9_.-]*/g) ?? [])].filter((w) => w.length > 3 && !FILLER.has(w)).join(' ');
+
 export interface ChatRequest {
   readonly boardId: number;
   readonly question: string;
@@ -104,6 +115,9 @@ export interface ChatRequest {
 
 /** What the answer streams: pieces of text as the model writes them. */
 export type ChatDelta = (text: string) => void;
+
+/** A line that says what the chat is doing while extra steps run ("Searching again…"); the text streamed so far is dropped. */
+export type ChatProgress = (line: string) => void;
 
 export interface ChatAnswer {
   readonly chat: ChatThread;
@@ -128,6 +142,14 @@ interface Composed {
   readonly answered: boolean;
   /** What the miss sentence would say here (what was searched); the MCP answer uses it when the model's text cites nothing. */
   readonly searched: string;
+}
+
+/** What a later step changes about the first pass. */
+interface Pass {
+  /** Search with this query instead of rewriting the question. */
+  readonly query?: string;
+  /** Steps already shown, which this pass's own lines follow. */
+  readonly tools?: readonly string[];
 }
 
 /** The most slop-help chunks the chat adds to the board's hits, so a how-to question always has them. */
@@ -279,6 +301,8 @@ export class ChatService {
       opsHealth?: (admin: boolean) => Promise<OpsHealth>;
       /** Sends an answer to the board's proposal queue (the knowledge service's `submitLearning`). */
       submitLearning?: (email: string, boardId: number, learning: NewLearning) => Promise<Result<{ id: string }>>;
+      /** The most extra steps a miss may try (see `CHAT_EXTRA_STEPS`); left out, a miss ends the question as before. */
+      extraSteps?: number;
       /** Where a reply the chat could not use is logged. */
       warn?: (message: string) => void;
     },
@@ -288,7 +312,7 @@ export class ChatService {
    * A question in a conversation (a new one when `chatId` is left out): answered from the board's records, then both
    * turns are stored. `onText` receives the answer as the model writes it; the stored answer is the final one.
    */
-  async ask(email: string, request: ChatRequest, onText?: ChatDelta): Promise<Result<ChatAnswer>> {
+  async ask(email: string, request: ChatRequest, onText?: ChatDelta, onProgress?: ChatProgress): Promise<Result<ChatAnswer>> {
     const recent = await this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, request.boardId);
       if (!actor.ok) return actor;
@@ -298,7 +322,7 @@ export class ChatService {
       return ok(await tx.listChatMessages(chat.id, RECENT_TURNS));
     });
     if (!recent.ok) return recent;
-    const composed = await this.compose(email, request, recent.value, onText);
+    const composed = await this.compose(email, request, recent.value, onText, onProgress);
     if (!composed.ok) return composed;
     if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
     const { question, answer, citations, tools, actions, uncited, miss, answered } = composed.value;
@@ -342,17 +366,106 @@ export class ChatService {
     request: ChatRequest,
     recent: readonly ChatMessage[],
     onText?: ChatDelta,
+    onProgress?: ChatProgress,
   ): Promise<Result<Composed>> {
     const question = request.question.trim();
     if (question === '') return invalidInput('question must not be empty');
     if (question.length > MAX_QUERY_LENGTH) return invalidInput(`question must be at most ${MAX_QUERY_LENGTH} characters`);
+    const first = await this.attempt(email, request, recent, question, {}, onText);
+    const budget = Math.min(this.deps.extraSteps ?? 0, CHAT_EXTRA_STEPS);
+    if (!first.ok || first.value.answered || budget <= 0) return first;
+    return this.moreSteps(email, request, recent, question, first.value, budget, onProgress);
+  }
 
-    const tools: string[] = [];
+  /**
+   * After a first pass that cited nothing, tries within `budget` extra steps, stopping at the first cited answer: a second
+   * search (other words, all time), the code, then the stronger model with all of that. Each step is listed in `tools`.
+   * A step that fails never fails the question: the best result so far stands.
+   */
+  private async moreSteps(
+    email: string,
+    request: ChatRequest,
+    recent: readonly ChatMessage[],
+    question: string,
+    first: Composed,
+    budget: number,
+    onProgress?: ChatProgress,
+  ): Promise<Result<Composed>> {
+    let best = first;
+    let left = budget;
+    let query: string | undefined;
+    let step: ChatRequest = { ...request, history: true };
+    const run = async (line: string, progress: string): Promise<boolean> => {
+      if (request.signal?.aborted === true) return false;
+      left -= 1;
+      onProgress?.(progress);
+      const next = await this.attempt(email, step, recent, question, { ...(query === undefined ? {} : { query }), tools: [...best.tools, line] }).catch(() => null);
+      if (next === null || !next.ok) return false;
+      best = next.value;
+      return next.value.answered;
+    };
+    const other = await this.otherQuery(request.boardId, question, recent);
+    if (left > 0 && (other !== question || request.history !== true)) {
+      query = other;
+      if (await run(`Searched again with other words, all time included: "${oneLine(other, 80)}"`, 'Searching again…')) return ok(best);
+    }
+    if (left > 0 && request.lookAtCode !== true && (await this.codeReadable(request.boardId))) {
+      step = { ...step, lookAtCode: true };
+      if (await run('Looked at the code', 'Looking at the code…')) return ok(best);
+    }
+    if (left > 0 && request.thinkHarder !== true && this.deps.deepLlm !== undefined) {
+      step = { ...step, thinkHarder: true };
+      if (await run('Tried the stronger model with everything gathered', 'Thinking harder…')) return ok(best);
+    }
+    if (request.signal?.aborted === true) return invalidInput('The answer was stopped');
+    return ok(best);
+  }
+
+  /** A second query for the same question: the rewrite model's other words, else the question's key nouns. */
+  private async otherQuery(boardId: number, question: string, recent: readonly ChatMessage[]): Promise<string> {
+    const nouns = keyNouns(question);
+    const fallback = nouns === '' ? question : nouns;
+    const llm = this.deps.rewriteLlm;
+    if (llm === undefined) return fallback;
+    try {
+      const turns = recent.map((m) => `${m.role === 'user' ? 'Asker' : 'Assistant'}: ${clip(m.content)}`).join('\n');
+      const raw = await completeWithDeadline(
+        llm,
+        {
+          system: REWRITE_ALT_SYSTEM,
+          prompt: `${turns === '' ? '' : `Earlier in this conversation:\n${turns}\n\n`}Question: ${question}`,
+          maxTokens: REWRITE_MAX_TOKENS,
+          spend: { boardId, source: 'chat' },
+        },
+        this.deps.rewriteTimeoutMs ?? REWRITE_TIMEOUT_MS,
+      );
+      const other = text(field(parseJson(raw), 'query'))?.trim() ?? '';
+      return other === '' ? fallback : other.slice(0, MAX_QUERY_LENGTH);
+    } catch {
+      return fallback;
+    }
+  }
+
+  /** One pass: search, then answer. `pass.query` skips the rewrite (a later step searching with other words). */
+  private async attempt(
+    email: string,
+    request: ChatRequest,
+    recent: readonly ChatMessage[],
+    question: string,
+    pass: Pass,
+    onText?: ChatDelta,
+  ): Promise<Result<Composed>> {
+    const tools: string[] = [...(pass.tools ?? [])];
     // Obvious small talk skips the rewrite call too; anything else lets that one call classify the message.
-    const rewritten = isSmallTalk(question) ? { query: question, smallTalk: true } : await this.rewrite(request.boardId, question, recent);
+    const rewritten =
+      pass.query !== undefined
+        ? { query: pass.query, smallTalk: false }
+        : isSmallTalk(question)
+          ? { query: question, smallTalk: true }
+          : await this.rewrite(request.boardId, question, recent);
     if (rewritten.smallTalk) return this.smallTalk(question, request, onText);
     const query = rewritten.query;
-    if (query !== question) tools.push('Rewrote the question for search');
+    if (pass.query === undefined && query !== question) tools.push('Rewrote the question for search');
     const allTime = request.history ?? impliesHistory(question);
     const filters = {
       boardId: request.boardId,

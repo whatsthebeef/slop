@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ChatService } from '../src/app/chat-service.js';
+import { CHAT_EXTRA_STEPS, ChatService, keyNouns } from '../src/app/chat-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
 import { LlmBusy, LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -784,7 +784,7 @@ describe('ChatService reading the code', () => {
   let bareBoard: number;
   const usage: string[] = [];
 
-  const serviceWith = (llm: Llm, extra: { code?: boolean; llmTimeoutMs?: number } = {}) =>
+  const serviceWith = (llm: Llm, extra: { code?: boolean; llmTimeoutMs?: number; extraSteps?: number; deepLlm?: Llm } = {}) =>
     new ChatService({
       store,
       clock: { now: () => NOW },
@@ -792,6 +792,8 @@ describe('ChatService reading the code', () => {
       llm,
       ...(extra.code === false ? {} : { code: new CodeViewService({ boards, view, usage: { record: (_b, consumer, op) => Promise.resolve(void usage.push(`${consumer}:${op}`)) } }) }),
       ...(extra.llmTimeoutMs === undefined ? {} : { llmTimeoutMs: extra.llmTimeoutMs }),
+      ...(extra.extraSteps === undefined ? {} : { extraSteps: extra.extraSteps }),
+      ...(extra.deepLlm === undefined ? {} : { deepLlm: extra.deepLlm }),
     });
 
   beforeEach(async () => {
@@ -934,5 +936,68 @@ describe('ChatService reading the code', () => {
     answer('It is');
     answer(' here');
     expect(out.join('')).toBe(' It is here');
+  });
+
+  describe('steps before giving up', () => {
+    it('answers after the code step when the first pass misses, listing what was tried and showing progress', async () => {
+      await seedRecord(repoBoard);
+      const llm = new ScriptedLlm([
+        CHAT_DONT_KNOW, // first pass
+        CHAT_DONT_KNOW, // second search, other words
+        '{"tool": "read", "path": "src/main.ts", "start": 10, "end": 20}',
+        'It lives in src/main.ts [2]',
+      ]);
+      const progress: string[] = [];
+      const answer = unwrap(await serviceWith(llm, { extraSteps: CHAT_EXTRA_STEPS }).ask(DEV, { boardId: repoBoard, question: 'where is the retry helper implemented?' }, undefined, (line) => progress.push(line)));
+      expect(answer.answered).toBe(true);
+      expect(answer.reply.content).toBe('It lives in src/main.ts [2]');
+      expect(answer.reply.citations).toEqual([expect.objectContaining({ n: 2, source: 'code', title: 'src/main.ts:10-20' })]);
+      expect(answer.reply.tools).toEqual(
+        expect.arrayContaining([expect.stringContaining('Searched again with other words'), 'Looked at the code', 'Read src/main.ts:10-20']),
+      );
+      expect(progress).toEqual(['Searching again…', 'Looking at the code…']);
+      expect(llm.requests.map((r) => r.spend)).toEqual(llm.requests.map(() => ({ boardId: repoBoard, source: 'chat' })));
+    });
+
+    it('stops at the first cited answer: later steps never run', async () => {
+      await seedRecord(repoBoard);
+      const llm = new ScriptedLlm([CHAT_DONT_KNOW, 'Found it [1]']);
+      const deep = new ScriptedLlm(['never']);
+      const answer = unwrap(await serviceWith(llm, { extraSteps: 4, deepLlm: deep }).ask(DEV, { boardId: repoBoard, question: 'retry helper decision' }));
+      expect(answer.answered).toBe(true);
+      expect(llm.requests).toHaveLength(2);
+      expect(deep.requests).toHaveLength(0);
+      expect(view.calls).toEqual([]);
+    });
+
+    it('never runs more steps than the budget, and ends as a miss that names what was tried', async () => {
+      await seedRecord(repoBoard);
+      const deep = new ScriptedLlm([CHAT_DONT_KNOW]);
+      const progress: string[] = [];
+      const two = unwrap(await serviceWith(new ScriptedLlm(Array.from({ length: 9 }, () => CHAT_DONT_KNOW)), { extraSteps: 2, deepLlm: deep }).ask(DEV, { boardId: repoBoard, question: 'retry helper decision' }, undefined, (l) => progress.push(l)));
+      expect(progress).toEqual(['Searching again…', 'Looking at the code…']);
+      expect(deep.requests).toHaveLength(0);
+      expect(two.reply).toMatchObject({ miss: true, citations: [], actions: ['think_harder', 'create_glob'] });
+      progress.length = 0;
+      const three = unwrap(await serviceWith(new ScriptedLlm(Array.from({ length: 9 }, () => CHAT_DONT_KNOW)), { extraSteps: 9, deepLlm: new ScriptedLlm([CHAT_DONT_KNOW]) }).ask(DEV, { boardId: repoBoard, question: 'retry helper decision' }, undefined, (l) => progress.push(l)));
+      expect(progress).toEqual(['Searching again…', 'Looking at the code…', 'Thinking harder…']);
+      expect(three.reply.actions).toEqual(['create_glob']);
+    });
+
+    it('tries the stronger model last, on a board without a repo, and does nothing extra when the budget is unset', async () => {
+      await seedRecord(bareBoard);
+      const deep = new ScriptedLlm(['Better [1]']);
+      const answered = unwrap(await serviceWith(new ScriptedLlm([CHAT_DONT_KNOW]), { extraSteps: 4, deepLlm: deep }).ask(DEV, { boardId: bareBoard, question: 'retry helper decision' }));
+      expect(answered.reply.content).toBe('Better [1]');
+      expect(answered.reply.tools).toContain('Tried the stronger model with everything gathered');
+      expect(deep.requests).toHaveLength(1);
+      const plain = new ScriptedLlm([CHAT_DONT_KNOW]);
+      expect(unwrap(await serviceWith(plain).ask(DEV, { boardId: bareBoard, question: 'retry helper decision' })).reply.miss).toBe(true);
+      expect(plain.requests).toHaveLength(1);
+    });
+
+    it('finds the key nouns of a question, without filler', () => {
+      expect(keyNouns('Why does the retry helper use backoff?')).toBe('retry helper backoff');
+    });
   });
 });

@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -390,6 +390,8 @@ const chat = new ChatService({
   rewriteLlm: searchLlm,
   // Questions about the code go through the code view (base branch, a capped loop of calls), counted as consumer `chat`.
   code,
+  // A miss tries a second search, the code and Opus before giving up, within this many extra steps.
+  extraSteps: CHAT_EXTRA_STEPS,
   warn: (message) => console.warn(`[chat] ${message}`),
   llm: trackLlm(new BedrockLlm({ id: config.CHAT_MODEL, configKey: 'CHAT_MODEL' }, config.BEDROCK_REGION, recordUsage, null), config.CHAT_MODEL),
   // "Think harder" answers one question with Opus.
