@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cardStatus, cornerMarker, hasBlocker, nowHeadline, specifics, turnButton } from '../src/lib/card-rows';
+import { cornerStatus, hasBlocker, specifics, turnButton } from '../src/lib/card-rows';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -28,98 +28,124 @@ const live = (state: 'queued' | 'active' | 'watching') => {
   return { runs: [r], currentRun: r };
 };
 
-describe('cornerMarker', () => {
-  it('shows the machine as the icon alone, with no "working" word', () => {
-    const marker = cornerMarker(view({ status: 'in_progress', ...live('active') }), NOW);
-    expect(marker?.text).toBe('');
-    expect(JSON.stringify(marker?.text)).not.toMatch(/working/i);
+describe('cornerStatus', () => {
+  const at = (g: GlobView) => cornerStatus(g, NOW);
+
+  it('is the machine icon spinning plus the verb while a step runs, never "working"', () => {
+    const status = at(view({ status: 'in_progress', ...live('active') }));
+    expect(status).toMatchObject({ kind: 'machine', icon: 'machine-spinning', text: 'implementing' });
+    expect(status?.text).not.toMatch(/working/i);
   });
 
+  it('keeps the machine icon still for a queued step, with its age', () => {
+    expect(at(view({ status: 'in_progress', ...live('queued') }))).toMatchObject({ kind: 'machine', icon: 'machine', text: 'starting' });
+    const waiting = run({ state: 'queued', queuedAt: minutesAgo(3), startedAt: minutesAgo(3), lastProgressAt: minutesAgo(3) });
+    const status = at(view({ status: 'in_progress', runs: [waiting], currentRun: waiting }));
+    expect(status?.icon).toBe('machine');
+    expect(status?.text).toMatch(/^(queued · 3 min|starting)$/);
+  });
 
-  it('shows stalled, with standby in its tooltip and no second marker', () => {
+  it('is a warning plus the cause for a stall, never "stalled", with the files and the stall in the tooltip', () => {
+    const status = at(mergeConflictStall());
+    expect(status).toMatchObject({ kind: 'stalled', icon: 'alert', text: 'merge conflict' });
+    expect(status?.text).not.toMatch(/stalled|\.tsx?|\//);
+    expect(status?.tip).toContain(files[0]);
+    expect(status?.tip).toContain('Merge conflict with main in');
+    const failed = view({ status: 'planning', failure: { reason: 'A very long reason that goes on and on about a thing that went wrong', at: NOW } });
+    expect(at(failed)).toMatchObject({ kind: 'stalled', icon: 'alert', text: 'run failed' });
+    expect(at(failed)?.tip).toContain('A very long reason');
+  });
+
+  it('adds how long a stall has lasted', () => {
+    const g = view({ status: 'failed', failure: { reason: 'run gave up', at: minutesAgo(18) }, move: { holder: 'stalled', reason: 'run failed', since: minutesAgo(18), minutes: 18 } });
+    expect(at(g)?.text).toBe('run failed · 18 min');
+  });
+
+  it('puts standby in a stall\'s tooltip, not a second status', () => {
     const g = view({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, ...live('watching') });
-    const marker = cornerMarker(g, NOW);
-    expect(marker).toMatchObject({ kind: 'stalled', text: 'stalled' });
-    expect(marker?.tip).toContain('on standby, listening to GitHub');
+    const status = at(g);
+    expect(status?.kind).toBe('stalled');
+    expect(status?.tip).toContain('on standby, listening to GitHub');
   });
 
-  it('shows one marker by precedence: stalled, needs a human, working, standby, none', () => {
-    expect(cornerMarker(escalated(), NOW)).toMatchObject({ kind: 'needs-human' });
-    expect(cornerMarker(view({ status: 'in_progress', ...live('active') }), NOW)).toMatchObject({ kind: 'working', text: '', label: 'Machine working' });
-    expect(cornerMarker(view({ status: 'in_progress', ...live('queued') }), NOW)).toMatchObject({ kind: 'working', text: '', label: 'Machine queued' });
-    expect(cornerMarker(prOpen({ type: 'sub', ...live('watching') }), NOW)).toMatchObject({ kind: 'standby', text: '', label: 'Machine on standby' });
-    expect(cornerMarker(view({ status: 'planning' }), NOW)).toBeNull();
-    // Stalled beats an escalation, and the escalation's reason stays reachable in the tooltip.
-    const both = view({ ...escalated(), status: 'planning', provisioning: 'failed' });
-    const marker = cornerMarker(both, NOW);
-    expect(marker?.kind).toBe('stalled');
-    expect(marker?.tip).toContain('touches billing');
-  });
-});
-
-describe('cardStatus', () => {
-  it('says a merge-conflict stall once, short, with the files only in the tooltip', () => {
-    const line = cardStatus(mergeConflictStall(), NOW);
-    expect(line?.text).toBe('merge conflict');
-    expect(line?.text.length).toBeLessThanOrEqual(40);
-    expect(line?.text).not.toMatch(/\.tsx?|\//);
-    expect(line?.tip).toContain(files[0]);
-    expect(line?.tip).toContain('Merge conflict with main in');
+  it('is "needs a human" for an escalated Planning glob, and a stall beats it with the reason in the tooltip', () => {
+    expect(at(escalated())).toMatchObject({ kind: 'needs-human', icon: 'needs-human', text: 'needs a human' });
+    const both = at(view({ ...escalated(), status: 'planning', provisioning: 'failed' }));
+    expect(both?.kind).toBe('stalled');
+    expect(both?.tip).toContain('touches billing');
   });
 
-  it('says "conflicts with main" for a conflicting glob, without files or advice, which stay in the tooltip', () => {
-    const line = cardStatus(openConflict(), NOW);
-    expect(line?.text).toBe('conflicts with main');
-    expect(line?.tip).toContain(files[0]);
-    const mine = cardStatus({ ...openConflict(), implementer: 'dev@example.com' }, NOW);
-    expect(mine?.text).toBe('conflicts with main');
-    expect(mine?.tip).toContain('Resolve locally');
+  it('is the person icon and just the action for your turn, opening the glob view', () => {
+    const status = at(prOpen({ allowedActions: ['merge'] }));
+    expect(status).toMatchObject({ kind: 'ready', icon: 'human' });
+    expect(status?.text).not.toMatch(/your turn/i);
+    expect(status?.click).toEqual({ kind: 'section', target: { section: 'actions' } });
+  });
+
+  it('says the other problems in a few words, with the detail in the tooltip', () => {
+    const checks = prOpen({ headChecks: { sha: head, state: 'failed', failure: { name: 'Type check', step: null, lines: ['packages/core typecheck: TS2322'], url: null } } });
+    expect(at(checks)).toMatchObject({ kind: 'checks', icon: 'alert', text: 'checks failed' });
+    expect(at(checks)?.tip).toContain('TS2322');
+    const conflict = at(openConflict());
+    expect(conflict?.text).toBe('conflicts with main');
+    expect(conflict?.tip).toContain(files[0]);
+    const behind = at(view({ status: 'in_progress', ...live('active'), behind: { base: 'main', behindBy: 2, files: ['a.ts'], at: NOW } }));
+    // The machine running wins over "behind"; the warning goes in the tooltip.
+    expect(behind).toMatchObject({ kind: 'machine', text: 'implementing' });
+    expect(behind?.tip).toContain('main');
+  });
+
+  it('shows a red base as waiting, with the failing run in the tooltip', () => {
+    const red = prOpen({ headChecks: { sha: head, state: 'failed', inheritedFrom: { base: 'main', since: null }, failure: { name: 'Lint', step: null, lines: ['x'], url: null } } });
+    expect(at(red)).toMatchObject({ icon: 'hourglass' });
+    expect(at(red)?.text).toMatch(/main is red/);
+  });
+
+  it('names the machine fixing a problem rather than the problem', () => {
+    const fixing = view({ status: 'in_progress', ...live('active'), conflict: { base: 'main', files, since: 's1t9', at: NOW } });
+    const status = at(fixing);
+    expect(status?.icon).toMatch(/^machine/);
+    expect(status?.tip).toContain(files[0]);
   });
 
   it('says what it waits on once, with the chain in the tooltip and no "blocked by"', () => {
-    const line = cardStatus(ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t9'), NOW);
-    expect(line?.text).toBe('waiting on s1t1, s1t2 +2 · next: s1t9');
-    expect(line?.waiting).toMatchObject({ ids: ['s1t1', 's1t2'], more: 2, next: 's1t9' });
-    expect(line?.tip).toContain('Waits for, in order: s1t1 (Doing)');
-    expect(JSON.stringify(line)).not.toMatch(/blocked by/i);
+    const status = at(ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t9'));
+    expect(status).toMatchObject({ kind: 'waiting-on', icon: 'hourglass', text: 'waiting on s1t1, s1t2 +2 · next: s1t9' });
+    expect(status?.tip).toContain('Waits for, in order: s1t1 (Doing)');
+    expect(JSON.stringify(status)).not.toMatch(/blocked by/i);
   });
 
-  it('puts the position first and what it waits on second', () => {
-    const line = cardStatus({ ...ahead(['s1t1']), status: 'in_progress', ...live('active') }, NOW);
-    expect(line?.text).toBe('implementing · waiting on s1t1');
+  it('lets the machine running win over what it waits on, which goes in the tooltip', () => {
+    const status = at({ ...ahead(['s1t1']), status: 'in_progress', ...live('active') });
+    expect(status?.text).toBe('implementing');
+    expect(status?.tip).toContain('Waits for, in order: s1t1');
   });
 
-  it('names the next step after Your turn, and nothing for a decision or a glob with nothing to say', () => {
-    const ready = cardStatus(prOpen({ allowedActions: ['merge'] }), NOW);
-    expect(ready?.head?.kind).toBe('ready');
-    expect(ready?.head?.text).toMatch(/^Your turn · /);
-    expect(cardStatus(view({ status: 'planning' }), NOW)).toBeNull();
+  it('shows other waiting as an hourglass', () => {
+    const g = prOpen({ ...live('watching'), headChecks: { sha: 'abc1234', state: 'pending' } });
+    expect(at(g)).toMatchObject({ kind: 'waiting', icon: 'hourglass' });
+    expect(at(g)?.text).toMatch(/^checks running/);
   });
 
-  it('keeps every other problem to a few words', () => {
-    const checks = prOpen({ headChecks: { sha: head, state: 'failed', failure: { name: 'Type check', step: null, lines: ['packages/core typecheck: TS2322'], url: null } } });
-    expect(cardStatus(checks, NOW)?.head?.text).toBe('checks failed');
-    const failed = view({ status: 'planning', failure: { reason: 'A very long reason that goes on and on about a thing that went wrong', at: NOW } });
-    // A failed run is a stall: the card says it once, short, and the long reason stays in the tooltip.
-    expect(cardStatus(failed, NOW)?.head?.text).toBe('run failed');
-    expect(cardStatus(failed, NOW)?.tip).toContain('A very long reason');
+  it('shows standby as the machine icon and the word, with what it listens for in the tooltip', () => {
+    const step = { id: 'machine:standby', kind: 'standby', state: 'standby', startedAt: null, lastProgressAt: null, detail: null, holdsBall: false } as const;
+    const status = at(view({ status: 'planning', machineSteps: [step], move: { holder: 'none', reason: '', since: null } as unknown as GlobView['move'] }));
+    expect(status).toMatchObject({ kind: 'standby', icon: 'machine', text: 'standby' });
+    expect(status?.tip).toContain('listening to GitHub');
+    // Any other waiting says its own words and keeps standby in the tooltip.
+    const waiting = at(prOpen({ type: 'sub', ...live('watching') }));
+    expect(waiting?.kind).toBe('waiting');
+    expect(waiting?.tip).toContain('listening to GitHub');
   });
-});
 
-describe('marker and line never repeat each other', () => {
-  it('keeps the marker words out of the line, and the Now headline is marker · line', () => {
-    const stalled = mergeConflictStall();
-    const marker = cornerMarker(stalled, NOW);
-    const line = cardStatus(stalled, NOW);
-    expect(line?.text).not.toMatch(/stalled/i);
-    expect(nowHeadline('stalled', 'stalled · merge conflict')).toBe(`${marker?.text} · ${line?.text}`);
-    expect(nowHeadline('stalled', 'stalled')).toBe('stalled');
-    expect(nowHeadline('machine', 'implementing')).toBe('implementing');
-    expect(nowHeadline('machine', 'queued 3 min', true)).toBe('queued 3 min');
-    expect(nowHeadline('machine', 'fixing conflict')).not.toMatch(/working/i);
-    expect(nowHeadline('machine', 'standby')).toBe('standby · listening for CI and reviews');
-    const working = cardStatus(view({ status: 'in_progress', ...live('active') }), NOW);
-    expect(working?.text).not.toMatch(/working|standby/i);
+  it('has nothing for a Planning glob with nothing pending, or a decision', () => {
+    expect(at(view({ status: 'planning' }))).toBeNull();
+    expect(at(view({ status: 'planning', decision: { scope: { kind: 'board' }, outcome: null } } as Partial<GlobView>))).toBeNull();
+  });
+
+  it('keeps the specifics helper stripping the icon\'s word', () => {
+    expect(specifics('stalled · merge conflict')).toBe('merge conflict');
+    expect(specifics('stalled')).toBe('');
     expect(specifics('standby')).toBe('listening for CI and reviews');
   });
 });

@@ -138,11 +138,12 @@ describe('status-line activity icons (s15f88)', () => {
     });
   });
 
-  it('renders the standby marker as a decorative icon with an accessible name', () => {
-    const html = card(view({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...live('watching') }));
+  it('renders standby as a decorative icon followed by the word', () => {
+    const step = { id: 'machine:standby', kind: 'standby', state: 'standby', startedAt: null, lastProgressAt: null, detail: null, holdsBall: false } as const;
+    const html = card(view({ status: 'planning', machineSteps: [step], move: { holder: 'none', reason: '', since: null } as unknown as GlobView['move'] }));
     expect(html).toContain('data-kind="standby"');
-    expect(html).toContain('aria-label="Machine on standby"');
-    expect(html).not.toContain('>standby<');
+    expect(html).toContain('data-icon="machine"');
+    expect(html).toContain('>standby<');
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain('aria-label="machine"');
   });
@@ -150,7 +151,7 @@ describe('status-line activity icons (s15f88)', () => {
   it('shows exactly one position indicator on a card, and no standby beside it', () => {
     const html = card(view({ status: 'in_progress', ...live('active') }));
     expect(html.split('data-testid="position"')).toHaveLength(2);
-    expect(html.split('data-testid="corner-marker"')).toHaveLength(2);
+    expect(html.split('data-testid="card-status"')).toHaveLength(2);
     expect(html).not.toContain('>standby<');
   });
 });
@@ -177,14 +178,14 @@ describe('escalation chip (s15f88)', () => {
     );
   });
 
-  it('is the one corner marker, in the header and not among the chips', () => {
+  it('is the one card status, in the header and not among the chips', () => {
     const html = card(
       view({
         status: 'planning',
         escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'],
       }),
     );
-    expect(html.split('data-testid="corner-marker"')).toHaveLength(2);
+    expect(html.split('data-testid="card-status"')).toHaveLength(2);
     expect(html).toContain('data-kind="needs-human"');
     expect(html.indexOf('data-testid="escalation-chip"')).toBeLessThan(html.indexOf('data-testid="card-chips"'));
   });
@@ -239,21 +240,21 @@ describe('a conflict-fix run that went to standby (s15b86)', () => {
     const watching = positionOf(fixed('watching'), NOW);
     expect(watching?.text ?? '').not.toMatch(/fixing/);
     expect(watching?.spinning ?? false).toBe(false);
-    // On the card: the corner marker is standby (never fixing), and nothing spins.
+    // On the card: the status is never fixing, and nothing spins.
     const standby = card(fixed('watching'));
-    expect(standby).toContain('data-kind="standby"');
+    expect(standby).toContain('data-testid="card-status"');
     expect(standby).not.toMatch(/fixing|animate-spin/);
     expect(positionOf(fixed('active'), NOW)).toMatchObject({
       holder: 'machine',
       text: 'fixing the conflict',
       spinning: true,
     });
-    // While the fix runs the status line says so, with a spinner in the corner.
+    // While the fix runs the status says so, with a spinner in the corner.
     // The card reads the clock, so the run must be fresh for it.
     const justNow = new Date().toISOString();
     const fresh = view({ ...fixed('active'), runs: [run({ state: 'active', purpose: 'resolve_conflict', startedAt: justNow, lastProgressAt: justNow })] });
     const fixing = card(fresh);
-    expect(fixing).toMatch(/data-testid="status-line-open"[^>]*>fixing the conflict</);
+    expect(fixing).toMatch(/data-testid="position"[^>]*>.*?<span class="truncate">fixing the conflict<\/span>/);
     expect(fixing).toContain('animate-spin');
   });
 

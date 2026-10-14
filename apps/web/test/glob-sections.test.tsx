@@ -355,7 +355,8 @@ describe('glob view: Now panel for a stalled failure', () => {
       ),
     );
     const headline = screen.getByTestId('header-status').textContent;
-    expect(headline).toContain('Stalled · needs your decision');
+    expect(headline).toContain('needs your decision');
+    expect(headline).not.toMatch(/stalled/i);
     expect(headline).not.toContain('Needs a decision before');
     const panel = screen.getByTestId('activity').textContent;
     expect(panel.split(DECISION).length - 1).toBe(1);
@@ -372,7 +373,8 @@ describe('glob view: Now panel for a stalled failure', () => {
         'stalled · run failed',
       ),
     );
-    expect(screen.getByTestId('header-status').textContent).toContain('Stalled · run failed');
+    expect(screen.getByTestId('header-status').textContent).toContain('run failed');
+    expect(screen.getByTestId('header-status').textContent).not.toMatch(/stalled/i);
     const panel = screen.getByTestId('activity').textContent;
     expect(panel.split('Could not reproduce the bug').length - 1).toBe(1);
   });
