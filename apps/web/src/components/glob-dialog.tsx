@@ -19,7 +19,7 @@ import { GlobTitle } from './glob-title';
 
 /** A section's anchor: found by `?section=`, and left below the sticky header (its measured height) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
-  <div id={`section-${name}`} data-section={name} className="scroll-mt-[calc(var(--glob-header-height,2.5rem)+0.5rem)] empty:hidden">
+  <div id={`section-${name}`} data-section={name} className="scroll-mt-[calc(var(--glob-header-height,2.25rem)+0.5rem)] empty:hidden">
     {children}
   </div>
 );

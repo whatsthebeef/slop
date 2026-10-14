@@ -44,6 +44,16 @@ describe('GlobHeader', () => {
     expect(bar.textContent).not.toMatch(/branch|v7/);
   });
 
+  it('uses compact padding and line-height with no fixed height', () => {
+    const { getByTestId } = renderBar(view());
+    const cls = getByTestId('glob-header').className;
+    expect(cls).toMatch(/\bpy-1\b/);
+    expect(cls).toContain('leading-5');
+    expect(cls).toContain('items-center');
+    expect(cls).not.toMatch(/\b(h-\d+|min-h-\S+)\b/);
+    expect(getByTestId('glob-back').className).toContain('p-1.5');
+  });
+
   it('scrolls to the Activity log when the status is clicked', () => {
     const { getByTestId } = renderBar(view());
     const target = document.createElement('div');
