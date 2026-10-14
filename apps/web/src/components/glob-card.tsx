@@ -67,9 +67,9 @@ const initials = (email: string): string => {
   return (second === '' ? first.slice(0, 2) : `${first.slice(0, 1)}${second.slice(0, 1)}`).toUpperCase();
 };
 
-/** The implementer, or the planner (dashed) while nobody has picked the glob up. */
+/** The implementer, or the planner (dashed) while no person implements (unassigned, or the machine implementing). */
 const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
-  <Tip text={`${planner ? 'Planner (not picked up yet)' : 'Implementer'}: ${email}`}>
+  <Tip text={`${planner ? 'Planner' : 'Implementer'}: ${email}`}>
   <span
     className={cn(
       'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border font-mono text-[9px] font-semibold',
@@ -715,9 +715,8 @@ export const GlobCard = ({
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
 }) => {
-  // Nothing for the machine: the corner marker already says it is working.
-  const machineRun = glob.runs.some((r) => r.generation === glob.generation && r.purpose !== 'investigate');
-  const person = glob.implementer ?? (machineRun ? null : glob.planner);
+  // A person implementing shows; otherwise (unassigned, or the machine implementing) the planner. Slop-created globs show none.
+  const person = glob.implementer ?? (glob.planner === 'slop' ? null : glob.planner);
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
   const now = new Date().toISOString();
