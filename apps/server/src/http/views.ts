@@ -79,7 +79,7 @@ export const globViewFor = (
     machine.allowedActions(
       glob,
       { email, role },
-      { recordSha: machine.recordShaOf(artifacts ?? []), ...(dependencies === undefined ? {} : { dependencies }), sizeHeld },
+      { recordSha: machine.recordShaOf(artifacts ?? []), reviews: machine.reviewsOf(artifacts ?? []), ...(dependencies === undefined ? {} : { dependencies }), sizeHeld },
     ),
     artifacts,
     null,

@@ -7,7 +7,7 @@ import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from 
 import type { Result } from './errors.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
 import type { ConflictKind, ConflictResolvedBy } from './conflict-record.js';
-import type { ArtifactSummary } from './knowledge.js';
+import type { ArtifactSummary, IndependentReviewMeta } from './knowledge.js';
 import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
@@ -135,6 +135,8 @@ export interface ActionFacts {
   readonly sizeHeld?: boolean;
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
   readonly rollout?: BlockProgress;
+  /** The glob's stored independent reviews, where loaded (Retry review is offered only once they are known). */
+  readonly reviews?: readonly IndependentReviewMeta[];
 }
 
 const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
@@ -147,6 +149,10 @@ export const recordShaOf = (
     artifacts.find((a) => a.kind === 'implementation_plan' && a.label === '') ??
     artifacts.find((a) => a.kind === 'postplan' && a.label === '')
   )?.commitSha ?? null;
+
+/** The independent reviews among a glob's artifact summaries. */
+export const reviewsOf = (artifacts: readonly Pick<ArtifactSummary, 'review'>[]): IndependentReviewMeta[] =>
+  artifacts.flatMap((a) => (a.review === undefined ? [] : [a.review]));
 
 /** Short SHAs are at least this long (git's default abbreviation). */
 const MIN_SHA_LENGTH = 7;
@@ -593,10 +599,34 @@ export const canReviewNow = (glob: Glob): boolean =>
   (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
 
 /**
+ * Whether Review code is on offer, and as what: `retry` when slop's automatic review for the glob's stage is missing at the
+ * current head (a ready same's before-merge review, any merged glob's after-merge one) and `review` for a person's own
+ * same or super with an open PR. Never while a machine run is live. Without the reviews loaded the retry case is unknown
+ * and not offered.
+ */
+export type ReviewOffer = 'retry' | 'review';
+
+export const reviewOffer = (
+  glob: Glob,
+  reviews?: readonly IndependentReviewMeta[],
+): ReviewOffer | null => {
+  const pr = glob.pr;
+  if (pr === null || !canReviewNow(glob) || hasLiveRun(glob)) return null;
+  const automatic = pr.state === 'merged' || (pr.state === 'ready' && glob.type !== 'sub');
+  if (automatic && reviews !== undefined) {
+    const missing = !reviews.some((r) =>
+      pr.state === 'merged' ? r.stage === 'post_merge' : r.stage === 'pre_merge' && sameCommit(r.headSha, pr.headSha),
+    );
+    if (missing) return 'retry';
+  }
+  return glob.type !== 'sub' && glob.implementer !== null && pr.state !== 'merged' ? 'review' : null;
+};
+
+/**
  * Review now: queues a fresh independent review (never deduplicated against earlier ones) of the change as it is: an open
  * PR as it would land on the latest base branch, a merged one as the squash commit. The glob itself doesn't change.
  */
-export const reviewNow = (glob: Glob, ctx: Context): Result<Transition> => {
+export const reviewNow = (glob: Glob, ctx: Context, facts: ActionFacts = {}): Result<Transition> => {
   const actor = requireActor(ctx);
   const pr = glob.pr;
   if (pr === null || !canReviewNow(glob))
@@ -604,6 +634,12 @@ export const reviewNow = (glob: Glob, ctx: Context): Result<Transition> => {
       glob,
       actor,
       'Only a glob with a pull request in Doing or Reviewing can be reviewed now',
+    );
+  if (!isAgentSetGlob(glob) && reviewOffer(glob, facts.reviews) === null)
+    return invalidTransition(
+      glob,
+      actor,
+      'Review code is only for a missing automatic review or a person implementing a same or super; the machine reviews the rest itself',
     );
   const stage = pr.state === 'merged' ? 'post_merge' : 'pre_merge';
   return new Builder(glob, ctx)
@@ -2898,7 +2934,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
         : waitingFor(glob, facts.dependencies).length > 0));
   if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
-  if (canReviewNow(glob)) actions.push('review_now');
+  if (reviewOffer(glob, facts.reviews) !== null) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');
   // Start (the machine takes over): picked up, but no session has started and no run is live.
   if (

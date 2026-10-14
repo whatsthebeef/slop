@@ -167,10 +167,40 @@ describe('glob view: main button', () => {
     expectMachineIcon(main);
   });
 
-  it('promotes Review code to main, with no ▾, when it is the only action left', () => {
-    renderGlob(view({ allowedActions: ['review_now', 'delete'] }));
+  it("promotes a person's Review code to main, with no ▾, only when it is the only action left", () => {
+    renderGlob(view({ implementer: 'a@b.c', allowedActions: ['review_now', 'delete'] }));
     expect(mainButton()?.textContent).toBe('Review code');
     expect(screen.queryByTestId('more-actions')).toBeNull();
+  });
+
+  it('promotes Retry review when the automatic review is missing and nothing else leads', () => {
+    renderGlob(
+      view({
+        type: 'sub',
+        status: 'reviewing',
+        list: 'reviewing',
+        pr: { number: 7, state: 'merged', headSha: 'abc' },
+        artifacts: [],
+        allowedActions: ['review_now', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toBe('Retry review');
+  });
+
+  it("keeps a person's Review code in the ▾, behind Pick up", async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'in_progress',
+        list: 'doing',
+        implementer: 'a@b.c',
+        pr: { number: 7, state: 'draft', headSha: 'abc' },
+        allowedActions: ['review_now', 'pick_up', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).not.toMatch(/Review/);
+    await user.click(screen.getByTestId('more-actions'));
+    expect((await screen.findByTestId('more-review_now')).textContent).toContain('Review code');
   });
 
   it('renders no actions when only Reset actions are allowed', () => {
@@ -212,20 +242,18 @@ describe('glob view: main button', () => {
     expect(screen.queryByTestId('more-actions')).toBeNull();
   });
 
-  it('keeps Pick up reachable while the machine works: Review code leads, Pick up is in the ▾', async () => {
-    const user = userEvent.setup();
+  it('keeps Pick up reachable while the machine works, as the main with no Review code', () => {
     renderGlob(
       view({
         status: 'in_progress',
         list: 'doing',
         currentRun: run({ state: 'active' }),
         runs: [run({ state: 'ended', outcome: 'failed' }), run({ state: 'active' })],
-        allowedActions: ['review_now', 'take_over', 'delete'],
+        allowedActions: ['take_over', 'delete'],
       }),
     );
-    expect(mainButton()?.textContent).toBe('Review code');
-    await user.click(screen.getByTestId('more-actions'));
-    expect((await screen.findByTestId('more-take_over')).textContent).toContain('Pick up');
+    expect(mainButton()?.textContent).toBe('Pick up');
+    expect(screen.queryByTestId('more-actions')).toBeNull();
   });
 
   describe('Pick up while the machine implements', () => {
@@ -236,22 +264,44 @@ describe('glob view: main button', () => {
         list: 'doing',
         branch: 's1t1',
         currentRun: run({ state: 'active' }),
-        allowedActions: ['review_now', 'take_over', 'delete'],
+        allowedActions: ['take_over', 'delete'],
         ...patch,
       });
     const press = (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByTestId('main-action'));
 
-    it('leads on a same, with Review code in the ▾', async () => {
-      const user = userEvent.setup();
+    it('leads on a same, black, with no Review code', () => {
       renderGlob(implementing());
       expect(mainButton()?.textContent).toBe('Pick up');
-      await user.click(screen.getByTestId('more-actions'));
-      expect(await screen.findByTestId('more-review_now')).toBeTruthy();
+      expect(mainButton()?.getAttribute('data-variant')).toBe('default');
+      expect(screen.queryByTestId('more-review_now')).toBeNull();
     });
 
-    it('is unchanged on a sub', () => {
+    it('is a quiet outline on a sub while the machine progresses', () => {
       renderGlob(implementing({ type: 'sub' }));
-      expect(mainButton()?.textContent).toBe('Review code');
+      expect(mainButton()?.textContent).toBe('Pick up');
+      expect(mainButton()?.getAttribute('data-variant')).toBe('outline');
+      expect(screen.queryByTestId('more-review_now')).toBeNull();
+    });
+
+    it('turns black on a sub once it is stalled', () => {
+      renderGlob(
+        implementing({
+          type: 'sub',
+          humanSteps: [
+            {
+              id: 'machine:unstick',
+              kind: 'unstick',
+              title: 'Open session',
+              who: 'implementer',
+              state: 'due',
+              source: 'machine',
+              action: 'open_session',
+              alternative: 'take_over',
+            } as unknown as NonNullable<GlobView['humanSteps']>[number],
+          ],
+        }),
+      );
+      expect(mainButton()?.getAttribute('data-variant')).toBe('default');
     });
 
     it('asks first: the branch and the command, and Cancel does nothing', async () => {

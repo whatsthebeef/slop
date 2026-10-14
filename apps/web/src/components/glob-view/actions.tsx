@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
-import { mainAction, promotedAction } from '@/lib/main-action';
+import { mainAction, mainVariant, promotedAction } from '@/lib/main-action';
 import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
 import { api } from '@/lib/api';
 import { copyOrSelect } from '@/lib/plan-text';
@@ -140,7 +140,9 @@ export const useGlobActions = ({
     stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
   // With no natural main (and no due step) a menu item is promoted, so the ▾ never stands alone.
   const natural = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
-  const main = natural ?? (stepTurn === null ? promotedAction(allActions) : null);
+  const main = natural ?? (stepTurn === null ? promotedAction(allActions, glob) : null);
+  // A stalled glob's step (nobody moving it) makes Pick up the black main; while a sub's machine progresses it stays quiet.
+  const variant = mainVariant(main, glob, stall !== undefined);
   const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -211,6 +213,7 @@ export const useGlobActions = ({
     pending,
     begin,
     main,
+    variant,
     viewer,
     stepTurn,
     stepsSignal,
@@ -627,7 +630,12 @@ export const GlobActions = ({
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          className="rounded-l-none border-l-primary-foreground/40 px-1.5"
+          variant={state.variant}
+          className={
+            state.variant === 'outline'
+              ? 'rounded-l-none -ml-px px-1.5'
+              : 'rounded-l-none border-l-primary-foreground/40 px-1.5'
+          }
           disabled={busy}
           aria-label="More actions"
           data-testid="more-actions"
@@ -728,9 +736,11 @@ export const GlobActions = ({
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>
                   <Button
                     size="sm"
+                    variant={state.variant}
                     className={hasMenu ? 'rounded-r-none' : undefined}
                     disabled={busy}
                     data-testid="main-action"
+                    data-variant={state.variant}
                     onClick={() => state.begin(main)}
                   >
                     <ActionContent action={main} ctx={ctx} state={state} />
