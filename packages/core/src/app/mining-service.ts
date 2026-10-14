@@ -1,5 +1,7 @@
 import { CHOICE_USAGE_RETENTION_DAYS, CHOICE_USAGE_WINDOW_DAYS, summariseUsage, usageFrom } from '../domain/choice-usage.js';
 import type { ChoiceActivity } from '../domain/choice-usage.js';
+import { CHAT_FEEDBACK_THEME_DAYS, missingSources } from '../domain/chat-feedback.js';
+import type { ChatFeedbackActivity } from '../domain/chat-feedback.js';
 import { decisionOf, scopeLabel } from '../domain/decision-glob.js';
 import { isSuperseded } from '../domain/decisions.js';
 import { KNOWLEDGE_PAGE_FEEDBACK_DAYS } from '../domain/knowledge-page.js';
@@ -24,6 +26,7 @@ import type {
   KnowledgePageVerdictActivity,
 } from '../domain/signals.js';
 import type { Hint, Notifier, Store, Tx } from '../ports.js';
+import { keyNouns } from './chat-service.js';
 import { squash } from './kb-dedupe.js';
 import { newLearningId } from './knowledge-service.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
@@ -86,6 +89,7 @@ export class MiningService {
     const choices = await this.choices(tx, boardId, now, knowledge);
     const settings = await tx.getContextSettings(boardId);
     const knowledgePageFeedback = await this.knowledgePageFeedback(tx, boardId, now);
+    const chatFeedback = await this.chatFeedback(tx, boardId, now);
     return {
       window: { from, to: now },
       globs: globs.map((g) => ({ id: g.id, type: g.type, status: g.status, createdAt: g.createdAt })),
@@ -99,11 +103,28 @@ export class MiningService {
       choices,
       settings,
       knowledgePageFeedback,
+      chatFeedback,
       learnings: learnings.flatMap(({ glob }) => {
         const facts = learningFacts(glob);
         return facts.source === 'submitted' ? [{ globIds: facts.sourceGlobIds, agentSetVersion: facts.agentSetVersion }] : [];
       }),
     };
+  }
+
+  /** The chat answers rated in the last `CHAT_FEEDBACK_THEME_DAYS` days, with their question's key terms and what they found nothing in. */
+  private async chatFeedback(tx: Tx, boardId: number, now: string): Promise<ChatFeedbackActivity[]> {
+    const since = new Date(Date.parse(now) - CHAT_FEEDBACK_THEME_DAYS * DAY_MS).toISOString();
+    const rows = await tx.listChatFeedback(boardId, { since, limit: 1000 });
+    return rows
+      .filter((f) => f.createdAt <= now)
+      .map((f) => ({
+        id: f.id,
+        rating: f.rating,
+        question: f.question,
+        at: f.createdAt,
+        terms: keyNouns(f.question).split(' ').filter((t) => t !== ''),
+        missing: missingSources(f.tools),
+      }));
   }
 
   /**
