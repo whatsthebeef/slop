@@ -2,7 +2,8 @@ import { isValidCombination } from '@slop/core';
 import type { Category, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input, Label, Select } from '@/components/ui/input';
+import { GroupInput } from '@/components/group-input';
+import { Label, Select } from '@/components/ui/input';
 import type { GlobChanges } from '@/lib/api';
 import { categoryOptions, saveCategory } from '@/lib/type-change';
 import type { GlobViewContext } from './context';
@@ -36,7 +37,7 @@ export type GlobEdits = ReturnType<typeof useGlobEdits>;
 
 /** Category (saved when it changes, with an Undo), group and environment (saved together with Save). */
 export const EditFieldsSection = ({
-  ctx: { board, glob, busy, onUpdate },
+  ctx: { board, glob, groups, busy, onUpdate },
   decision,
   edits,
   run,
@@ -89,7 +90,8 @@ export const EditFieldsSection = ({
         )}
         <Label>
           Group
-          <Input
+          <GroupInput
+            groups={groups}
             value={merged.group ?? ''}
             onChange={(e) => edit({ group: e.target.value === '' ? null : e.target.value })}
           />

@@ -6,6 +6,8 @@ import type { GlobTarget } from '@/lib/glob-section';
 export interface GlobViewContext {
   board: BoardView;
   glob: GlobView;
+  /** The board's existing groups, suggested in the Group field. */
+  groups: readonly string[];
   /** An action or save is running, or the glob has not moved since one was sent. */
   busy: boolean;
   /** Resolves false when the action failed. `anyway` goes ahead of unmerged prerequisites (Retry). */
