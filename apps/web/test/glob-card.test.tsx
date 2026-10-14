@@ -116,8 +116,13 @@ describe('card rows', () => {
       expect(avatar(g)?.lastElementChild?.textContent).toContain('AN');
       expect(avatar(g)?.textContent).toContain('Planner');
     });
-    it('shows nothing when the machine is implementing', () => {
-      const bottom = avatar(view({ implementer: null, generation: 1, runs: [run()] }));
+    it('shows the planner when the machine is implementing', () => {
+      const bottom = avatar(view({implementer: null, planner: 'ann@x.com', generation: 1, runs: [run()]}));
+      expect(bottom?.textContent).toContain('Planner: ann@x.com');
+      expect(bottom?.lastElementChild?.textContent).toContain('AN');
+    });
+    it('shows nothing for a slop-planned glob', () => {
+      const bottom = avatar(view({implementer: null, planner: 'slop', runs: []}));
       expect(bottom?.textContent).not.toMatch(/Planner|Implementer/);
     });
   });
