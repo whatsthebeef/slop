@@ -256,7 +256,7 @@ describe('a startable same in Planning', () => {
   };
   const withPlaceholder = (): Partial<GlobView> => {
     const g = glob({ status: 'planning', type: 'same' });
-    return { move: whoseMove(g, deriveHumanSteps(g, {}, [stored]), [], [], NOW) } as Partial<GlobView>;
+    return { move: whoseMove(g, deriveHumanSteps(g, {}, [stored]), [], [], NOW) };
   };
   const startable = (patch: Partial<GlobView> = {}) => view({ type: 'same', status: 'planning', list: 'planning', allowedActions: ['start', 'pick_up'], ...patch });
   const ended = run({ state: 'ended', outcome: 'completed' });
