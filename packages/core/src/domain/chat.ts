@@ -92,8 +92,8 @@ export const isSmallTalk = (question: string): boolean => {
 export interface ChatCitation {
   /** The source's number in the prompt, the `[n]` the answer uses (the lowest, when one item has several chunks). */
   readonly n: number;
-  /** `board_state` is the live snapshot of the board, not a stored record. */
-  readonly source: SourceType | 'board_state' | 'code';
+  /** `board_state` is the live snapshot of the board and `ops_state` slop's own health and recent failures; neither is a stored record. */
+  readonly source: SourceType | 'board_state' | 'ops_state' | 'code';
   /** `Decision`, `Plan`, ... as search shows it. */
   readonly sourceLabel: string;
   readonly title: string;

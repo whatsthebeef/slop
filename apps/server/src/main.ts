@@ -399,6 +399,19 @@ const chat = new ChatService({
   deepLlm: trackLlm(new BedrockLlm({ id: config.CHAT_THINK_MODEL, configKey: 'CHAT_THINK_MODEL' }, config.BEDROCK_REGION, recordUsage, null), config.CHAT_THINK_MODEL),
   // Save to knowledge goes to the proposal queue, like an agent's learning.
   submitLearning: (email, board, learning) => knowledge.submitLearning(email, board, learning),
+  // "Why isn't X working": the same health facts as /api/health (request timing and the outbox for admins only).
+  opsHealth: async (admin) => {
+    const llm = llmHealth.state();
+    const routes = admin ? requestMetrics.summary().routes : [];
+    return {
+      llm: llm.state === 'down' ? llm : llm.state === 'ok' ? { state: 'ok', since: llm.since } : { state: 'unknown' },
+      throttledModels: llmHealth.throttledCount(),
+      integrations: integrations.list(),
+      capabilities: await capabilities.read(),
+      capabilityReasons: await capabilities.reasons(),
+      ...(admin ? { requests: { routes, outboxBacklog: await outboxBacklog() } } : {}),
+    };
+  },
 });
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with a fan-out proposal.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
@@ -546,6 +559,14 @@ const capabilities = new CapabilityReader({
   codeIndexRuns: config.SLOP_JOBS.has('code'),
   deployResultsConfigured: config.AWS_WEBHOOK_KEY.length > 0,
 });
+const outboxBacklog = async (): Promise<Record<string, number>> => {
+  const rows = await db
+    .select({ lane: schema.outbox.lane, n: sql<number>`count(*)::int` })
+    .from(schema.outbox)
+    .where(eq(schema.outbox.state, 'pending'))
+    .groupBy(schema.outbox.lane);
+  return Object.fromEntries(rows.map((r) => [r.lane, r.n]));
+};
 mountHealth(app, {
   llm: llmHealth,
   boards,
@@ -553,14 +574,7 @@ mountHealth(app, {
   signIn: awsSignIn,
   capabilities,
   metrics: requestMetrics,
-  outboxBacklog: async () => {
-    const rows = await db
-      .select({ lane: schema.outbox.lane, n: sql<number>`count(*)::int` })
-      .from(schema.outbox)
-      .where(eq(schema.outbox.state, 'pending'))
-      .groupBy(schema.outbox.lane);
-    return Object.fromEntries(rows.map((r) => [r.lane, r.n]));
-  },
+  outboxBacklog,
 });
 mountSearch(app, { search });
 mountCode(app, { code });

@@ -10,6 +10,9 @@ import { SearchIndexer } from '../src/app/search-indexer.js';
 import { SearchService } from '../src/app/search-service.js';
 import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, CHAT_NO_CODE, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutCodeRequests } from '../src/domain/chat.js';
 import type { PageContext } from '../src/domain/chat.js';
+import { isOperationalQuestion, safeLine } from '../src/domain/ops-state.js';
+import type { OpsHealth } from '../src/domain/ops-state.js';
+import type { Deploy } from '../src/domain/deploys.js';
 import type { Result } from '../src/domain/errors.js';
 import type { AuthorityTier, ItemStatus, NewKnowledgeItem, SourceType } from '../src/domain/search.js';
 import { FakeEmbedder, vectorOf } from '../src/testing/fake-embedder.js';
@@ -380,6 +383,140 @@ describe('ChatService', () => {
     expect(llm.requests[1]?.prompt).toContain('viewing the knowledge page (s1k3)');
     await ask('retry backoff', { page: { type: 'board' } });
     expect(llm.requests[2]?.prompt).not.toContain('The person is viewing');
+  });
+
+  describe('slop status', () => {
+    const healthy: OpsHealth = { llm: { state: 'ok', since: NOW }, throttledModels: 0, integrations: [{ name: 'GitHub App', state: 'ok', reason: null, fix: null, since: NOW }], capabilities: { slack: true }, capabilityReasons: {} };
+    const withHealth = (health: OpsHealth | Error, seen: boolean[] = []) => {
+      chat = new ChatService({
+        store,
+        clock: { now: () => NOW },
+        search: new SearchService({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder() }),
+        llm,
+        opsHealth: (admin) => {
+          seen.push(admin);
+          return health instanceof Error ? Promise.reject(health) : Promise.resolve(health);
+        },
+      });
+    };
+    const statusN = () => Number(/\[(\d+)\] Slop status \(now\)/.exec(llm.requests[0]?.prompt ?? '')?.[1]);
+
+    it('recognises operational questions', () => {
+      for (const q of ["Why isn't the chat working?", "why hasn't s15t4 started", 'the deploy failed, why?', 'builds are slow', 'something is stuck', 'is slop down?', "it won't load", 'why did the run fail']) expect(isOperationalQuestion(q)).toBe(true);
+      for (const q of ['What did we decide about retry backoff?', 'how do watch signals work', 'what did we decide about the deploy rollback', 'why is retry backoff 5s', 'error handling convention', 'health check design', 'scroll down to the list']) expect(isOperationalQuestion(q)).toBe(false);
+    });
+
+    it('answers "why isn\'t the chat working" from a model that is down, citing Slop status (now)', async () => {
+      withHealth({ ...healthy, llm: { state: 'down', reason: 'Access to the model is denied', fix: 'Enable the model in Bedrock', since: NOW } });
+      llm.next = 'unset';
+      unwrap(await ask("why isn't the chat working?"));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      expect(prompt).toContain('AI models: DOWN');
+      expect(prompt).toContain('Access to the model is denied');
+      expect(prompt).toContain('Fix: Enable the model in Bedrock');
+      llm.next = `The model is down: access is denied. Enable it in Bedrock [${statusN()}].`;
+      const result = unwrap(await ask("why isn't the chat working?"));
+      expect(result.answered).toBe(true);
+      expect(result.reply.citations).toEqual([expect.objectContaining({ source: 'ops_state', sourceLabel: 'Slop status', title: 'Slop status (now)' })]);
+      expect(result.reply.tools).toContain("Checked slop's status (health, recent failures, deploys)");
+    });
+
+    it('cites a failed provisioning on a glob, and numbers it after the records and the board state', async () => {
+      withHealth(healthy);
+      await seed('d1', 'why s1t5 has not started: provisioning', { title: 'Provisioning' });
+      await store.transaction((tx) =>
+        tx.insertGlob(makeGlob({ boardId, id: 's1t5', title: 'Add exports', status: 'in_progress', provisioning: 'failed', failure: { reason: 'GitHub App is missing the contents permission', at: NOW, kind: 'provisioning' } }), null),
+      );
+      llm.next = 'unset';
+      unwrap(await ask("why hasn't s1t5 started?"));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      expect(prompt).toContain('s1t5: provisioning failed: GitHub App is missing the contents permission');
+      const stateN = Number(/\[(\d+)\] Board state \(now\)/.exec(prompt)?.[1]);
+      expect(statusN()).toBe(stateN + 1);
+      llm.next = `s1t5 did not start: its provisioning failed [${statusN()}].`;
+      const result = unwrap(await ask("why hasn't s1t5 started?"));
+      expect(result.reply.citations?.map((c) => c.source)).toEqual(['ops_state']);
+    });
+
+    it('says everything is healthy when it is, and the answer is still cited', async () => {
+      withHealth(healthy);
+      llm.next = 'unset';
+      unwrap(await ask("why isn't the export working?"));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      expect(prompt).toContain('AI models: ok');
+      expect(prompt).toContain('Board failures in the last 24 h: none');
+      expect(llm.requests[0]?.system).toContain('When everything in it is healthy, say so');
+      llm.next = `Slop looks healthy [${statusN()}]; check the glob's own checks next.`;
+      expect(unwrap(await ask("why isn't the export working?")).answered).toBe(true);
+    });
+
+    it('is left out of questions that are not operational', async () => {
+      withHealth(healthy);
+      await seed('a', 'retry backoff');
+      llm.next = 'Yes [1]';
+      unwrap(await ask('retry backoff'));
+      expect(llm.requests[0]?.prompt).not.toContain('Slop status (now)');
+    });
+
+    it('shows request timing and the outbox to admins only', async () => {
+      const full: OpsHealth = { ...healthy, requests: { routes: [{ route: 'GET /api/boards/:n', count: 40, errors: 2, p95Ms: 5400 }], outboxBacklog: { llm: 12 } } };
+      const seen: boolean[] = [];
+      withHealth(full, seen);
+      unwrap(await ask("why is slop slow?"));
+      expect(seen).toEqual([false]);
+      await store.transaction((tx) => tx.upsertMember({ boardId, email: DEV, role: 'admin' }));
+      unwrap(await ask("why is slop slow?"));
+      expect(seen).toEqual([false, true]);
+      expect(llm.requests[1]?.prompt).toContain('GET /api/boards/:n p95 5400 ms, 2 errors of 40');
+      expect(llm.requests[1]?.prompt).toContain('llm 12');
+    });
+
+    it('still reports the board\'s failures and deploys when health cannot be read', async () => {
+      withHealth(new Error('boom'));
+      const failed: Deploy = { id: 'd1', boardId, environment: 'staging', globId: 's1t7', sha: 'abc', state: 'failed', trigger: 'push', requestedBy: null, requestedAt: NOW, runningSince: NOW, startedAt: NOW, finishedAt: NOW, providerRef: null, url: null, error: 'Build exited with code 1' };
+      await store.transaction((tx) => tx.saveDeploys([failed]));
+      unwrap(await ask('why did the deploy fail?'));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      expect(prompt).toContain('Slop health: not available');
+      expect(prompt).toContain('s1t7 to staging: failed (Build exited with code 1)');
+    });
+
+    it('lists stalled globs from the board\'s notifications', async () => {
+      withHealth(healthy);
+      await store.transaction((tx) => tx.saveNotification({ id: `${String(boardId)}/stalled:s1t3`, boardId, source: 'stalled:s1t3', severity: 'warning', title: 's1t3 stalled', detail: 'no progress 50 min', link: null, action: null, since: NOW, clears: { kind: 'condition' } }));
+      unwrap(await ask("why hasn't s1t3 finished?"));
+      expect(llm.requests[0]?.prompt).toContain('Stalled globs');
+      expect(llm.requests[0]?.prompt).toContain('s1t3 stalled: no progress 50 min');
+    });
+
+    it('redacts the shapes secrets take in an error', () => {
+      for (const raw of ['access_token=abc123def', 'GITHUB_TOKEN: abc123def', 'client_secret: hunter2', '{"password":"hunter2"}', 'https://u:hunter2@host/x', 'Authorization: Basic dTpoMjM0', 'Bearer abc.def.ghi', 'key AKIAIOSFODNN7EXAMPLE', 'blob 0123456789abcdef0123456789abcdef01']) {
+        const out = safeLine(`failed with ${raw} here`);
+        expect(out, raw).not.toMatch(/hunter2|abc123def|dTpoMjM0|abc\.def|AKIAIOSFODNN7|0123456789abcdef/);
+        expect(out).toContain('[redacted]');
+      }
+      for (const plain of ['skipped_all_checks', 'packages/core/src/app/chat-service', 'Merge conflict in apps/web/src/components/glob-dialog.tsx']) expect(safeLine(plain)).toBe(plain);
+    });
+
+    it('never includes another board\'s globs or deploys, or a secret-looking value', async () => {
+      const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+      withHealth({ ...healthy, integrations: [{ name: 'GitHub App', state: 'down', reason: `Bad credentials ${secret}`, fix: 'token=supersecretvalue12345 rotate it', since: NOW }] });
+      const other = await store.transaction((tx) => tx.insertBoard({ name: 'o', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }));
+      await store.transaction(async (tx) => {
+        await tx.insertGlob(makeGlob({ boardId: other.id, id: 's9t1', title: 'Other board', status: 'failed', failure: { reason: 'other board failure', at: NOW } }), null);
+        await tx.saveDeploys([{ id: 'dx', boardId: other.id, environment: 'prod', globId: 's9t1', sha: 'x', state: 'failed', trigger: 'push', requestedBy: null, requestedAt: NOW, runningSince: null, startedAt: null, finishedAt: null, providerRef: null, url: null, error: 'other deploy' }]);
+        await tx.insertGlob(makeGlob({ boardId, id: 's1t9', title: 'Mine', status: 'failed', failure: { reason: `Merge failed with key ${secret}`, at: NOW, kind: 'merge' } }), null);
+      });
+      unwrap(await ask("why isn't it working?"));
+      const prompt = llm.requests[0]?.prompt ?? '';
+      const status = prompt.slice(prompt.indexOf('Slop status (now)'));
+      expect(status).toContain('s1t9: merge failed');
+      expect(status).not.toContain('s9t1');
+      expect(status).not.toContain('other deploy');
+      expect(status).not.toContain(secret);
+      expect(status).not.toContain('supersecretvalue12345');
+      expect(status).toContain('[redacted]');
+    });
   });
 
   describe('slop help and misses', () => {
