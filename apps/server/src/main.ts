@@ -342,6 +342,7 @@ const dependencyInference = new DependencyInferenceService({
   store,
   llm: intakeLlm,
   apply: (globId, edges, planHash): Promise<void> => globs.applyInferred(globId, edges, planHash),
+  release: (globId): Promise<unknown> => globs.release(globId),
   log: logError,
 });
 const intake = new IntakeService({

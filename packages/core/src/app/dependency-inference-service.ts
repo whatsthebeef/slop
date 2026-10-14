@@ -216,6 +216,8 @@ export const refineEdges = (
   const found = new Map<string, InferredEdge>();
   for (const f of start) {
     if (!candidates.has(f.to) || found.has(f.to)) continue;
+    // A decision edge needs the model's quoted question (see `parseEdges`): a finding only refines one that has it.
+    if ((decisions.has(f.to) || f.until === 'decided') && !edges.some((e) => e.id === f.to && e.kind === 'decision')) continue;
     found.set(f.to, { id: f.to, kind: decisions.has(f.to) || f.until === 'decided' ? 'decision' : 'needs', reason: f.reason.slice(0, MAX_REASON_CHARS), files: f.files.slice(0, 5) });
   }
   const kept = edges.filter((e) => !found.has(e.id) && e.kind === 'decision');
@@ -237,6 +239,8 @@ export class DependencyInferenceService {
       llmTimeoutMs?: number;
       /** Writes the inferred edges of a glob (version-checked, cycles dropped); resolves when written. */
       apply: (globId: string, edges: readonly InferredEdge[], planHash: string) => Promise<void>;
+      /** Starts a held glob whose last relation was lifted (as a person's dismissal does); used by the learning cleanup. */
+      release?: (globId: string) => Promise<unknown>;
       log?: (what: string, message: string) => void;
     },
   ) {}
@@ -272,18 +276,24 @@ export class DependencyInferenceService {
    * recording why in the relation's reason. Relations a person or agent made are left alone. Idempotent; returns how many it dismissed.
    */
   async dismissLearningHolds(boardId: number, now: () => string = () => new Date().toISOString()): Promise<number> {
-    return this.deps.store.transaction(async (tx) => {
+    const froms = await this.deps.store.transaction(async (tx) => {
       const relations = (await tx.listRelations(boardId)).filter((r) => r.gate === 'start' && r.source === 'inferred' && r.dismissedAt === null && r.overriddenAt === null);
-      let dismissed = 0;
+      const dismissed: string[] = [];
       for (const r of relations) {
         const target = await tx.getGlob(r.to);
         if (target === null || target.category !== 'decision' || isHoldableDecision(target)) continue;
         const why = `Dismissed: ${r.to} is a KB learning or refactor decision, which never holds a glob.`;
         await tx.updateRelation(r.id, { dismissedAt: now(), reason: r.reason === null || r.reason === '' ? why : `${why} Was: ${r.reason}` });
-        dismissed++;
+        dismissed.push(r.from);
       }
       return dismissed;
     });
+    // What waited only for a dismissed relation starts, as when a person dismisses it.
+    for (const id of new Set(froms)) {
+      const glob = await this.deps.store.transaction((tx) => tx.getGlob(id));
+      if (glob?.status === 'planning' && glob.waiting != null) await this.deps.release?.(id);
+    }
+    return froms.length;
   }
 
   /** The edges for a plan; none when the model is unavailable or has nothing to compare with. Never throws. */

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
-import { DependencyInferenceService, parseEdges } from '../src/app/dependency-inference-service.js';
+import { DependencyInferenceService, parseEdges, refineEdges } from '../src/app/dependency-inference-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { CreateGlobInput } from '../src/app/glob-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
@@ -121,7 +121,7 @@ describe('dependency inference', () => {
     asked = 0;
     answer = () => '{"edges": []}';
     let runs = 0;
-    inference = new DependencyInferenceService({ store, llm, apply: (id, found, hash) => globs.applyInferred(id, found, hash) });
+    inference = new DependencyInferenceService({ store, llm, apply: (id, found, hash) => globs.applyInferred(id, found, hash), release: (id) => globs.release(id) });
     boards = new BoardService({ store, notifier });
     globs = new GlobService({
       store,
@@ -494,7 +494,12 @@ describe('dependency inference', () => {
       const learning = await decision('s1k2', 'A learning', {}, { origin: { kind: 'mined' } });
       const manual = await decision('s1k3', 'A learning held by a person', {}, { origin: { kind: 'submitted' } });
       const real = await decision('s1k1', 'Which store holds the widgets: Postgres or DynamoDB?');
-      const held = await create();
+      const made = await create();
+      // Held at creation by the learning, as the bug did it.
+      const entry = store.state.globs.get(made.id);
+      if (entry === undefined) throw new Error('no glob');
+      store.state.globs.set(made.id, { ...entry, glob: { ...entry.glob, status: 'planning', waiting: { since: '2026-10-05T12:00:00.000Z' } } });
+      const held = made;
       const base = { boardId, dismissedPlanHash: null, from: held.id, gate: 'start' as const, until: 'decided' as const, reason: null, evidence: [], createdAt: '2026-10-05T12:00:00.000Z', dismissedAt: null, overriddenAt: null };
       let n = 0;
       await store.transaction(async (tx) => {
@@ -502,11 +507,34 @@ describe('dependency inference', () => {
           await tx.insertRelation({ ...base, id: `rel-${String(++n)}`, to, source });
       });
       expect(await inference.dismissLearningHolds(boardId)).toBe(1);
+      // Only the person's relation still holds, so it stays held; the learning's no longer does.
+      expect((await current(held.id)).waiting).not.toBeNull();
       const by = (to: string) => [...store.state.relations.values()].find((r) => r.from === held.id && r.to === to);
       expect(by(learning.id)?.dismissedAt).not.toBeNull();
       expect(by(manual.id)?.dismissedAt).toBeNull();
       expect(by(real.id)?.dismissedAt).toBeNull();
       expect(await inference.dismissLearningHolds(boardId)).toBe(0);
+    });
+
+    it('the cleanup starts a glob that only a learning held', async () => {
+      const learning = await decision('s1k2', 'A learning', {}, { origin: { kind: 'mined' } });
+      const held = await create();
+      const entry = store.state.globs.get(held.id);
+      if (entry === undefined) throw new Error('no glob');
+      store.state.globs.set(held.id, { ...entry, glob: { ...entry.glob, status: 'planning', waiting: { since: '2026-10-05T12:00:00.000Z' } } });
+      await store.transaction((tx) =>
+        tx.insertRelation({ id: 'rel-1', boardId, from: held.id, to: learning.id, gate: 'start', until: 'decided', reason: null, evidence: [], source: 'inferred', dismissedAt: null, dismissedPlanHash: null, overriddenAt: null, createdAt: '2026-10-05T12:00:00.000Z' }),
+      );
+      expect(await inference.dismissLearningHolds(boardId)).toBe(1);
+      expect((await current(held.id)).waiting ?? null).toBeNull();
+    });
+
+    it('an investigator finding on a decision refines the model\'s edge but never adds one without the quoted question', () => {
+      const open = new Set(['s1k1']);
+      const finding = { to: 's1k1', gate: 'start' as const, until: 'decided' as const, reason: 'plan relies on it', files: [] };
+      expect(refineEdges([], [finding], open, open)).toEqual([]);
+      const model = [{ id: 's1k1', kind: 'decision' as const, reason: 'open', files: [] }];
+      expect(refineEdges(model, [finding], open, open)).toEqual([expect.objectContaining({ id: 's1k1', kind: 'decision', reason: 'plan relies on it' })]);
     });
   });
 });
