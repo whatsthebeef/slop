@@ -35,7 +35,7 @@ const ActorMark = ({ actor }: { actor: ActivityEntry['actor'] }) =>
 const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
   const external = entry.link !== null && /^https?:\/\//.test(entry.link);
   return (
-    <li className="flex items-center gap-2" data-testid="activity-entry" data-actor={entry.actor} title={entry.title}>
+    <li className="flex min-w-0 items-center gap-2" data-testid="activity-entry" data-actor={entry.actor} title={entry.title}>
       <ActorMark actor={entry.actor} />
       <span className="min-w-0 flex-1 truncate">
         {entry.text}
@@ -79,9 +79,9 @@ export const ActivityLog = ({
   const shown = all ? feed : feed.slice(0, ACTIVITY_SHOWN);
   const now = Date.now();
   return (
-    <section id={ACTIVITY_ID} className="grid scroll-mt-[calc(var(--glob-header-height,2.25rem)+0.5rem)] gap-1.5 text-sm" data-testid="activity" data-holder={move?.holder ?? 'none'}>
+    <section id={ACTIVITY_ID} className="grid min-w-0 grid-cols-[minmax(0,1fr)] scroll-mt-[calc(var(--glob-header-height,2.25rem)+0.5rem)] gap-1.5 text-sm" data-testid="activity" data-holder={move?.holder ?? 'none'}>
       <h3 className="text-xs font-semibold text-muted-foreground">Activity</h3>
-      <div className="grid gap-2" data-testid="activity-pinned">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 break-words" data-testid="activity-pinned">
         {turn !== null && turn.reason !== '' && (
           <p className="font-medium" data-testid="turn-reason">
             Your turn · {headlineReason(turn.reason)}
@@ -129,7 +129,7 @@ export const ActivityLog = ({
         )}
         {brief !== null && <HandoverBrief state={actions} brief={brief} omit={shownElsewhere(glob, problem)} />}
       </div>
-      <ul className="grid gap-1 text-xs" data-testid="activity-feed">
+      <ul className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 text-xs" data-testid="activity-feed">
         {shown.map((entry) => (
           <Entry key={entry.id} entry={entry} now={now} />
         ))}
