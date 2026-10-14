@@ -91,7 +91,7 @@ export const SplitGlob = ({
           </div>
           <Label>
             Title
-            <Input value={part.title} onChange={(e) => edit(index, { title: e.target.value })} />
+            <Input value={part.title} placeholder="Feature: what this part delivers" onChange={(e) => edit(index, { title: e.target.value })} />
           </Label>
           <Label>
             Plan
