@@ -1,6 +1,7 @@
 import type { DomainEvent } from './events.js';
 import { contextSectionList, extractPlanFeatures } from './intake-learning.js';
 import type { Area, GlobOutcome } from './intake-learning.js';
+import type { WorkstreamsBlock } from './workstreams.js';
 import { forecastEvidence, forecastReasons } from './size-forecast.js';
 import type { SizeForecast } from './size-forecast.js';
 
@@ -16,13 +17,20 @@ export interface SizeThreshold {
   readonly maxTasks: number;
   /** Flagged when the work falls into more independent parts than this. */
   readonly maxParts: number;
+  /**
+   * The fan-out floor: a glob is flagged, and a run fans out, only when at least this many workstreams could be built at the
+   * same time. Learned from fan-out outcomes (`fanout_helped` lowers it, `fanout_stalled` raises it).
+   */
+  readonly minParallel: number;
 }
 
-export const DEFAULT_SIZE_THRESHOLD: SizeThreshold = { maxTasks: 5, maxParts: 3 };
+export const DEFAULT_SIZE_THRESHOLD: SizeThreshold = { maxTasks: 5, maxParts: 3, minParallel: 2 };
 export const SIZE_TASKS_MIN = 2;
 export const SIZE_TASKS_MAX = 12;
 export const SIZE_PARTS_MIN = 2;
 export const SIZE_PARTS_MAX = 6;
+export const SIZE_PARALLEL_MIN = 2;
+export const SIZE_PARALLEL_MAX = 4;
 /** Each move changes both limits by this much, each within its own bounds. */
 export const SIZE_STEP = 1;
 /** An outcome counts a raise only when no follow-up bug blamed the glob within this many days of its merge. */
@@ -38,44 +46,80 @@ export const MAX_PROPOSED_PARTS = 10;
 export interface SizeBounds {
   readonly tasks: { readonly min: number; readonly max: number };
   readonly parts: { readonly min: number; readonly max: number };
+  readonly parallel: { readonly min: number; readonly max: number };
   readonly step: number;
 }
 
 export const SIZE_BOUNDS: SizeBounds = {
   tasks: { min: SIZE_TASKS_MIN, max: SIZE_TASKS_MAX },
   parts: { min: SIZE_PARTS_MIN, max: SIZE_PARTS_MAX },
+  parallel: { min: SIZE_PARALLEL_MIN, max: SIZE_PARALLEL_MAX },
   step: SIZE_STEP,
 };
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
-/** A raise: a flagged glob merged cleanly. Never lowers a value set above the bounds. */
+/** A raise: a flagged glob merged cleanly. Never lowers a value set above the bounds; the fan-out floor stays. */
 export const raisedThreshold = (t: SizeThreshold): SizeThreshold => ({
+  ...t,
   maxTasks: Math.max(t.maxTasks, Math.min(SIZE_TASKS_MAX, t.maxTasks + SIZE_STEP)),
   maxParts: Math.max(t.maxParts, Math.min(SIZE_PARTS_MAX, t.maxParts + SIZE_STEP)),
 });
 
-/** A lowering: an unflagged glob struggled. Never raises a value set below the bounds. */
+/** A lowering: an unflagged glob struggled. Never raises a value set below the bounds; the fan-out floor stays. */
 export const loweredThreshold = (t: SizeThreshold): SizeThreshold => ({
+  ...t,
   maxTasks: Math.min(t.maxTasks, Math.max(SIZE_TASKS_MIN, t.maxTasks - SIZE_STEP)),
   maxParts: Math.min(t.maxParts, Math.max(SIZE_PARTS_MIN, t.maxParts - SIZE_STEP)),
 });
 
 /** `split_stalled` and `split_helped` are no longer recorded (a split is a scope cut now); old rows stay readable. */
-export const SIZE_OUTCOMES = ['kept_whole_clean', 'unflagged_struggled', 'flag_confirmed', 'split_stalled', 'split_helped', 'reset'] as const;
+export const SIZE_OUTCOMES = [
+  'kept_whole_clean',
+  'unflagged_struggled',
+  'flag_confirmed',
+  'fanout_helped',
+  'fanout_stalled',
+  'split_stalled',
+  'split_helped',
+  'reset',
+] as const;
 /**
- * `kept_whole_clean` (a flagged glob that merged cleanly) raises, `unflagged_struggled` lowers, `flag_confirmed` (a flag that
- * was right) leaves it; `reset` (an admin returning the board to the defaults) is the only one that sets it to something
- * else. The old `split_stalled` raised and `split_helped` left it; they are only read from history now and move nothing.
+ * `kept_whole_clean` (a flagged glob that merged cleanly, not fanned out) raises the task and part limits, `unflagged_struggled`
+ * lowers them, `flag_confirmed` (a flag that was right) leaves them; `fanout_helped` (a glob that fanned out and merged
+ * cleanly) lowers the fan-out floor `minParallel`, so smaller parallelism is flagged too, and `fanout_stalled` (it fanned out
+ * and still struggled or conflicted) raises it; `reset` (an admin returning the board to the defaults) is the only one that
+ * sets it to something else. The old `split_stalled` raised and `split_helped` left it; they are only read from history now and
+ * move nothing.
  */
 export type SizeOutcome = (typeof SIZE_OUTCOMES)[number];
+
+/** The fan-out floor one step lower: parallel work paid off. Never raises a value set below the bounds. */
+export const loweredFloor = (t: SizeThreshold): SizeThreshold => ({
+  ...t,
+  minParallel: Math.min(t.minParallel, Math.max(SIZE_PARALLEL_MIN, t.minParallel - SIZE_STEP)),
+});
+
+/** The fan-out floor one step higher: parallel work stalled. Never lowers a value set above the bounds. */
+export const raisedFloor = (t: SizeThreshold): SizeThreshold => ({
+  ...t,
+  minParallel: Math.max(t.minParallel, Math.min(SIZE_PARALLEL_MAX, t.minParallel + SIZE_STEP)),
+});
 
 export const nextThreshold = (outcome: SizeOutcome, t: SizeThreshold): SizeThreshold =>
   outcome === 'kept_whole_clean'
     ? raisedThreshold(t)
     : outcome === 'unflagged_struggled'
       ? loweredThreshold(t)
-      : t;
+      : outcome === 'fanout_helped'
+        ? loweredFloor(t)
+        : outcome === 'fanout_stalled'
+          ? raisedFloor(t)
+          : t;
+
+/** Whether two thresholds differ in any limit. */
+export const thresholdMoved = (a: SizeThreshold, b: SizeThreshold): boolean =>
+  a.maxTasks !== b.maxTasks || a.maxParts !== b.maxParts || a.minParallel !== b.minParallel;
 
 export interface SizeThresholdChange {
   readonly id: number;
@@ -149,13 +193,13 @@ export const withModelParts = (estimate: SizeEstimate, parts: number, reasoning:
 
 /**
  * Why the estimate exceeds the threshold, as plain text; empty when it doesn't. Size alone never flags: only work with at
- * least 2 parts that could be built at the same time does (a long serial plan stays whole), and only the model can tell.
+ * least `minParallel` (2 or more) parts that could be built at the same time does (a long serial plan stays whole), and only the model can tell.
  */
 export const oversizedReasons = (estimate: SizeEstimate, threshold: SizeThreshold): string[] => {
   // The forecast (from the code) judges the parts and what can run at once itself.
   if (estimate.forecast !== undefined) return forecastReasons(estimate.forecast, threshold);
   const parallel = estimate.parallelParts ?? null;
-  if (parallel === null || parallel < 2) return [];
+  if (parallel === null || parallel < Math.max(2, threshold.minParallel)) return [];
   const big = [
     ...(estimate.tasks > threshold.maxTasks ? [`${estimate.tasks} tasks (more than ${threshold.maxTasks})`] : []),
     ...(estimate.independentParts > threshold.maxParts
@@ -494,8 +538,8 @@ export interface SizeOutcomeInput {
   readonly failedRuns: number;
   /** Hours from the PR opening to the merge; null when no PR was recorded. */
   readonly prHours: number | null;
-  /** The glob has a `GlobSplit` event at all (its scope was cut into independent globs). */
-  readonly split: boolean;
+  /** The glob's latest recorded workstreams block (the implementation record's); null when it has none (a small glob). */
+  readonly workstreams: WorkstreamsBlock | null;
 }
 
 export interface PrRange {
@@ -540,22 +584,49 @@ const notClean = (input: SizeOutcomeInput, range: PrRange): string[] => {
   ];
 };
 
+/** Why a fanned-out glob's parallel work stalled: a workstream that failed or was retried, or files that conflicted on integration. */
+export const fanoutProblems = (block: WorkstreamsBlock): string[] => {
+  const failed = block.workstreams.filter((w) => w.state === 'failed').map((w) => w.name);
+  const retried = block.workstreams.filter((w) => w.state !== 'failed' && w.attempts > 1).map((w) => w.name);
+  const conflicted = block.workstreams.filter((w) => w.conflicts.length > 0);
+  return [
+    ...(failed.length > 0 ? [`workstream${failed.length === 1 ? '' : 's'} ${failed.join(', ')} failed`] : []),
+    ...(retried.length > 0 ? [`workstream${retried.length === 1 ? '' : 's'} ${retried.join(', ')} needed a retry`] : []),
+    ...(conflicted.length > 0
+      ? [`${conflicted.length} workstream${conflicted.length === 1 ? '' : 's'} conflicted on integration (${conflicted.map((w) => w.name).join(', ')})`]
+      : []),
+  ];
+};
+
+const fanoutSummary = (block: WorkstreamsBlock): string =>
+  `${block.workstreams.length} workstreams, up to ${block.maxParallel} at the same time`;
+
 /**
- * The outcome a merged glob with a size check shows, or null when it says nothing (unflagged and fine).
- * - flagged, not split, merged cleanly: `kept_whole_clean` (raise): the flag was advice and the glob went through whole;
- * - flagged and split, or merged whole and not clean: `flag_confirmed` (no move);
- * - unflagged and struggled: `unflagged_struggled` (lower).
+ * The outcome a merged glob with a size check shows, or null when it says nothing (unflagged and fine). Whether the glob
+ * fanned out is read from its workstreams block (`fannedOut`), never from a decision on the board.
+ * - unflagged and struggled, fanned out or not: `unflagged_struggled` (lower the limits);
+ * - fanned out, otherwise: `fanout_helped` (lower the fan-out floor) when it merged cleanly and its workstreams ran without
+ *   failure, retry or conflict; else `fanout_stalled` (raise the floor);
+ * - flagged, not fanned out, merged cleanly: `kept_whole_clean` (raise the limits): the flag was advice and the glob went through whole;
+ * - flagged, not fanned out, not clean: `flag_confirmed` (no move).
  */
 export const sizeOutcomeOf = (input: SizeOutcomeInput, range: PrRange): { outcome: SizeOutcome; evidence: string } | null => {
+  const struggled = struggles(input, range);
+  if (!input.flagged && struggled.length > 0) return { outcome: 'unflagged_struggled', evidence: `Not flagged, and it ${struggled.join('; ')}` };
+  const block = input.workstreams?.fannedOut === true ? input.workstreams : null;
+  if (block !== null) {
+    const problems = [...notClean(input, range), ...fanoutProblems(block)];
+    return problems.length === 0
+      ? { outcome: 'fanout_helped', evidence: `Fanned out (${fanoutSummary(block)}) and merged cleanly: no failed or retried workstream, no conflict, review rounds within the tier, no failed run, PR open time normal, no follow-up bug` }
+      : { outcome: 'fanout_stalled', evidence: `Fanned out (${fanoutSummary(block)}), and it ${problems.join('; ')}` };
+  }
   if (input.flagged) {
-    if (input.split) return { outcome: 'flag_confirmed', evidence: 'Flagged oversized and split' };
     const problems = notClean(input, range);
     return problems.length === 0
       ? { outcome: 'kept_whole_clean', evidence: 'Flagged oversized, and merged cleanly: review rounds within the tier, no failed run, PR open time normal, no follow-up bug' }
       : { outcome: 'flag_confirmed', evidence: `Flagged oversized, and it ${problems.join('; ')}` };
   }
-  const problems = struggles(input, range);
-  return problems.length === 0 ? null : { outcome: 'unflagged_struggled', evidence: `Not flagged, and it ${problems.join('; ')}` };
+  return null;
 };
 
 /** Hours between a glob's first `PROpened` and its `Merged` event, from its events (oldest first); null without both. */
@@ -567,4 +638,4 @@ export const prHoursOf = (events: readonly DomainEvent[]): number | null => {
   return Number.isFinite(ms) && ms >= 0 ? ms / 3_600_000 : null;
 };
 
-export const SIZE_EVENT_TYPES = ['PROpened', 'Merged', 'RunFailed', 'RunTriggered', 'PickedUp', 'GlobSplit'] as const;
+export const SIZE_EVENT_TYPES = ['PROpened', 'Merged', 'RunFailed', 'RunTriggered', 'PickedUp', 'WorkstreamsRecorded'] as const;

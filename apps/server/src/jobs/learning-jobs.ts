@@ -2,6 +2,9 @@ import type { BoardJobResult, LearningJobService } from '@slop/core';
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/** The fan-out floor of a threshold in a result stored before the floor existed (it had none: 2). */
+const floorOf = (t: { minParallel?: number }): number => t.minParallel ?? 2;
+
 /** A finished run in one line, for the server log. */
 const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string => {
   switch (result.kind) {
@@ -31,8 +34,8 @@ const summary = (result: Exclude<BoardJobResult, { kind: 'failed' }>): string =>
       return `${result.backfilled} snapshots backfilled, ${result.embedded} embedded, ${result.recorded} outcomes recorded, ${result.refreshed} refreshed`;
     case 'size_threshold':
       return [
-        `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts`,
-        ...result.changes.map((c) => `${c.globId} ${c.outcome.replace(/_/g, ' ')}: ${c.from.maxTasks}/${c.from.maxParts} to ${c.to.maxTasks}/${c.to.maxParts}`),
+        `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, fan-out from ${floorOf(result.threshold)} parallel`,
+        ...result.changes.map((c) => `${c.globId} ${c.outcome.replace(/_/g, ' ')}: ${c.from.maxTasks}/${c.from.maxParts}/${floorOf(c.from)} to ${c.to.maxTasks}/${c.to.maxParts}/${floorOf(c.to)}`),
       ].join('; ');
     case 'context_tuning':
       return [

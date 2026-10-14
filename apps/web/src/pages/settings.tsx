@@ -474,6 +474,8 @@ const SIZE_OUTCOME_TEXT: Partial<Record<SizeOutcome, string>> = {
   kept_whole_clean: 'Flagged and merged cleanly: raised',
   unflagged_struggled: 'Not flagged, and it struggled: lowered',
   flag_confirmed: 'Flag confirmed: unchanged',
+  fanout_helped: 'Fanned out and merged cleanly: fan-out floor lowered',
+  fanout_stalled: 'Fanned out and stalled or conflicted: fan-out floor raised',
   reset: 'Reset to the defaults',
 };
 
@@ -506,17 +508,17 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
     );
   if (threshold.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the size threshold…</p>;
   const { current, defaults, bounds, history } = threshold.data;
-  const learned = defaults.maxTasks !== current.maxTasks || defaults.maxParts !== current.maxParts;
+  const learned = defaults.maxTasks !== current.maxTasks || defaults.maxParts !== current.maxParts || defaults.minParallel !== current.minParallel;
   return (
     <div className='grid gap-2' data-testid='size-threshold'>
       <p className='text-sm'>
-        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts ({learned ? 'learned from outcomes' : 'the default'})
+        Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts, with at least {current.minParallel} buildable at the same time ({learned ? 'learned from outcomes' : 'the default'})
       </p>
       <p className='text-xs text-muted-foreground' data-testid='size-threshold-forecast'>
-        Judged from the code (the forecast), the part limit is {Math.max(current.maxParts, 3)} or more separate modules, and only when at least 2 of them can be built at the same time.
+        Judged from the code (the forecast), the part limit is {Math.max(current.maxParts, 3)} or more separate modules, and only when at least {current.minParallel} of them can be built at the same time.
       </p>
       <p className='text-xs text-muted-foreground' data-testid='size-threshold-defaults'>
-        Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts.
+        Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts, fan-out from {defaults.minParallel} parallel. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts, fan-out from {current.minParallel} parallel.
       </p>
       {admin && learned && (
         <div>
@@ -527,9 +529,9 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
         </div>
       )}
       <p className='text-xs text-muted-foreground'>
-        Intake flags a glob above it, and only when at least two of its parts could be built at the same time (a long serial plan stays whole), and
-        advises with its size workstreams and critical path. A flagged glob that merges cleanly raises the threshold. An unflagged glob that struggles (the most review rounds, a failed run or a very long PR) lowers it.
-        Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, in steps of {bounds.step}.
+        Intake flags a glob above it, and only when at least {current.minParallel} of its parts could be built at the same time (a long serial plan stays whole), and
+        advises with its size workstreams and critical path. A flagged glob that merges cleanly without fanning out raises the threshold. A glob that fans out and merges cleanly lowers the fan-out floor (the parallel parts it takes to flag and fan out); one whose workstreams fail, are retried or conflict, or that otherwise struggles, raises it. An unflagged glob that struggles (the most review rounds, a failed run or a very long PR) lowers it.
+        Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, fan-out floor between {bounds.parallel.min} and {bounds.parallel.max}, in steps of {bounds.step}.
       </p>
       <JobStatus boardId={boardId} admin={admin} job='size_threshold' />
       {history.length === 0 ? (
@@ -539,7 +541,7 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
           <thead className='text-left text-muted-foreground'>
             <tr>
               <th className='pr-3 font-normal'>Date</th>
-              <th className='pr-3 font-normal'>Tasks / parts</th>
+              <th className='pr-3 font-normal'>Tasks / parts / parallel</th>
               <th className='pr-3 font-normal'>Why</th>
               <th className='font-normal'>Glob</th>
             </tr>
@@ -549,7 +551,7 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
               <tr key={change.id} className='align-top'>
                 <td className='pr-3 whitespace-nowrap'>{new Date(change.at).toLocaleDateString()}</td>
                 <td className='pr-3 whitespace-nowrap'>
-                  {change.from.maxTasks} / {change.from.maxParts} → {change.to.maxTasks} / {change.to.maxParts}
+                  {change.from.maxTasks} / {change.from.maxParts} / {change.from.minParallel} → {change.to.maxTasks} / {change.to.maxParts} / {change.to.minParallel}
                 </td>
                 <td className='pr-3'>
                   {SIZE_OUTCOME_TEXT[change.outcome] ?? 'Earlier outcome (no longer recorded)'}

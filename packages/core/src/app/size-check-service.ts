@@ -5,6 +5,7 @@ import type { GlobOutcome } from '../domain/intake-learning.js';
 import type { DomainEvent } from '../domain/events.js';
 import { parseInvestigation } from '../domain/investigation.js';
 import { parseWorkstreams } from '../domain/workstreams.js';
+import type { WorkstreamsBlock } from '../domain/workstreams.js';
 import { areasMatching } from '../domain/risk-area.js';
 import { safeGrepPattern, safeRepoPath } from '../domain/review-tools.js';
 import type { BoardJobResult } from '../domain/signals.js';
@@ -21,6 +22,7 @@ import {
   prHoursOf,
   prRangeOf,
   sizeOutcomeOf,
+  thresholdMoved,
   withModelParts,
 } from '../domain/size-check.js';
 import {
@@ -106,6 +108,14 @@ const dirOf = (path: string): string => path.slice(0, Math.max(0, path.lastIndex
 const FOOTPRINT_OBSERVATION_CHARS = 3000;
 const REFERENCE_POOL = 40;
 const EMBED_PLAN_CHARS = 2000;
+/** The glob's latest recorded workstreams block, from its `WorkstreamsRecorded` events (oldest first); null when it has none. */
+const workstreamsOf = (events: readonly DomainEvent[]): WorkstreamsBlock | null => {
+  const data = events.filter((e) => e.type === 'WorkstreamsRecorded').at(-1)?.data;
+  if (data === undefined) return null;
+  const parsed = parseWorkstreams(`## Workstreams\n\n\`\`\`workstreams\n${JSON.stringify(data)}\n\`\`\``);
+  return parsed.kind === 'ok' ? parsed.block : null;
+};
+
 const LEARN_EVENT_TYPES = [...SIZE_EVENT_TYPES, 'Escalated'] as const;
 
 const intOf = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -492,7 +502,7 @@ export class SizeCheckService implements SizeAssessor {
       if ((await tx.getBoard(boardId)) === null) return notFound(`No board ${boardId}`);
       await tx.lockBoardJob(boardId, 'size_threshold');
       const from = await tx.getSizeThreshold(boardId);
-      if (from.maxTasks === DEFAULT_SIZE_THRESHOLD.maxTasks && from.maxParts === DEFAULT_SIZE_THRESHOLD.maxParts) return ok(null);
+      if (!thresholdMoved(from, DEFAULT_SIZE_THRESHOLD)) return ok(null);
       // The history keeps one entry per glob, so a reset is filed under its own key rather than a glob.
       await tx.insertSizeThresholdChange({ boardId, at: now, from, to: DEFAULT_SIZE_THRESHOLD, outcome: 'reset', globId: `reset:${now}`, evidence: `Reset to the defaults by ${email}` });
       if (!(await tx.setSizeThreshold(boardId, from, DEFAULT_SIZE_THRESHOLD))) throw new Error(`Board ${boardId}'s size threshold changed during the reset`);
@@ -542,7 +552,7 @@ export class SizeCheckService implements SizeAssessor {
           outcome,
           failedRuns: events.filter((e) => e.type === 'RunFailed' && !isInvestigateEvent(e)).length,
           prHours: prHoursOf(events),
-          split: events.some((e) => e.type === 'GlobSplit'),
+          workstreams: workstreamsOf(events),
         },
         range,
       );
@@ -550,7 +560,7 @@ export class SizeCheckService implements SizeAssessor {
       const change = await this.record(boardId, found.outcome, outcome.globId, found.evidence);
       if (change !== null) changes.push(change);
     }
-    if (changes.some((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts))
+    if (changes.some((c) => thresholdMoved(c.from, c.to)))
       this.deps.notifier.publish({ kind: 'board.changed', boardId });
     const threshold = await this.deps.store.transaction((tx) => tx.getSizeThreshold(boardId));
     const calibration = await this.learnCalibration(boardId, read.outcomes, byGlob, categories);
@@ -647,7 +657,7 @@ export class SizeCheckService implements SizeAssessor {
       const to = nextThreshold(outcome, from);
       const inserted = await tx.insertSizeThresholdChange({ boardId, at: this.deps.clock.now(), from, to, outcome, globId, evidence });
       if (!inserted) return null;
-      const moved = to.maxTasks !== from.maxTasks || to.maxParts !== from.maxParts;
+      const moved = thresholdMoved(from, to);
       // The lock makes a concurrent run wait, so a lost write is a bug, not a race to retry.
       if (moved && !(await tx.setSizeThreshold(boardId, from, to))) throw new Error(`Board ${boardId}'s size threshold changed during the learning run`);
       return { globId, outcome, from, to };

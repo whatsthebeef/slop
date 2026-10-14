@@ -26,7 +26,7 @@ import { isClearedAttachment } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, KnowledgeDoc } from '../domain/knowledge.js';
 import { GLOB_OWNED_SOURCES, matchesFilters } from '../domain/search.js';
 import type { Candidate, KnowledgeItem } from '../domain/search.js';
-import { DEFAULT_SIZE_THRESHOLD } from '../domain/size-check.js';
+import { DEFAULT_SIZE_THRESHOLD, thresholdMoved } from '../domain/size-check.js';
 import type { SizeCheck, SizeThreshold, SizeThresholdChange } from '../domain/size-check.js';
 import { DEFAULT_SIZE_CALIBRATION } from '../domain/size-forecast.js';
 import type { SizeCalibration, SizeCalibrationChange, SizeRecord } from '../domain/size-forecast.js';
@@ -533,7 +533,7 @@ export class MemoryStore implements Store {
       getSizeThreshold: (boardId) => Promise.resolve(s.sizeThresholds.get(boardId) ?? DEFAULT_SIZE_THRESHOLD),
       setSizeThreshold: (boardId, from, to) => {
         const current = s.sizeThresholds.get(boardId) ?? DEFAULT_SIZE_THRESHOLD;
-        if (current.maxTasks !== from.maxTasks || current.maxParts !== from.maxParts) return Promise.resolve(false);
+        if (thresholdMoved(current, from)) return Promise.resolve(false);
         s.sizeThresholds.set(boardId, to);
         return Promise.resolve(true);
       },

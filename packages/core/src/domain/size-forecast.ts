@@ -469,7 +469,7 @@ export const forecastShape = (forecast: SizeForecast): { criticalPath: number; m
  */
 export const forecastReasons = (forecast: SizeForecast, threshold: SizeThreshold): string[] => {
   const { maxParallel } = forecastShape(forecast);
-  if (maxParallel < 2) return [];
+  if (maxParallel < Math.max(2, threshold.minParallel)) return [];
   const limit = Math.max(threshold.maxParts, FORECAST_MIN_PARTS);
   const units = forecastUnits(forecast);
   const big = [

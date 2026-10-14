@@ -178,6 +178,8 @@ export interface GlobContext {
 
 export interface SizeContext {
   readonly oversized: boolean;
+  /** The board's fan-out floor: fan out only when at least this many workstreams can be built at the same time. */
+  readonly minParallel: number;
   readonly reasons: readonly string[];
   readonly evidence: readonly string[];
   /** `split` once the glob's scope was cut into independent globs; null otherwise. */
@@ -205,8 +207,9 @@ export interface SizeForecastContext {
 
 export const FORECAST_NOTE = 'predicted files and parts; confirm or correct';
 
-const sizeContext = (check: SizeCheck): SizeContext => ({
+const sizeContext = (check: SizeCheck, minParallel: number): SizeContext => ({
   oversized: check.flagged,
+  minParallel,
   reasons: check.reasons,
   evidence: check.evidence,
   decision: check.decision,
@@ -724,7 +727,7 @@ export class ArtifactService {
                 plan?.content ?? '',
               ),
             }),
-        ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
+        ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck, (await tx.getSizeThreshold(glob.boardId)).minParallel) }),
         ...(group === null ? {} : { group }),
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",

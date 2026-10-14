@@ -9,6 +9,7 @@ import type { Result } from '../src/domain/errors.js';
 import type { GlobOutcome } from '../src/domain/intake-learning.js';
 import * as machine from '../src/domain/machine.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../src/domain/size-check.js';
+import type { JsonValue } from '../src/domain/events.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -465,13 +466,13 @@ describe('learned size check', () => {
       effort: { calendarHours: 5 },
       postMerge: { fixGlobs: patch.fixGlobs ?? [] },
     });
-    const merge = async (globId: string, patch: Parameters<typeof outcomeOf>[1] = {}, extra: { type: 'RunFailed' | 'GlobSplit' | 'RunTriggered'; at: string }[] = []) => {
+    const merge = async (globId: string, patch: Parameters<typeof outcomeOf>[1] = {}, extra: { type: 'RunFailed' | 'GlobSplit' | 'RunTriggered' | 'WorkstreamsRecorded'; at: string; data?: { [key: string]: JsonValue } }[] = []) => {
       await store.transaction(async (tx) => {
         await tx.upsertGlobOutcome(outcomeOf(globId, patch));
         await tx.appendEvents([
           { type: 'PROpened', globId, actor: null, at: '2026-08-31T20:00:00.000Z', data: {} },
           { type: 'Merged', globId, actor: null, at: '2026-09-01T00:00:00.000Z', data: {} },
-          ...extra.map((e) => ({ type: e.type, globId, actor: null, at: e.at, data: {} })),
+          ...extra.map((e) => ({ type: e.type, globId, actor: null, at: e.at, data: e.data ?? {} })),
         ]);
       });
     };
@@ -481,8 +482,8 @@ describe('learned size check', () => {
       const glob = await create('same', BIG);
       await merge(glob.id);
       const first = await service.learn(boardId);
-      expect(first.changes).toMatchObject([{ globId: glob.id, outcome: 'kept_whole_clean', from: { maxTasks: 5, maxParts: 3 }, to: { maxTasks: 6, maxParts: 4 } }]);
-      expect(await threshold()).toEqual({ maxTasks: 6, maxParts: 4 });
+      expect(first.changes).toMatchObject([{ globId: glob.id, outcome: 'kept_whole_clean', from: { maxTasks: 5, maxParts: 3, minParallel: 2 }, to: { maxTasks: 6, maxParts: 4, minParallel: 2 } }]);
+      expect(await threshold()).toEqual({ maxTasks: 6, maxParts: 4, minParallel: 2 });
       expect((await service.learn(boardId)).changes).toEqual([]);
       const view = unwrap(await service.view(DEV, boardId));
       expect(view.history).toHaveLength(1);
@@ -499,17 +500,68 @@ describe('learned size check', () => {
       ]);
       const result = await service.learn(boardId);
       expect(result.changes.map((c) => [c.globId, c.outcome])).toEqual([[a.id, 'unflagged_struggled']]);
-      expect(await threshold()).toEqual({ maxTasks: 4, maxParts: 2 });
+      expect(await threshold()).toEqual({ maxTasks: 4, maxParts: 2, minParallel: 2 });
     });
 
-    it('leaves the threshold when a flagged glob was split, or merged and was not clean', async () => {
-      const split = await create('same', BIG);
+    it('leaves the threshold when a flagged glob merged and was not clean', async () => {
       const messy = await create('same', BIG);
-      await merge(split.id, {}, [{ type: 'GlobSplit', at: '2026-08-30T00:00:00.000Z' }]);
       await merge(messy.id, { fixGlobs: ['s1b9'] });
       const result = await service.learn(boardId);
-      expect(result.changes.map((c) => c.outcome)).toEqual(['flag_confirmed', 'flag_confirmed']);
+      expect(result.changes.map((c) => c.outcome)).toEqual(['flag_confirmed']);
       expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
+    });
+
+    const recorded = (patch: { state?: string; attempts?: number; conflicts?: string[] } = {}) => ({
+      type: 'WorkstreamsRecorded' as const,
+      at: '2026-08-31T22:00:00.000Z',
+      data: {
+        fannedOut: true,
+        maxParallel: 2,
+        workstreams: ['a', 'b'].map((name, i) => ({
+          name,
+          goal: 'g',
+          predictedFiles: [],
+          actualFiles: [],
+          needs: [],
+          state: i === 1 ? (patch.state ?? 'done') : 'done',
+          attempts: i === 1 ? (patch.attempts ?? 1) : 1,
+          conflicts: i === 1 ? (patch.conflicts ?? []) : [],
+          durationMinutes: 5,
+        })),
+        version: 2,
+        commitSha: null,
+        runId: null,
+      },
+    });
+
+    it('lowers the fan-out floor when a glob fanned out and merged cleanly, with evidence, once', async () => {
+      await store.transaction((tx) => tx.setSizeThreshold(boardId, DEFAULT_SIZE_THRESHOLD, { ...DEFAULT_SIZE_THRESHOLD, minParallel: 3 }));
+      const glob = await create('same', BIG);
+      await merge(glob.id, {}, [recorded()]);
+      const result = await service.learn(boardId);
+      expect(result.changes).toMatchObject([{ globId: glob.id, outcome: 'fanout_helped', from: { minParallel: 3 }, to: { minParallel: 2, maxTasks: 5, maxParts: 3 } }]);
+      expect(await threshold()).toEqual(DEFAULT_SIZE_THRESHOLD);
+      expect((await service.learn(boardId)).changes).toEqual([]);
+      expect(unwrap(await service.view(DEV, boardId)).history[0]?.evidence).toContain('2 workstreams, up to 2 at the same time');
+    });
+
+    it('raises the fan-out floor when a workstream conflicted, failed or was retried', async () => {
+      const a = await create('same', BIG);
+      await merge(a.id, {}, [recorded({ conflicts: ['x.ts'] })]);
+      const result = await service.learn(boardId);
+      expect(result.changes.map((c) => c.outcome)).toEqual(['fanout_stalled']);
+      expect(await threshold()).toEqual({ ...DEFAULT_SIZE_THRESHOLD, minParallel: 3 });
+      expect(unwrap(await service.view(DEV, boardId)).history[0]?.evidence).toContain('conflicted on integration (b)');
+      const b = await create('same', BIG);
+      await merge(b.id, {}, [recorded({ state: 'failed' })]);
+      expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['fanout_stalled']);
+      expect((await threshold()).minParallel).toBe(4);
+    });
+
+    it('reads the latest workstreams block of the glob', async () => {
+      const glob = await create('same', BIG);
+      await merge(glob.id, {}, [recorded({ state: 'failed' }), { ...recorded(), at: '2026-08-31T23:00:00.000Z' }]);
+      expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['fanout_helped']);
     });
 
     it('records no split outcome any more: a split original is judged like any flagged glob, and old split outcomes stay readable', async () => {
@@ -519,11 +571,11 @@ describe('learned size check', () => {
       unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
       // Only the original has merged; its parts are not waited for.
       await merge(glob.id, {}, [{ type: 'GlobSplit', at: '2026-08-30T00:00:00.000Z' }]);
-      expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['flag_confirmed']);
+      expect((await service.learn(boardId)).changes.map((c) => c.outcome)).toEqual(['kept_whole_clean']);
       await store.transaction((tx) =>
-        tx.insertSizeThresholdChange({ boardId, at: NOW, from: DEFAULT_SIZE_THRESHOLD, to: { maxTasks: 6, maxParts: 4 }, outcome: 'split_stalled', globId: 's1f99', evidence: 'Split into 3 parts' }),
+        tx.insertSizeThresholdChange({ boardId, at: NOW, from: DEFAULT_SIZE_THRESHOLD, to: { maxTasks: 6, maxParts: 4, minParallel: 2 }, outcome: 'split_stalled', globId: 's1f99', evidence: 'Split into 3 parts' }),
       );
-      expect(unwrap(await service.view(DEV, boardId)).history.map((h) => h.outcome)).toEqual(expect.arrayContaining(['split_stalled', 'flag_confirmed']));
+      expect(unwrap(await service.view(DEV, boardId)).history.map((h) => h.outcome)).toEqual(expect.arrayContaining(['split_stalled', 'kept_whole_clean']));
     });
 
     it('shows the learned threshold beside the default, and an admin resets it', async () => {
@@ -531,7 +583,7 @@ describe('learned size check', () => {
       await merge(glob.id);
       await service.learn(boardId);
       const view = unwrap(await service.view(DEV, boardId));
-      expect(view).toMatchObject({ current: { maxTasks: 6, maxParts: 4 }, defaults: DEFAULT_SIZE_THRESHOLD });
+      expect(view).toMatchObject({ current: { maxTasks: 6, maxParts: 4, minParallel: 2 }, defaults: DEFAULT_SIZE_THRESHOLD });
       expect((await service.reset(DEV, boardId)).ok).toBe(false);
       const reset = unwrap(await service.reset(ADMIN, boardId));
       expect(reset.current).toEqual(DEFAULT_SIZE_THRESHOLD);
