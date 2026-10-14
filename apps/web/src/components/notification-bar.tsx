@@ -2,10 +2,10 @@ import type { BoardNotification } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { api, dismissedNotificationsKey, healthKey, notificationsKey } from '@/lib/api';
+import { api, healthKey, notificationsKey } from '@/lib/api';
 import { signInPoll, signInView } from '@/lib/aws-sign-in';
 import type { SignInView } from '@/lib/aws-sign-in';
-import { barView, canDismiss, dismissedLabel, linkTarget, pollInterval, shownRows, toggleLabel } from '@/lib/notification-bar';
+import { barView, canDismiss, linkTarget, pollInterval, shownRows, toggleLabel } from '@/lib/notification-bar';
 import { cn } from '@/lib/utils';
 
 const OUTLINE: Record<BoardNotification['severity'], string> = { critical: 'border-red', warning: 'border-amber', info: 'border-edge' };
@@ -103,30 +103,8 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
     // A hint refetches at once; the poll is the backstop.
     refetchInterval: (query) => pollInterval((query.state.data?.length ?? 0) > 0),
   });
-  const dismissed = useQuery({ queryKey: dismissedNotificationsKey(boardId), queryFn: () => api.dismissedNotifications(boardId) });
-  const client = useQueryClient();
-  const restore = useMutation({
-    mutationFn: async (ids: string[]) => {
-      for (const id of ids) await api.restoreNotification(boardId, id);
-    },
-    onSuccess: () => client.invalidateQueries({ queryKey: ['notifications', boardId] }),
-  });
-  const hidden = dismissed.data ?? [];
   const view = barView(items.data ?? []);
-  const undo =
-    hidden.length === 0 ? null : (
-      <button
-        type='button'
-        className='mt-1 block text-sm font-normal text-muted-foreground underline'
-        data-testid='notifications-dismissed'
-        title={hidden.map((n) => n.title).join('\n')}
-        disabled={restore.isPending}
-        onClick={() => restore.mutate(hidden.map((n) => n.id))}
-      >
-        {dismissedLabel(hidden.length)}
-      </button>
-    );
-  if (view === null) return undo === null ? null : <div className='mx-5'>{undo}</div>;
+  if (view === null) return null;
   return (
     <div className='mx-5' data-testid='notification-bar'>
       {/* One stack: the rows share the outer border and are split by hairlines. Keyed by id so a new arrival flashes once. */}
@@ -148,7 +126,6 @@ export const NotificationBar = ({ boardId }: { boardId: number }) => {
           </button>
         </div>
       )}
-      {undo}
     </div>
   );
 };

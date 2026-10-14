@@ -102,6 +102,16 @@ const awaitingSignOff = (glob: GlobView): boolean =>
   glob.status === 'reviewing' && Object.values(glob.labels).some((state) => state !== 'approved');
 
 /**
+ * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
+ * sign-off, an escalation in Planning). A decision glob has no corner status, so its turn is the status line's.
+ */
+export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
+  if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
+  const icon = cornerStatus(glob, now, viewer)?.icon;
+  return icon === 'human' || icon === 'needs-human';
+};
+
+/**
  * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
  * words, the rest go in the tooltip: a stall, an escalation in Planning, your turn, a problem, the machine running, the
  * prerequisites it waits on, any other waiting, standby. Decision globs have none.

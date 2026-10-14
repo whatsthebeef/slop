@@ -1,7 +1,10 @@
 import { ListFilter, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
+import { HumanIcon } from '@/components/actor-icons';
 import { CATEGORY_ICON } from '@/components/glob-card';
-import { activeCount, BOARD_FILTERS, defaultFilters, selectedOptions, toggleOption } from '@/lib/board-filters';
+import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
+import { activeCount, BOARD_FILTERS, defaultFilters, parseFilters, selectedOptions, toggleOption, writeFilters } from '@/lib/board-filters';
 import type { BoardFilter, FilterValues } from '@/lib/board-filters';
 import { cn } from '@/lib/utils';
 
@@ -28,6 +31,35 @@ export const useFilterPaneOpen = (): [boolean, (open: boolean) => void] => {
     }
   };
   return [open, set];
+};
+
+/**
+ * The filters live in the URL so a filtered view can be linked, and the board remembers them: a URL with filters wins and is
+ * saved; a bare URL (back from a glob, another tab or board, a reload) gets the remembered ones. The board and its Signed Off
+ * view share them. Whether the pane is open is the viewer's own preference.
+ */
+export const useBoardFilters = (boardId: number) => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
+  const filtering = activeCount(filters);
+  const setFilters = (values: FilterValues) => {
+    // Back to the defaults forgets the memory first, so the restore below doesn't bring the old filters back.
+    if (activeCount(values) === 0) clearFilterMemory(browserStore(), boardId);
+    setSearchParams((params) => writeFilters(params, values), { replace: true });
+  };
+  const query = searchParams.toString();
+  useEffect(() => {
+    const store = browserStore();
+    if (hasFilterParams(searchParams)) {
+      saveFilterMemory(store, boardId, searchParams);
+      return;
+    }
+    const saved = loadFilterMemory(store, boardId);
+    if (saved === null) return;
+    setSearchParams((params) => new URLSearchParams([...params, ...saved]), { replace: true });
+  }, [boardId, query]);
+  const [filterOpen, setFilterOpen] = useFilterPaneOpen();
+  return { filters, filtering, setFilters, filterOpen, setFilterOpen };
 };
 
 /** The tab row's filter button, left of the chat button. A dot with the number of filters on shows even while the pane is closed. */
@@ -106,6 +138,24 @@ const Control = ({
     );
   }
   if (filter.control === 'tag') return null;
+  if (filter.control === 'toggle') {
+    const pressed = value !== '';
+    return (
+      <button
+        type="button"
+        aria-pressed={pressed}
+        className={cn(
+          'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs',
+          pressed ? 'border-foreground bg-muted font-medium' : 'border-edge text-muted-foreground hover:text-foreground',
+        )}
+        data-testid={`filter-${filter.key}`}
+        onClick={() => onChange(pressed ? '' : '1')}
+      >
+        <HumanIcon className="h-3.5 w-3.5" decorative />
+        {filter.label}
+      </button>
+    );
+  }
   const on = selectedOptions(value);
   return (
     <div className="flex gap-1" role="group" aria-label={filter.label}>
@@ -178,7 +228,7 @@ export const FilterPane = ({
         </button>
         {BOARD_FILTERS.filter((filter) => filter.control !== 'tag').map((filter) => (
           <div key={filter.key} className="flex items-center gap-2 text-xs text-muted-foreground">
-            {!filter.hideLabel && <span>{filter.label}</span>}
+            {!filter.hideLabel && filter.control !== 'toggle' && <span>{filter.label}</span>}
             <Control
               filter={filter}
               value={values[filter.key] ?? ''}
