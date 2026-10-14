@@ -82,7 +82,10 @@ const provenNeed = (id: string, item: unknown, evidence: EdgeEvidence | undefine
   const confidence = field(item, 'confidence');
   if (typeof confidence !== 'number' || !(confidence >= MIN_NEED_CONFIDENCE)) return false;
   if (evidence === undefined) return true;
-  return (evidence.others.get(id) ?? '').includes(symbol) && evidence.own.includes(symbol);
+  // Direction is the model's `addedBy` claim: the code cannot tell a true reversal from a correct claim, only that both plans name the symbol.
+  if (!/^[A-Za-z_$][\w$]*$/.test(symbol)) return false;
+  const named = new RegExp(`(?<![\\w$])${symbol.replace(/\$/g, '\\$')}(?![\\w$])`);
+  return named.test(evidence.others.get(id) ?? '') && named.test(evidence.own);
 };
 
 /**
