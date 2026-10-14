@@ -37,6 +37,27 @@ const conflict = (
   kind,
 });
 
+describe('detectHotspots with workstream conflicts', () => {
+  const ws = (path: string, globId: string, workstream: string, at: string): FileConflict => ({
+    ...conflict(path, globId, at),
+    kind: null,
+    workstream,
+  });
+
+  it('counts each workstream that conflicted on a file as a party, like a glob', () => {
+    const hot = detectHotspots(
+      [ws('a.ts', 's1t1', 'W1', day(10)), ws('a.ts', 's1t1', 'W2', day(10)), ws('a.ts', 's1t1', 'W3', day(10))],
+      NOW,
+      settings,
+    );
+    expect(hot.map((h) => [h.path, h.globs, h.workstreamConflicts])).toEqual([['a.ts', ['s1t1'], 3]]);
+  });
+
+  it('lists nothing below the threshold', () => {
+    expect(detectHotspots([ws('a.ts', 's1t1', 'W1', day(10)), ws('a.ts', 's1t1', 'W2', day(10))], NOW, settings)).toEqual([]);
+  });
+});
+
 describe('detectHotspots', () => {
   it('reads the defaults: a 7-day window, 3 globs or 2 real conflicts', () => {
     expect(settings).toEqual({ windowDays: 7, minGlobs: 3, minReal: 2 });

@@ -823,8 +823,8 @@ export const api = {
       `/api/globs/${id}/plan`,
     ),
   /** Cuts a glob in Planning into parts; the first keeps the glob's ID. */
-  splitGlob: (id: string, version: number, parts: SplitPartInput[], idempotencyKey: string) =>
-    request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts }),
+  splitGlob: (id: string, version: number, parts: SplitPartInput[], idempotencyKey: string, group?: string) =>
+    request<{ parts: GlobView[] }>('POST', `/api/globs/${id}/split`, { version, idempotencyKey, parts, ...(group === undefined ? {} : { group }) }),
   savePlan: (id: string, content: string) => request<ArtifactView>('PUT', `/api/globs/${id}/plan`, { content }),
   /** The glob's test plan with its versions; `version` reads an older one. */
   testPlan: (id: string, version?: number) =>

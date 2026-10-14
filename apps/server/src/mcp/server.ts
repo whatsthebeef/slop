@@ -307,6 +307,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         id: z.string(),
         version: z.number().int(),
         idempotencyKey: z.string().min(1),
+        group: z.string().min(1).max(100).optional().describe('The group every part shares when the glob has none (default: named from its title); ignored when it has one'),
         parts: z
           .array(
             z.object({
@@ -322,9 +323,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(MAX_SPLIT_PARTS),
       },
     },
-    async ({ id, version, idempotencyKey, parts }) => {
+    async ({ id, version, idempotencyKey, group, parts }) => {
       const split = await globs.split(email, id, version, {
         idempotencyKey,
+        ...(group === undefined ? {} : { group }),
         planBy: 'sessionator',
         parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
           ...rest,

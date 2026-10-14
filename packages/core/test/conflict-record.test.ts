@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conflictRecords } from '../src/domain/conflict-record.js';
+import { conflictRecords, workstreamConflictRecords } from '../src/domain/conflict-record.js';
 import type { DomainEvent } from '../src/domain/events.js';
 
 const flagged = (
@@ -73,5 +73,39 @@ describe('conflictRecords', () => {
       ['2026-10-13T01:00:00Z', '2026-10-13T02:00:00Z'],
       ['2026-10-13T03:00:00Z', null],
     ]);
+  });
+});
+
+const recorded = (globId: string, at: string, workstreams: { name: string; conflicts: string[] }[]): DomainEvent => ({
+  type: 'WorkstreamsRecorded',
+  globId,
+  actor: null,
+  at,
+  data: { fannedOut: true, maxParallel: 2, workstreams },
+});
+
+describe('workstreamConflictRecords', () => {
+  it('makes one row per workstream and file from the latest record of each glob', () => {
+    const rows = workstreamConflictRecords([
+      recorded('s1t1', '2026-10-13T01:00:00Z', [{ name: 'W1', conflicts: ['old.ts'] }]),
+      recorded('s1t1', '2026-10-13T03:00:00Z', [
+        { name: 'W1', conflicts: ['a.ts', 'a.ts'] },
+        { name: 'W2', conflicts: ['a.ts', 'b.ts'] },
+        { name: 'W3', conflicts: [] },
+      ]),
+    ]);
+    expect(rows.map((r) => [r.path, r.workstream, r.globId, r.by, r.kind])).toEqual([
+      ['a.ts', 'W1', 's1t1', 'run', null],
+      ['a.ts', 'W2', 's1t1', 'run', null],
+      ['b.ts', 'W2', 's1t1', 'run', null],
+    ]);
+  });
+
+  it('joins the conflicts between globs in conflictRecords', () => {
+    const rows = conflictRecords([
+      recorded('s1t1', '2026-10-13T03:00:00Z', [{ name: 'W1', conflicts: ['a.ts'] }]),
+      flagged('s1t2', '2026-10-13T01:00:00Z', ['a.ts']),
+    ]);
+    expect(rows.map((r) => [r.globId, r.workstream])).toEqual([['s1t2', undefined], ['s1t1', 'W1']]);
   });
 });
