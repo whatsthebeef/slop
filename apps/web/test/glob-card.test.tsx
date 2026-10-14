@@ -9,8 +9,14 @@ import type { CardMove } from '../src/components/glob-card';
 import { actionPresentation } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import { handoverKey, statusKey } from '../src/lib/dismissals';
+import { cornerStatus } from '../src/lib/card-rows';
 import { statusLine } from '../src/lib/status-line';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
+
+vi.mock('../src/lib/card-rows', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/card-rows')>();
+  return { ...actual, cornerStatus: vi.fn(actual.cornerStatus) };
+});
 
 afterEach(cleanup);
 
@@ -73,7 +79,8 @@ const withoutTips = (html: string) => visible(html.replace(/<span id="[^"]+" cla
 
 describe('card rows', () => {
   it('renders the header, title, chips and actions in that order, with no status row under the title', () => {
-    const root = dom(markup(prOpen({ allowedActions: ['merge'] })));
+    const g = prOpen({ allowedActions: ['merge'] });
+    const root = dom(markup(g, [move('start', g)]));
     const order = ['card-header', 'card-title', 'card-chips', 'card-actions'].map((id) => {
       const el = root.querySelector(`[data-testid="${id}"]`);
       expect(el, id).not.toBeNull();
@@ -126,7 +133,7 @@ describe('card rows', () => {
       ['machine running', () => view({ status: 'in_progress', ...live('active') }), 'machine-spinning', 'implementing', 'The machine is working on it'],
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
-      ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob'],
+      ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Asks you to confirm'],
       ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1 +3', 'Waits for, in order: s1t1 (Doing)'],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Waiting'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
@@ -389,8 +396,19 @@ describe('card actions', () => {
     expect(failed).toContain('provisioning failed');
   });
 
-  it('offers Merge when nothing blocks it', () => {
-    expect(markup(prOpen({ allowedActions: ['merge'] }))).toMatch(/<button[^>]*aria-label="Your turn: Merge PR #289"[^>]*data-testid="your-turn-chip"/);
+  it('offers Merge once, in the corner, when nothing blocks it', () => {
+    const html = markup(prOpen({ allowedActions: ['merge'] }));
+    expect(html).not.toContain('your-turn-chip');
+    expect(html).not.toContain('card-actions');
+    const root = dom(html);
+    const mentions = [...root.querySelectorAll('*')].filter((el) => el.children.length === 0 && /merge/i.test(el.textContent) && !el.classList.contains('sr-only'));
+    expect(mentions).toHaveLength(1);
+    expect(root.querySelector('[data-testid="card-corner"] [data-testid="position"]')?.textContent).toMatch(/merge/i);
+  });
+
+  it('still shows the actions row for a card with move buttons', () => {
+    const g = view({ type: 'same', status: 'planning' });
+    expect(markup(g, [move('start', g)])).toContain('data-testid="card-actions"');
   });
 });
 
@@ -428,26 +446,63 @@ describe('card interaction', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('keeps Merge a two-step confirm from the actions row', async () => {
+  it('merges from the corner in two clicks, never opening the card', async () => {
     const user = userEvent.setup();
-    const { onAct, onOpen } = renderCard(prOpen({ allowedActions: ['merge'] }));
-    await user.click(screen.getByTestId('your-turn-chip'));
-    expect(screen.getByTestId('your-turn-chip').textContent).toBe('Confirm merge #289');
+    const { onAct, onOpen, onOpenSection } = renderCard(prOpen({ allowedActions: ['merge'] }));
+    expect(screen.queryByTestId('your-turn-chip')).toBeNull();
+    await user.click(screen.getByTestId('position'));
+    expect(screen.getByTestId('position').textContent).toBe('confirm merge');
+    expect(screen.getByTestId('position').getAttribute('data-confirming')).toBe('true');
     expect(onAct).not.toHaveBeenCalled();
-    await user.click(screen.getByTestId('your-turn-chip'));
+    await user.click(screen.getByTestId('position'));
     expect(onAct).toHaveBeenCalledWith('merge');
+    expect(onAct).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
+    expect(onOpenSection).not.toHaveBeenCalled();
   });
 
-  it('never runs Your turn from the status: it opens the glob view, and the tooltip says so', async () => {
+  it('reverts the corner merge confirm on Esc', async () => {
     const user = userEvent.setup();
-    const g = prOpen({ allowedActions: ['merge'] });
+    const { onAct } = renderCard(prOpen({ allowedActions: ['merge'] }));
+    await user.click(screen.getByTestId('position'));
+    expect(screen.getByTestId('position').textContent).toBe('confirm merge');
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('position').textContent).toMatch(/^merge/i);
+    expect(onAct).not.toHaveBeenCalled();
+  });
+
+  it('shows the working state in the corner while an action is pending', () => {
+    renderCard(prOpen({ allowedActions: ['merge'] }), { pending: 'merge' });
+    expect(screen.getByTestId<HTMLButtonElement>('position').disabled).toBe(true);
+  });
+
+  it('runs Done from the corner on one click', async () => {
+    const user = userEvent.setup();
+    const g = prOpen({ allowedActions: ['mark_ready'] });
+    const real = vi.mocked(cornerStatus).getMockImplementation();
+    vi.mocked(cornerStatus).mockImplementation((...args) => {
+      const status = real?.(...args) ?? null;
+      return status === null ? null : { ...status, text: 'done', click: { kind: 'act', action: 'mark_ready', confirm: false } };
+    });
+    try {
+      const { onAct, onOpen } = renderCard(g);
+      await user.click(screen.getByTestId('position'));
+      expect(onAct).toHaveBeenCalledTimes(1);
+      expect(onAct).toHaveBeenCalledWith('mark_ready');
+      expect(onOpen).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(cornerStatus).mockImplementation((...args) => real?.(...args) ?? null);
+    }
+  });
+
+  it('opens the glob view from a ready status that needs input, without running anything', async () => {
+    const user = userEvent.setup();
+    const g = prOpen({ allowedActions: [] });
     const { onOpenSection, onOpen, onAct } = renderCard(g);
     await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledWith({ section: 'actions' });
     expect(onAct).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
-    expect(screen.getByTestId('card-status').querySelector('.sr-only')?.textContent.endsWith('Opens the glob')).toBe(true);
   });
 
   it('opens the glob view at the section from the status without running anything', async () => {

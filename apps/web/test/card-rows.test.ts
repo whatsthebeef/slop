@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cornerStatus, hasBlocker, plainText, specifics, turnButton } from '../src/lib/card-rows';
+import { cornerStatus, hasBlocker, plainText, specifics } from '../src/lib/card-rows';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -113,11 +113,17 @@ describe('cornerStatus', () => {
     expect(both?.tip).toContain('touches billing');
   });
 
-  it('is the person icon and just the action for your turn, opening the glob view', () => {
+  it('is the person icon and just the action for your turn, running Merge from the corner (with its confirm)', () => {
     const status = at(prOpen({ allowedActions: ['merge'] }));
     expect(status).toMatchObject({ kind: 'ready', icon: 'human' });
     expect(status?.text).not.toMatch(/your turn/i);
-    expect(status?.click).toEqual({ kind: 'section', target: { section: 'actions' } });
+    expect(status?.click).toEqual({ kind: 'act', action: 'merge', confirm: true });
+  });
+
+  it('opens the glob view for a ready step that needs input, or when something blocks', () => {
+    const noMerge = at(prOpen({ allowedActions: [] }));
+    expect(noMerge).toMatchObject({ kind: 'ready' });
+    expect(noMerge?.click?.kind).toBe('section');
   });
 
   it('says the other problems in a few words, with the detail in the tooltip', () => {
@@ -215,14 +221,6 @@ describe('hasBlocker', () => {
     expect(hasBlocker(view({ status: 'planning', clash: { with: 's1t2', paths: ['a.ts'] } }), NOW)).toBe(false);
     expect(hasBlocker(view({ status: 'planning' }), NOW)).toBe(false);
     expect(hasBlocker(prOpen({ allowedActions: ['merge'] }), NOW)).toBe(false);
-  });
-});
-
-describe('turnButton', () => {
-  it('is Merge when it is the viewer\'s turn to merge and nothing blocks, and never with a blocker', () => {
-    const g = prOpen({ allowedActions: ['merge'] });
-    expect(turnButton(g, NOW, undefined, false)?.click).toEqual({ kind: 'act', action: 'merge', confirm: true });
-    expect(turnButton(g, NOW, undefined, true)).toBeNull();
   });
 });
 

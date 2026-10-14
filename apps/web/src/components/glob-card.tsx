@@ -8,7 +8,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import { cornerStatus, hasBlocker, turnButton } from '@/lib/card-rows';
+import { cornerStatus, hasBlocker } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
@@ -134,14 +134,65 @@ export const GroupChip = ({ name, onFilter, to }: { name: string; onFilter?: (na
  */
 const CornerStatusView = ({
   status,
+  pending,
   onAct,
   onOpenSection,
 }: {
   status: CornerStatus;
+  pending?: Action;
   onAct?: (action: Action) => void;
   onOpenSection: (target: GlobTarget) => void;
 }) => {
   const click = status.click;
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = setTimeout(() => setConfirming(false), CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [confirming]);
+  // Merge and Done are run from here: a chip button, with Merge asking for a second click (Esc, blur or the timeout reverts it).
+  if (status.kind === 'ready' && click?.kind === 'act') {
+    const busy = pending !== undefined;
+    const label = busy ? workingLabel(pending) : confirming ? 'confirm merge' : status.text;
+    const tip = [...status.tip.split('\n').filter((line) => line !== clickTip(click)), clickTip(click, confirming)].join('\n');
+    return (
+      <span className='inline-flex min-w-0 shrink justify-end' data-testid='card-status' data-kind={status.kind} data-icon={status.icon}>
+        <Tip text={tip}>
+          <button
+            type='button'
+            className={cn(
+              'inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-current px-1.5 text-right font-mono text-[11px] hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
+              confirming ? 'text-required' : status.tone,
+            )}
+            disabled={busy}
+            data-testid='position'
+            data-kind={status.kind}
+            data-confirming={confirming ? 'true' : undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (busy) return;
+              if (turnStep(click, confirming) === 'confirm') {
+                setConfirming(true);
+                return;
+              }
+              setConfirming(false);
+              (onAct ?? (() => undefined))(click.action);
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Escape') setConfirming(false);
+            }}
+            onBlur={() => setConfirming(false)}
+          >
+            <span className='truncate' data-testid='status-text'>
+              {label}
+            </span>
+            {busy ? <Loader2 className='h-3 w-3 shrink-0 animate-spin' aria-hidden /> : <StatusIconView icon={status.icon} />}
+          </button>
+        </Tip>
+      </span>
+    );
+  }
   const open = click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
   const needsHuman = status.kind === 'needs-human';
   return (
@@ -503,68 +554,6 @@ const runChip = (click: ChipClick, onAct: (action: Action) => void, onOpenSectio
   else window.open(click.url, '_blank', 'noopener,noreferrer');
 };
 
-/**
- * Your turn as a button in the actions row, for the two steps the card runs itself: Merge asks for a second click (Confirm
- * merge, for a few seconds; Esc, blur or the timeout reverts it) and Done runs at once. Steps that need input are the status's
- * link into the glob view, not a button. The click never reaches the card.
- */
-const TurnButton = ({
-  glob,
-  turn,
-  pending,
-  onAct,
-}: {
-  glob: GlobView;
-  turn: NonNullable<ReturnType<typeof turnButton>>;
-  pending?: Action;
-  onAct: (action: Action) => void;
-}) => {
-  const [confirming, setConfirming] = useState(false);
-  useEffect(() => {
-    if (!confirming) return;
-    const timer = setTimeout(() => setConfirming(false), CONFIRM_MS);
-    return () => clearTimeout(timer);
-  }, [confirming]);
-  const { status, click } = turn;
-  const busy = pending !== undefined;
-  const pr = glob.pr === null ? '' : ` #${String(glob.pr.number)}`;
-  const verb = click.action === 'merge' ? 'Merge' : 'Done';
-  return (
-    <Tip text={`${status.tip}\n${clickTip(click, confirming)}`}>
-      <button
-        type='button'
-        className={cn(
-          'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-sm bg-foreground px-1.5 py-0.5 font-mono text-[11px] font-medium text-background hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
-          confirming && 'bg-required',
-        )}
-        disabled={busy}
-        aria-label={`Your turn: ${verb} PR${pr}`}
-        data-testid='your-turn-chip'
-        data-kind={status.kind}
-        data-confirming={confirming ? 'true' : undefined}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (busy) return;
-          if (turnStep(click, confirming) === 'confirm') {
-            setConfirming(true);
-            return;
-          }
-          setConfirming(false);
-          onAct(click.action);
-        }}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === 'Escape') setConfirming(false);
-        }}
-        onBlur={() => setConfirming(false)}
-      >
-        {busy ? <Loader2 className='h-3 w-3 animate-spin' aria-hidden /> : <HumanIcon className='h-3 w-3' decorative />}
-        {busy ? workingLabel(pending) : confirming ? `Confirm merge${pr}` : verb}
-      </button>
-    </Tip>
-  );
-};
-
 export const GlobCard = ({
   glob,
   onOpen,
@@ -603,7 +592,7 @@ export const GlobCard = ({
   previewing: Action | null;
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
-  /** Runs an action from a chip (Your turn: Merge, Done); the board's own action path, with its pending state. */
+  /** Runs an action from the corner status (Your turn: Merge, Done); the board's own action path, with its pending state. */
   onAct?: (action: Action) => void;
   /** The board's GitHub repo, for chips that open the PR's checks. */
   repo?: string;
@@ -633,7 +622,6 @@ export const GlobCard = ({
   const decision = decisionOf(glob) !== null;
   const status = cornerStatus(glob, now, viewer, repo);
   const blocked = hasBlocker(glob, now, viewer);
-  const turn = turnButton(glob, now, viewer, blocked);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
   const shown = blocked ? [] : moves;
 
@@ -693,7 +681,7 @@ export const GlobCard = ({
           )}
           {tag === undefined && status !== null && (
             <>
-              <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />
+              <CornerStatusView status={status} pending={pending} onAct={onAct} onOpenSection={onOpenSection} />
               <span aria-hidden='true' className='shrink-0' data-testid='card-corner-separator'>
                 ·
               </span>
@@ -739,7 +727,7 @@ export const GlobCard = ({
               </Tip>
             )}
           </div>
-          {(pending !== undefined || turn !== null || shown.length > 0) && (
+          {(pending !== undefined || shown.length > 0) && (
             <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-actions'>
               {pending !== undefined && (
                 <span className='inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
@@ -747,7 +735,6 @@ export const GlobCard = ({
                   {workingLabel(pending)}
                 </span>
               )}
-              {turn !== null && <TurnButton glob={glob} turn={turn} pending={pending} onAct={(action) => onAct?.(action)} />}
               {shown.map((move, _i, all) => (
                 <MoveButton
                   key={move.action}
