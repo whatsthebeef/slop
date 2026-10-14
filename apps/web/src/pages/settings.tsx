@@ -6,7 +6,8 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
 import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/components/board-filter-pane';
 import type { BoardShellContext } from '@/components/board-shell';
-import { GroupChip } from '@/components/glob-card';
+import { GlobCard } from '@/components/glob-card';
+import { globPath } from '@/lib/glob-section';
 import { ContextSection } from '@/components/context-report';
 import { JobStatus } from '@/components/job-status';
 import { ReadinessChecklist } from '@/components/readiness';
@@ -1282,6 +1283,8 @@ const DeploySettings = ({
   </div>
 );
 
+const noop = () => undefined;
+
 export const SignedOffPage = () => {
   const boardId = Number(useParams().boardId);
   usePageContext({ type: 'signed_off' });
@@ -1309,7 +1312,7 @@ export const SignedOffPage = () => {
   }, [linked, boardId, navigate]);
 
   return (
-    <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
+    <main className='mx-auto grid w-full max-w-[90rem] gap-4 p-6'>
       {headerActions !== null &&
         createPortal(<FilterToggle open={filterOpen} active={filtering} onClick={() => setFilterOpen(!filterOpen)} />, headerActions)}
       <FilterPane
@@ -1326,23 +1329,30 @@ export const SignedOffPage = () => {
           {loaded.length === 0 ? 'Nothing signed off yet.' : 'No globs match the filter'}
         </p>
       )}
-      {globs.map((g) => (
-        <button
-          key={g.id}
-          type='button'
-          // The list item has no actions; the glob page (fetched fresh) has them.
-          onClick={() => void navigate(`/boards/${String(boardId)}/globs/${encodeURIComponent(g.id)}`)}
-          className='flex items-center gap-2 rounded-md border bg-card p-2 text-left text-sm hover:bg-muted'
-          data-testid={`signed-off-${g.id}`}
-        >
-          <span className='font-mono text-xs text-muted-foreground'>{g.id}</span>
-          <span className='flex-1'>{g.title}</span>
-          {g.group !== null && <GroupChip name={g.group} />}
-          <span className='text-xs text-muted-foreground'>
-            {g.signedOffAt === null ? '' : new Date(g.signedOffAt).toLocaleDateString()}
-          </span>
-        </button>
-      ))}
+      {globs.length > 0 && (
+        <div className='grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,17rem),1fr))]' data-testid='signed-off-grid'>
+          {globs.map((g) => (
+            <div key={g.id} className='contents' data-testid={`signed-off-${g.id}`}>
+              {/* Read-only: no moves, actions or label changes; the glob page (fetched fresh) has them. */}
+              <GlobCard
+                glob={g}
+                onOpen={() => void navigate(globPath(boardId, g.id))}
+                onOpenSection={(target) => void navigate(globPath(boardId, g.id, target))}
+                onFilterGroup={(name) => {
+                  setFilters({ ...filters, group: name });
+                  setFilterOpen(true);
+                }}
+                moves={[]}
+                previewing={null}
+                onPreview={noop}
+                onMove={noop}
+                onArrow={noop}
+                viewer={viewer}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       {pages.hasNextPage && (
         <Button variant='outline' onClick={() => void pages.fetchNextPage()}>
           Load more

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Outlet, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,7 @@ const renderPage = (url: string) =>
         <Routes>
           <Route path='/boards/:boardId' element={<Outlet context={{ headerActions: null }} />}>
             <Route path='signed-off' element={<SignedOffPage />} />
+            <Route path='globs/:globId' element={<p data-testid='glob-page'>glob page</p>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -68,5 +69,63 @@ describe('Signed Off view filters', () => {
     expect(screen.getByTestId('filter-human').getAttribute('aria-pressed')).toBe('true');
     await userEvent.setup().click(screen.getByTestId('filter-category-bug'));
     expect(await screen.findByTestId('no-match')).toBeTruthy();
+  });
+});
+
+describe('Signed Off view cards', () => {
+  it('shows a read-only GlobCard per glob in a grid', async () => {
+    renderPage('/boards/1/signed-off');
+    const grid = await screen.findByTestId('signed-off-grid');
+    expect(within(grid).getByTestId('card-s1f1')).toBeTruthy();
+    expect(within(grid).getByTestId('card-s1b2')).toBeTruthy();
+    expect(within(screen.getByTestId('signed-off-s1f1')).getByTestId('card-s1f1')).toBeTruthy();
+    expect(screen.queryByTestId('card-actions')).toBeNull();
+    expect(screen.queryByRole('button', { name: /pick up|start|split/i })).toBeNull();
+  });
+
+  it('opens the glob page on a card click', async () => {
+    renderPage('/boards/1/signed-off');
+    await userEvent.setup().click(await screen.findByTestId('card-s1f1'));
+    expect(await screen.findByTestId('glob-page')).toBeTruthy();
+  });
+
+  it('the group tag sets the group filter', async () => {
+    api.signedOff.mockResolvedValue({
+      next: null,
+      globs: [view({ id: 's1f1', title: 'A', status: 'signed_off', group: 'alpha' }), view({ id: 's1f2', title: 'B', status: 'signed_off', group: 'beta' })],
+    });
+    renderPage('/boards/1/signed-off');
+    const user = userEvent.setup();
+    await user.click(within(await screen.findByTestId('card-s1f1')).getByTestId('group-chip'));
+    expect(await screen.findByTestId('signed-off-s1f1')).toBeTruthy();
+    expect(screen.queryByTestId('signed-off-s1f2')).toBeNull();
+  });
+
+  it('Load more pages in more cards and the filter applies to them', async () => {
+    api.signedOff
+      .mockResolvedValueOnce({ next: 'c2', globs: [view({ id: 's1f1', title: 'One', category: 'feature', status: 'signed_off' })] })
+      .mockResolvedValueOnce({ next: null, globs: [view({ id: 's1b2', title: 'Two', category: 'bug', status: 'signed_off' })] });
+    renderPage('/boards/1/signed-off?category=bug');
+    expect(await screen.findByTestId('no-match')).toBeTruthy();
+    await userEvent.setup().click(screen.getByText('Load more'));
+    expect(await screen.findByTestId('card-s1b2')).toBeTruthy();
+    expect(screen.queryByTestId('card-s1f1')).toBeNull();
+  });
+
+  it('offers no Approve or Re-open on label chips, and dates only signed-off cards', async () => {
+    api.signedOff.mockResolvedValue({
+      next: null,
+      globs: [
+        view({ id: 's1f1', title: 'Done feature', status: 'signed_off', signedOffAt: '2026-10-01T00:00:00.000Z' }),
+        view({ id: 's1b2', title: 'Re-opened bug', category: 'bug', status: 'reviewing', labels: { CR: 'required' } }),
+      ],
+    });
+    renderPage('/boards/1/signed-off');
+    const user = userEvent.setup();
+    await user.click(within(await screen.findByTestId('card-s1b2')).getByLabelText('Sign-off labels'));
+    expect(await screen.findByText('Open review')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^(approve|re-open)$/i })).toBeNull();
+    expect(within(screen.getByTestId('card-s1f1')).getByTestId('card-signed-off')).toBeTruthy();
+    expect(within(screen.getByTestId('card-s1b2')).queryByTestId('card-signed-off')).toBeNull();
   });
 });
