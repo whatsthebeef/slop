@@ -8,10 +8,8 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
-import type { Position } from '@/lib/position';
-import { positionOf } from '@/lib/position';
-import { cardStatus, cornerMarker, hasBlocker, turnButton } from '@/lib/card-rows';
-import type { CornerMarker } from '@/lib/card-rows';
+import { cornerStatus, hasBlocker, turnButton } from '@/lib/card-rows';
+import type { CornerStatus, StatusIcon } from '@/lib/card-rows';
 import { cn, groupSticker } from '@/lib/utils';
 import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
@@ -124,32 +122,30 @@ export const GroupChip = ({ name, onFilter, to }: { name: string; onFilter?: (na
 };
 
 /**
- * The card's one corner marker (see `cornerMarker`): a single line that never wraps, truncated with the full text in its
- * tooltip, anchored right. Stalled hides standby; the tooltip says it instead.
+ * The card's one status (see `cornerStatus`): an icon and a few words on a single line that never wraps, truncated with the
+ * full detail in its tooltip, anchored right. It shrinks before the ID does.
  */
-const CornerMarkerView = ({
-  marker,
-  position,
+const CornerStatusView = ({
+  status,
   onAct,
   onOpenSection,
 }: {
-  marker: CornerMarker;
-  position: Position | null;
+  status: CornerStatus;
   onAct?: (action: Action) => void;
   onOpenSection: (target: GlobTarget) => void;
 }) => {
-  const click = marker.click;
+  const click = status.click;
   const open = click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
-  const needsHuman = marker.kind === 'needs-human';
+  const needsHuman = status.kind === 'needs-human';
   return (
-    <span className='inline-flex min-w-0 max-w-[45%] justify-end' data-testid='corner-marker' data-kind={marker.kind}>
-      <Tip text={open === undefined || click === null || needsHuman ? marker.tip : `${marker.tip}\n${clickTip(click)}`}>
+    <span className='inline-flex min-w-0 shrink justify-end' data-testid='card-status' data-kind={status.kind} data-icon={status.icon}>
+      <Tip text={status.tip}>
         <ChipButton
           onOpen={open}
-          className={cn('inline-flex min-w-0 items-center gap-1 text-right font-mono text-[11px]', marker.tone)}
+          className={cn('inline-flex min-w-0 items-center gap-1 text-right font-mono text-[11px]', status.tone)}
           testId={needsHuman ? 'escalation-chip' : 'position'}
-          dataKind={marker.kind}
-          ariaLabel={needsHuman ? 'Needs a person' : marker.label}
+          dataKind={status.kind}
+          ariaLabel={needsHuman ? status.label : undefined}
         >
           {needsHuman ? (
             // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
@@ -158,12 +154,8 @@ const CornerMarkerView = ({
             </span>
           ) : (
             <>
-              {marker.kind === 'standby' ? (
-                <ActorIcon actor='machine' className='h-3 w-3 shrink-0' decorative />
-              ) : position === null ? null : (
-                <PositionIcon position={position} />
-              )}
-              {marker.text !== '' && <span className='truncate'>{marker.text}</span>}
+              <StatusIconView icon={status.icon} />
+              <span className='truncate'>{status.text}</span>
             </>
           )}
         </ChipButton>
@@ -172,12 +164,12 @@ const CornerMarkerView = ({
   );
 };
 
-const PositionIcon = ({ position }: { position: Position }) => {
-  if (position.spinning && position.holder === 'machine') return <MachineIcon working className='h-3 w-3 shrink-0' decorative />;
-  if (position.spinning) return <Loader2 className='h-3 w-3 shrink-0 animate-spin' aria-hidden />;
-  if (position.holder === 'waiting') return <Hourglass className='h-3 w-3 shrink-0' aria-hidden />;
-  if (position.holder === 'stalled') return <AlertTriangle className='h-3 w-3 shrink-0' aria-hidden />;
-  return <ActorIcon actor={position.holder === 'human' ? 'human' : 'machine'} className='h-3 w-3 shrink-0' decorative />;
+const StatusIconView = ({ icon }: { icon: StatusIcon }) => {
+  if (icon === 'machine-spinning') return <MachineIcon working className='h-3 w-3 shrink-0' decorative />;
+  if (icon === 'machine') return <ActorIcon actor='machine' className='h-3 w-3 shrink-0' decorative />;
+  if (icon === 'human') return <ActorIcon actor='human' className='h-3 w-3 shrink-0' decorative />;
+  if (icon === 'hourglass') return <Hourglass className='h-3 w-3 shrink-0' aria-hidden />;
+  return <AlertTriangle className='h-3 w-3 shrink-0' aria-hidden />;
 };
 
 /** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
@@ -440,25 +432,6 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   );
 };
 
-/** Glob IDs as comma-separated links that open that glob on the board without opening the card they sit on. */
-const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }) => (
-  <>
-    {ids.map((id, i) => (
-      <span key={id}>
-        {i > 0 && ', '}
-        <Link
-          to={`/boards/${boardId}?glob=${encodeURIComponent(id)}`}
-          className='underline-offset-2 hover:underline'
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          {id}
-        </Link>
-      </span>
-    ))}
-  </>
-);
-
 /**
  * Globs that may change the same files as this one (predicted from the board's merge policy, or set by a person): a note
  * that the later merge rebases, never a hold. Each ID opens that glob on the board.
@@ -598,8 +571,8 @@ const runChip = (click: ChipClick, onAct: (action: Action) => void, onOpenSectio
 
 /**
  * Your turn as a button in the actions row, for the two steps the card runs itself: Merge asks for a second click (Confirm
- * merge, for a few seconds; Esc, blur or the timeout reverts it) and Done runs at once. Steps that need input are the status
- * line's link into the glob view, not a button. The click never reaches the card.
+ * merge, for a few seconds; Esc, blur or the timeout reverts it) and Done runs at once. Steps that need input are the status's
+ * link into the glob view, not a button. The click never reaches the card.
  */
 const TurnButton = ({
   glob,
@@ -715,7 +688,7 @@ export const GlobCard = ({
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
 }) => {
-  // Nothing for the machine: the corner marker already says it is working.
+  // Nothing for the machine: the status already says it is working.
   const machineRun = glob.runs.some((r) => r.generation === glob.generation && r.purpose !== 'investigate');
   const person = glob.implementer ?? (machineRun ? null : glob.planner);
   const failed = glob.status === 'failed' || glob.failure !== null;
@@ -724,9 +697,7 @@ export const GlobCard = ({
   const preview = moves.find((m) => m.action === previewing);
   // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
   const decision = decisionOf(glob) !== null;
-  const marker = cornerMarker(glob, now, viewer, repo);
-  const position = positionOf(glob, now, viewer);
-  const line = cardStatus(glob, now, viewer, repo);
+  const status = cornerStatus(glob, now, viewer, repo);
   const blocked = hasBlocker(glob, now, viewer);
   const turn = turnButton(glob, now, viewer, blocked);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
@@ -768,55 +739,19 @@ export const GlobCard = ({
       data-testid={`card-${glob.id}`}
     >
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
-        {/* The ID gives way last: the marker's text truncates first (it shrinks faster), the category icon never moves. */}
+        {/* The ID gives way last: the status truncates first (it shrinks faster), the category icon never moves. */}
         <span className='min-w-0 shrink-[0.2] truncate whitespace-nowrap' data-testid='card-id'>
           {glob.id} · {decision ? 'decision' : glob.type}
           {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
         <span className='inline-flex min-w-0 items-center justify-end gap-1.5' data-testid='card-corner'>
-          {marker !== null && <CornerMarkerView marker={marker} position={position} onAct={onAct} onOpenSection={onOpenSection} />}
+          {status !== null && <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />}
           <CategoryIcon category={glob.category} />
         </span>
       </div>
       <div className='leading-snug font-medium break-words' data-testid='card-title'>
         {glob.title}
       </div>
-      {line !== null && (
-        <Tip text={line.tip} className='w-full'>
-          <div
-            className='w-full min-w-0 truncate whitespace-nowrap text-left font-mono text-[11px]'
-            data-testid='status-line'
-            data-kind={line.kind}
-          >
-            {line.head !== null && (
-              <ChipButton
-                onOpen={() => runChip(line.head?.click ?? { kind: 'section', target: cardTargets.actions() }, () => undefined, onOpenSection)}
-                className={cn('inline text-left', line.head.tone)}
-                testId='status-line-open'
-                dataKind={line.head.kind}
-              >
-                {line.head.text}
-              </ChipButton>
-            )}
-            {line.head !== null && line.waiting !== null && <span className='text-muted-foreground'> · </span>}
-            {line.waiting !== null && (
-              <span className='text-muted-foreground' data-testid='waiting-on'>
-                <ChipButton onOpen={() => onOpenSection(cardTargets.prerequisites())} className='inline' testId='waiting-on-open'>
-                  waiting on
-                </ChipButton>{' '}
-                <GlobLinks boardId={glob.boardId} ids={line.waiting.ids} />
-                {line.waiting.more > 0 && ` +${String(line.waiting.more)}`}
-                {line.waiting.next !== null && (
-                  <>
-                    {' · next: '}
-                    <GlobLinks boardId={glob.boardId} ids={[line.waiting.next]} />
-                  </>
-                )}
-              </span>
-            )}
-          </div>
-        </Tip>
-      )}
       <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
           <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>

@@ -63,9 +63,9 @@ const visible = (html: string) => (dom(html).querySelector('[data-glob-id]')?.cl
 const withoutTips = (html: string) => visible(html.replace(/<span id="[^"]+" class="sr-only">[\s\S]*?<\/span>/g, ''));
 
 describe('card rows', () => {
-  it('renders the header, title, status line, chips and actions in that order', () => {
+  it('renders the header, title, chips and actions in that order, with no status row under the title', () => {
     const root = dom(markup(prOpen({ allowedActions: ['merge'] })));
-    const order = ['card-header', 'card-title', 'status-line', 'card-chips', 'card-actions'].map((id) => {
+    const order = ['card-header', 'card-title', 'card-chips', 'card-actions'].map((id) => {
       const el = root.querySelector(`[data-testid="${id}"]`);
       expect(el, id).not.toBeNull();
       return el;
@@ -74,30 +74,89 @@ describe('card rows', () => {
       const [before, el] = [order[i - 1], order[i]];
       expect(before !== null && before !== undefined && el !== null && el !== undefined && (before.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0, String(i)).toBe(true);
     }
+    for (const gone of ['status-line', 'status-line-open', 'waiting-on', 'waiting-on-open']) expect(root.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
   });
 
-  it('keeps the status line and corner marker on one left-aligned truncated line with the full text in a tip', () => {
+  it('keeps the one status on a single truncated line that is never centred, with the full text in a tip', () => {
     const root = dom(markup(stalledByConflict()));
-    const line = root.querySelector('[data-testid="status-line"]');
-    expect(line?.className).toContain('whitespace-nowrap');
-    expect(line?.className).toContain('truncate');
-    expect(line?.className).toContain('text-left');
-    expect(line?.className).not.toMatch(/text-center|justify-center/);
-    const corner = root.querySelector('[data-testid="corner-marker"]');
-    expect(corner?.querySelector('.truncate')?.textContent).toBe('stalled');
-    expect(corner?.querySelector('button')?.className).toContain('whitespace-nowrap');
-    expect(corner?.className).toContain('max-w-[45%]');
-    expect(corner?.className).not.toMatch(/text-center|justify-center/);
-    expect(root.querySelectorAll('[data-testid="corner-marker"]')).toHaveLength(1);
+    const status = root.querySelector('[data-testid="card-status"]');
+    expect(status?.querySelector('.truncate')?.textContent).toMatch(/^merge conflict( · \d+ min)?$/);
+    expect(status?.querySelector('button')?.className).toContain('whitespace-nowrap');
+    expect(status?.querySelector('button')?.className).toContain('truncate');
+    // It shrinks (the ID only at 0.2 of its rate) and may reach zero width; the category icon never does.
+    expect(status?.className).toContain('min-w-0');
+    expect(status?.className).toContain('shrink');
+    expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
+    expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-[0.2]');
+    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('task');
+    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
+    expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
+    expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
   });
 
-  it('puts the category icon last in the header, the status marker just before it, and the ID on the left', () => {
+  it('keeps a very long status truncated, with the category icon still there and the whole text in the tip', () => {
+    const reason = 'A reason that goes on and on about a thing that went wrong in a place nobody expected it to';
+    const html = markup(view({ status: 'planning', failure: { reason, at: NOW } }));
+    const root = dom(html);
+    const status = root.querySelector('[data-testid="card-status"]');
+    expect(status?.querySelector('.truncate')).not.toBeNull();
+    expect(status?.querySelector('button')?.className).toContain('whitespace-nowrap');
+    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')).not.toBeNull();
+    expect(html).toContain(reason);
+  });
+
+  describe('one status per situation', () => {
+    // The card reads the clock, so a run must be fresh or the glob is stalled.
+    const live = (state: 'queued' | 'active' | 'watching') => {
+      const fresh = new Date().toISOString();
+      const r = run({ state, queuedAt: fresh, startedAt: fresh, lastProgressAt: fresh });
+      return { runs: [r], currentRun: r };
+    };
+    const situations: readonly [string, () => GlobView, string, string, string][] = [
+      ['machine running', () => view({ status: 'in_progress', ...live('active') }), 'machine-spinning', 'implementing', 'The machine is working on it'],
+      ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
+      ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
+      ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1, s1t2 +2 · next: s1t9', 'Waits for, in order: s1t1 (Doing)'],
+      ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running on d16d563', 'Waiting'],
+      ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
+    ];
+    it.each(situations)('%s: exactly one status in the header, the icon and the words, the detail in the tip, no row under the title', (_name, make, icon, text, detail) => {
+      const html = markup(make());
+      const root = dom(html);
+      const statuses = root.querySelectorAll('[data-testid="card-status"]');
+      expect(statuses).toHaveLength(1);
+      expect(root.querySelector('[data-testid="card-header"]')?.contains(statuses[0] ?? null)).toBe(true);
+      expect(statuses[0]?.getAttribute('data-icon')).toBe(icon);
+      // A stall adds how long it has lasted.
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).toMatch(new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( · \\d+ min)?$`));
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).not.toMatch(/working|stalled/i);
+      expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
+      expect(statuses[0]?.querySelector('.sr-only')?.textContent).toContain(detail);
+    });
+
+    it('escalated in Planning: "needs a" and the person icon, the reason in the tip', () => {
+      const root = dom(markup(view({ status: 'planning', escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'] })));
+      const status = root.querySelector('[data-testid="card-status"]');
+      expect(status?.getAttribute('data-icon')).toBe('needs-human');
+      expect(status?.textContent).toContain('needs a');
+      expect(status?.querySelector('.sr-only')?.textContent).toContain('touches billing');
+    });
+
+    it('shows no status and no status row for a Planning glob with nothing pending', () => {
+      const root = dom(markup(view({ status: 'planning' })));
+      expect(root.querySelector('[data-testid="card-status"]')).toBeNull();
+      expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
+    });
+  });
+
+  it('puts the category icon last in the header, the status just before it, and the ID on the left', () => {
     const root = dom(markup(stalledByConflict()));
     const header = root.querySelector('[data-testid="card-header"]');
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
     expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
-    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('corner-marker');
+    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('card-status');
     expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
     expect(header?.firstElementChild?.className).toContain('truncate');
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
@@ -152,12 +211,11 @@ describe('card rows', () => {
   it('shows a merge-conflict stall once, short, with no file names; the tooltip has the full reason', () => {
     const html = markup(stalledByConflict());
     const text = withoutTips(html);
-    expect(text).toContain('stalled');
     expect(text).toContain('merge conflict');
-    expect(text).not.toContain('stalled · merge conflict');
+    expect(text).not.toMatch(/stalled/i);
     expect(text.match(/conflict/g)).toHaveLength(1);
     expect(text).not.toMatch(/\.tsx?|apps\/|Merge conflict with main in/);
-    const line = dom(html).querySelector('[data-testid="status-line"]')?.textContent ?? '';
+    const line = dom(html).querySelector('[data-testid="card-status"] .truncate')?.textContent ?? '';
     expect(line.length).toBeLessThanOrEqual(40);
     expect(html).toContain(`Merge conflict with main in ${files.join(', ')}`);
   });
@@ -171,12 +229,13 @@ describe('card rows', () => {
     expect(html).toContain('Resolve locally');
   });
 
-  it('says what it waits on once, with linked IDs, and never "blocked by"', () => {
+  it('says what it waits on once, as plain text in the one status, and never "blocked by"', () => {
     const html = markup(waitingOn());
     const root = dom(html);
-    const waiting = root.querySelector('[data-testid="waiting-on"]');
-    expect(waiting?.textContent).toBe('waiting on s1t1, s1t2 +2 · next: s1t9');
-    expect([...(waiting?.querySelectorAll('a') ?? [])].map((a) => a.textContent)).toEqual(['s1t1', 's1t2', 's1t9']);
+    const status = root.querySelector('[data-testid="card-status"]');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1, s1t2 +2 · next: s1t9');
+    expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
+    expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
     expect(html).not.toContain('after-chip');
     expect(html).toContain('Waits for, in order: s1t1 (Doing)');
@@ -320,21 +379,21 @@ describe('card interaction', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it('never runs Your turn from the status line: it opens the glob view, and the tooltip says so', async () => {
+  it('never runs Your turn from the status: it opens the glob view, and the tooltip says so', async () => {
     const user = userEvent.setup();
     const g = prOpen({ allowedActions: ['merge'] });
     const { onOpenSection, onOpen, onAct } = renderCard(g);
-    await user.click(screen.getByTestId('status-line-open'));
+    await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledWith({ section: 'actions' });
     expect(onAct).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
-    expect(screen.getByTestId('status-line').parentElement?.querySelector('.sr-only')?.textContent.endsWith('Opens the glob')).toBe(true);
+    expect(screen.getByTestId('card-status').querySelector('.sr-only')?.textContent.endsWith('Opens the glob')).toBe(true);
   });
 
-  it('opens the glob view at the section from the status line without running anything', async () => {
+  it('opens the glob view at the section from the status without running anything', async () => {
     const user = userEvent.setup();
     const { onOpenSection, onOpen, onAct } = renderCard(conflicting());
-    await user.click(screen.getByTestId('status-line-open'));
+    await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
     expect(onAct).not.toHaveBeenCalled();

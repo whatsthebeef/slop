@@ -10,23 +10,25 @@ import { blockedParts, chainTip, statusLine } from './status-line';
 import type { BlockedParts, StatusLine } from './status-line';
 
 /**
- * What the card's rows say, decided in one place and kept pure: the one corner marker, the one status line, whether anything
- * blocks the glob, and the actions row. The card only renders these.
+ * What the card's status says, decided in one place and kept pure: the one status in the card's top right (also the glob view
+ * header's text), whether anything blocks the glob, and the actions row. The card only renders these.
  */
 
-/** The one actor or position marker in the card's top-right corner. Highest first: stalled, needs a human, working, standby. */
-export type CornerKind = 'stalled' | 'needs-human' | 'working' | 'standby';
+/** Which icon leads the status: the machine (spinning while a step runs), a warning, a person, an hourglass, or "needs a <person>". */
+export type StatusIcon = 'machine' | 'machine-spinning' | 'alert' | 'human' | 'hourglass' | 'needs-human';
 
-export interface CornerMarker {
-  readonly kind: CornerKind;
-  /** One short word or two; the card never wraps it. Empty for the machine, whose marker is the icon alone. */
+export interface CornerStatus {
+  /** What the status is about, for styling and tests: stalled, needs-human, ready, a problem's kind, machine, human, waiting, standby. */
+  readonly kind: string;
+  readonly icon: StatusIcon;
+  /** One short phrase; the card never wraps it. The icon carries what the words would repeat ("working", "stalled"). */
   readonly text: string;
-  /** The marker's accessible name where it has no text ("Machine working"). */
-  readonly label?: string;
-  /** The full text: the stall's reason, the escalation's reason, and standby where it applies. */
+  /** The accessible name of the status. */
+  readonly label: string;
+  /** The full detail: every lower-priority item, what a click does, the learned reasons and the chain it waits for. */
   readonly tip: string;
   readonly tone: string;
-  /** What a click does; null where the marker is plain text. */
+  /** What a click does; null where the status is plain text. */
   readonly click: ChipClick | null;
 }
 
@@ -34,48 +36,13 @@ const STANDBY_TIP = "The machine is on standby, listening to GitHub: it fixes ne
 
 const isEscalated = (glob: GlobView): boolean => glob.escalation != null && glob.status === 'planning';
 
-/** The single marker for the corner, or null. A stalled glob never also shows standby: its tooltip says so instead. */
-export const cornerMarker = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CornerMarker | null => {
-  const position = positionOf(glob, now, viewer);
-  const standby = onStandby(glob);
-  const escalation = glob.escalation;
-  if (position?.holder === 'stalled') {
-    return {
-      kind: 'stalled',
-      text: 'stalled',
-      tip: [position.tip, ...(standby === null ? [] : [STANDBY_TIP]), ...(escalation != null && isEscalated(glob) ? [`Needs a person: ${escalation.reason}`] : [])].join('\n'),
-      tone: position.tone,
-      click: positionClick(position, glob, repo),
-    };
-  }
-  if (escalation != null && isEscalated(glob)) {
-    return { kind: 'needs-human', text: 'needs a human', tip: `Needs a person: ${escalation.reason}. Opens the reason`, tone: 'text-required', click: { kind: 'section', target: cardTargets.escalation() } };
-  }
-  if (position?.holder === 'machine') {
-    // The robot head alone (spinning while a step runs); the status line's verb carries the specifics.
-    return { kind: 'working', text: '', label: position.queued ? 'Machine queued' : 'Machine working', tip: position.tip, tone: 'text-muted-foreground', click: positionClick(position, glob, repo) };
-  }
-  if (standby !== null) return { kind: 'standby', text: '', label: 'Machine on standby', tip: STANDBY_TIP, tone: 'text-muted-foreground', click: null };
-  return null;
-};
-
 /**
- * The specifics a position's label adds to the corner marker, without the marker's own word: "stalled · merge conflict"
+ * The specifics a position's label adds to its icon, without the word the icon already says: "stalled · merge conflict"
  * becomes "merge conflict", and a bare "standby" says what it is listening for.
  */
 export const specifics = (label: string): string => {
   const rest = label.replace(/^stalled(\s*[·:]\s*|$)/i, '');
   return rest.toLowerCase() === 'standby' ? 'listening for CI and reviews' : rest;
-};
-
-/** The glob view's Now headline for a stalled or machine position: the stalled word or the machine's verb (the robot head says the rest). */
-export const nowHeadline = (holder: 'stalled' | 'machine', label: string, queued = false): string => {
-  // A step waiting to start already says so in its label ("starting", "queued 3 min").
-  if (queued) return label;
-  const line = specifics(label);
-  if (holder === 'machine' && label.toLowerCase() !== 'standby') return label;
-  const word = holder === 'stalled' ? 'stalled' : 'standby';
-  return line === '' ? word : `${word} · ${line}`;
 };
 
 /** The merge conflict the glob has, open or recorded on a failed merge. */
@@ -105,90 +72,96 @@ const shortProblem = (status: StatusLine, glob: GlobView): string => {
   }
 };
 
-/** The first item of the line: what is wrong or what is next, with what a click on it does. */
-export interface StatusHead {
-  readonly kind: string;
-  readonly text: string;
-  readonly tone: string;
-  readonly click: ChipClick;
-}
-
-/** What the glob waits on, said once: the nearest unmerged needs, how many more, and what to start next. */
-export interface StatusWaiting extends BlockedParts {
-  readonly text: string;
-}
-
-export interface CardStatus {
-  /** The head's kind (a status kind, a holder, or `waiting`), for styling and tests. */
-  readonly kind: string;
-  readonly head: StatusHead | null;
-  readonly waiting: StatusWaiting | null;
-  /** The whole visible line, items separated by " · " most important first. */
-  readonly text: string;
-  readonly tip: string;
-}
-
 const waitingText = (parts: BlockedParts): string =>
   `waiting on ${parts.ids.join(', ')}${parts.more > 0 ? ` +${String(parts.more)}` : ''}${parts.next === null ? '' : ` · next: ${parts.next}`}`;
 
-/** Why a Planning glob waits, from what slop learned of its needs, for the waiting item's tooltip. */
+/** Why a Planning glob waits, from what slop learned of its needs, for the tooltip. */
 const learnedReasons = (glob: GlobView): string[] =>
   (glob.impliedAfter ?? [])
     .filter((i) => i.overridden !== true && i.kind === 'needs')
     .map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`);
 
+/** A queued step's "queued 3 min" as "queued · 3 min". */
+const queuedText = (label: string): string => label.replace(/^queued (\d+ min)$/, 'queued · $1');
+
 /**
- * The card's one status line, or null when there is nothing to say (no row then). Priority, so that a cut-off line loses the
- * least important item: (1) a stall, else Your turn, else the problem, else where the glob is; (2) what it waits on.
- * Decision globs have none.
+ * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
+ * words, the rest go in the tooltip: a stall, an escalation in Planning, your turn, a problem, the machine running, the
+ * prerequisites it waits on, any other waiting, standby. Decision globs have none.
  */
-export const cardStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CardStatus | null => {
+export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CornerStatus | null => {
   if (decisionOf(glob) !== null) return null;
   const status = statusLine(glob, now, viewer);
   const position = positionOf(glob, now, viewer);
   const blocked = blockedParts(glob);
+  const standby = onStandby(glob);
+  const escalation = glob.escalation;
   const escalated = isEscalated(glob);
-  const tips: string[] = [];
-  let head: StatusHead | null = null;
+
+  const make = (kind: string, icon: StatusIcon, text: string, tone: string, click: ChipClick | null, lead: string[]): CornerStatus => {
+    const rest = [
+      ...(status === null ? [] : [status.tip]),
+      ...(position === null ? [] : [position.tip]),
+      ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
+      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`, ...learnedReasons(glob)]),
+      ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
+    ];
+    const hint =
+      click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's prerequisites" : clickTip(click)];
+    const tip = [...new Set([...lead, ...rest, ...hint].filter((t) => t !== ''))].join('\n');
+    return { kind, icon, text, label: kind === 'needs-human' ? 'Needs a person' : text, tip, tone, click };
+  };
 
   if (position?.holder === 'stalled') {
-    // One mention: the stall's own short label, with the problem's detail (files included) in the tooltip.
-    head = { kind: 'stalled', text: specifics(position.label), tone: position.tone, click: positionClick(position, glob, repo) };
-    tips.push(position.tip, ...(status === null ? [] : [status.tip]));
-  } else if (status !== null && status.kind === 'ready') {
-    // The status line only ever opens the glob view; Merge and Done are run by the actions row's button.
+    const cause = specifics(position.label) || specifics(position.text) || 'nobody on it';
+    // A cause that already carries its age ("no progress 12 min") is not given it twice.
+    const minutes = position.minutes !== null && position.minutes > 0 && !/\d+ min/.test(cause) ? ` · ${String(position.minutes)} min` : '';
+    return make('stalled', 'alert', `${cause}${minutes}`, position.tone, positionClick(position, glob, repo), [position.tip]);
+  }
+  if (escalated && escalation != null) {
+    return make('needs-human', 'needs-human', 'needs a human', 'text-required', { kind: 'section', target: cardTargets.escalation() }, [
+      `Needs a person: ${escalation.reason}. Opens the reason`,
+    ]);
+  }
+  if (status !== null && status.kind === 'ready') {
+    // Your turn only ever opens the glob view from here; Merge and Done are run by the actions row's button.
     const turn = yourTurnClick(status, glob);
     const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
-    head = { kind: 'ready', text: `Your turn · ${status.text}`, tone: status.tone, click };
-    tips.push(status.tip);
-  } else if (status !== null && position?.holder === 'machine' && (status.conflict === true || status.kind === 'checks' || status.kind === 'stuck')) {
+    return make('ready', 'human', status.text, status.tone, click, [status.tip]);
+  }
+  if (status !== null && position?.holder === 'machine' && (status.conflict === true || status.kind === 'checks' || status.kind === 'stuck' || status.kind === 'behind')) {
     // Someone is on the problem: say what the machine is doing ("fixing the conflict"), with the problem in the tooltip.
-    head = { kind: 'machine', text: specifics(position.label), tone: position.tone, click: positionClick(position, glob, repo) };
-    tips.push(position.tip, status.tip);
-  } else if (status !== null) {
-    const click = statusClick(status);
-    head = { kind: status.kind, text: shortProblem(status, glob), tone: status.tone, click };
-    tips.push(status.tip);
-  } else if (position !== null && !(escalated && position.holder === 'human') && !(blocked !== null && position.holder === 'waiting')) {
-    head = { kind: position.holder, text: specifics(position.label), tone: position.tone, click: positionClick(position, glob, repo) };
-    tips.push(position.tip);
-    if (position.holder === 'waiting') tips.push(...learnedReasons(glob));
+    const icon = position.spinning ? 'machine-spinning' : 'machine';
+    return make('machine', icon, queuedText(position.label), position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
-  if (head !== null) tips.push(clickTip(head.click));
-
-  let waiting: StatusWaiting | null = null;
+  if (status !== null) {
+    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : 'alert';
+    return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
+  }
+  if (position?.holder === 'machine') {
+    const icon = position.spinning ? 'machine-spinning' : 'machine';
+    const isStandby = position.label.toLowerCase() === 'standby';
+    return make(isStandby ? 'standby' : 'machine', icon, queuedText(position.label), position.tone, positionClick(position, glob, repo), [position.tip]);
+  }
   if (blocked !== null) {
-    waiting = { ...blocked, text: waitingText(blocked) };
-    tips.push(`Waits for, in order: ${chainTip(glob)}`, ...learnedReasons(glob), `Opens this glob's prerequisites; each ID opens that glob`);
+    return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.prerequisites() }, [
+      `Waits for, in order: ${chainTip(glob)}`,
+      ...learnedReasons(glob),
+    ]);
   }
-  if (head === null && waiting === null) return null;
-  return {
-    kind: head?.kind ?? 'waiting',
-    head,
-    waiting,
-    text: [head?.text, waiting?.text].filter((t): t is string => t !== undefined).join(' · '),
-    tip: tips.join('\n'),
-  };
+  if (position !== null) {
+    const waiting = position.holder === 'waiting';
+    return make(
+      waiting ? 'waiting' : 'human',
+      waiting ? 'hourglass' : 'human',
+      position.label,
+      position.tone,
+      positionClick(position, glob, repo),
+      [position.tip, ...(waiting ? learnedReasons(glob) : [])],
+    );
+  }
+  if (standby !== null) return make('standby', 'machine', 'standby', 'text-muted-foreground', null, [STANDBY_TIP]);
+  return null;
 };
 
 /**

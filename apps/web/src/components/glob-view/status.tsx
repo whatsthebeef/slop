@@ -3,7 +3,7 @@ import { MachineIcon } from '@/components/actor-icons';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
-import { nowHeadline } from '@/lib/card-rows';
+import { cornerStatus } from '@/lib/card-rows';
 import { rolloutLine } from '@/lib/human-steps';
 import { viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
@@ -93,7 +93,7 @@ export const useNowState = (glob: GlobView, decision: boolean, disabled: readonl
   // Dismissed (per person), the long text collapses to the short label; the main action is untouched.
   const seen = problem === null ? null : collapsed(glob, problem);
   const turnDismissed = turn !== null && turn.reason !== '' && isDismissed(glob, turnKey(turn));
-  return { now, position, move, turn, steps, yours, brief, problem, seen, turnDismissed };
+  return { now, viewer: actions.viewer, position, move, turn, steps, yours, brief, problem, seen, turnDismissed };
 };
 
 export type NowState = ReturnType<typeof useNowState>;
@@ -103,25 +103,21 @@ export type NowState = ReturnType<typeof useNowState>;
  * else the lifecycle text. Clicking it scrolls to the Activity log, where its details are.
  */
 export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decision: boolean; state: NowState }) => {
-  const { position, move, turn, problem, seen, turnDismissed } = state;
-  const minutes = position?.minutes ?? null;
+  const { position, move, turn, problem, seen, turnDismissed, now, viewer } = state;
+  // The same status as the card's top right, word for word; the lifecycle text only where it has nothing to say.
+  const corner = decision ? null : cornerStatus(glob, now, viewer);
   const rollout = decision ? null : rolloutLine(glob, glob.humanSteps ?? [], undefined);
-  const text = turn !== null
-    ? `Your turn${turn.reason !== '' && !turnDismissed ? ` · ${headlineReason(turn.reason)}` : ''}`
-    : position !== null
-      ? `${position.holder === 'human' ? 'Their turn · ' : ''}${
-          position.holder === 'stalled' && seen?.dismissed === true
-            ? `Stalled · ${seen.label}`
-            : position.holder === 'stalled' || position.holder === 'machine'
-              ? capitalised(nowHeadline(position.holder, position.label, position.queued))
-              : capitalised(headlineReason(position.text))
-        }${minutes !== null && minutes > 0 && !(position.holder === 'machine' && position.queued) ? ` · ${String(minutes)} min` : ''}`
-      : problem !== null
-        ? seen?.dismissed === true
-          ? capitalised(seen.label)
-          : problem.text
-        : (rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]);
-  const tone = turn !== null ? undefined : (position?.tone ?? (seen?.dismissed === true ? 'text-muted-foreground' : problem?.tone));
+  const text =
+    corner !== null
+      ? corner.text
+      : turn !== null
+        ? `Your turn${turn.reason !== '' && !turnDismissed ? ` · ${headlineReason(turn.reason)}` : ''}`
+        : problem !== null
+          ? seen?.dismissed === true
+            ? capitalised(seen.label)
+            : problem.text
+          : (rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]);
+  const tone = corner !== null ? corner.tone : turn !== null ? undefined : seen?.dismissed === true ? 'text-muted-foreground' : problem?.tone;
   return (
     <button
       type="button"
@@ -131,7 +127,9 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
       data-holder={move?.holder ?? 'none'}
       onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
     >
-      {position?.holder === 'machine' && turn === null && <MachineIcon className="mr-1 inline" working={position.spinning} decorative />}
+      {(corner?.icon === 'machine' || corner?.icon === 'machine-spinning') && (
+        <MachineIcon className="mr-1 inline" working={corner.icon === 'machine-spinning'} decorative />
+      )}
       {text}
     </button>
   );
