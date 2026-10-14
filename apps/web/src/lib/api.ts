@@ -40,6 +40,9 @@ import type {
   Environment,
   Glob,
   GlobFindings,
+  GroupSummary,
+  GroupView,
+  RegroupResult,
   InboxStatus,
   KbSignal,
   LabelCommand,
@@ -658,6 +661,15 @@ export const api = {
   deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>
     request<GlobView>('POST', `/api/boards/${boardId}/globs`, { ...input, idempotencyKey: input.idempotencyKey ?? crypto.randomUUID() }),
+  /** The board's groups with progress (the card's "name 3/5"); a group is only the label on its globs. */
+  groups: (boardId: number) => request<GroupSummary[]>('GET', `/api/boards/${boardId}/groups`),
+  group: (boardId: number, name: string) => request<GroupView>('GET', `/api/boards/${boardId}/groups/${encodeURIComponent(name)}`),
+  /** Puts a new name on every glob of the group; `failed` lists globs that kept their old one (a second call moves them). */
+  renameGroup: (boardId: number, name: string, to: string) =>
+    request<RegroupResult>('POST', `/api/boards/${boardId}/groups/${encodeURIComponent(name)}/rename`, { to }),
+  /** Moves every glob of the group into an existing group. */
+  mergeGroup: (boardId: number, name: string, into: string) =>
+    request<RegroupResult>('POST', `/api/boards/${boardId}/groups/${encodeURIComponent(name)}/merge`, { into }),
   updateGlob: (id: string, version: number, changes: GlobChanges) =>
     request<GlobView>('PATCH', `/api/globs/${id}`, { ...changes, version }),
   /** Human steps answer with the glob's view, steps included. A step change leaves the glob's version alone. */

@@ -44,6 +44,14 @@ A relation holds one glob back until another reaches a state. Each relation has 
 
 Use a start relation when order matters, such as a glob that builds on another's code. Relations come from people, agents, and slop's own inference from the plans (which you can dismiss). Start now overrides inferred start holds only; it never overrides a merge or sign-off gate.
 
+## Breaking up a feature
+
+A group is a name shared by several globs, such as the parts of a split. It has no status, branch or sign-off of its own: everything on its page comes from its globs.
+
+- **The group page** (click the group label on a card or in a glob) shows progress as "3/5 merged", each glob with its status and type, who holds the move and what holds it, the relations between its globs (holding ones first, and ones that cross into another group flagged), and the open decisions that hold back a glob in it.
+- **Progress on the card:** while a group has more than one open glob, its label reads "board-chat 3/5". The small filter button beside the label, or the board's filter pane, still shows only that group's cards.
+- **Scope moves:** Add glob creates a glob in the group. Move out removes a glob from it and Move in adds one from the board; relations stay as they are, so a relation to a glob in another group shows as crossing. Rename changes the name on every glob; Merge moves all of them into another group.
+
 ## Splits and oversized globs
 
 Slop checks the size of a glob when it is created or its plan changes. A glob is flagged **oversized** when it looks like more than one pull request of work and parts of it could be built at the same time. A serial plan stays whole, however long.

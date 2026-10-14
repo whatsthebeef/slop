@@ -32,6 +32,7 @@ const empty = (): NewGlob => ({
 export const CreateGlobDialog = ({
   board,
   groups,
+  initialGroup,
   open,
   initialRequest = '',
   fromInbox,
@@ -40,6 +41,8 @@ export const CreateGlobDialog = ({
 }: {
   board: BoardView;
   groups: readonly string[];
+  /** The group the form starts with (the group page's Add glob); the form still shows it and it can be changed. */
+  initialGroup?: string;
   open: boolean;
   /** Free text to start the request box with (a chat answer); Process turns it into the fields. */
   initialRequest?: string;
@@ -51,9 +54,10 @@ export const CreateGlobDialog = ({
 }) => {
   const client = useQueryClient();
   const toast = useToast();
+  const blank = (): NewGlob => ({ ...empty(), group: initialGroup ?? null });
   const [staged, setStaged] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [form, setForm] = useState<NewGlob>(empty);
+  const [form, setForm] = useState<NewGlob>(blank);
   const [request, setRequest] = useState(initialRequest);
   // A new text from outside (another chat answer) replaces what was typed.
   const [seen, setSeen] = useState(initialRequest);
@@ -148,7 +152,7 @@ export const CreateGlobDialog = ({
       if (created !== undefined && staged.length > 0) uploadStaged(created.id, staged);
       setStaged([]);
       setFileError(null);
-      setForm(empty());
+      setForm(blank());
       setRequest('');
       setReason(null);
       setInsight(null);

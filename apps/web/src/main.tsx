@@ -7,6 +7,7 @@ import './index.css';
 import { RequestError } from './lib/api';
 import { BoardPage } from './pages/board';
 import { GlobPage } from './pages/glob';
+import { GroupPage } from './pages/group';
 import { InboxPage } from './pages/inbox';
 import { KnowledgePage } from './pages/knowledge';
 import { BoardsPage, HomePage, LoginPage } from './pages/home';
@@ -64,6 +65,7 @@ createRoot(root).render(
                 <Route path='settings' element={<SettingsPage />} />
                 <Route path='knowledge' element={<KnowledgePage />} />
                 <Route path='globs/:globId' element={<GlobPage />} />
+                <Route path='groups/:name' element={<GroupPage />} />
               </Route>
             </Routes>
           </RequireSession>
