@@ -39,8 +39,12 @@ export interface ParsedGlobTarget {
 
 const isSection = (name: string): name is GlobSection => GLOB_SECTIONS.some((s) => s === name);
 
-/** Other names a link may use for a section: `rollout` is what people call the Human steps section. */
-const SECTION_ALIASES: Readonly<Record<string, GlobSection>> = { rollout: 'human-steps' };
+/** Other names a link may use for a section: `rollout` is what people call the Human steps section; `runs` and `pr` are carried by the Activity log under the actions. */
+const SECTION_ALIASES: Readonly<Record<string, GlobSection>> = {
+  rollout: 'human-steps',
+  runs: 'actions',
+  pr: 'actions',
+};
 
 const sectionOf = (name: string): GlobSection | null => (isSection(name) ? name : (SECTION_ALIASES[name] ?? null));
 

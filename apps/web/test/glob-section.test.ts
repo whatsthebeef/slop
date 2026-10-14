@@ -71,6 +71,8 @@ describe('human steps section', () => {
   it('opens at human-steps, and rollout is an alias for it', () => {
     expect(parse('section=human-steps').section).toBe('human-steps');
     expect(parse('section=rollout').section).toBe('human-steps');
+    expect(parse('section=runs').section).toBe('actions');
+    expect(parse('section=pr').section).toBe('actions');
     expect(globPath(15, 's15f1', { section: 'human-steps' })).toBe('/boards/15/globs/s15f1?section=human-steps');
   });
 });
