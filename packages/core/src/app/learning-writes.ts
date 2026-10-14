@@ -10,6 +10,7 @@ import type { LearningAssessmentFacts } from '../domain/decision-glob.js';
 import type { EffectCheck } from '../domain/effect-check.js';
 import type { Effect, OutboxJob } from '../domain/events.js';
 import type { Result } from '../domain/errors.js';
+import { decisionGroup } from '../domain/group.js';
 import { parseId } from '../domain/ids.js';
 import { KB_STEP_KIND, kbStepOf, stepEffects } from '../domain/kb.js';
 import type {
@@ -472,7 +473,7 @@ export const createLearning = async (
       type: 'same',
       category: 'decision',
       attributes,
-      group: null,
+      group: decisionGroup(attributes, null),
       environment: null,
       autoTrigger: false,
     },
@@ -599,8 +600,13 @@ const editLearning = async (
   else changed.conflictsWith = conflicts;
   const previousStatement = learningStatement(glob, artifacts);
   const statement = edit.statement ?? previousStatement;
+  // Routing and drafting settle the target: a group slop set from the old one (or none) follows it; a person's own stays.
+  const groupBefore = decisionGroup(base, null);
+  const groupAfter = decisionGroup(changed, null);
+  const group = groupAfter !== groupBefore && (moved.group === null || moved.group === groupBefore) ? groupAfter : moved.group;
   const next: Glob = {
     ...moved,
+    group,
     // A person may have retitled the decision: only a new statement gives it a new title.
     title: statement === previousStatement ? moved.title : decisionGlobTitle(statement),
     attributes: changed,

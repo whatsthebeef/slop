@@ -20,23 +20,31 @@ export const copyOrSelect = async (
   }
 };
 
-/** The saved version the header describes: its number and who saved it. */
+/** A saved plan.md version, as the header's version label describes it. */
 export interface PlanSaved {
   readonly version: number;
   readonly createdAt: string;
   readonly provenance: { readonly by: string; readonly actor: string };
 }
 
-/**
- * The header's version line: which plan.md version the editor shows and who saved it. While a draft differs from the
- * saved text it also says which version Save will make.
- */
+/** The author without the domain: everything before the "@" ("slop" and other machine authors stay as they are). */
+const planAuthor = (actor: string): string => {
+  const at = actor.indexOf('@');
+  return at > 0 ? actor.slice(0, at) : actor;
+};
+
+/** A version as the header and its dropdown name it: `v3 · john · 2026-10-14` (the date is local, yyyy-mm-dd). */
+export const planVersionLabel = (saved: PlanSaved): string => {
+  const d = new Date(saved.createdAt);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const date = `${String(d.getFullYear())}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `v${String(saved.version)} · ${planAuthor(saved.provenance.actor)} · ${date}`;
+};
+
+/** The header's version label; while a draft differs from the saved text it is marked unsaved. */
 export const planVersionLine = (saved: PlanSaved | null, editing = false): string => {
-  if (saved === null) return editing ? 'not written yet · Save makes version 1' : 'not written yet';
-  const who = saved.provenance.by === 'human' ? saved.provenance.actor : `${saved.provenance.actor} (${saved.provenance.by})`;
-  const when = `${saved.createdAt.slice(0, 16).replace('T', ' ')} UTC`;
-  const line = `version ${saved.version} · saved by ${who} · ${when}`;
-  return editing ? `${line} · Save makes version ${saved.version + 1}` : line;
+  const line = saved === null ? 'not written yet' : planVersionLabel(saved);
+  return editing ? `${line} · unsaved` : line;
 };
 
 /** Until a glob is signed off the plan field already shows plan.md, so the Artifacts list leaves it out. */
