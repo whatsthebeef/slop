@@ -1,5 +1,12 @@
-import type { Category } from '@slop/core';
+import type { Category, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
+import { needsPerson } from './card-rows';
+
+/** What a filter may need beyond the glob itself: the time and the viewer decide whose turn it is. */
+export interface FilterContext {
+  now: string;
+  viewer?: HumanStepViewer;
+}
 
 /** A filter's value is always its URL text, so reading, writing and matching share one form (chips hold comma-joined options). */
 export type FilterValues = Readonly<Record<string, string>>;
@@ -18,7 +25,7 @@ interface FilterBase {
   /** Cleans a raw value (from the URL or the control); empty means the filter is off. */
   normalize: (raw: string) => string;
   /** True when the glob passes, given a non-empty normalised value. */
-  matches: (glob: GlobView, value: string) => boolean;
+  matches: (glob: GlobView, value: string, context: FilterContext) => boolean;
 }
 
 /** Toggle chips; none selected means all. */
@@ -37,7 +44,12 @@ interface TagFilter extends FilterBase {
   control: 'tag';
 }
 
-export type BoardFilter = ChipsFilter | TextFilter | TagFilter;
+/** An on/off switch: its value is `1` when on, and it is off by default. */
+interface ToggleFilter extends FilterBase {
+  control: 'toggle';
+}
+
+export type BoardFilter = ChipsFilter | TextFilter | TagFilter | ToggleFilter;
 
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
@@ -83,6 +95,14 @@ export const BOARD_FILTERS: BoardFilter[] = [
     // Exact match on the name; globs with no group never match.
     matches: (glob, value) => glob.group === value,
   },
+  {
+    key: 'human',
+    label: 'Only human',
+    control: 'toggle',
+    normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
+    // The same status the card shows: only globs whose status is the human outline.
+    matches: (glob, _value, { now, viewer }) => needsPerson(glob, now, viewer),
+  },
 ];
 
 /** The URL text meaning "show all" for a filter that has a default. */
@@ -123,10 +143,14 @@ export const activeCount = (values: FilterValues): number =>
   BOARD_FILTERS.filter((f) => f.normalize(values[f.key] ?? '') !== (f.defaultValue ?? '')).length;
 
 /** True when the glob passes every active filter; with none active, every glob does. */
-export const matchesFilters = (glob: GlobView, values: FilterValues): boolean =>
+export const matchesFilters = (
+  glob: GlobView,
+  values: FilterValues,
+  context: FilterContext = { now: new Date().toISOString() },
+): boolean =>
   BOARD_FILTERS.every((f) => {
     const value = f.normalize(values[f.key] ?? '');
-    return value === '' || f.matches(glob, value);
+    return value === '' || f.matches(glob, value, context);
   });
 
 /** A chips value with the option switched on or off. */

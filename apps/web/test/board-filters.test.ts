@@ -9,7 +9,7 @@ import {
   writeFilters,
   BOARD_FILTERS,
 } from '../src/lib/board-filters';
-import { glob } from '../../../packages/core/test/fixtures';
+import { NOW, glob } from '../../../packages/core/test/fixtures';
 
 const view = (patch: Partial<GlobView>): GlobView => ({ ...glob(), ...patch }) as GlobView;
 const parse = (q: string) => parseFilters(new URLSearchParams(q));
@@ -118,17 +118,17 @@ describe('board filters', () => {
     expect(toggleOption(category, 'bug', 'bug')).toBe('');
   });
 
-  it('has the category and ID filters and the temporary group filter', () => {
-    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['category', 'id', 'group']);
+  it('has the category and ID filters, the temporary group filter and the Only human toggle', () => {
+    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['category', 'id', 'group', 'human']);
   });
 
-  it('ignores the removed yourTurn, move and human parameters in old links', () => {
+  it('ignores the removed yourTurn and move parameters and an old human value in links', () => {
     const values = parse('yourTurn=1&move=stalled&human=rollout');
     expect(values).toEqual(defaultFilters());
     expect(activeCount(values)).toBe(0);
     expect(matchesFilters(view({}), values)).toBe(true);
     expect(writeFilters(new URLSearchParams('yourTurn=1&move=stalled&human=rollout'), values).toString()).toBe(
-      'yourTurn=1&move=stalled&human=rollout',
+      'yourTurn=1&move=stalled',
     );
   });
 
@@ -145,5 +145,41 @@ describe('board filters', () => {
     expect(params.toString()).toBe('group=glob-groups');
     expect(parseFilters(params)).toEqual(values);
     expect(writeFilters(params, defaultFilters()).toString()).toBe('');
+  });
+  describe('Only human', () => {
+    const ctx = { now: NOW };
+    const mine = (patch: Partial<GlobView>) => view({ status: 'reviewing', labels: { CR: 'required' }, ...patch });
+    const machine = view({ status: 'planning' });
+    const escalated = view({ status: 'planning', escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'] });
+    const signOff = mine({ category: 'bug' });
+
+    it('is off by default and on for human=1', () => {
+      expect(parse('')).toEqual(defaultFilters());
+      expect(parse('human=1')).toEqual({ category: 'feature,task,bug', human: '1' });
+      expect(parse('human=nope')).toEqual(defaultFilters());
+      expect(activeCount(parse('human=1'))).toBe(1);
+    });
+
+    it('shows only globs whose status is the human outline', () => {
+      const values = parse('human=1');
+      expect(matchesFilters(signOff, values, ctx)).toBe(true);
+      expect(matchesFilters(escalated, values, ctx)).toBe(true);
+      expect(matchesFilters(machine, values, ctx)).toBe(false);
+      expect(matchesFilters(machine, parse(''), ctx)).toBe(true);
+    });
+
+    it('combines with the other filters', () => {
+      const values = parse('human=1&category=bug');
+      expect(matchesFilters(signOff, values, ctx)).toBe(true);
+      expect(matchesFilters({ ...signOff, category: 'task' }, values, ctx)).toBe(false);
+      expect(matchesFilters(machine, values, ctx)).toBe(false);
+    });
+
+    it('round-trips through the URL', () => {
+      const params = writeFilters(new URLSearchParams('glob=s1t1'), { ...defaultFilters(), human: '1' });
+      expect(params.toString()).toBe('glob=s1t1&human=1');
+      expect(parseFilters(params)).toEqual({ category: 'feature,task,bug', human: '1' });
+      expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
+    });
   });
 });
