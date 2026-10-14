@@ -291,7 +291,7 @@ describe('card rows', () => {
   });
 });
 
-describe('independent review icon', () => {
+describe('independent review on the card', () => {
   const reviewed = (findings: number, headSha: string | null = head) =>
     view({
       pr: { state: 'draft', number: 1, headSha: head },
@@ -310,22 +310,10 @@ describe('independent review icon', () => {
       ],
     });
 
-  it('shows no icon or text for a review with zero findings', () => {
-    const root = dom(markup(reviewed(0)));
-    expect(root.querySelector('[data-testid="artifact-icon-independent_review"]')).toBeNull();
-    expect(root.querySelector('[data-testid="review-status"]')).toBeNull();
-    expect(root.innerHTML).not.toContain('No findings');
-  });
-
-  it('shows the icon with the count when there are findings', () => {
+  it('shows no artifact icons or review status on the card', () => {
     const root = dom(markup(reviewed(2)));
-    expect(root.querySelector('[data-testid="artifact-icon-independent_review"]')).not.toBeNull();
-    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toBe('2 findings');
-  });
-
-  it('says outdated when a later push left the review behind', () => {
-    const root = dom(markup(reviewed(1, 'old0000')));
-    expect(root.querySelector('[data-testid="review-status"]')?.textContent).toContain('(outdated)');
+    expect(root.querySelector('[data-testid^="artifact-icon-"]')).toBeNull();
+    expect(root.querySelector('[data-testid="review-status"]')).toBeNull();
   });
 });
 
