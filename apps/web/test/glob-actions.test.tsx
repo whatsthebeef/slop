@@ -277,6 +277,21 @@ describe('glob view: main button', () => {
       expect(cb.onAction).toHaveBeenCalledWith('take_over');
     });
 
+    it('says nothing about a run that is not live', async () => {
+      const user = userEvent.setup();
+      renderGlob(implementing({ currentRun: run({ state: 'watching' }) }));
+      await press(user);
+      expect(screen.getByTestId('take-over-happens').textContent).not.toMatch(/run is stopped|cancelled/);
+      expect(screen.getByTestId('take-over-happens').textContent).toContain('commits so far stay');
+    });
+
+    it('keeps the handover brief in the confirmation', async () => {
+      const user = userEvent.setup();
+      renderGlob(implementing({ handover: { why: ['Checks failed.'], next: 'Fix them.', detail: [] } }));
+      await press(user);
+      expect(screen.getByTestId('handover-confirmation').textContent).toContain('taking over because: Checks failed.');
+    });
+
     it('says a queued run is cancelled', async () => {
       const user = userEvent.setup();
       renderGlob(implementing({ currentRun: run({ state: 'queued' }) }));

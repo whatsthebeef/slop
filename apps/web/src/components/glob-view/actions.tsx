@@ -479,6 +479,14 @@ const TakeOverConfirmation = ({
     >
       <strong>{says.title}</strong>
       <p data-testid="take-over-happens">{says.happens}</p>
+      {state.oversized && (
+        <p data-testid="take-over-oversized">
+          This glob is flagged oversized: it is probably more than one PR&apos;s worth of work.
+        </p>
+      )}
+      {state.brief !== null && (
+        <p data-testid="handover-confirmation">{handoverConfirmation('take_over', state.brief)}</p>
+      )}
       <div className="flex items-center gap-2">
         <code className="flex-1 rounded bg-muted px-2 py-1" data-testid="take-over-command">
           {says.command}
