@@ -140,7 +140,8 @@ export const LabelPopover = ({
   onOpenReview,
 }: {
   glob: GlobView;
-  onReview: ReviewLabel;
+  /** Absent on a read-only card: the popover then only links to the review. */
+  onReview?: ReviewLabel;
   /** Opens the sign-off section in the glob view, at one label's checklist when given. */
   onOpenReview: (label?: LabelName) => void;
 }) => {
@@ -192,7 +193,7 @@ export const LabelPopover = ({
                     <Button size="sm" variant="ghost" onClick={() => onOpenReview(name)}>
                       Open review
                     </Button>
-                    {state === 'approved' ? (
+                    {onReview === undefined ? null : state === 'approved' ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -233,7 +234,7 @@ export const LabelPopover = ({
         counts={confirmingCounts}
         onCancel={() => setConfirming(null)}
         onConfirm={() => {
-          if (confirming !== null) void onReview(confirming, { kind: 'approve' });
+          if (confirming !== null) void onReview?.(confirming, { kind: 'approve' });
           setConfirming(null);
         }}
       />
