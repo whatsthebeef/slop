@@ -371,7 +371,7 @@ export const ChatPanel = ({
               <History className='h-4 w-4' />
             </button>
             <button
-              className='rounded p-1 hover:bg-muted'
+              className='rounded p-1 hover:bg-muted max-sm:hidden'
               aria-label={fullScreen ? 'Back to the side panel' : 'Full screen'}
               aria-pressed={fullScreen}
               data-testid='chat-fullscreen'
@@ -379,7 +379,7 @@ export const ChatPanel = ({
             >
               {fullScreen ? <Minimize2 className='h-4 w-4' /> : <Maximize2 className='h-4 w-4' />}
             </button>
-            <button className='rounded p-1 hover:bg-muted' aria-label='Close chat' onClick={onClose}>
+            <button className='rounded p-1 hover:bg-muted max-sm:p-2' aria-label='Close chat' onClick={onClose}>
               <X className='h-4 w-4' />
             </button>
           </div>
