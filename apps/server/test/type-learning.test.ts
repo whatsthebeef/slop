@@ -312,4 +312,17 @@ describe('Type corrections in Postgres', () => {
       expect.objectContaining({ globId: sub.id, fromType: 'sub', toType: 'super', actor: ADMIN }),
     ]);
   });
+
+  it('REST create: a dev gets 403 for an explicit sub or super and a same by default; an admin may create a sub', async () => {
+    const post = (body: Record<string, unknown>, email: string) =>
+      request('POST', `/api/boards/${boardId}/globs`, { title: 'x', plan: 'p', group: null, ...body }, email);
+    expect((await post({ type: 'sub' }, DEV)).status).toBe(403);
+    expect((await post({ type: 'super' }, DEV)).status).toBe(403);
+    const made = await post({}, DEV);
+    expect(made.status).toBeLessThan(300);
+    expect(await made.json()).toMatchObject({ type: 'same' });
+    const sub = await post({ type: 'sub' }, ADMIN);
+    expect(sub.status).toBeLessThan(300);
+    expect(await sub.json()).toMatchObject({ type: 'sub' });
+  });
 });

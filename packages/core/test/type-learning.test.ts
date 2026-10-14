@@ -384,6 +384,15 @@ describe('type corrections', () => {
       expect(unwrap(await globs.get(ADMIN, failed.id)).allowedActions).not.toContain('make_super');
     });
 
+    it('refuses Make it a super and undoing an escalation for a non-admin', async () => {
+      const failed = await failPairing('sub');
+      const refused = await globs.makeSuper(DEV, failed.id, failed.version);
+      expect(!refused.ok && refused.error.code).toBe('forbidden');
+      const same = await create('same', OPEN_PLAN);
+      const undo = await globs.deescalate(DEV, same.id, same.version);
+      expect(!undo.ok && undo.error.code).toBe('forbidden');
+    });
+
     it('works on a same, and a plain failure does not offer it', async () => {
       const failed = await failPairing('same');
       const made = unwrap(await globs.makeSuper(ADMIN, failed.id, failed.version));
