@@ -8,7 +8,7 @@ import type { GlobViewContext } from './context';
 export const splittable = (glob: GlobView, decision: boolean): boolean =>
   !decision && canSplit(glob) && (glob.allowedActions ?? []).includes('delete');
 
-/** The size section: a flagged glob's explanation, and the split form that Split… and Edit split in the actions open. */
+/** The size section: a flagged glob's explanation, and the split form that Split… in the actions opens. */
 export const SizeSection = ({
   ctx: { glob },
   decision,
