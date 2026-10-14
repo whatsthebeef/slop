@@ -302,7 +302,8 @@ export const GroupPage = () => {
       const result = await work();
       toast(regroupNotice(result));
       await refresh();
-      void navigate(groupPath(boardId, result.name), { replace: true });
+      // Stay put on a partial move: the globs that failed still carry this group's name, and this page is where to try again.
+      if (result.failed.length === 0) void navigate(groupPath(boardId, result.name), { replace: true });
       return null;
     } catch (error) {
       return message(error);
