@@ -1,4 +1,4 @@
-import type { Action, EditFailure, LabelName, SuggestionPrefill } from '@slop/core';
+import type { Action, EditFailure, LabelName } from '@slop/core';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AddRelationInput, BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
@@ -13,7 +13,7 @@ import { useGlobEdits } from './glob-view/edit-fields';
 import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
-import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
+import { DECISION_VIEW_SECTIONS, GLOB_VIEW_SECTIONS } from './glob-view/sections';
 import { useNowState } from './glob-view/status';
 import { GlobTitle } from './glob-title';
 import { isOversized, useOversized } from './oversized-glob';
@@ -101,9 +101,6 @@ export const GlobDetail = ({
   const nowState = useNowState(glob, decision, disabled, actionState);
   const edits = useGlobEdits(glob.id);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
-  // Suggest's Apply: the decision form opens pre-filled; reset when another glob opens.
-  const [applied, setApplied] = useState<SuggestionPrefill | null>(null);
-  useEffect(() => setApplied(null), [glob.id]);
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
   // Once per navigation (glob or section), not on the live refreshes that re-render the page.
   useEffect(() => {
@@ -159,8 +156,6 @@ export const GlobDetail = ({
     openLabel,
     artifact,
     onSelectArtifact: setArtifact,
-    applied,
-    onApply: setApplied,
     size,
     splitting,
     onSplitting: setSplitting,
@@ -187,7 +182,7 @@ export const GlobDetail = ({
           onReload={onReload}
         />
         <GlobChips ctx={ctx} actions={actionState} />
-        {GLOB_VIEW_SECTIONS.map((name) => (
+        {(decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS).map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>
             {AFTER_SECTION[name]?.(sectionProps)}

@@ -32,8 +32,7 @@ describe('the Suggest card', () => {
 });
 
 describe('APPLY_HINT_TEXT', () => {
-  it('does not claim the form is below the assessment', () => {
-    expect(APPLY_HINT_TEXT).not.toMatch(/below/i);
-    expect(APPLY_HINT_TEXT).toMatch(/above/);
+  it('does not point at another section: the suggestion and its form are in the Decide block', () => {
+    expect(APPLY_HINT_TEXT).not.toMatch(/above|below/i);
   });
 });
