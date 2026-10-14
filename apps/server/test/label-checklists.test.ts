@@ -92,6 +92,28 @@ describe('sign-off label checklists in Postgres', () => {
     ]);
   });
 
+  it('stores draft items with the glob until they are sent', async () => {
+    const reviewing = await mergedGlob();
+    const first = unwrap(
+      await globs.reviewLabel(DEV, reviewing.id, reviewing.version, 'QA', { kind: 'save_draft_item', text: 'Check copy' }),
+    );
+    const second = unwrap(await globs.reviewLabel(DEV, first.id, first.version, 'QA', { kind: 'save_draft_item', text: 'Check A11y' }));
+    const edited = unwrap(
+      await globs.reviewLabel(DEV, second.id, second.version, 'QA', { kind: 'save_draft_item', text: 'Check a11y', itemId: '2' }),
+    );
+    expect(edited.version).toBeGreaterThan(reviewing.version);
+    const stored = await store.transaction((tx) => tx.getGlob(reviewing.id));
+    expect(stored?.labels.QA).toBe('required');
+    expect(stored?.checklists.QA?.map((i) => [i.id, i.text, i.draft])).toEqual([
+      ['1', 'Check copy', true],
+      ['2', 'Check a11y', true],
+    ]);
+    const removed = unwrap(await globs.reviewLabel(DEV, edited.id, edited.version, 'QA', { kind: 'remove_draft_item', itemId: '1' }));
+    const sent = unwrap(await globs.reviewLabel(DEV, removed.id, removed.version, 'QA', { kind: 'send_items' }));
+    expect(sent.labels.QA).toBe('added');
+    expect(sent.checklists.QA?.map((i) => [i.id, i.text, i.draft])).toEqual([['2', 'Check a11y', undefined]]);
+  });
+
   it('migration 0006 renames added to approved in globs and events and adds empty checklists', async () => {
     const reviewing = await mergedGlob();
     // Put the glob and an event back into the shape stored before 0006.

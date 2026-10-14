@@ -164,6 +164,25 @@ const CornerStatusView = ({
   );
 };
 
+/**
+ * A move made elsewhere, shown in the status slot for the tag's few seconds in place of the status (khaki, like the move's
+ * flash). Keyed by the move, so a second move restarts the fade.
+ */
+const MoveTagView = ({ tag }: { tag: MoveTag }) => (
+  <span
+    key={tag.n}
+    className='move-tag inline-flex min-w-0 shrink items-center justify-end gap-1 text-right font-mono text-[11px] text-[var(--remote)]'
+    role='status'
+    data-testid='card-status'
+    data-kind='move-tag'
+  >
+    <span className='truncate' data-testid='status-text'>
+      {tag.text}
+    </span>
+    {tag.icon !== undefined && <StatusIconView icon={tag.icon} />}
+  </span>
+);
+
 /** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
 const CardButton = ({
   onOpen,
@@ -693,7 +712,15 @@ export const GlobCard = ({
           </span>
         </span>
         <span className='inline-flex min-w-0 items-center justify-end gap-1.5' data-testid='card-corner'>
-          {status !== null && (
+          {tag !== undefined && (
+            <>
+              <MoveTagView tag={tag} />
+              <span aria-hidden='true' className='shrink-0' data-testid='card-corner-separator'>
+                ·
+              </span>
+            </>
+          )}
+          {tag === undefined && status !== null && (
             <>
               <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />
               <span aria-hidden='true' className='shrink-0' data-testid='card-corner-separator'>
@@ -774,12 +801,6 @@ export const GlobCard = ({
         </div>
         <Avatar email={person} planner={glob.implementer === null} />
       </div>
-      {tag !== undefined && (
-        // Keyed by the move, so a second move's tag restarts its fade.
-        <div key={tag.n} className='move-tag font-mono text-[10px] text-muted-foreground' role='status'>
-          ▸ {tag.text}
-        </div>
-      )}
     </div>
   );
 };

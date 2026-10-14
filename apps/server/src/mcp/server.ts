@@ -554,20 +554,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   /** Approve and reopen are sign-off decisions, made on the board, not through MCP. */
-  const MCP_LABEL_COMMAND_KINDS = ['submit_items', 'tick', 'resubmit'] as const;
+  const MCP_LABEL_COMMAND_KINDS = ['submit_items', 'save_draft_item', 'remove_draft_item', 'send_items', 'tick', 'resubmit'] as const;
 
   server.registerTool(
     'review_label',
     {
       description:
-        "Work on a merged glob's sign-off label (FR, CR or QA) and its review checklist. Reviewer: submit_items (items: one or more texts; label required → added). Developer: tick (itemId, done) while items are added, or resubmit (added → required, items and ticks kept). Approving and re-opening a review are human decisions made on the board, so this tool refuses them. Pass the version you read.",
+        "Work on a merged glob's sign-off label (FR, CR or QA) and its review checklist. Reviewer: submit_items (items: one or more texts; label required → added), or keep unsent drafts with save_draft_item (text, itemId to edit a draft) and remove_draft_item (itemId), then send_items (drafts → items; required → added). Developer: tick (itemId, done) while items are added, or resubmit (added → required, items and ticks kept). Approving and re-opening a review are human decisions made on the board, so this tool refuses them. Pass the version you read.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
         label: z.enum(LABEL_NAMES),
         kind: z.enum(MCP_LABEL_COMMAND_KINDS),
         items: z.array(z.string()).optional().describe('submit_items: the items to add'),
-        itemId: z.string().optional().describe('tick: the item'),
+        text: z.string().optional().describe('save_draft_item: the draft text'),
+        itemId: z.string().optional().describe('tick, remove_draft_item, save_draft_item (edit): the item'),
         done: z.boolean().optional().describe('tick: true to tick, false to untick'),
       },
     },
@@ -575,7 +576,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       // Sign-off stays human (like merging): slop can't tell an agent from its developer over MCP.
       const command = parseLabelCommand(input);
       if (command === null) {
-        return reply(invalidInput('submit_items needs items; tick needs itemId and done'));
+        return reply(invalidInput('submit_items needs items; save_draft_item needs text; remove_draft_item needs itemId; tick needs itemId and done'));
       }
       return reply(await globs.reviewLabel(email, id, version, label, command), (g) => globView(g));
     },

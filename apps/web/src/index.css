@@ -212,7 +212,7 @@
 }
 
 .move-tag {
-  animation: tag-fade 4.5s linear forwards;
+  animation: tag-fade 3s linear forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
