@@ -51,15 +51,6 @@ export const ARTIFACT_META: Record<
   rollout_script: { title: 'Rollout script', icon: Terminal },
 };
 
-/** The kinds shown as icons on a card, in this order. */
-export const CARD_ARTIFACT_KINDS = [
-  'plan',
-  'implementation_plan',
-  'local_review',
-  'assessment',
-  'independent_review',
-] as const;
-
 export interface ArtifactRef {
   readonly kind: ArtifactKind;
   readonly label: string;

@@ -1,4 +1,4 @@
-import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
+import { decisionOf, dueText, scopeLabel, upcomingSteps } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
 import { Bug, GitBranch, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -12,7 +12,6 @@ import { cornerStatus, hasBlocker, turnButton } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
-import { ARTIFACT_META, CARD_ARTIFACT_KINDS } from './artifacts';
 import { OUTCOME_TEXT } from './decision-section';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
@@ -236,53 +235,6 @@ export const ChipButton = ({
       {children}
     </CardButton>
   );
-
-/**
- * Small icons for the artifacts the glob has; each opens the glob view on that artifact. An independent review's finding
- * count is its own button beside the icon and opens the findings.
- */
-const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: GlobTarget) => void }) => {
-  const present = CARD_ARTIFACT_KINDS.flatMap((kind) => {
-    const artifact = glob.artifacts?.find((a) => a.kind === kind);
-    // An independent review with no findings has nothing to show on the card; the glob view still lists it.
-    return artifact === undefined || artifact.review?.findings === 0 ? [] : [artifact];
-  });
-  if (present.length === 0) return null;
-  return (
-    <span className='inline-flex items-center gap-0.5'>
-      {present.map((a) => {
-        const { title, icon: Icon } = ARTIFACT_META[a.kind];
-        // An independent review shows its finding count, and says so when a later push left it behind.
-        const status = a.review === undefined ? null : `${findingsLabel(a.review.findings)}${reviewOutdated(a.review, glob.pr?.headSha ?? null) ? ' (outdated)' : ''}`;
-        return (
-          <span key={a.kind} className='inline-flex items-center'>
-            <Tip text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}: opens it in the artifacts`}>
-              <CardButton
-                onOpen={() => onOpen(cardTargets.artifact(a.kind))}
-                className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-                ariaLabel={title}
-                testId={`artifact-icon-${a.kind}`}
-              >
-                <Icon className='h-3.5 w-3.5' />
-              </CardButton>
-            </Tip>
-            {status !== null && (
-              <Tip text={`${title}: ${status}. Opens the findings`}>
-                <CardButton
-                  onOpen={() => onOpen(cardTargets.findings())}
-                  className='rounded-sm px-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground'
-                  testId='review-status'
-                >
-                  {status}
-                </CardButton>
-              </Tip>
-            )}
-          </span>
-        );
-      })}
-    </span>
-  );
-};
 
 import type { CardMove } from '@/lib/card-moves';
 export type { CardMove };
@@ -753,7 +705,6 @@ export const GlobCard = ({
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
-            <ArtifactIcons glob={glob} onOpen={onOpenSection} />
             <OverlapChip glob={glob} />
             <SplitChip glob={glob} />
             <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
