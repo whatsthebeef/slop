@@ -5,13 +5,12 @@ import {
   Activity,
   FileText,
   Gavel,
+  Gauge,
   Hammer,
-  ListChecks,
   Microscope,
   Paperclip,
   PencilLine,
   Plus,
-  Scale,
   SearchCheck,
   Terminal,
 } from 'lucide-react';
@@ -40,10 +39,10 @@ export const ARTIFACT_META: Record<
   implementation_plan: { title: 'Implementation record', icon: Hammer },
   // Legacy rows only: postplans were migrated into the record and writes to the kind land there.
   postplan: { title: 'Postplan (old)', icon: Hammer },
-  local_review: { title: 'Local review', icon: ListChecks },
+  local_review: { title: 'Local review', icon: SearchCheck },
   independent_review: { title: 'Independent review', icon: SearchCheck },
   investigation: { title: 'Investigation', icon: Microscope },
-  assessment: { title: 'Assessment', icon: Scale },
+  assessment: { title: 'Assessment', icon: Gauge },
   // A KB learning's pipeline output (JSON), shown by the decision section rather than as files.
   draft: { title: 'Draft', icon: PencilLine },
   outcome: { title: 'Outcome', icon: Gavel },
