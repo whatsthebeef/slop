@@ -279,10 +279,15 @@ describe('the ATF spec list endpoint', () => {
           },
         }),
       });
-    // A status the schema doesn't know is not a report (and never an error for the pipeline).
+    // Rows the schema doesn't know lose only the rows: the run's counts are still recorded, never an error for the pipeline.
     const bad = await report('atf-bad', [{ file: 'x', status: 'exploded' }]);
     expect(bad.status).toBe(202);
-    expect(await bad.json()).toEqual({ ok: true, ignored: true });
+    expect(await bad.json()).not.toEqual({ ok: true, ignored: true });
+    const huge = await report(
+      'atf-huge',
+      Array.from({ length: 1001 }, (_, i) => ({ file: `e2e/gen-${String(i)}.spec.ts`, status: 'passed' })),
+    );
+    expect(await huge.json()).not.toEqual({ ok: true, ignored: true });
     expect(
       (await report('atf-1', [{ file: 'e2e/other.spec.ts', status: 'passed', tests: 2 }])).status,
     ).toBe(202);

@@ -91,7 +91,7 @@ const runSpecSchema = z.object({
   durationMs: countSchema.optional(),
 });
 
-/** Most specs one report may carry; a bigger report loses its per-spec rows, never its counts. */
+/** Most per-spec rows kept from one report; the rest are dropped, and the counts are always kept. */
 const MAX_REPORTED_SPECS = 1000;
 
 /**
@@ -110,7 +110,8 @@ const atfCompletedSchema = slopCiBase.extend({
       failed: countSchema,
       skipped: countSchema.optional(),
       url: linkSchema.optional(),
-      specs: z.array(runSpecSchema).max(MAX_REPORTED_SPECS).optional(),
+      // Malformed per-spec rows lose only the rows: the counts above are still recorded.
+      specs: z.array(runSpecSchema).optional().catch(undefined),
     })
     .refine((d) => d.environment !== undefined || d.branch !== undefined, 'needs an environment or a branch'),
 });
@@ -128,7 +129,7 @@ type SlopCiEvent = z.infer<typeof slopCiEventSchema>;
 const reportedSpecs = (specs: readonly z.infer<typeof runSpecSchema>[]): TestRunSpec[] => {
   const seen = new Set<string>();
   const rows: TestRunSpec[] = [];
-  for (const s of specs) {
+  for (const s of specs.slice(0, MAX_REPORTED_SPECS)) {
     if (seen.has(s.file)) continue;
     seen.add(s.file);
     rows.push({ spec: s.file, status: s.status, tests: s.tests ?? 0, failedTests: s.failed ?? 0, durationMs: s.durationMs ?? null });
