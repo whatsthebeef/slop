@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cornerStatus, hasBlocker, plainText, specifics } from '../src/lib/card-rows';
+import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts } from '../src/lib/card-rows';
+import { humanSteps as deriveHumanSteps, whoseMove } from '@slop/core';
+import type { StoredHumanStep } from '@slop/core';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -242,5 +244,44 @@ describe('cornerStatus text stays a word or two', () => {
     expect(text.replace(/\+\d+/g, '').trim().split(/\s+/).length).toBeLessThanOrEqual(3);
     expect(text).not.toMatch(/[(;]/);
     expect(text.replace(/\bs\d+[a-z]\d+\b/g, '').replace(/\+\d+/g, '')).not.toMatch(/\d/);
+  });
+});
+
+describe('a startable same in Planning', () => {
+  // The server's move for a Planning same carrying the investigation's predicted rollout placeholder.
+  const stored: StoredHumanStep = {
+    id: 'hs-1', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Rollout: steps to be written', detail: null, who: 'admin', due: 'after_merge',
+    state: 'open', blocks: ['sign_off'], check: null, script: null, origin: 'investigation', createdBy: 'dev@example.com', createdAt: NOW,
+    doneBy: null, doneAt: null, dismissedReason: null,
+  };
+  const withPlaceholder = (): Partial<GlobView> => {
+    const g = glob({ status: 'planning', type: 'same' });
+    return { move: whoseMove(g, deriveHumanSteps(g, {}, [stored]), [], [], NOW) };
+  };
+  const startable = (patch: Partial<GlobView> = {}) => view({ type: 'same', status: 'planning', list: 'planning', allowedActions: ['start', 'pick_up'], ...patch });
+  const ended = run({ state: 'ended', outcome: 'completed' });
+
+  it.each([
+    ['a plain one', {}],
+    ['a predicted rollout placeholder', withPlaceholder()],
+    ['an unanswered oversized flag', { sizeCheck: { flagged: true, decision: null } } as Partial<GlobView>],
+    ['a split original', { sizeCheck: { flagged: true, decision: 'split' } } as Partial<GlobView>],
+    ['a finished investigate-only run', { runs: [ended], currentRun: ended }],
+  ])('is not blocked with %s', (_name, patch) => {
+    expect(hasBlocker(startable(patch), NOW)).toBe(false);
+  });
+
+  it('is still blocked while it waits for another glob', () => {
+    expect(hasBlocker(startable({ holding: [hold('s1t1')] }), NOW)).toBe(true);
+  });
+
+  it('counts the Planning globs waiting on each glob', () => {
+    const counts = waitingOnCounts([
+      view({ id: 's1t2', status: 'planning', holding: [hold('s1t1')] }),
+      view({ id: 's1t3', status: 'planning', holding: [hold('s1t1'), hold('s1t1', { relationId: 'r2' })] }),
+      view({ id: 's1t4', status: 'planning', holding: [hold('s1t1', { gate: 'merge' })] }),
+      view({ id: 's1t5', status: 'implementing', holding: [hold('s1t1')] }),
+    ]);
+    expect(counts.get('s1t1')).toBe(2);
   });
 });
