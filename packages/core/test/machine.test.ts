@@ -1618,6 +1618,24 @@ describe('aging', () => {
   });
 });
 
+describe('listSince', () => {
+  const earlier = '2026-10-01T00:00:00.000Z';
+
+  it('is set at creation and when a transition changes the list', () => {
+    expect(value(m.create(createInput(), board, ctx())).glob.listSince).toBe(NOW);
+    const started = value(m.start(glob({ listSince: earlier }), ctx())).glob;
+    expect(started.listSince).toBe(NOW);
+  });
+
+  it('is left alone by a transition inside the same list and by changes that are not transitions', () => {
+    const active = glob({ status: 'implementing', listSince: earlier, runs: [run({ state: 'active' })] });
+    const failed = value(m.reportFailure(active, { reason: 'gave up', runId: 'run-0' }, ctx(null))).glob;
+    expect(failed.status).toBe('failed');
+    expect(failed.listSince).toBe(earlier);
+    expect(value(m.changeFields(active, { group: 'x' }, board, ctx())).glob.listSince).toBe(earlier);
+  });
+});
+
 describe('merge failure recovery (row 16a)', () => {
   const failedMerge = (over: Record<string, unknown> = {}) =>
     glob({
