@@ -6,6 +6,7 @@ import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
 import { LabelReviews } from '../labels';
 import type { ReviewLabel } from '../labels';
+import { ActivityLog } from './activity';
 import { GlobActions } from './actions';
 import type { GlobActionsState } from './actions';
 import { ArtifactsPanel } from './artifacts';
@@ -22,12 +23,15 @@ import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
 import { SizeSection } from './size';
+import type { NowState } from './status';
 import { TestsPanel } from './tests';
 
 /** What the glob page hands every section's view: the shared context, the shared state and the page's callbacks. */
 export interface SectionProps {
   ctx: GlobViewContext;
   actions: GlobActionsState;
+  /** The status worked out once for the header and the Activity log. */
+  nowState: NowState;
   edits: GlobEdits;
   /** The `?section=` the page opened at. */
   section: GlobSection | null;
@@ -110,15 +114,18 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   findings: ({ ctx }) => <FindingsPanel ctx={ctx} />,
 };
 
-/** Sections that render after another one's anchor without an anchor of their own (the edit fields, under the actions). */
+/** Sections that render after another one's anchor without an anchor of their own (the Activity log and the edit fields, under the actions). */
 export const AFTER_SECTION: Partial<Record<GlobSection, SectionView>> = {
-  actions: ({ ctx, actions, edits, onReload }) => (
-    <EditFieldsSection
-      ctx={ctx}
-      decision={actions.decision}
-      edits={edits}
-      run={actions.run}
-      onReload={onReload}
-    />
+  actions: ({ ctx, actions, nowState, edits, onReload }) => (
+    <>
+      <ActivityLog ctx={ctx} state={nowState} actions={actions} />
+      <EditFieldsSection
+        ctx={ctx}
+        decision={actions.decision}
+        edits={edits}
+        run={actions.run}
+        onReload={onReload}
+      />
+    </>
   ),
 };

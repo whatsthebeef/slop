@@ -288,7 +288,19 @@ export class GitHub implements CodeHost, CommitGraph {
       });
       runs = checks.data.check_runs.filter((run) => run.name !== REVIEW_CHECK);
     }
-    const state = classifyMergeState(data.mergeable_state, runs);
+    let state = classifyMergeState(data.mergeable_state, runs);
+    // A head with no check runs is pending: the runs of a fresh push appear a minute later and their webhooks follow. A repo
+    // that runs no checks at all (the base branch's head has none either) would wait forever, so that one passes.
+    if (state === 'pending' && runs.length === 0 && ['clean', 'has_hooks'].includes(data.mergeable_state)) {
+      const base = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+        owner: repo.owner,
+        repo: repo.name,
+        ref: repo.base,
+        filter: 'latest',
+        per_page: 100,
+      });
+      if (base.data.check_runs.every((run) => run.name === REVIEW_CHECK)) state = 'passed';
+    }
     return { sha: data.head.sha, state };
   }
 

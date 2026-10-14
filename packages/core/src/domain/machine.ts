@@ -1724,6 +1724,12 @@ export const commitPushed = (
   }
   // A new head is a different commit from the one the person armed the merge on: they press Merge again.
   if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'new push' });
+  // A failed-checks run failure ("Auto-fix didn't respond …") is about the head that was red; a new head replaces it, so
+  // the glob reads as waiting on the new head's checks instead of staying on Resume until it merges. Failures of another
+  // kind (needs_pairing, merge, provisioning, reverted) are not about a head and stay.
+  if (glob.status === 'pr_open' && glob.failure !== null && glob.failure.kind === undefined && GAVE_UP.test(glob.failure.reason)) {
+    b.set({ failure: null });
+  }
   if (!recovers && (glob.status === 'pr_open' || glob.status === 'merging')) {
     b.set({ headChecks: null }).effect({
       kind: 'refresh_checks',

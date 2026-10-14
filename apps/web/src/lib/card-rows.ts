@@ -19,8 +19,10 @@ export type CornerKind = 'stalled' | 'needs-human' | 'working' | 'standby';
 
 export interface CornerMarker {
   readonly kind: CornerKind;
-  /** One short word or two; the card never wraps it. */
+  /** One short word or two; the card never wraps it. Empty for the machine, whose marker is the icon alone. */
   readonly text: string;
+  /** The marker's accessible name where it has no text ("Machine working"). */
+  readonly label?: string;
   /** The full text: the stall's reason, the escalation's reason, and standby where it applies. */
   readonly tip: string;
   readonly tone: string;
@@ -50,10 +52,10 @@ export const cornerMarker = (glob: GlobView, now: string, viewer?: HumanStepView
     return { kind: 'needs-human', text: 'needs a human', tip: `Needs a person: ${escalation.reason}. Opens the reason`, tone: 'text-required', click: { kind: 'section', target: cardTargets.escalation() } };
   }
   if (position?.holder === 'machine') {
-    // A step still waiting to start is not working: say so, as the card's status line does ("starting" / "queued N min").
-    return { kind: 'working', text: position.queued ? (position.label === 'starting' ? 'starting' : 'queued') : 'working', tip: position.tip, tone: 'text-muted-foreground', click: positionClick(position, glob, repo) };
+    // The robot head alone (spinning while a step runs); the status line's verb carries the specifics.
+    return { kind: 'working', text: '', label: position.queued ? 'Machine queued' : 'Machine working', tip: position.tip, tone: 'text-muted-foreground', click: positionClick(position, glob, repo) };
   }
-  if (standby !== null) return { kind: 'standby', text: 'standby', tip: STANDBY_TIP, tone: 'text-muted-foreground', click: null };
+  if (standby !== null) return { kind: 'standby', text: '', label: 'Machine on standby', tip: STANDBY_TIP, tone: 'text-muted-foreground', click: null };
   return null;
 };
 
@@ -66,12 +68,13 @@ export const specifics = (label: string): string => {
   return rest.toLowerCase() === 'standby' ? 'listening for CI and reviews' : rest;
 };
 
-/** The glob view's Now headline for a stalled or machine position: the corner marker's word and the line's specifics, joined once. */
+/** The glob view's Now headline for a stalled or machine position: the stalled word or the machine's verb (the robot head says the rest). */
 export const nowHeadline = (holder: 'stalled' | 'machine', label: string, queued = false): string => {
-  // A step waiting to start already says so in its label ("starting", "queued 3 min"): don't prefix it with "working".
+  // A step waiting to start already says so in its label ("starting", "queued 3 min").
   if (queued) return label;
   const line = specifics(label);
-  const word = holder === 'stalled' ? 'stalled' : label.toLowerCase() === 'standby' ? 'standby' : 'working';
+  if (holder === 'machine' && label.toLowerCase() !== 'standby') return label;
+  const word = holder === 'stalled' ? 'stalled' : 'standby';
   return line === '' ? word : `${word} · ${line}`;
 };
 

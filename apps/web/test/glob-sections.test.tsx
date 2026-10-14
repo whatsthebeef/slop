@@ -172,24 +172,28 @@ describe('glob view: escalation, dependencies and edit fields', () => {
 
   it('escalated glob with failed checks and an active fix run: the machine holds the ball, the failure shows once', () => {
     renderGlob(fixing);
-    expect(screen.getByTestId('now-headline').textContent).toMatch(/fix(ing)? (CI|checks)/i);
-    expect(screen.getByTestId('now-panel').getAttribute('data-holder')).toBe('machine');
+    expect(screen.getByTestId('header-status').textContent).toMatch(/fix(ing)? (CI|checks)/i);
+    expect(screen.getByTestId('activity').getAttribute('data-holder')).toBe('machine');
     expect(screen.queryByText(/Why you're needed/)).toBeNull();
     expect(screen.queryByTestId('handover-box')).toBeNull();
     expect(screen.queryByTestId('machine-steps')).toBeNull();
     // The header chip is Planning-only (s15b86); this glob is pr_open, so the reason lives in the disclosure.
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
     expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
-    expect(screen.getByTestId('now-details').textContent).toContain('Error: boom');
+    expect(screen.getByTestId('activity-pinned').textContent).toContain('Error: boom');
     // Escalation reason appears only behind "Why a person?", never in Now.
-    expect(screen.getByTestId('now-panel').textContent).not.toContain('Touches auth');
+    expect(screen.getByTestId('activity').textContent).not.toContain('Touches auth');
   });
 
-  it('keeps the details collapsed under one toggle for a machine headline', () => {
+  it('puts the status in the header, not in a Now panel, and the details in the Activity log below the actions', () => {
     renderGlob(fixing);
-    const details = screen.getByTestId<HTMLDetailsElement>('now-details');
-    expect(details.open).toBe(false);
-    expect(screen.getByText('Show details')).toBeTruthy();
+    expect(screen.queryByTestId('now-panel')).toBeNull();
+    expect(screen.getByTestId('glob-header').contains(screen.getByTestId('header-status'))).toBe(true);
+    expect(screen.getByTestId('header-status').textContent).not.toContain('Now:');
+    expect(screen.getByTestId('glob-header').textContent).not.toMatch(/branch|v\d/);
+    const log = screen.getByTestId('activity');
+    expect(log.id).toBe('glob-activity');
+    expect(log.textContent).toContain('Error: boom');
   });
 
   it("the viewer's turn: the headline and the handover brief inside the details", () => {
@@ -203,8 +207,8 @@ describe('glob view: escalation, dependencies and edit fields', () => {
         handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] },
       }),
     );
-    expect(screen.getByTestId('now-headline').textContent).toContain('Your turn · Merge');
-    const details = screen.getByTestId('now-details');
+    expect(screen.getByTestId('header-status').textContent).toContain('Your turn · Merge');
+    const details = screen.getByTestId('activity-pinned');
     expect(details.textContent).toContain("Why you're needed");
     expect(details.textContent).toContain('Reproduce and fix');
     expect(screen.getAllByText(/Why you're needed/)).toHaveLength(1);
@@ -217,7 +221,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
         move: { holder: 'human', reason: 'Needs a human: Touches auth', since: null, who: 'dev@example.com' },
       }),
     );
-    expect(screen.getByTestId('now-headline').textContent).not.toContain('Touches auth');
+    expect(screen.getByTestId('header-status').textContent).not.toContain('Touches auth');
   });
 
   it('has no Waits for input: a glob in Planning shows only the edges slop inferred, with a ✕ to dismiss one', () => {
@@ -350,10 +354,10 @@ describe('glob view: Now panel for a stalled failure', () => {
         'stalled · needs your decision',
       ),
     );
-    const headline = screen.getByTestId('now-headline').textContent;
+    const headline = screen.getByTestId('header-status').textContent;
     expect(headline).toContain('Stalled · needs your decision');
     expect(headline).not.toContain('Needs a decision before');
-    const panel = screen.getByTestId('now-panel').textContent;
+    const panel = screen.getByTestId('activity').textContent;
     expect(panel.split(DECISION).length - 1).toBe(1);
     expect(panel).not.toContain('Decision needed:');
     expect(panel.split('MARKER').length - 1).toBe(1);
@@ -368,8 +372,66 @@ describe('glob view: Now panel for a stalled failure', () => {
         'stalled · run failed',
       ),
     );
-    expect(screen.getByTestId('now-headline').textContent).toContain('Stalled · run failed');
-    const panel = screen.getByTestId('now-panel').textContent;
+    expect(screen.getByTestId('header-status').textContent).toContain('Stalled · run failed');
+    const panel = screen.getByTestId('activity').textContent;
     expect(panel.split('Could not reproduce the bug').length - 1).toBe(1);
+  });
+});
+
+describe('glob view: Activity log', () => {
+  const withRuns = (n: number) =>
+    view({
+      status: 'pr_open',
+      pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+      runs: Array.from({ length: n }, (_, i) => ({
+        id: `r${String(i)}`,
+        state: 'ended' as const,
+        outcome: 'failed' as const,
+        generation: 1,
+        triggeredBy: 'a',
+        routineOwner: 'a',
+        queuedAt: new Date(Date.UTC(2026, 9, 1, i)).toISOString(),
+        startedAt: new Date(Date.UTC(2026, 9, 1, i, 1)).toISOString(),
+        lastProgressAt: null,
+        endedAt: new Date(Date.UTC(2026, 9, 1, i, 2)).toISOString(),
+        failureReason: `reason ${String(i)}\nline two ${String(i)}`,
+        sessionId: null,
+        sessionUrl: 'https://claude.ai/code/s',
+      })),
+    });
+
+  it('sits right under the actions, with the PR entry and a link for the run', () => {
+    renderGlob(withRuns(1));
+    const log = screen.getByTestId('activity');
+    const actions = document.getElementById('section-actions');
+    expect(actions?.compareDocumentPosition(log)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(within(log).getByText(/PR #7 ready for review/)).toBeTruthy();
+    expect(within(log).getAllByRole('link', { name: 'open' }).length).toBeGreaterThan(0);
+  });
+
+  it('shows the last 8 with Show all, and expands a failure in place', async () => {
+    const user = userEvent.setup();
+    renderGlob(withRuns(6));
+    expect(screen.getAllByTestId('activity-entry')).toHaveLength(8);
+    await user.click(screen.getByTestId('activity-show-all'));
+    expect(screen.getAllByTestId('activity-entry').length).toBeGreaterThan(8);
+    expect(screen.queryByTestId('activity-more')).toBeNull();
+    await user.click(screen.getAllByTestId('activity-expand')[0] as HTMLElement);
+    expect(screen.getByTestId('activity-more').textContent).toContain('line two');
+  });
+});
+
+describe('glob view: title in the main content', () => {
+  it('renders the title under the bar, not in it, and edits there', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(view({ title: 'A long title '.repeat(12) }));
+    const bar = screen.getByTestId('glob-header');
+    const title = screen.getByTestId('glob-title');
+    expect(bar.contains(title)).toBe(false);
+    await user.click(screen.getByTestId('glob-title-edit'));
+    const input = screen.getByTestId('glob-title-input');
+    await user.clear(input);
+    await user.type(input, 'New title{Enter}');
+    expect(cb.onUpdate).toHaveBeenCalled();
   });
 });

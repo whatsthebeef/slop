@@ -29,6 +29,13 @@ const live = (state: 'queued' | 'active' | 'watching') => {
 };
 
 describe('cornerMarker', () => {
+  it('shows the machine as the icon alone, with no "working" word', () => {
+    const marker = cornerMarker(view({ status: 'in_progress', ...live('active') }), NOW);
+    expect(marker?.text).toBe('');
+    expect(JSON.stringify(marker?.text)).not.toMatch(/working/i);
+  });
+
+
   it('shows stalled, with standby in its tooltip and no second marker', () => {
     const g = view({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, ...live('watching') });
     const marker = cornerMarker(g, NOW);
@@ -38,9 +45,9 @@ describe('cornerMarker', () => {
 
   it('shows one marker by precedence: stalled, needs a human, working, standby, none', () => {
     expect(cornerMarker(escalated(), NOW)).toMatchObject({ kind: 'needs-human' });
-    expect(cornerMarker(view({ status: 'in_progress', ...live('active') }), NOW)).toMatchObject({ kind: 'working', text: 'working' });
-    expect(cornerMarker(view({ status: 'in_progress', ...live('queued') }), NOW)).toMatchObject({ kind: 'working', text: 'starting' });
-    expect(cornerMarker(prOpen({ type: 'sub', ...live('watching') }), NOW)).toMatchObject({ kind: 'standby' });
+    expect(cornerMarker(view({ status: 'in_progress', ...live('active') }), NOW)).toMatchObject({ kind: 'working', text: '', label: 'Machine working' });
+    expect(cornerMarker(view({ status: 'in_progress', ...live('queued') }), NOW)).toMatchObject({ kind: 'working', text: '', label: 'Machine queued' });
+    expect(cornerMarker(prOpen({ type: 'sub', ...live('watching') }), NOW)).toMatchObject({ kind: 'standby', text: '', label: 'Machine on standby' });
     expect(cornerMarker(view({ status: 'planning' }), NOW)).toBeNull();
     // Stalled beats an escalation, and the escalation's reason stays reachable in the tooltip.
     const both = view({ ...escalated(), status: 'planning', provisioning: 'failed' });
@@ -107,8 +114,9 @@ describe('marker and line never repeat each other', () => {
     expect(line?.text).not.toMatch(/stalled/i);
     expect(nowHeadline('stalled', 'stalled · merge conflict')).toBe(`${marker?.text} · ${line?.text}`);
     expect(nowHeadline('stalled', 'stalled')).toBe('stalled');
-    expect(nowHeadline('machine', 'implementing')).toBe('working · implementing');
+    expect(nowHeadline('machine', 'implementing')).toBe('implementing');
     expect(nowHeadline('machine', 'queued 3 min', true)).toBe('queued 3 min');
+    expect(nowHeadline('machine', 'fixing conflict')).not.toMatch(/working/i);
     expect(nowHeadline('machine', 'standby')).toBe('standby · listening for CI and reviews');
     const working = cardStatus(view({ status: 'in_progress', ...live('active') }), NOW);
     expect(working?.text).not.toMatch(/working|standby/i);

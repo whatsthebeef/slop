@@ -4,8 +4,10 @@ import { classifyMergeState } from '../src/github/merge-state.js';
 const run = (status: string, conclusion: string | null) => ({ status, conclusion });
 
 describe('classifyMergeState', () => {
-  it('clean passes', () => {
-    expect(classifyMergeState('clean', [])).toBe('passed');
+  it('clean passes once a check run succeeded; with no check runs yet it is pending', () => {
+    expect(classifyMergeState('clean', [run('completed', 'success')])).toBe('passed');
+    expect(classifyMergeState('clean', [])).toBe('pending');
+    expect(classifyMergeState('has_hooks', [])).toBe('pending');
   });
 
   it('unstable with a failed check run (a non-required sub-gate) fails', () => {

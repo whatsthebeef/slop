@@ -14,7 +14,8 @@ import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta, MachineRuns } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
-import { NowPanel } from './glob-view/status';
+import { useNowState } from './glob-view/status';
+import { GlobTitle } from './glob-title';
 
 /** A section's anchor: found by `?section=`, and left below the sticky header (its measured height) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
@@ -90,6 +91,7 @@ export const GlobDetail = ({
     ...(email === undefined ? {} : { email }),
   });
   const { decision, busy, disabled } = actionState;
+  const nowState = useNowState(glob, decision, disabled, actionState);
   const edits = useGlobEdits(glob.id);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   // Suggest's Apply: the decision form opens pre-filled; reset when another glob opens.
@@ -142,6 +144,7 @@ export const GlobDetail = ({
   const sectionProps = {
     ctx,
     actions: actionState,
+    nowState,
     edits,
     section,
     openLabel,
@@ -163,10 +166,16 @@ export const GlobDetail = ({
 
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
-      <GlobHeader ctx={ctx} onClose={onClose} onReload={onReload} />
+      <GlobHeader ctx={ctx} onClose={onClose} state={nowState} />
       <div className="grid gap-4">
+        <GlobTitle
+          id={glob.id}
+          title={glob.title}
+          editable={glob.status !== 'signed_off'}
+          onUpdate={onUpdate}
+          onReload={onReload}
+        />
         <GlobChips ctx={ctx} actions={actionState} />
-        <NowPanel glob={glob} decision={decision} disabled={disabled} actions={actionState} />
         {GLOB_VIEW_SECTIONS.map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>
