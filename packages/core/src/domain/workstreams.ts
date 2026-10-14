@@ -140,6 +140,8 @@ export const parseWorkstreams = (content: string): WorkstreamsParse => {
   if (loop.length > 0) errors.push(`needs form a cycle through ${loop.join(', ')}`);
   if (raw.fannedOut === true && Array.isArray(raw.workstreams) && raw.workstreams.length < 2)
     errors.push('fannedOut is true, which needs at least 2 workstreams');
+  if (raw.fannedOut === true && isCount(raw.maxParallel) && raw.maxParallel < 2)
+    errors.push('fannedOut is true, which needs a maxParallel of at least 2');
   if (isCount(raw.maxParallel) && list.length > 0 && raw.maxParallel > list.length)
     errors.push(`maxParallel (${String(raw.maxParallel)}) is more than the ${String(list.length)} workstreams`);
 

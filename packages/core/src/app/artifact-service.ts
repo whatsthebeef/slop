@@ -348,8 +348,14 @@ export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: strin
   let previous: ReturnType<typeof parseWorkstreams> | null = null;
   if (workstreams?.kind === 'ok') {
     await tx.lockGlobArtifacts(globId);
-    const before = (await tx.artifactVersions(globId, 'implementation_plan', '')).at(-1);
-    previous = before === undefined ? null : parseWorkstreams(before.content);
+    // The last version whose block parsed, so a malformed push in between doesn't make the same block look new again.
+    for (const v of (await tx.artifactVersions(globId, 'implementation_plan', '')).reverse()) {
+      const p = parseWorkstreams(v.content);
+      if (p.kind === 'ok') {
+        previous = p;
+        break;
+      }
+    }
   }
   const artifact = await tx.insertArtifact({
     globId,

@@ -67,6 +67,7 @@ describe('parseWorkstreams', () => {
     expect(errorsOf({ ...BLOCK, workstreams: [WS('W0', { needs: ['W1'] }), WS('W1', { needs: ['W0'] })] }).join(';')).toContain('cycle through W0, W1');
     expect(errorsOf({ fannedOut: true, maxParallel: 1, workstreams: [WS('W0')] }).join(';')).toContain('at least 2 workstreams');
     expect(errorsOf({ ...BLOCK, maxParallel: 4 }).join(';')).toContain('more than the 3 workstreams');
+    expect(errorsOf({ ...BLOCK, maxParallel: 1 }).join(';')).toContain('maxParallel of at least 2');
   });
 
   it('refuses text that is not JSON or not an object', () => {
@@ -77,7 +78,8 @@ describe('parseWorkstreams', () => {
   });
 
   it('reads a block in a CRLF record and treats a missing duration as null', () => {
-    const { durationMinutes: _omit, ...noDuration } = WS('W0');
+    const noDuration = WS('W0');
+    delete noDuration.durationMinutes;
     const text = record({ fannedOut: false, maxParallel: 1, workstreams: [noDuration] }).replace(/\n/g, '\r\n');
     const parsed = parseWorkstreams(text);
     expect(parsed.kind === 'ok' && parsed.block.workstreams[0]?.durationMinutes).toBeNull();
@@ -159,17 +161,26 @@ describe('the record hook', () => {
     expect(recorded()).toHaveLength(0);
   });
 
+  it('does not record the same block again after a malformed push in between', async () => {
+    await put(record(BLOCK));
+    await put(record({ ...BLOCK, maxParallel: 0 }));
+    await put(`${record(BLOCK)}\nMore prose`);
+    expect(recorded()).toHaveLength(1);
+  });
+
   it('does not parse the block in other artifact kinds', async () => {
     const stored = unwrap(await artifacts.putArtifact(ADMIN, globId, 'local_review', record(BLOCK), OPTIONS));
     if ('ignored' in stored) throw new Error('ignored');
     expect(recorded()).toHaveLength(0);
   });
 
-  it('records again when a valid block returns after a malformed push, and never for an unparseable first push', async () => {
+  it('does not record the same block again after a malformed push in between', async () => {
     await put(record(BLOCK));
     await put(record({ ...BLOCK, maxParallel: 0 }), { ...OPTIONS, commitSha: 'bad' });
     expect(recorded()).toHaveLength(1);
     await put(record(BLOCK), { ...OPTIONS, commitSha: 'fix' });
-    expect(recorded().map((e) => e.data.version)).toEqual([1, 3]);
+    expect(recorded().map((e) => e.data.version)).toEqual([1]);
+    await put(record({ ...BLOCK, maxParallel: 3 }), { ...OPTIONS, commitSha: 'new' });
+    expect(recorded().map((e) => e.data.version)).toEqual([1, 4]);
   });
 });
