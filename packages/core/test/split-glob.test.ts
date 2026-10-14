@@ -52,7 +52,7 @@ describe('split a glob into parts', () => {
     boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     original = unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Big',
         type: 'same',
@@ -109,7 +109,7 @@ describe('split a glob into parts', () => {
 
   it('puts every part of a split of a group-less glob in one group named from its title', async () => {
     const bare = unwrap(
-      await globs.create(DEV, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
+      await globs.create(ADMIN, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
     );
     const parts = unwrap(
       await globs.split(DEV, bare.id, bare.version, input([part({ title: 'Billing overhaul 1/2: model' }), part({ title: 'Billing overhaul 2/2: ui', after: [0] })])),
@@ -120,10 +120,10 @@ describe('split a glob into parts', () => {
 
   it('reuses an existing group whose name matches, and keeps a grouped original\'s group', async () => {
     unwrap(
-      await globs.create(DEV, { boardId, title: 'Other', type: 'same', category: 'task', group: 'Billing Overhaul', environment: null, autoTrigger: false, idempotencyKey: null, plan: 'x' }),
+      await globs.create(ADMIN, { boardId, title: 'Other', type: 'same', category: 'task', group: 'Billing Overhaul', environment: null, autoTrigger: false, idempotencyKey: null, plan: 'x' }),
     );
     const bare = unwrap(
-      await globs.create(DEV, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
+      await globs.create(ADMIN, { boardId, title: 'Billing overhaul: all of it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'All' }),
     );
     const parts = unwrap(await globs.split(DEV, bare.id, bare.version, input([part({ title: 'A' }), part({ title: 'B', after: [0] })])));
     expect(parts.map((g) => g.group)).toEqual(['Billing Overhaul', 'Billing Overhaul']);
@@ -200,7 +200,7 @@ describe('split a glob into parts', () => {
       store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', [type]));
     const makeSub = async (): Promise<Glob> =>
       unwrap(
-        await globs.create(DEV, {
+        await globs.create(ADMIN, {
           boardId,
           title: 'Sub',
           type: 'sub',

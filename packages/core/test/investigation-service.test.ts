@@ -52,7 +52,7 @@ describe('acting on an investigation', () => {
 
   const create = async (type: 'sub' | 'same'): Promise<Glob> =>
     unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'T',
         type,

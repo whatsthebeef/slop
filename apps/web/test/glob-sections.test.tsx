@@ -227,9 +227,12 @@ describe('glob view: escalation, dependencies and edit fields', () => {
 
   it('has no Related section content but the Add button for a glob with no relations, and never a Waits for input', () => {
     renderGlob(view({ status: 'planning', provisioning: 'none' }));
-    expect(screen.getByTestId('related').textContent).toContain('Related');
+    expect(screen.getByTestId('related-toggle').textContent).toBe('Related (0)');
+    expect(screen.getByTestId('related-toggle').closest('div')?.contains(screen.getByTestId('add-relation'))).toBe(true);
+    expect(screen.getByTestId('related').className).not.toContain('border');
     expect(screen.queryByTestId('related-holding')).toBeNull();
-    expect(screen.getByTestId('add-relation').textContent).toBe('Add relation…');
+    expect(screen.getByTestId('add-relation').textContent).toBe('Add relation');
+    expect(screen.queryByTestId('add-relation-form')).toBeNull();
     expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
     expect(screen.queryByTestId('dependencies')).toBeNull();
   });
@@ -307,6 +310,26 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(cb.onAddRelation).toHaveBeenCalledWith({ gate: 'start', reason: 'needs its schema', to: 's1t9', version: 7 });
   });
 
+  it('toggles the Related section, which starts open only while something holds the glob back, and the Add button toggles the form', async () => {
+    renderGlob(view({ status: 'planning', provisioning: 'none', relations: related({ done: [{ relationId: 'rel_d', to: 's1t0', toTitle: null, gate: 'start', until: 'merged', reason: null, source: 'learned', how: 'met' }] }) }));
+    expect(screen.getByTestId('related-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('related-done')).toBeNull();
+    await userEvent.click(screen.getByTestId('related-toggle'));
+    expect(screen.getByTestId('related-done')).toBeTruthy();
+    await userEvent.click(screen.getByTestId('add-relation'));
+    expect(screen.getByTestId('add-relation-form')).toBeTruthy();
+    await userEvent.click(screen.getByTestId('add-relation'));
+    expect(screen.queryByTestId('add-relation-form')).toBeNull();
+  });
+
+  it('starts the Related section open when something holds the glob back, and shows "N holding" once collapsed', async () => {
+    renderGlob(view({ status: 'planning', provisioning: 'none', relations: related({ holding: [hold('s1t2'), hold('s1t3')] }) }));
+    expect(screen.getByTestId('related-toggle').getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('related-holding')).toBeTruthy();
+    await userEvent.click(screen.getByTestId('related-toggle'));
+    expect(screen.getByTestId('related-holding-count').textContent).toBe('2 holding');
+  });
+
   it('keeps the form open and the text when the add failed', async () => {
     const cb = renderGlob(view({ status: 'planning', provisioning: 'none' }));
     cb.onAddRelation.mockResolvedValueOnce(false);
@@ -327,6 +350,8 @@ describe('glob view: escalation, dependencies and edit fields', () => {
       }),
     );
     expect(screen.queryByTestId('related')).toBeNull();
+    expect(screen.getByTestId('add-relation').textContent).toBe('Holds back');
+    expect(screen.getByTestId('holds-back-toggle').textContent).toBe('Holds back (1)');
     expect(screen.getByTestId('holds-back').textContent).toContain("can't start until this is decided");
     expect(screen.getByTestId('holds-back').textContent).toContain('waits on the choice');
     await userEvent.click(screen.getByTestId('add-relation'));

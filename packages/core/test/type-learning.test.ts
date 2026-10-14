@@ -199,7 +199,7 @@ describe('type corrections', () => {
     category: Glob['category'] = 'feature',
   ): Promise<Glob> =>
     unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'x',
         type,
@@ -223,13 +223,13 @@ describe('type corrections', () => {
 
   it('records a person retype with the plan signals, for each direction', async () => {
     const same = await create('same', OPEN_PLAN);
-    unwrap(await globs.update(DEV, same.id, same.version, { type: 'super' }));
+    unwrap(await globs.update(ADMIN, same.id, same.version, { type: 'super' }));
     const [recorded] = await history();
     expect(recorded).toMatchObject({
       globId: same.id,
       fromType: 'same',
       toType: 'super',
-      actor: DEV,
+      actor: ADMIN,
       at: NOW,
       resetAt: null,
       signals: {
@@ -240,7 +240,7 @@ describe('type corrections', () => {
       },
     });
     const sub = await create('sub', SETTLED_PLAN);
-    unwrap(await globs.update(DEV, sub.id, sub.version, { type: 'same' }));
+    unwrap(await globs.update(ADMIN, sub.id, sub.version, { type: 'same' }));
     expect((await history())[0]).toMatchObject({
       globId: sub.id,
       fromType: 'sub',
@@ -261,7 +261,7 @@ describe('type corrections', () => {
   it('never fails the change when recording fails, and logs it', async () => {
     const same = await create('same', OPEN_PLAN);
     store.failRecording = true;
-    const result = await globs.update(DEV, same.id, same.version, { type: 'super' });
+    const result = await globs.update(ADMIN, same.id, same.version, { type: 'super' });
     expect(result.ok && result.value.type).toBe('super');
     expect(logged).toEqual(['type learning: recording down']);
     store.failRecording = false;
@@ -271,7 +271,7 @@ describe('type corrections', () => {
   it('feeds the corrections into the next intake prompt; a new board gets the defaults', async () => {
     expect(await propose()).toContain('Type defaults (this board has not corrected a type yet)');
     const same = await create('same', OPEN_PLAN);
-    unwrap(await globs.update(DEV, same.id, same.version, { type: 'super' }));
+    unwrap(await globs.update(ADMIN, same.id, same.version, { type: 'super' }));
     const prompt = await propose();
     expect(prompt).toContain(
       'Changed from same to super: 2 open questions, decision wording, risk-area files (apps/server/src/auth/session.ts), no tasks',
@@ -294,7 +294,7 @@ describe('type corrections', () => {
     for (let i = 0; i < TYPE_EXAMPLES_MAX + 3; i++) {
       now = new Date(Date.parse(NOW) + i * 1000).toISOString();
       const sub = await create('sub', `Plan ${String(i)}`);
-      unwrap(await globs.update(DEV, sub.id, sub.version, { type: 'same' }));
+      unwrap(await globs.update(ADMIN, sub.id, sub.version, { type: 'same' }));
     }
     const prompt = await propose();
     expect(prompt.match(/Changed from sub to same/g)).toHaveLength(TYPE_EXAMPLES_MAX);
@@ -308,7 +308,7 @@ describe('type corrections', () => {
       defaults: TYPE_DEFAULTS,
     });
     const same = await create('same', OPEN_PLAN);
-    unwrap(await globs.update(DEV, same.id, same.version, { type: 'super' }));
+    unwrap(await globs.update(ADMIN, same.id, same.version, { type: 'super' }));
     expect(await view()).toMatchObject({ learned: true, corrections: [{ globId: same.id }] });
 
     const refused = await learning.reset(DEV, boardId);
@@ -327,7 +327,7 @@ describe('type corrections', () => {
 
     // A later retype teaches again; the reset one stays history.
     const sub = await create('sub', SETTLED_PLAN);
-    unwrap(await globs.update(DEV, sub.id, sub.version, { type: 'same' }));
+    unwrap(await globs.update(ADMIN, sub.id, sub.version, { type: 'same' }));
     expect((await view()).corrections).toHaveLength(1);
     expect(await history()).toHaveLength(2);
   });
@@ -354,17 +354,17 @@ describe('type corrections', () => {
       });
       expect(failed.runs).toHaveLength(1);
 
-      const asDev = unwrap(await globs.get(DEV, failed.id));
+      const asDev = unwrap(await globs.get(ADMIN, failed.id));
       expect(asDev.allowedActions).toContain('make_super');
       expect(asDev.allowedActions).toContain('pick_up');
       expect(unwrap(await globs.get(PO, failed.id)).allowedActions).not.toContain('make_super');
       expect((await globs.makeSuper(PO, failed.id, failed.version)).ok).toBe(false);
 
-      const made = unwrap(await globs.makeSuper(DEV, failed.id, failed.version));
+      const made = unwrap(await globs.makeSuper(ADMIN, failed.id, failed.version));
       expect(made).toMatchObject({
         type: 'super',
         status: 'in_progress',
-        implementer: DEV,
+        implementer: ADMIN,
         failure: null,
       });
       expect(await history()).toEqual([
@@ -372,7 +372,7 @@ describe('type corrections', () => {
           globId: failed.id,
           fromType: 'sub',
           toType: 'super',
-          actor: DEV,
+          actor: ADMIN,
           signals: {
             openQuestions: 2,
             decisionWording: true,
@@ -381,12 +381,21 @@ describe('type corrections', () => {
           },
         }),
       ]);
-      expect(unwrap(await globs.get(DEV, failed.id)).allowedActions).not.toContain('make_super');
+      expect(unwrap(await globs.get(ADMIN, failed.id)).allowedActions).not.toContain('make_super');
+    });
+
+    it('refuses Make it a super and undoing an escalation for a non-admin', async () => {
+      const failed = await failPairing('sub');
+      const refused = await globs.makeSuper(DEV, failed.id, failed.version);
+      expect(!refused.ok && refused.error.code).toBe('forbidden');
+      const same = await create('same', OPEN_PLAN);
+      const undo = await globs.deescalate(DEV, same.id, same.version);
+      expect(!undo.ok && undo.error.code).toBe('forbidden');
     });
 
     it('works on a same, and a plain failure does not offer it', async () => {
       const failed = await failPairing('same');
-      const made = unwrap(await globs.makeSuper(DEV, failed.id, failed.version));
+      const made = unwrap(await globs.makeSuper(ADMIN, failed.id, failed.version));
       expect(made.type).toBe('super');
       expect((await history())[0]).toMatchObject({ fromType: 'same', toType: 'super' });
 

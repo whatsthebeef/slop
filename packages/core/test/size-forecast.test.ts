@@ -103,7 +103,7 @@ describe('size forecast', () => {
 
   const create = async (plan: string): Promise<Glob> =>
     unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'T',
         type: 'same',
@@ -426,7 +426,7 @@ describe('size forecast', () => {
   describe('the background forecast of a created glob and the hold', () => {
     const createSub = async (plan: string): Promise<Glob> =>
       unwrap(
-        await globs.create(DEV, { boardId, title: 'T', type: 'sub', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan }),
+        await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan }),
       );
     const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 

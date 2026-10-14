@@ -1,8 +1,9 @@
 import { decisionOf } from '@slop/core';
+import { useState } from 'react';
 import type { AddRelationInput, DecideInput } from '@/lib/api';
 import { DecisionAssessment, DecisionSection as DecisionBody } from '../decision-section';
 import type { GlobViewContext } from './context';
-import { AddRelation, relatedGroups, Row } from './related';
+import { AddRelationForm, RelationsHeader, relatedGroups, Row } from './related';
 
 /** The decision section: only a decision glob has one. */
 export const DecisionPanel = ({
@@ -39,19 +40,38 @@ export const DecisionHoldsBack = ({
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
 }) => {
   const rows = relatedGroups(ctx.glob)?.holdsBack ?? [];
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const [adding, setAdding] = useState(false);
+  const open = toggled ?? rows.length > 0;
   return (
-    <div className="grid gap-2 rounded border p-2 text-sm" data-testid="holds-back">
-      <span className="font-medium">Holds back</span>
-      {rows.length === 0 ? (
-        <span className="text-xs text-muted-foreground">Nothing waits for this decision.</span>
-      ) : (
-        <ul className="ml-4 list-disc">
-          {rows.map((r) => (
-            <Row key={r.relationId} boardId={ctx.glob.boardId} row={r} onDismiss={null} />
-          ))}
-        </ul>
+    <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-sm" aria-label="Holds back" data-testid="holds-back">
+      <RelationsHeader
+        open={open}
+        onToggle={() => setToggled(!open)}
+        title="Holds back"
+        count={rows.length}
+        holding={0}
+        addLabel="Holds back"
+        onAdd={() => {
+          setAdding(!(adding && open));
+          setToggled(true);
+        }}
+        toggleTestId="holds-back-toggle"
+      />
+      {open && (
+        <>
+          {rows.length === 0 ? (
+            <span className="text-xs text-muted-foreground">Nothing waits for this decision.</span>
+          ) : (
+            <ul className="ml-4 list-disc">
+              {rows.map((r) => (
+                <Row key={r.relationId} boardId={ctx.glob.boardId} row={r} onDismiss={null} />
+              ))}
+            </ul>
+          )}
+          {adding && <AddRelationForm ctx={ctx} gates={['start', 'merge']} onAdd={onAddRelation} onClose={() => setAdding(false)} />}
+        </>
       )}
-      <AddRelation ctx={ctx} label="Holds back…" gates={['start', 'merge']} onAdd={onAddRelation} />
-    </div>
+    </section>
   );
 };
