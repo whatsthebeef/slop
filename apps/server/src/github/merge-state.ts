@@ -23,7 +23,7 @@ export const noSuccessfulRun = (runs: readonly { status: string; conclusion: str
  * Maps GitHub's `mergeable_state` to a merge state. `unstable` (a non-required check failed or is running) and
  * `blocked` (a required check is missing or failed) don't say which, so the head's check runs decide: any failed
  * run fails the head, any unfinished (or cancelled) run leaves it pending, and an `unstable` head with neither is a failing
- * commit status, which also fails it. A `sub-gate` that isn't a required check lands here as `unstable`.
+ * commit status, which also fails it. A gate check that isn't a required check lands here as `unstable`.
  */
 export const classifyMergeState = (
   mergeableState: string,

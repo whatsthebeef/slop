@@ -1256,6 +1256,14 @@ describe('checks and merging (slice 2)', () => {
     expect(effectKinds(pushed)).toEqual(['refresh_checks', 'review_change']);
   });
 
+  it('a gate check result counts only for the PR head: a run on another sha (a push to the base) is ignored', () => {
+    const open = glob({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
+    const passed = value(m.subGateCheckCompleted(open, { sha: 'bbb', passed: true }, ctx(null)));
+    expect(passed.effects).toEqual([{ kind: 'evaluate_sub_gate', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    expect(value(m.subGateCheckCompleted(open, { sha: 'main-sha', passed: true }, ctx(null))).effects).toEqual([]);
+    expect(value(m.subGateCheckCompleted(open, { sha: 'bbb', passed: false }, ctx(null))).effects).toEqual([]);
+  });
+
   it('a sub entering pr_open goes straight to the sub policy, without waiting for its checks', () => {
     const sub = value(m.prReadyForReview(glob({ type: 'sub', status: 'implementing' }), { number: 7, headSha: 'bbb' }, ctx(null)));
     expect(sub.effects).toEqual([

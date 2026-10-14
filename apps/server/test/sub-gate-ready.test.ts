@@ -21,9 +21,9 @@ const unwrap = <T>(result: Result<T>): T => {
   return result.value;
 };
 
-/** A code host whose `sub-gate` check run on the head may already have completed. */
+/** A code host whose gate check run on the head may already have completed. */
 class FakeHost extends FakeCodeHost {
-  /** The completed `sub-gate` run on HEAD, or null while it is still running. */
+  /** The completed gate check run on HEAD, or null while it is still running. */
   subGate: { passed: boolean } | null = null;
   readonly lookups: string[] = [];
   diff: DiffSummary = { changedLines: 10, files: ['src/a.ts'] };
@@ -48,6 +48,8 @@ describe('a sub whose PR is ready', () => {
   let globs: GlobService;
   let host: FakeHost;
   let handle: ReturnType<typeof githubDeliveryHandler>;
+  /** A board whose policy still names the old `sub-gate` check. */
+  let handleLegacy: ReturnType<typeof githubDeliveryHandler>;
   let executors: ReturnType<typeof codeHostExecutors>;
   let n = 0;
   const deliveryId = () => `delivery-${String(++n)}`;
@@ -79,6 +81,7 @@ describe('a sub whose PR is ready', () => {
     host = new FakeHost();
     // These deliveries never carry review comments.
     handle = githubDeliveryHandler({ db: database.db, globs, boardOf, github: host });
+    handleLegacy = githubDeliveryHandler({ db: database.db, globs, boardOf, github: host, subGateCheck: () => Promise.resolve('sub-gate') });
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }));
   });
 
@@ -137,6 +140,54 @@ describe('a sub whose PR is ready', () => {
       pull_request: { number: 7, draft: false, merged: false, merge_commit_sha: null, head: { ref: globId, sha: HEAD } },
       repository: { full_name: REPO },
     },
+  });
+
+  const checkRun = (name: string, sha: string, conclusion: string) => ({
+    id: deliveryId(),
+    event: 'check_run',
+    payload: {
+      action: 'completed',
+      check_run: { name, head_sha: sha, status: 'completed', conclusion, check_suite: { head_branch: globId } },
+      repository: { full_name: REPO },
+    },
+  });
+  const queuedEvaluations = async () => {
+    const rows = await pending('evaluate_sub_gate');
+    for (const row of rows) await database.db.update(schema.outbox).set({ state: 'done' }).where(eq(schema.outbox.id, row.id));
+    return rows.length;
+  };
+
+  it('waits for the `checks` run on the PR head by default, not for a sub-gate run or a run on another sha', async () => {
+    await handle(readyForReview());
+    await queuedEvaluations();
+    await handle(checkRun('sub-gate', HEAD, 'success'));
+    await handle(checkRun('checks', 'ffffffffffffffff', 'success'));
+    await handle(checkRun('checks', HEAD, 'failure'));
+    await handle(checkRun('checks', HEAD, 'skipped'));
+    expect(await queuedEvaluations()).toBe(0);
+    await handle(checkRun('checks', HEAD, 'success'));
+    expect(await queuedEvaluations()).toBe(1);
+  });
+
+  it("a board whose policy names `sub-gate` waits for that run and ignores `checks`", async () => {
+    await handleLegacy(readyForReview());
+    await queuedEvaluations();
+    await handleLegacy(checkRun('checks', HEAD, 'success'));
+    expect(await queuedEvaluations()).toBe(0);
+    await handleLegacy(checkRun('sub-gate', HEAD, 'success'));
+    expect(await queuedEvaluations()).toBe(1);
+  });
+
+  it('looks up the default `checks` run by name on the PR head when its webhook was missed', async () => {
+    await handle(readyForReview());
+    await queuedEvaluations();
+    host.subGate = { passed: true };
+    const glob = await current();
+    const refresh = executors.refresh_sub_gate;
+    if (refresh === undefined) throw new Error('No executor for refresh_sub_gate');
+    expect(await refresh({ kind: 'refresh_sub_gate', globId: globId, generation: glob.generation }, glob, { globs })).toBe('done');
+    expect(host.lookups).toEqual([`checks@${HEAD}`]);
+    expect(await queuedEvaluations()).toBe(1);
   });
 
   it('a sub is evaluated as soon as its PR is ready, without its checks, and merges', async () => {

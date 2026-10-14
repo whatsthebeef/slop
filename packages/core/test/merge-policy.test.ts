@@ -12,6 +12,10 @@ import { isAgentSetKind } from '../src/domain/knowledge.js';
 import {
   checkMergePolicy,
   DEFAULT_ROLLOUT_PATHS,
+  DEFAULT_SUB_GATE_CHECK,
+  MERGE_POLICY_CHECK_MAX,
+  subGateCheckOf,
+  subGateWorkflowPath,
   rolloutPathsOf,
   MERGE_POLICY_PATH_MAX,
   MERGE_POLICY_PATHS_MAX,
@@ -52,6 +56,10 @@ describe('parseMergePolicy', () => {
     ['a NUL', '{"sizeIgnoredPaths": ["a\\u0000b"]}', 'one line'],
     ['a parent path', '{"exclusivePaths": ["../x/**"]}', 'no ..'],
     ['an absolute path', '{"exclusivePaths": ["/etc/**"]}', 'no ..'],
+    ['a non-string gate check', '{"subGateCheck": 1}', 'check name'],
+    ['an empty gate check', '{"subGateCheck": "  "}', 'must not be empty'],
+    ['a multi-line gate check', '{"subGateCheck": "a\\nb"}', 'one line'],
+    ['an over-long gate check', JSON.stringify({ subGateCheck: 'x'.repeat(MERGE_POLICY_CHECK_MAX + 1) }), 'longer than'],
     ['an over-long entry', JSON.stringify({ exclusivePaths: ['x'.repeat(MERGE_POLICY_PATH_MAX + 1)] }), 'longer than'],
     [
       'too many entries',
@@ -70,6 +78,20 @@ describe('parseMergePolicy', () => {
     expect(renderMergePolicy(policy)).toBe('{\n  "exclusivePaths": [\n    "a/**"\n  ],\n  "sizeIgnoredPaths": [\n    "b"\n  ]\n}\n');
     expect(renderMergePolicy({})).toBe('{}\n');
     expect(unwrap(parseMergePolicy(renderMergePolicy(policy)))).toEqual(policy);
+  });
+
+  it('the gate check is one trimmed name, rendered last, and defaults to `checks` when the policy has none', () => {
+    expect(unwrap(parseMergePolicy('{"subGateCheck": " sub-gate "}'))).toEqual({ subGateCheck: 'sub-gate' });
+    const policy = { rolloutPaths: ['infra/**'], subGateCheck: 'sub-gate' };
+    expect(renderMergePolicy(policy)).toBe('{\n  "rolloutPaths": [\n    "infra/**"\n  ],\n  "subGateCheck": "sub-gate"\n}\n');
+    expect(unwrap(parseMergePolicy(renderMergePolicy(policy)))).toEqual(policy);
+    expect(DEFAULT_SUB_GATE_CHECK).toBe('checks');
+    expect(subGateCheckOf(null)).toBe('checks');
+    expect(subGateCheckOf({})).toBe('checks');
+    expect(subGateCheckOf({ subGateCheck: 'sub-gate' })).toBe('sub-gate');
+    expect(subGateWorkflowPath('checks')).toBe('.github/workflows/checks.yml');
+    expect(subGateWorkflowPath('sub-gate')).toBe('.github/workflows/sub-gate.yml');
+    expect(subGateWorkflowPath('a/../b')).toBe('.github/workflows/checks.yml');
   });
 
   it('is not an agent-set kind, so it never bumps the agent-set version', () => {

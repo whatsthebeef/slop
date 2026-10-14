@@ -1,5 +1,5 @@
 import type { Board, BoardService, GlobService, NotificationService, ReadinessFacts, ReadinessItem, Store } from '@slop/core';
-import { allowsBot, appSettingsUrl, missingAppEvents, missingCoreAreas, readiness, recentRoutineFailures, runsClaudeAction, unreactedCheckFailures } from '@slop/core';
+import { allowsBot, appSettingsUrl, missingAppEvents, missingCoreAreas, readMergePolicy, readiness, recentRoutineFailures, runsClaudeAction, subGateCheckOf, subGateWorkflowPath, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
@@ -55,7 +55,8 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
 
   let repoConnected: boolean | null = null;
   let installUrl: string | null = null;
-  let subGateWorkflow: boolean | null = null;
+  let checksWorkflow: boolean | null = null;
+  const gateCheck = subGateCheckOf(await deps.store.transaction((tx) => readMergePolicy(tx, board.id)));
   let claudeWorkflow: boolean | null = null;
   let slopBot: string | null = null;
   let claudeAllowsSlop: boolean | null = null;
@@ -68,7 +69,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
       installUrl = connection.installUrl === null ? null : `${connection.installUrl}?state=${String(board.id)}`;
       if (connection.connected) {
         const [workflow, agentSet, claude] = await Promise.all([
-          deps.host.readFile(repo, board.baseBranch, '.github/workflows/sub-gate.yml'),
+          deps.host.readFile(repo, board.baseBranch, subGateWorkflowPath(gateCheck)),
           deps.host.readFile(repo, board.baseBranch, '.claude/slop-agent-set.json'),
           claudeWorkflows(deps.host, repo, board.baseBranch),
         ]);
@@ -76,7 +77,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
         slopBot = connection.appName === null ? null : `${connection.appName}[bot]`;
         const bot = slopBot;
         claudeAllowsSlop = bot === null || claude.length === 0 ? null : claude.some((t) => allowsBot(t, bot));
-        subGateWorkflow = workflow !== null;
+        checksWorkflow = workflow !== null;
         agentSetRead = true;
         committedAgentSetVersion = agentSet === null ? null : parseAgentSetVersion(agentSet);
       }
@@ -110,7 +111,8 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     board,
     repoConnected,
     installUrl,
-    subGateWorkflow,
+    gateCheck,
+    checksWorkflow,
     claudeWorkflow,
     slopBot,
     claudeAllowsSlop,

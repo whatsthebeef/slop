@@ -1,7 +1,9 @@
 # Slop checks: the repo's own checks on every ready PR (sub, same or super), reported as the
-# `checks` check run, including on the head after slop updates the branch. Make `checks` a
-# required status check on the base branch (setup-repo.sh --protect checks sub-gate). Copy to
-# .github/workflows/checks.yml and adjust the check steps to the project's build doc.
+# `checks` check run, including on the head after slop updates the branch. A sub waits for this
+# run on its head (the board's merge policy `subGateCheck`, `checks` by default), then slop applies
+# the board's policy (size, sensitive paths) and merges it. Make `checks` a required status check on
+# the base branch (setup-repo.sh --protect). Copy to .github/workflows/checks.yml and adjust the
+# check steps to the project's build doc.
 name: checks
 
 on:
