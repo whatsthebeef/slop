@@ -18,6 +18,7 @@ import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, haltedBy } from '@/lib/action-presentation';
 import { cardMoves } from '@/lib/card-moves';
 import { groupNames } from '@/lib/group-names';
+import { cardProgress, groupPath } from '@/lib/group-page';
 import { hasBlocker, waitingOnCounts } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
@@ -156,6 +157,9 @@ const Unavailable = ({ boardId, error }: { boardId: number; error: unknown }) =>
 /** How often the board re-reads deploy state while a deploy is in progress (a safety net for missed hints). */
 const DEPLOY_POLL_MS = 15_000;
 
+/** How often the groups' progress is read again; the cards' "3/5" follows merges without a live hint of its own. */
+const GROUPS_POLL_MS = 20_000;
+
 /** How long a first connection may take before the board says it isn't live. */
 const CONNECT_GRACE_MS = 3000;
 
@@ -277,6 +281,13 @@ export const BoardPage = () => {
   // Deploy state (branch deploys, and the release and integration environments each glob is in) lives beside the
   // globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
+  // Progress for the cards' group labels; without it (an older API) the labels stay plain.
+  const groupSummaries = useQuery({
+    queryKey: ['groups', boardId],
+    queryFn: () => api.groups(boardId),
+    retry: false,
+    refetchInterval: GROUPS_POLL_MS,
+  });
   const deployState = useQuery({
     queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
     queryFn: () => api.boardDeploys(boardId, boardGlobIds),
@@ -443,6 +454,7 @@ export const BoardPage = () => {
         open={filterOpen}
         values={filters}
         onChange={setFilters}
+        groupHref={(name) => groupPath(boardId, name)}
         onClose={() => {
           setFilterOpen(false);
           document.getElementById(FILTER_TOGGLE_ID)?.focus();
@@ -498,6 +510,8 @@ export const BoardPage = () => {
                         setFilters({ ...filters, group: name });
                         setFilterOpen(true);
                       }}
+                      groupHref={glob.group === null ? undefined : groupPath(boardId, glob.group)}
+                      groupProgress={glob.group === null ? null : cardProgress(groupSummaries.data, glob.group)}
                       onReviewLabel={reviewLabel(glob)}
                       moves={moves.map((m) => m.move)}
                       pending={pending[glob.id]}

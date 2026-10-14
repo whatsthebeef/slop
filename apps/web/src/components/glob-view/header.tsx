@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { GroupChip } from '../glob-card';
 import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
+import { groupPath } from '@/lib/group-page';
 import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
 import { EscalationChip } from './escalation';
@@ -105,7 +106,7 @@ export const GlobChips = ({
         <TypeChip ctx={ctx} state={actions} />
       )}
       <EscalationChip ctx={ctx} />
-      {glob.group !== null && <GroupChip name={glob.group} to={`/boards/${String(glob.boardId)}?group=${encodeURIComponent(glob.group)}`} />}
+      {glob.group !== null && <GroupChip name={glob.group} to={groupPath(glob.boardId, glob.group)} />}
       {!decision && <LabelChips glob={glob} />}
     </div>
   );

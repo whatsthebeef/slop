@@ -1,6 +1,6 @@
 import { ListFilter, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { HumanIcon } from '@/components/actor-icons';
 import { CATEGORY_ICON } from '@/components/glob-card';
 import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
@@ -196,11 +196,14 @@ export const FilterPane = ({
   values,
   onChange,
   onClose,
+  groupHref,
 }: {
   open: boolean;
   values: FilterValues;
   onChange: (values: FilterValues) => void;
   onClose: () => void;
+  /** The page of the group being filtered to; the group chip links to it. */
+  groupHref?: (name: string) => string;
 }) => (
   <div
     id={PANE_ID}
@@ -243,6 +246,11 @@ export const FilterPane = ({
             data-testid={`filter-${filter.key}-chip`}
           >
             {filter.label}: {values[filter.key]}
+            {filter.key === 'group' && groupHref !== undefined && (
+              <Link className="underline" to={groupHref(values[filter.key] ?? '')} data-testid="filter-group-page">
+                Open
+              </Link>
+            )}
             <button
               type="button"
               className="rounded-full p-0.5 hover:bg-background"
