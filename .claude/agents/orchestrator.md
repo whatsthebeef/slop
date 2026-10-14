@@ -372,8 +372,11 @@ If a phase fails: log the details, call `report_failure(id, reason)` (with the r
 When CI fails on a commit whose local checks passed (Phase 6 full checks, a local review, or a routine's push or auto-fix push), compare it with the base branch before changing anything:
 
 - Check CI on `origin/<base>` at the commit you merged (`git log origin/<base> -1` after `git fetch origin <base>`). If the same check fails there, the failure is inherited from a red base. Don't fix it in this glob unless it is the one glob fixing the base (see Red base branch under Super mode). Record "inherited from red `<base>` at `<sha>`" in the review document, or in an `Assumptions` attachment if unattended.
-- If `<base>` is green, the failure is the glob's own. Find the CI job's command, run that exact command locally, fix the failure, and say in the review document why the local checks missed it.
+- Checks that run only on PRs (the sub-gate, which runs eslint) never fail on `<base>`. An error already merged to `<base>` shows up first on PRs, and slop reports it with `failedChecks.inherited: false`. Before fixing a failed check as the glob's own, run `git diff origin/<base>...HEAD -- <failing file>`. If the glob doesn't touch that file, the error is `<base>`'s. Fix it once, in one glob (check the open globs first), and say in the implementation record that it fixes `<base>`'s error. In a routine's auto-fix, respond to the failed check either way, by fixing it or by recording it. Don't go quiet.
+- If `<base>` is green and the glob changed the failing file, the failure is the glob's own. Find the CI job's command, run that exact command locally, fix the failure, and say in the review document why the local checks missed it.
 - If CI runs a check that the board's build doc does not list, or runs it differently (other flags, other environment), submit a `gotcha` learning that names the check, so the build doc can be corrected.
+
+In s15b91, sub-gate Lint failed at `apps/server/test/base-checks.test.ts:193` (`no-unsafe-assignment` on `expect.stringContaining`, from s15f124) with `failedChecks.inherited=false`, but the file was identical on `origin/main`. Routine run 31a2bbcb didn't respond and failed with "Auto-fix didn't respond to failed checks". The fix was 16ea614, using `as unknown` (the pattern in `aws-sso.test.ts:69`).
 
 ### Overlapping side globs
 
