@@ -119,7 +119,7 @@ describe('Type corrections in Postgres', () => {
 
   const create = async (type: Glob['type']): Promise<Glob> =>
     unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'x',
         type,
@@ -222,7 +222,7 @@ describe('Type corrections in Postgres', () => {
   it('a person retype through the glob service is recorded with the plan signals, and the routes show it', async () => {
     at = '2026-10-11T12:00:00.000Z';
     const same = await create('same');
-    unwrap(await globs.update(DEV, same.id, same.version, { type: 'super' }));
+    unwrap(await globs.update(ADMIN, same.id, same.version, { type: 'super' }));
 
     const view = await request('GET', path(''), undefined, DEV);
     expect(view.status).toBe(200);
@@ -278,7 +278,7 @@ describe('Type corrections in Postgres', () => {
     );
     expect(failed.failure).toMatchObject({ kind: 'needs_pairing', decision: 'Which store?' });
 
-    const read = (await (await request('GET', `/api/globs/${sub.id}`, undefined, DEV)).json()) as {
+    const read = (await (await request('GET', `/api/globs/${sub.id}`, undefined, ADMIN)).json()) as {
       allowedActions?: string[];
     };
     expect(read.allowedActions).toContain('make_super');
@@ -297,19 +297,19 @@ describe('Type corrections in Postgres', () => {
       'POST',
       `/api/globs/${sub.id}/actions/make-super`,
       { version: failed.version },
-      DEV,
+      ADMIN,
     );
     expect(made.status).toBe(200);
     expect(await made.json()).toMatchObject({
       type: 'super',
       status: 'in_progress',
-      implementer: DEV,
+      implementer: ADMIN,
       failure: null,
     });
 
     const live = await store.transaction((tx) => tx.listTypeCorrections(boardId));
     expect(live).toEqual([
-      expect.objectContaining({ globId: sub.id, fromType: 'sub', toType: 'super', actor: DEV }),
+      expect.objectContaining({ globId: sub.id, fromType: 'sub', toType: 'super', actor: ADMIN }),
     ]);
   });
 });

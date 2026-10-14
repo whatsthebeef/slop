@@ -5,7 +5,7 @@ import { categoryOptions, saveCategory, typeOptions } from '../src/lib/type-chan
 import { glob } from '../../../packages/core/test/fixtures';
 
 const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), ...patch }) as GlobView;
-const option = (g: GlobView, to: string, role: Role = 'dev') => {
+const option = (g: GlobView, to: string, role: Role = 'admin') => {
   const found = typeOptions(g, role).find((o) => o.to === to);
   if (found === undefined) throw new Error(`no ${to} option`);
   return found;
@@ -13,7 +13,7 @@ const option = (g: GlobView, to: string, role: Role = 'dev') => {
 
 describe('type options', () => {
   it('lists the three types with their descriptions and actors', () => {
-    const options = typeOptions(view({ type: 'same' }), 'dev');
+    const options = typeOptions(view({ type: 'same' }), 'admin');
     expect(options.map((o) => o.to)).toEqual(['sub', 'same', 'super']);
     expect(options.map((o) => o.description)).toEqual([
       'The machine does it all and merges it itself',
@@ -66,7 +66,10 @@ describe('type options', () => {
     const merging = view({ type: 'same', status: 'merging' });
     expect(option(merging, 'super').reason).toMatch(/swapped in planning/);
     expect(option(merging, 'sub').reason).toBe('A same can only become a sub while in planning');
-    expect(option(view({ type: 'same' }), 'super', 'po')).toMatchObject({ via: null, reason: 'QA and PO members cannot create supers' });
+    expect(option(view({ type: 'same' }), 'super', 'po')).toMatchObject({ via: null, reason: 'Only board admins can choose sub or super' });
+    expect(option(view({ type: 'same', status: 'planning' }), 'sub', 'dev')).toMatchObject({ via: null, reason: 'Only board admins can choose sub or super' });
+    expect(option(view({ type: 'same', status: 'planning' }), 'same', 'dev').current).toBe(true);
+    expect(option(view({ type: 'sub', status: 'implementing' }), 'same', 'dev')).toMatchObject({ via: 'update', reason: null });
     expect(option(view({ type: 'sub', category: 'bug' }), 'super').reason).toBe('A bug cannot be a super');
   });
 

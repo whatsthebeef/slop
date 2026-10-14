@@ -167,7 +167,7 @@ describe('knowledge and artifacts', () => {
 
   it('stores an investigation, and keeps a malformed one as text with a validation note', async () => {
     const glob = unwrap(
-      await globs.create(DEV, { boardId, title: 'Investigate me', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
+      await globs.create(ADMIN, { boardId, title: 'Investigate me', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
     const good = [
       '# Investigation',
@@ -212,7 +212,7 @@ describe('knowledge and artifacts', () => {
 
   it('builds a basic context from plan.md and attachments', async () => {
     const glob = unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Plan me',
         type: 'same',
@@ -256,7 +256,7 @@ describe('knowledge and artifacts', () => {
 
   it('keeps plan.md and the implementation record apart; a postplan write is an alias for the record', async () => {
     const glob = unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Pair on it',
         type: 'super',
@@ -284,7 +284,7 @@ describe('knowledge and artifacts', () => {
 
   it('ignores artifacts from a run that is not current', async () => {
     const glob = unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title: 'Sub',
         type: 'sub',
@@ -309,7 +309,7 @@ describe('knowledge and artifacts', () => {
 
   const createGlob = async (title: string, type: 'same' | 'super' = 'same') =>
     unwrap(
-      await globs.create(DEV, {
+      await globs.create(ADMIN, {
         boardId,
         title,
         type,
@@ -385,7 +385,7 @@ describe('knowledge and artifacts', () => {
 
   describe('plan.md v1 at creation (s15f16)', () => {
     const create = (patch: { plan?: string | null; planBy?: 'human' | 'sessionator'; intake?: IntakeRecord }) =>
-      globs.create(DEV, {
+      globs.create(ADMIN, {
         boardId,
         title: 'New',
         type: 'same',
@@ -400,7 +400,7 @@ describe('knowledge and artifacts', () => {
     it('stores `plan` verbatim', async () => {
       const glob = unwrap(await create({ plan: '# Spec\n\nDone when: x.\n', planBy: 'sessionator' }));
       const plan = unwrap(await artifacts.plan(DEV, glob.id, null));
-      expect(plan.current).toMatchObject({ version: 1, content: '# Spec\n\nDone when: x.\n', provenance: { by: 'sessionator', actor: DEV } });
+      expect(plan.current).toMatchObject({ version: 1, content: '# Spec\n\nDone when: x.\n', provenance: { by: 'sessionator', actor: ADMIN } });
     });
 
     it('stores the intake input when there is no plan', async () => {

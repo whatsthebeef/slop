@@ -60,14 +60,48 @@ describe('services', () => {
     unwrap(await boards.setMember(ADMIN, boardId, PO, 'po'));
   });
 
+  describe('who can choose sub or super', () => {
+    const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'ok' : r.error?.code);
+
+    it('lets an admin create a sub, a same and a super', async () => {
+      for (const type of ['sub', 'same', 'super'] as const) expect(unwrap(await globs.create(ADMIN, input({ type }))).type).toBe(type);
+    });
+
+    it('lets dev and po create a same only, refusing an explicit sub or super', async () => {
+      for (const who of [DEV, PO]) {
+        expect(unwrap(await globs.create(who, input({ type: 'same' }))).type).toBe('same');
+        for (const type of ['sub', 'super'] as const) {
+          const refused = await globs.create(who, input({ type }));
+          expect(code(refused)).toBe('forbidden');
+          if (!refused.ok) expect(refused.error.message).toBe('Only board admins can create a sub or a super; create it as a same and an admin can change its type');
+        }
+      }
+    });
+
+    it('makes a type nobody chose a same for a non-admin, and keeps an admin\'s', async () => {
+      expect(unwrap(await globs.create(DEV, input({ type: 'sub', typeChosen: false }))).type).toBe('same');
+      expect(unwrap(await globs.create(DEV, input({ type: 'super', typeChosen: false, start: false }))).type).toBe('same');
+      expect(unwrap(await globs.create(ADMIN, input({ type: 'sub', typeChosen: false }))).type).toBe('sub');
+    });
+
+    it('refuses a type change to sub or super for a non-admin, allows it for an admin and a change to same for anyone', async () => {
+      const same = unwrap(await globs.create(DEV, input()));
+      expect(code(await globs.update(DEV, same.id, same.version, { type: 'sub' }))).toBe('forbidden');
+      expect(code(await globs.update(DEV, same.id, same.version, { type: 'super' }))).toBe('forbidden');
+      const asSuper = unwrap(await globs.update(ADMIN, same.id, same.version, { type: 'super' }));
+      expect(asSuper.type).toBe('super');
+      expect(unwrap(await globs.update(DEV, asSuper.id, asSuper.version, { type: 'same' })).type).toBe('same');
+    });
+  });
+
   it('numbers globs per board and ID letter', async () => {
-    expect(unwrap(await globs.create(DEV, input())).id).toBe(`s${boardId}t1`);
-    expect(unwrap(await globs.create(DEV, input())).id).toBe(`s${boardId}t2`);
-    expect(unwrap(await globs.create(DEV, input({ category: 'bug' }))).id).toBe(`s${boardId}b1`);
+    expect(unwrap(await globs.create(ADMIN, input())).id).toBe(`s${boardId}t1`);
+    expect(unwrap(await globs.create(ADMIN, input())).id).toBe(`s${boardId}t2`);
+    expect(unwrap(await globs.create(ADMIN, input({ category: 'bug' }))).id).toBe(`s${boardId}b1`);
   });
 
   it('lists a glob\'s human steps on a read: a stored rollout step is pending until the PR merges', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     await store.transaction((tx) =>
       tx.saveHumanSteps([
         {
@@ -98,14 +132,14 @@ describe('services', () => {
   });
 
   it('returns the same glob for a repeated idempotency key', async () => {
-    const first = unwrap(await globs.create(DEV, input({ idempotencyKey: 'k1' })));
-    const again = unwrap(await globs.create(DEV, input({ idempotencyKey: 'k1' })));
+    const first = unwrap(await globs.create(ADMIN, input({ idempotencyKey: 'k1' })));
+    const again = unwrap(await globs.create(ADMIN, input({ idempotencyKey: 'k1' })));
     expect(again.id).toBe(first.id);
     expect(store.state.globs.size).toBe(1);
   });
 
   it('writes events and effects with the state change and publishes a hint', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     expect(store.state.events.map((e) => e.type)).toEqual(['GlobCreated', 'ArtifactAdded']);
     // A same in Planning has no branch yet; it provisions when work starts.
     expect(store.state.outbox.map((e) => e.kind)).toEqual([]);
@@ -113,7 +147,7 @@ describe('services', () => {
   });
 
   it('rejects stale versions with the current glob', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     unwrap(await globs.update(DEV, glob.id, 1, { group: 'Sync' }));
     const stale = await globs.start(DEV, glob.id, 1);
     expect(stale.ok).toBe(false);
@@ -124,16 +158,16 @@ describe('services', () => {
   });
 
   it('runs routines as the triggerer, falling back to the board default', async () => {
-    const mine = unwrap(await globs.create(DEV, input({ type: 'sub' })));
-    expect(mine.runs[0]?.routineOwner).toBe(DEV);
-    const fallback = unwrap(await globs.create(PO, input({ type: 'sub' })));
+    const mine = unwrap(await globs.create(ADMIN, input({ type: 'sub' })));
+    expect(mine.runs[0]?.routineOwner).toBe(ADMIN);
+    const fallback = unwrap(await globs.create(PO, input({ type: 'same', autoTrigger: true })));
     expect(fallback.runs[0]?.triggeredBy).toBe(PO);
     expect(fallback.runs[0]?.routineOwner).toBe(ADMIN);
   });
 
   it("counts a routine set up only for this board as the triggerer's own", async () => {
     withRoutine.add(`${PO}#${String(boardId)}`);
-    const glob = unwrap(await globs.create(PO, input({ type: 'sub' })));
+    const glob = unwrap(await globs.create(PO, input({ type: 'same', autoTrigger: true })));
     expect(glob.runs[0]?.routineOwner).toBe(PO);
   });
 
@@ -145,7 +179,7 @@ describe('services', () => {
   });
 
   it('applies integration events against the current version', async () => {
-    const glob = unwrap(await globs.create(DEV, input({ type: 'sub' })));
+    const glob = unwrap(await globs.create(ADMIN, input({ type: 'sub' })));
     const runId = glob.runs[0]?.id ?? '';
     const ready = unwrap(
       await globs.applyEvent(glob.id, (g, ctx) =>
@@ -157,7 +191,7 @@ describe('services', () => {
   });
 
   it('merge (row 14) needs the current version, then queues the squash merge', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false));
     const ready = unwrap(
       await globs.applyEvent(picked.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: 'abc' }, ctx)),
@@ -172,7 +206,7 @@ describe('services', () => {
   });
 
   it('review now queues a fresh review every time, beside the automatic one for the same commit', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false));
     unwrap(await globs.applyEvent(picked.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: 'abc' }, ctx)));
     const reviews = () => store.state.outbox.flatMap((e) => (e.kind === 'review_change' ? [e] : []));
@@ -192,7 +226,7 @@ describe('services', () => {
   });
 
   it('stores independent reviews as versioned artifacts tied to the commit, and the summary carries the finding count', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     const artifacts = new ArtifactService({ store, notifier, clock: { now: () => '2026-10-05T12:00:00.000Z' } });
     const meta = { stage: 'pre_merge' as const, headSha: 'abc', findings: 3, high: 1, medium: 1, low: 1 };
     const first = unwrap(await artifacts.addIndependentReview(glob.id, { content: '# review', commitSha: 'm1', meta, model: 'gpt-oss' }));
@@ -208,7 +242,7 @@ describe('services', () => {
   });
 
   it('review now is refused for a glob still in Planning', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     const result = await globs.reviewNow(DEV, glob.id);
     expect(!result.ok && result.error.code).toBe('invalid_transition');
   });
@@ -228,7 +262,7 @@ describe('services', () => {
     );
 
   it('merge and continue (row 31) needs the latest implementation record at the head', async () => {
-    const glob = unwrap(await globs.create(DEV, input({ type: 'super', category: 'feature' })));
+    const glob = unwrap(await globs.create(ADMIN, input({ type: 'super', category: 'feature' })));
     const head = 'abcdef0123456789';
     unwrap(await globs.applyEvent(glob.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: head }, ctx)));
     const passing = unwrap(
@@ -251,7 +285,7 @@ describe('services', () => {
   });
 
   it("mark_ready from the board (supers) needs the latest implementation record at the draft PR's head", async () => {
-    const glob = unwrap(await globs.create(DEV, input({ type: 'super', category: 'feature' })));
+    const glob = unwrap(await globs.create(ADMIN, input({ type: 'super', category: 'feature' })));
     const head = 'abcdef0123456789';
     const drafted = unwrap(
       await globs.applyEvent(glob.id, (g, ctx) =>
@@ -269,7 +303,7 @@ describe('services', () => {
   });
 
   it('delete removes the glob and its events and queues the clean-up', async () => {
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     unwrap(await globs.delete(PO, glob.id, 1));
     expect(store.state.globs.size).toBe(0);
     expect(store.state.events).toEqual([]);
@@ -278,7 +312,7 @@ describe('services', () => {
   });
 
   it('review checklist commands need the current version and log who acted', async () => {
-    const glob = unwrap(await globs.create(DEV, input({ type: 'sub' })));
+    const glob = unwrap(await globs.create(ADMIN, input({ type: 'sub' })));
     const reviewing = unwrap(await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: 'abc' }, ctx)));
     const added = unwrap(
       await globs.reviewLabel(PO, reviewing.id, reviewing.version, 'QA', { kind: 'submit_items', items: ['Check copy'] }),
@@ -355,7 +389,7 @@ describe('services', () => {
 
   it('pick-up takes an optional environment and keeps the current one when it is left out', async () => {
     unwrap(await boards.updateSettings(ADMIN, boardId, 1, { environments: [{ name: 'dev', allowBranchDeploy: true }] }));
-    const glob = unwrap(await globs.create(DEV, input()));
+    const glob = unwrap(await globs.create(ADMIN, input()));
     const picked = unwrap(await globs.pickUp(DEV, glob.id, glob.version, false, 'dev'));
     expect(picked.environment).toBe('dev');
     const again = unwrap(await globs.pickUp(DEV, picked.id, picked.version, false));

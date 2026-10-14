@@ -72,7 +72,7 @@ describe('dependency learning', () => {
     idempotencyKey: null,
     ...patch,
   });
-  const create = async (patch: Partial<CreateGlobInput> = {}): Promise<Glob> => unwrap(await globs.create(DEV, input(patch)));
+  const create = async (patch: Partial<CreateGlobInput> = {}): Promise<Glob> => unwrap(await globs.create(ADMIN, input(patch)));
   const current = async (id: string): Promise<Glob> => {
     const found = await globs.peek(id);
     if (found === null) throw new Error(`No glob ${id}`);
@@ -293,11 +293,11 @@ describe('overlaps set by a person', () => {
     const boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     const base = { boardId, title: 'Work', summary: '', category: 'task' as const, group: null, environment: null, autoTrigger: false, idempotencyKey: null };
-    const other = unwrap(await globs.create(DEV, { ...base, type: 'same' }));
-    const sub = unwrap(await globs.create(DEV, { ...base, type: 'sub', overlaps: [other.id] }));
+    const other = unwrap(await globs.create(ADMIN, { ...base, type: 'same' }));
+    const sub = unwrap(await globs.create(ADMIN, { ...base, type: 'sub', overlaps: [other.id] }));
     expect(sub.status).toBe('implementing');
     expect(sub.impliedAfter).toEqual([{ id: other.id, paths: [], kind: 'overlaps', source: 'explicit' }]);
-    const same = unwrap(await globs.create(DEV, { ...base, type: 'same' }));
+    const same = unwrap(await globs.create(ADMIN, { ...base, type: 'same' }));
     const updated = unwrap(await globs.update(DEV, same.id, same.version, { overlaps: [other.id] }));
     expect(updated.impliedAfter?.map((i) => i.id)).toEqual([other.id]);
     expect((await globs.update(DEV, same.id, updated.version, { overlaps: ['s99t99'] })).ok).toBe(false);

@@ -54,7 +54,7 @@ describe('recheck overlaps', () => {
     return found;
   };
   const openGlob = async (files: readonly string[] | null) => {
-    const made = unwrap(await globs.create(DEV, input({ type: 'same', plan: 'Something else entirely' })));
+    const made = unwrap(await globs.create(ADMIN, input({ type: 'same', plan: 'Something else entirely' })));
     const picked = unwrap(await globs.pickUp(DEV, made.id, made.version, false));
     branches.files.set(picked.id, files);
     return picked;
@@ -100,7 +100,7 @@ describe('recheck overlaps', () => {
 
   it('drops an overlap once the other branch shows no exclusive file, keeps it while it still changes one, and a repeat changes nothing', async () => {
     const open = await openGlob([MIGRATION]);
-    const mine = unwrap(await globs.create(DEV, input({ plan: 'Add a migration for the new column' })));
+    const mine = unwrap(await globs.create(ADMIN, input({ plan: 'Add a migration for the new column' })));
     expect(mine.impliedAfter?.map((i) => i.id)).toEqual([open.id]);
 
     expect(await globs.recheckOverlaps(boardId)).toEqual([]);
@@ -126,7 +126,7 @@ describe('recheck overlaps', () => {
 
   it('drops an overlap when the other glob is deleted', async () => {
     const open = await openGlob([MIGRATION]);
-    const mine = unwrap(await globs.create(DEV, input({ plan: 'Add a migration for the new column' })));
+    const mine = unwrap(await globs.create(ADMIN, input({ plan: 'Add a migration for the new column' })));
     unwrap(await globs.delete(ADMIN, open.id, (await current(open.id)).version));
     await globs.recheckOverlaps(boardId);
     expect((await current(mine.id)).impliedAfter ?? []).toEqual([]);
@@ -134,7 +134,7 @@ describe('recheck overlaps', () => {
 
   it('keeps explicit overlaps and ones a person overrode', async () => {
     const open = await openGlob(['apps/web/src/a.tsx']);
-    const mine = unwrap(await globs.create(DEV, input({ plan: 'Fix a typo', overlaps: [open.id] })));
+    const mine = unwrap(await globs.create(ADMIN, input({ plan: 'Fix a typo', overlaps: [open.id] })));
     await globs.recheckOverlaps(boardId);
     expect((await current(mine.id)).impliedAfter).toEqual([{ id: open.id, paths: [], kind: 'overlaps', source: 'explicit' }]);
   });

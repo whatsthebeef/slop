@@ -1,4 +1,4 @@
-import { isValidCombination, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
+import { canChooseType, isValidCombination, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
 import type { Category, SlopType } from '@slop/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
@@ -9,6 +9,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api } from '@/lib/api';
 import { globsKey } from '@/lib/live';
+import { CHOOSE_TYPE_TOOLTIP } from '@/lib/type-change';
 import { attachFile, checkFile } from '@/lib/upload';
 import { useToast } from '@/toast';
 import { FileDropZone } from './file-drop';
@@ -68,6 +69,7 @@ export const CreateGlobDialog = ({
   const [error, setError] = useState<string | null>(null);
   const restricted = board.role === 'qa' || board.role === 'po';
   const types = SLOP_TYPES.filter((t) => !(restricted && t === 'super'));
+  const chooses = (t: SlopType) => canChooseType(board.role, t);
   const valid = isValidCombination(form.type, form.category) && form.title.trim() !== '';
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
 
@@ -80,14 +82,14 @@ export const CreateGlobDialog = ({
       setForm({
         title: proposal.title,
         plan: proposal.plan,
-        type: restricted && proposal.type === 'super' ? 'same' : proposal.type,
+        type: chooses(proposal.type) ? proposal.type : 'same',
         category: proposal.category,
         group: proposal.group,
         // An environment the person already chose wins over one the request names.
         environment: form.environment ?? proposal.environment,
         autoTrigger: proposal.autoTrigger,
         // A super intake chose waits in Planning for a person to pick it up.
-        ...(!restricted && proposal.type === 'super' ? { start: false } : {}),
+        ...(chooses(proposal.type) && proposal.type === 'super' ? { start: false } : {}),
         ...(proposal.files === undefined || proposal.files.length === 0 ? {} : { files: proposal.files }),
       });
       setReason(proposal.autoTriggerReason);
@@ -197,9 +199,15 @@ export const CreateGlobDialog = ({
           <div className='grid grid-cols-2 gap-3'>
             <Label>
               Type
-              <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as SlopType })}>
+              <Select
+                value={form.type}
+                title={types.some((t) => !chooses(t)) ? CHOOSE_TYPE_TOOLTIP : undefined}
+                onChange={(e) => setForm({ ...form, type: e.target.value as SlopType })}
+              >
                 {types.map((t) => (
-                  <option key={t}>{t}</option>
+                  <option key={t} disabled={!chooses(t)} title={chooses(t) ? undefined : CHOOSE_TYPE_TOOLTIP}>
+                    {t}
+                  </option>
                 ))}
               </Select>
             </Label>

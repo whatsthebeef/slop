@@ -65,6 +65,7 @@ export type { AtfIndicator, EnvironmentCommit, NewTestRun, TestRun, TestRunKind 
 export * as machine from './domain/machine.js';
 export type { Action, ActionFacts, Context, DecideInput, FieldChanges, LabelCommand, Transition } from './domain/machine.js';
 export * from './ports.js';
+export { canChooseType, CHOOSE_TYPE_REFUSAL } from './app/access.js';
 export * from './app/glob-service.js';
 export * from './app/attachment-service.js';
 export * from './app/hold-service.js';

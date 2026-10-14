@@ -37,7 +37,7 @@ describe('start after', () => {
     idempotencyKey: null,
     ...patch,
   });
-  const create = async (patch: Partial<CreateGlobInput> = {}): Promise<Glob> => unwrap(await globs.create(DEV, input(patch)));
+  const create = async (patch: Partial<CreateGlobInput> = {}): Promise<Glob> => unwrap(await globs.create(ADMIN, input(patch)));
   const merge = async (id: string): Promise<Glob> =>
     unwrap(await globs.applyEvent(id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
   const kinds = (): string[] => store.state.outbox.map((e) => e.kind);
@@ -98,10 +98,10 @@ describe('start after', () => {
       await boards.create(ADMIN, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
     );
     unwrap(await boards.setMember(ADMIN, other.id, DEV, 'dev'));
-    const foreign = unwrap(await globs.create(DEV, input({ boardId: other.id })));
-    const unknown = await globs.create(DEV, input({ type: 'sub', after: ['s99t99'] }));
+    const foreign = unwrap(await globs.create(ADMIN, input({ boardId: other.id })));
+    const unknown = await globs.create(ADMIN, input({ type: 'sub', after: ['s99t99'] }));
     expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
-    const wrongBoard = await globs.create(DEV, input({ type: 'sub', after: [foreign.id] }));
+    const wrongBoard = await globs.create(ADMIN, input({ type: 'sub', after: [foreign.id] }));
     expect(!wrongBoard.ok && wrongBoard.error.message).toContain('on this board');
     const mine = await create();
     const self = await globs.update(DEV, mine.id, mine.version, { after: [mine.id] });
@@ -125,14 +125,14 @@ describe('start after', () => {
     const second = await create({ after: [first.id] });
     expect(second.status).toBe('planning');
     expect(second.waiting == null).toBe(true);
-    const changed = unwrap(await globs.update(DEV, second.id, second.version, { type: 'sub' }));
+    const changed = unwrap(await globs.update(ADMIN, second.id, second.version, { type: 'sub' }));
     expect(changed.status).toBe('planning');
     expect(changed.waiting).not.toBeNull();
     expect(changed.runs).toEqual([]);
     expect(kinds()).toEqual([]);
 
     const free = await create();
-    const run = unwrap(await globs.update(DEV, free.id, free.version, { type: 'sub' }));
+    const run = unwrap(await globs.update(ADMIN, free.id, free.version, { type: 'sub' }));
     expect(run.status).toBe('implementing');
     expect(run.runs).toHaveLength(1);
   });
@@ -189,7 +189,7 @@ describe('start after', () => {
     expect(released.waiting).toBeNull();
     expect(released.provisioning).toBe('pending');
     expect(released.runs).toHaveLength(1);
-    expect(released.runs[0]?.triggeredBy).toBe(DEV);
+    expect(released.runs[0]?.triggeredBy).toBe(ADMIN);
     expect(store.state.outbox.slice(before).map((e) => e.kind)).toEqual(['provision', 'fire_routine']);
     expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toContain('Released');
   });

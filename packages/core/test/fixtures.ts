@@ -34,6 +34,7 @@ export const board: Board = {
 };
 
 export const dev: Actor = { email: 'dev@example.com', role: 'dev' };
+export const admin: Actor = { email: 'admin@example.com', role: 'admin' };
 export const other: Actor = { email: 'other@example.com', role: 'dev' };
 export const po: Actor = { email: 'po@example.com', role: 'po' };
 

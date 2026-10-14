@@ -120,7 +120,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (a person can split it); an explicit `type` always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -130,7 +130,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .string()
           .optional()
           .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the title'),
-        type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing)'),
+        type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing). Sub and super are for board admins only; everyone else creates a same'),
         category: z.enum(WORK_CATEGORIES).optional(),
         group: z.string().nullable().optional().describe('The glob\'s group; omit it to let slop choose one from the title and plan, pass null or an empty string for none'),
         environment: z
@@ -250,6 +250,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
+        typeChosen: input.type !== undefined,
         ...(start === undefined ? {} : { start }),
         plan: input.plan ?? proposedPlan ?? input.input ?? '',
         planBy: 'sessionator',
@@ -418,7 +419,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, type, category, group, environment or `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
+        "Change a glob's title, type (changing it to sub or super needs a board admin; to same is open to anyone who can edit the glob), category, group, environment or `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),

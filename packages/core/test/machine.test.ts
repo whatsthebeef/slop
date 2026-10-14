@@ -3,7 +3,7 @@ import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
-import { NOW, board, ctx, dev, glob, other, po, run } from './fixtures.js';
+import { NOW, admin, board, ctx, dev, glob, other, po, run } from './fixtures.js';
 import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
@@ -2100,7 +2100,8 @@ describe('escalation to a same', () => {
 
   it('a person makes it a sub again, and the gate runs on a ready PR whose checks passed', () => {
     const escalated = value(m.escalateToSame(sub(), { reason: 'x', runId: 'run-0' }, ctx(null))).glob;
-    expect(m.allowedActions(escalated, dev)).toContain('deescalate');
+    expect(m.allowedActions(escalated, admin)).toContain('deescalate');
+    expect(m.allowedActions(escalated, dev)).not.toContain('deescalate');
     const ready = { ...escalated, status: 'pr_open' as const, pr: { number: 7, state: 'ready' as const, headSha: 'bbb' }, headChecks: { sha: 'bbb', state: 'passed' as const } };
     const t = value(m.deescalate(ready, ctx()));
     expect(t.glob.type).toBe('sub');
@@ -2145,11 +2146,12 @@ describe('needs_pairing and Make it a super', () => {
     expect(m.allowedActions(t.glob, dev)).not.toContain('retry_autofix');
   });
 
-  it('is offered to a developer on a failed sub or same, not to QA or PO, not on other failures, supers or bugs', () => {
-    expect(m.allowedActions(pairing(), dev)).toContain('make_super');
-    expect(m.allowedActions(pairing({ type: 'same' }), dev)).toContain('make_super');
+  it('is offered to an admin on a failed sub or same, not to a dev, QA or PO, not on other failures, supers or bugs', () => {
+    expect(m.allowedActions(pairing(), admin)).toContain('make_super');
+    expect(m.allowedActions(pairing({ type: 'same' }), admin)).toContain('make_super');
+    expect(m.allowedActions(pairing(), dev)).not.toContain('make_super');
     expect(m.allowedActions(pairing(), po)).not.toContain('make_super');
-    expect(m.allowedActions(pairing({ category: 'bug' }), dev)).not.toContain('make_super');
+    expect(m.allowedActions(pairing({ category: 'bug' }), admin)).not.toContain('make_super');
     const plain = glob({ type: 'same', status: 'failed', failure: { reason: 'stuck', at: NOW } });
     expect(m.allowedActions(plain, dev)).not.toContain('make_super');
     // Sames and subs can always be picked up.
