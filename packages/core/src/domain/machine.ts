@@ -256,6 +256,7 @@ class Builder {
     this.set({
       status: to,
       doingSince: entersDoing ? this.ctx.now : leavesDoing ? null : this.glob.doingSince,
+      ...(listOf(from) !== listOf(to) && { listSince: this.ctx.now }),
     });
     this.event('StatusChanged', { ...detail, from, to });
     return listOf(to) === 'doing' ? this.ensureProvisioned() : this;
@@ -511,6 +512,7 @@ export const create = (
     updatedAt: ctx.now,
     signedOffAt: null,
     doingSince: listOf(status) === 'doing' ? ctx.now : null,
+    listSince: ctx.now,
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
     ...(startsBySelf && { autoStart: true }),
@@ -3131,6 +3133,7 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     updatedAt: ctx.now,
     signedOffAt: null,
     doingSince: null,
+    listSince: ctx.now,
   };
   return new Builder(glob, ctx)
     .event('GlobCreated', {

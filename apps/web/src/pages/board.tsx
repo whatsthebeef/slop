@@ -1,4 +1,4 @@
-import { LISTS, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
+import { LISTS, byListSinceNewest, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
 import type { Action, HumanStepViewer, LabelCommand, LabelName, List } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -453,7 +453,7 @@ export const BoardPage = () => {
           {LISTS.map((list) => {
             const inList = all.filter((g) => g.list === list);
             const items =
-              list === 'signed_off' ? bySignedOffNewest(inList) : inList.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+              list === 'signed_off' ? bySignedOffNewest(inList) : byListSinceNewest(inList);
             const total = list === 'signed_off' && filtering === 0 ? Math.max(items.length, signedOffTotal.data ?? 0) : items.length;
             return (
               <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
