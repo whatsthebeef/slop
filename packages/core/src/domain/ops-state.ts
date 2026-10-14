@@ -1,6 +1,8 @@
 import type { Capabilities } from './capabilities.js';
 import { CAPABILITY_TEXT, CAPABILITY_NAMES } from './capabilities.js';
 import type { Deploy } from './deploys.js';
+import { STALLED_SOURCE_PREFIX } from './notifications.js';
+import type { BoardNotification } from './notifications.js';
 import type { Glob } from './types.js';
 
 /**
@@ -44,12 +46,24 @@ export interface OpsHealth {
   readonly requests?: { readonly routes: readonly OpsRoute[]; readonly outboxBacklog: Readonly<Record<string, number>> | null };
 }
 
-const SECRET = /\b(?:bearer\s+\S+|(?:ghp|gho|ghs|ghu|github_pat|xox[a-z]|sk|AKIA|ASIA)[-_A-Za-z0-9]{8,}|[A-Za-z0-9+/_=-]{32,})/gi;
-const ASSIGNED = /\b((?:secret|token|password|passwd|api[_-]?key|private[_-]?key|authorization)\w*\s*[=:]\s*)\S+/gi;
+const URL_CREDENTIALS = /(\w+:\/\/)[^\s/@:]+:[^\s/@]+@/g;
+/** `token=x`, `GITHUB_TOKEN: x`, `"password":"x"`, `Authorization: Basic x`: the keyword may sit inside a longer name, and the value may be quoted. */
+const ASSIGNED = /((?:secret|token|password|passwd|pwd|api[_-]?key|private[_-]?key|authorization|credential)[\w-]*["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|(?:basic|bearer)\s+\S+|\S+)/gi;
+/** Well-known token prefixes, case-sensitive so ordinary words such as "skipped_all_checks" are left alone. */
+const PREFIXED = /\b(?:(?:gh[pousr]|github_pat|sk)_[-_A-Za-z0-9]{8,}|sk-[-_A-Za-z0-9]{8,}|xox[a-z]-[-A-Za-z0-9]{8,}|(?:AKIA|ASIA)[A-Z0-9]{12,})/g;
+const BEARER = /\bbearer\s+\S+/gi;
+/** A long unbroken run with letters and digits (a key or hash); paths and plain words have no digits or slashes. */
+const BLOB = /\b(?=[A-Za-z0-9+_=-]*\d)(?=[A-Za-z0-9+_=-]*[A-Za-z])[A-Za-z0-9+_=-]{32,}/g;
 
 /** One line, cut, with anything secret-looking replaced. */
 export const safeLine = (s: string, max = REASON_CHARS): string => {
-  const first = (s.split('\n')[0] ?? '').trim().replace(ASSIGNED, '$1[redacted]').replace(SECRET, '[redacted]');
+  const first = (s.split('\n')[0] ?? '')
+    .trim()
+    .replace(URL_CREDENTIALS, '$1[redacted]@')
+    .replace(ASSIGNED, '$1[redacted]')
+    .replace(PREFIXED, '[redacted]')
+    .replace(BEARER, '[redacted]')
+    .replace(BLOB, '[redacted]');
   return first.length > max ? `${first.slice(0, max)}...` : first;
 };
 
@@ -119,7 +133,7 @@ export const recentFailures = (globs: readonly Glob[], now: string): Failure[] =
   return out.sort((a, b) => b.at.localeCompare(a.at));
 };
 
-/** Latest deploys first; failed ones from the last day plus whatever is in progress and the newest few. */
+/** The newest few deploys, latest first. */
 const deployLines = (deploys: readonly Deploy[]): string[] =>
   deploys
     .slice(0, MAX_DEPLOYS)
@@ -130,6 +144,8 @@ export interface OpsInput {
   /** Only the asked board's globs and deploys: the caller reads them by board. */
   readonly globs: readonly Glob[];
   readonly deploys: readonly Deploy[];
+  /** The board's active notifications; the stalled ones are listed with the failures. */
+  readonly notifications?: readonly BoardNotification[];
   readonly now: string;
 }
 
@@ -144,13 +160,32 @@ export const opsStateText = (input: OpsInput): string => {
       ? 'Board failures in the last 24 h: none'
       : `Board failures in the last 24 h (${String(failures.length)}):\n${failures.slice(0, MAX_FAILURES).map((f) => `- ${time(f.at)} ${f.line}`).join('\n')}${failures.length > MAX_FAILURES ? `\n(${String(failures.length - MAX_FAILURES)} more not shown)` : ''}`,
   );
+  const stalled = (input.notifications ?? []).filter((n) => n.source.startsWith(STALLED_SOURCE_PREFIX));
+  if (stalled.length > 0) {
+    sections.push(`Stalled globs (nobody is moving them):\n${stalled.slice(0, MAX_FAILURES).map((n) => `- ${safeLine(n.title, 100)}: ${safeLine(n.detail)}`).join('\n')}`);
+  }
   sections.push(input.deploys.length === 0 ? 'Deploys: none on this board' : `Latest deploys:\n${deployLines(input.deploys).map((l) => `- ${l}`).join('\n')}`);
   const text = sections.join('\n');
   return text.length > OPS_STATE_MAX_CHARS ? `${text.slice(0, OPS_STATE_MAX_CHARS - 20)}\n(cut)` : text;
 };
 
-const OPERATIONAL =
-  /\b(not working|isn'?t working|doesn'?t work|stopped working|broken|down|outage|slow|sluggish|laggy?|timing out|timeout|time out|fail(?:s|ed|ing|ure|ures)?|error(?:s|ing)?|stuck|stalled|hang(?:s|ing)?|unavailable|why (?:isn'?t|hasn'?t|won'?t|can'?t|didn'?t|doesn'?t|is)\b|what'?s wrong|health|status of slop|deploy(?:s|ed|ing|ment)?|integration|backlog|throttl\w*|not (?:start|run|merg|deploy)\w*|isn'?t (?:start|run|merg|deploy)\w*)/i;
+const OPERATIONAL = new RegExp(
+  [
+    // "isn't working", "won't load", "can't merge", "not starting", "didn't run", "doesn't work"
+    String.raw`\b(?:is|are|was|were|does|do|did|has|have|had|will|can|could)(?:n'?t| not)\s+(?:\w+\s+){0,3}(?:work\w*|load\w*|start\w*|run\w*|merg\w*|deploy\w*|sync\w*|respond\w*|answer\w*|finish\w*|appear\w*|show\w*)`,
+    String.raw`\b(?:won'?t|can'?t|cannot)\s+(?:\w+\s+){0,3}(?:work|load|start|run|merge|deploy|sync|respond|answer|finish)`,
+    String.raw`\bnot (?:working|loading|starting|running|merging|syncing|responding|answering)`,
+    String.raw`\b(?:stopped working|broken|outage|timing out|timed out|time out|stuck|stalled|hung|hanging|unavailable|throttl\w*)`,
+    String.raw`\b(?:slow|sluggish|laggy)\b`,
+    String.raw`\b(?:is|are) (?:slop|the (?:chat|chatbot|app|site|server|board|deploys?|builds?)) (?:down|up|ok|healthy)`,
+    String.raw`\b(?:slop|chat|server|the app|the site) (?:is |seems )?down`,
+    String.raw`\b(?:deploy|build|merge|run|provisioning|checks?) (?:has |have |just )?(?:failed|fails|failing)`,
+    String.raw`\b(?:why|what).{0,30}\b(?:fail(?:ed|ing)?|erroring|errored)`,
+    String.raw`\bwhat'?s wrong\b`,
+    String.raw`\bsystem (?:status|health)|\bslop(?:'s)? (?:status|health)|\boutbox backlog`,
+  ].join('|'),
+  'i',
+);
 
 /** Whether a question is about something not working (so the status source goes in the prompt). */
 export const isOperationalQuestion = (question: string): boolean => OPERATIONAL.test(question);

@@ -10,7 +10,7 @@ import { SearchIndexer } from '../src/app/search-indexer.js';
 import { SearchService } from '../src/app/search-service.js';
 import { CHAT_CODE_MAX_CALLS, CHAT_DONT_KNOW, CHAT_NO_CODE, impliesHistory, isSmallTalk, parseActions, parseCodeCall, withoutCodeRequests } from '../src/domain/chat.js';
 import type { PageContext } from '../src/domain/chat.js';
-import { isOperationalQuestion } from '../src/domain/ops-state.js';
+import { isOperationalQuestion, safeLine } from '../src/domain/ops-state.js';
 import type { OpsHealth } from '../src/domain/ops-state.js';
 import type { Deploy } from '../src/domain/deploys.js';
 import type { Result } from '../src/domain/errors.js';
@@ -402,8 +402,8 @@ describe('ChatService', () => {
     const statusN = () => Number(/\[(\d+)\] Slop status \(now\)/.exec(llm.requests[0]?.prompt ?? '')?.[1]);
 
     it('recognises operational questions', () => {
-      for (const q of ["Why isn't the chat working?", 'why hasn\'t s15t4 started', 'is the deploy failing', 'builds are slow', 'something is stuck']) expect(isOperationalQuestion(q)).toBe(true);
-      for (const q of ['What did we decide about retry backoff?', 'how do watch signals work']) expect(isOperationalQuestion(q)).toBe(false);
+      for (const q of ["Why isn't the chat working?", "why hasn't s15t4 started", 'the deploy failed, why?', 'builds are slow', 'something is stuck', 'is slop down?', "it won't load", 'why did the run fail']) expect(isOperationalQuestion(q)).toBe(true);
+      for (const q of ['What did we decide about retry backoff?', 'how do watch signals work', 'what did we decide about the deploy rollback', 'why is retry backoff 5s', 'error handling convention', 'health check design', 'scroll down to the list']) expect(isOperationalQuestion(q)).toBe(false);
     });
 
     it('answers "why isn\'t the chat working" from a model that is down, citing Slop status (now)', async () => {
@@ -479,6 +479,23 @@ describe('ChatService', () => {
       const prompt = llm.requests[0]?.prompt ?? '';
       expect(prompt).toContain('Slop health: not available');
       expect(prompt).toContain('s1t7 to staging: failed (Build exited with code 1)');
+    });
+
+    it('lists stalled globs from the board\'s notifications', async () => {
+      withHealth(healthy);
+      await store.transaction((tx) => tx.saveNotification({ id: `${String(boardId)}/stalled:s1t3`, boardId, source: 'stalled:s1t3', severity: 'warning', title: 's1t3 stalled', detail: 'no progress 50 min', link: null, action: null, since: NOW, clears: { kind: 'condition' } }));
+      unwrap(await ask("why hasn't s1t3 finished?"));
+      expect(llm.requests[0]?.prompt).toContain('Stalled globs');
+      expect(llm.requests[0]?.prompt).toContain('s1t3 stalled: no progress 50 min');
+    });
+
+    it('redacts the shapes secrets take in an error', () => {
+      for (const raw of ['access_token=abc123def', 'GITHUB_TOKEN: abc123def', 'client_secret: hunter2', '{"password":"hunter2"}', 'https://u:hunter2@host/x', 'Authorization: Basic dTpoMjM0', 'Bearer abc.def.ghi', 'key AKIAIOSFODNN7EXAMPLE', 'blob 0123456789abcdef0123456789abcdef01']) {
+        const out = safeLine(`failed with ${raw} here`);
+        expect(out, raw).not.toMatch(/hunter2|abc123def|dTpoMjM0|abc\.def|AKIAIOSFODNN7|0123456789abcdef/);
+        expect(out).toContain('[redacted]');
+      }
+      for (const plain of ['skipped_all_checks', 'packages/core/src/app/chat-service', 'Merge conflict in apps/web/src/components/glob-dialog.tsx']) expect(safeLine(plain)).toBe(plain);
     });
 
     it('never includes another board\'s globs or deploys, or a secret-looking value', async () => {

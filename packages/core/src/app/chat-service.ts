@@ -684,7 +684,8 @@ export class ChatService {
       const board = await this.deps.store.transaction(async (tx) => {
         const actor = await memberOf(tx, email, boardId);
         if (!actor.ok) return null;
-        return { admin: actor.value.role === 'admin', globs: await tx.listGlobs(boardId, {}), deploys: await tx.listDeploys(boardId, { limit: 20 }) };
+        // Request timing and the outbox are admin-only (stricter than /api/health, which gates them on any board's admin role).
+        return { admin: actor.value.role === 'admin', globs: await tx.listGlobs(boardId, {}), notifications: await tx.listNotifications(boardId), deploys: await tx.listDeploys(boardId, { limit: 20 }) };
       });
       if (board === null) return '';
       let health: OpsHealth | null = null;
@@ -693,7 +694,7 @@ export class ChatService {
       } catch {
         // Health is context only: the failures and deploys still answer.
       }
-      return opsStateText({ health, globs: board.globs, deploys: board.deploys, now: this.deps.clock.now() });
+      return opsStateText({ health, globs: board.globs, deploys: board.deploys, notifications: board.notifications, now: this.deps.clock.now() });
     } catch {
       return '';
     }
