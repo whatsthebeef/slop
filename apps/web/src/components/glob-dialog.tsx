@@ -178,7 +178,7 @@ export const GlobDetail = ({
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
       <GlobHeader ctx={ctx} onClose={onClose} state={nowState} />
-      <div className="grid gap-4">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
         <GlobTitle
           id={glob.id}
           title={glob.title}
