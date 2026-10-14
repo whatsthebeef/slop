@@ -4,6 +4,7 @@ import type { Hono } from 'hono';
 import type { AwsSignIn } from '../aws-sso.js';
 import type { IntegrationRegistry } from '../integration-health.js';
 import type { LlmHealth, LlmHealthState } from '../llm-health.js';
+import type { RequestMetrics } from '../request-metrics.js';
 import type { Env } from './app.js';
 import { errorBody, statusOf } from './views.js';
 
@@ -22,6 +23,10 @@ interface Deps {
   readonly integrations?: IntegrationRegistry;
   /** The in-app AWS sign-in; null unless the server runs with an SSO profile (local development). */
   readonly signIn?: AwsSignIn | null;
+  /** Request timing and load (admins only); absent: not reported. */
+  readonly metrics?: RequestMetrics;
+  /** Pending outbox jobs per lane, for the load summary. */
+  readonly outboxBacklog?: () => Promise<Record<string, number>>;
   /** What slop can verify about its own deployment (file attachments, Slack...); absent: not reported. */
   readonly capabilities?: { read(): Promise<Capabilities>; reasons(): Promise<Partial<Record<CapabilityName, string>>> };
 }
@@ -47,6 +52,12 @@ export const mountHealth = (app: Hono<Env>, deps: Deps): void => {
     if (deps.capabilities !== undefined) {
       body.capabilities = await deps.capabilities.read();
       body.capabilityReasons = await deps.capabilities.reasons();
+    }
+    // What the board's slow requests wait on: per-route latency over the last hour and the load now. Admins only.
+    if (deps.metrics !== undefined && memberRoles.includes('admin')) {
+      const summary = deps.metrics.summary();
+      deps.metrics.resetLoop();
+      body.requests = { ...summary, outboxBacklog: deps.outboxBacklog === undefined ? null : await deps.outboxBacklog() };
     }
     return c.json(body);
   });

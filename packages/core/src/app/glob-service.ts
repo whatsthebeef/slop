@@ -835,16 +835,17 @@ export class GlobService {
         holds = await findHolds(this.deps.store, this.deps.branchFiles, board, candidate, new Set(input.after ?? []), await this.deps.dependencyLearning?.prediction(board.id));
       }
     }
-    // The snapshot's embedding is computed here, outside the transaction (it calls a model).
-    const embedding = await embedRequest(this.deps.embedder, input.intake?.request ?? planOf(input));
-    // The size check asks a model too, so it is made here as well; a failing model leaves the text estimate.
+    // Three model-bound reads that don't depend on each other, made at once so the request waits for the slowest (each has its
+    // own deadline) rather than their sum. The snapshot's embedding; the size check, where a failing model leaves the text
+    // estimate; and the dependency tree: needs and overlaps against the open globs, with a reason each (a person's edges win).
     const planText = planOf(input);
-    const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText);
-    // Slop builds the dependency tree: needs and overlaps against the open globs, with a reason each (a person's edges win).
-    const inferred =
+    const [embedding, size, inferred] = await Promise.all([
+      embedRequest(this.deps.embedder, input.intake?.request ?? planText),
+      this.deps.sizeCheck === undefined ? null : this.deps.sizeCheck.assess(input.boardId, planText),
       this.deps.inference === undefined || input.type === 'super'
         ? []
-        : await this.deps.inference.infer({ boardId: input.boardId, plan: planText, selfId: null, title: input.title, ...(input.files === undefined ? {} : { files: input.files }) });
+        : this.deps.inference.infer({ boardId: input.boardId, plan: planText, selfId: null, title: input.title, ...(input.files === undefined ? {} : { files: input.files }) }),
+    ]);
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
       if (board === null) return notFound(`No board ${input.boardId}`);

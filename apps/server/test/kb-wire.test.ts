@@ -339,7 +339,7 @@ describe('the KB wire contract', () => {
 
     const second = await submit(boardId, sourceGlobId, 'Generated files live in src/gen/');
     await drafted(second);
-    const listed = await tool('list_kb_items', { board: boardId });
+    const listed = await tool('list_kb_items', { board: boardId, detail: 'full' });
     expect(listed.isError).toBe(false);
     const view = { evidenceCount: 1, lastEvidenceAt: NOW };
     expect(listed.body).toEqual([
@@ -350,6 +350,13 @@ describe('the KB wire contract', () => {
       VIEW_KEYS,
       VIEW_KEYS,
     ]);
+
+    // The default is compact: no previews, long text clipped; `id` picks one item.
+    const compact = await tool('list_kb_items', { board: boardId });
+    expect(compact.body).toHaveLength(2);
+    expect(compact.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: second, extraEvidenceCount: 0 })]));
+    expect(JSON.stringify(compact.body)).not.toContain('"preview"');
+    expect((await tool('list_kb_items', { board: boardId, id: second })).body).toHaveLength(1);
   });
 
   it('GET proposals lists open, decided and closed items, each as a view', async () => {
@@ -651,10 +658,10 @@ describe('the KB wire contract', () => {
     });
 
     const view = { preview: null, evidenceCount: 1, lastEvidenceAt: NOW };
-    expect((await tool('list_kb_items', { board: boardId, status: 'approved' })).body).toEqual([
+    expect((await tool('list_kb_items', { board: boardId, status: 'approved', detail: 'full' })).body).toEqual([
       { ...approvedItem, ...view },
     ]);
-    expect((await tool('list_kb_items', { board: boardId, status: 'rejected' })).body).toEqual([
+    expect((await tool('list_kb_items', { board: boardId, status: 'rejected', detail: 'full' })).body).toEqual([
       { ...rejectedItem, ...view },
     ]);
   });

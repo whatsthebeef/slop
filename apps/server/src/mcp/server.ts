@@ -16,7 +16,8 @@ import { parseLabelCommand } from '../http/labels.js';
 import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
 import { isDate, parseBound, toRequest } from '../search-request.js';
-import { errorBody, globView, globViewOf, onBoard } from '../http/views.js';
+import { requestMetrics } from '../request-metrics.js';
+import { compactKbItem, compactSizeProposal, errorBody, globView, globViewOf, onBoard } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { MergeGate, ReadyGate } from '../ready-gate.js';
 
@@ -80,6 +81,13 @@ const reply = <T>(result: Result<T>, map: (value: T) => unknown = (v) => v): Cal
 export const buildServer = (deps: McpDeps, email: string, origin: string): McpServer => {
   const { boards, globs } = deps;
   const server = new McpServer({ name: 'slop', version: '0.1.0' });
+  // Every tool is the same URL: name the request after the tool, so the timing summary tells them apart.
+  const register = server.registerTool.bind(server) as (name: string, config: unknown, cb: (...args: unknown[]) => unknown) => unknown;
+  (server as { registerTool: unknown }).registerTool = (name: string, config: unknown, cb: (...args: unknown[]) => unknown) =>
+    register(name, config, (...args: unknown[]) => {
+      requestMetrics.label(`mcp ${name}`);
+      return cb(...args);
+    });
 
   server.registerTool(
     'whoami',
@@ -348,16 +356,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the dependency `edges`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
-      inputSchema: { id: z.string(), runId: z.string().optional() },
+        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the dependency `edges`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape while the glob is held for it; afterwards each part has its title, needs and overlaps, a short `planSummary` and `planChars`, and `include: ['size_proposal']` returns the plans); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
+      inputSchema: {
+        id: z.string(),
+        runId: z.string().optional(),
+        include: z.array(z.enum(['size_proposal'])).optional().describe("'size_proposal': each proposed part's plan in full (the default has a short summary and the length)"),
+      },
     },
-    async ({ id, runId }) => {
+    async ({ id, runId, include }) => {
       if (runId !== undefined) await globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
       const view = await globs.get(email, id);
       if (!view.ok) return reply(view, () => null);
       const history = await deps.deploys.history(email, id, 5);
       return reply(view, (v) => ({
-        ...globViewOf(v),
+        // A glob held for its oversized flag keeps the plans: the split is made from them. Otherwise the proposal is a summary.
+        ...(include?.includes('size_proposal') === true || globViewOf(v).oversized === true ? globViewOf(v) : compactSizeProposal(globViewOf(v))),
         deploys: history.ok ? history.value.map(deployView) : [],
       }));
     },
@@ -696,13 +709,22 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'list_kb_items',
     {
       description:
-        "Admins only: the board's knowledge-base proposals (open by default; or approved, rejected, merged, suppressed, covered). Each gives its id and version (pass both to decide_kb_item), type, statement, evidence, target (kind, name, section), draft (section, content), a preview of what approving would change, processing state and error, and the flags: contradicts, possiblyCoveredBy, staleSince and duplicateOf. Approved and rejected ones show who decided and, in outcome.via, 'agent' when an agent did.",
+        "Admins only: the board's knowledge-base proposals (open by default; or approved, rejected, merged, suppressed, covered). Each gives its id and version (pass both to decide_kb_item), type, statement, evidence, target (kind, name, section), draft (section, content), a preview of what approving would change, processing state and error, and the flags: contradicts, possiblyCoveredBy, staleSince and duplicateOf. Approved and rejected ones show who decided and, in outcome.via, 'agent' when an agent did. By default each item is compact: long evidence, draft and document text is clipped (with its full length alongside), the extra evidence is a count, and there is no preview. Pass `detail: 'full'` with an `id` for one item whole (the preview included); `detail: 'full'` without an id lists every item whole, previews included, which can run to 100–200 KB.",
       inputSchema: {
         board: z.number().int(),
         status: z.enum(KB_ITEM_STATUSES).optional().describe('Defaults to open'),
+        detail: z.enum(['compact', 'full']).optional().describe("Defaults to compact"),
+        id: z.string().optional().describe('Only this item'),
       },
     },
-    async ({ board, status }) => reply(await knowledge.listItems(email, board, status)),
+    async ({ board, status, detail, id }) => {
+      const full = detail === 'full';
+      const result = await knowledge.listItems(email, board, status, { preview: full });
+      return reply(result, (items) => {
+        const wanted = id === undefined ? items : items.filter((i) => i.id === id);
+        return full ? wanted : wanted.map((i) => compactKbItem(i as unknown as Record<string, unknown>));
+      });
+    },
   );
 
   server.registerTool(

@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import type { PostgresJsDatabase, PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
+import { requestMetrics } from '../request-metrics.js';
 import * as schema from './schema.js';
 
 export type Db = PostgresJsDatabase<typeof schema>;
@@ -574,7 +575,7 @@ export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
   transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
-    return this.db.transaction((t) => work(this.tx(t)));
+    return requestMetrics.db(() => this.db.transaction((t) => work(this.tx(t))));
   }
 
   private tx(t: Executor): Tx {
