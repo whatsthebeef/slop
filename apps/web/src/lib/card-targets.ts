@@ -13,7 +13,7 @@ export const cardTargets = {
   escalation: (): GlobTarget => ({ section: 'escalation' }),
   /** The clash chip. */
   conflict: (): GlobTarget => ({ section: 'conflict' }),
-  /** The oversized and split chips. */
+  /** The oversized chip. */
   size: (): GlobTarget => ({ section: 'size' }),
   /** A label's "open review", or the sign-off section as a whole without a label. */
   label: (name?: LabelName): GlobTarget => (name === undefined ? { section: 'labels' } : { section: 'labels', label: name }),

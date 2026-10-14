@@ -2,10 +2,12 @@ import { decisionOf } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
-import { GroupChip } from '../glob-card';
+import { ArmSystemLabel, DotSeparator, GroupChip } from '../glob-card';
 import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
 import { groupPath } from '@/lib/group-page';
+import { needsRelease } from '@/lib/human-steps';
+import { LIST_TITLES } from '@/lib/list-titles';
 import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
 import { EscalationChip } from './escalation';
@@ -28,6 +30,7 @@ export const GlobHeader = ({
 }) => {
   const { glob } = ctx;
   const decision = decisionOf(glob) !== null;
+  const armStep = decision ? null : needsRelease(glob.humanSteps ?? []);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -80,6 +83,12 @@ export const GlobHeader = ({
         <span className="shrink-0 self-center font-mono text-base font-semibold text-muted-foreground" data-testid="glob-id">
           {glob.id}
         </span>
+        {/* The list sits by the ID as a quiet label, with the card header's dot between values: never a status. */}
+        <span className="inline-flex shrink-0 items-center gap-[3px] self-center font-mono text-sm text-muted-foreground" data-testid="glob-list">
+          <DotSeparator testId="glob-list-separator" />
+          <span>{LIST_TITLES[glob.list]}</span>
+        </span>
+        {armStep !== null && <ArmSystemLabel step={armStep} to={`/boards/${String(glob.boardId)}?arm=1`} />}
         <HeaderStatus glob={glob} decision={decision} state={state} />
       </div>
     </>

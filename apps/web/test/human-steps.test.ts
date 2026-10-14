@@ -14,6 +14,7 @@ import {
   mainStep,
   stepMain,
   rolloutLine,
+  needsRelease,
   scriptArtifactPath,
   scriptCopyText,
   stateText,
@@ -86,22 +87,53 @@ describe('main step action', () => {
 
 describe('rollout status line', () => {
   const steps = [step({ id: 'a', state: 'done' }), step({ id: 'b' }), step({ id: 'c', state: 'pending' }), step({ id: 'd', state: 'dismissed' })];
-  it('is just "rollout"; the count and first step are in the tooltip', () => {
-    expect(statusLine(merged(steps), NOW, admin)).toMatchObject({ kind: 'ready', text: 'rollout', turn: 'rollout', work: true });
+  it('is "rollout done/total": the steps done of all (a dismissed one is not counted); the open steps are in the tooltip', () => {
+    expect(statusLine(merged(steps), NOW, admin)).toMatchObject({ kind: 'ready', text: 'rollout 1/3', turn: 'rollout', work: true });
     expect(rolloutLine(merged(steps), steps, admin)?.tip).toMatch(/^Merged; 1 of 3 rollout steps done/);
   });
   it('is a quiet line when the due step is for somebody else', () => {
-    expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'rollout' });
-    expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'rollout' });
+    expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'rollout 1/3' });
+    expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'rollout 1/3' });
   });
   it('shows the human icon on the card, with the count and first step in the tooltip', () => {
     const named = [step({ id: 'a', state: 'done' }), step({ id: 'b', title: 'Run the migration' })];
-    expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)).toMatchObject({ kind: 'rollout', icon: 'human', text: 'rollout' });
+    expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)).toMatchObject({ kind: 'rollout', icon: 'human', text: 'rollout 1/2' });
     expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)?.tip).toContain('Merged; 1 of 2 rollout steps done: Run the migration');
+  });
+  it('lists every open step in the tooltip', () => {
+    const open = [step({ id: 'a', state: 'done' }), step({ id: 'b', title: 'Run the migration' }), step({ id: 'c', state: 'pending', title: 'Flip the flag' })];
+    expect(rolloutLine(merged(open), open, admin)?.tip.split('\n')).toEqual(['Merged; 1 of 3 rollout steps done: Run the migration', 'Flip the flag']);
+  });
+  it('waits for a deploy that is still running, where the board tracks deploys, and does not count a predicted placeholder', () => {
+    const deploy = (state: 'running' | 'done') => ({ id: 'd', kind: 'deploy' as const, state, startedAt: null, lastProgressAt: null, detail: 'prod', holdsBall: false });
+    expect(rolloutLine(merged(steps), steps, admin, [deploy('running')])).toBeNull();
+    expect(rolloutLine(merged(steps), steps, admin, [deploy('done')])?.text).toBe('rollout 1/3');
+    const predicted = [step({ state: 'pending', predicted: true })];
+    expect(rolloutLine(merged(predicted), predicted, admin)).toBeNull();
+  });
+  it('returns the corner to sign off (labels to approve) or signed off once the rollout is done', () => {
+    const doneSteps = [step({ state: 'done' })];
+    expect(cornerStatus(merged(doneSteps, { labels: { QA: 'required' } }), NOW, dev)).toMatchObject({ kind: 'sign-off', text: 'sign off', icon: 'human' });
+    expect(cornerStatus(merged(doneSteps, { status: 'signed_off', labels: { QA: 'approved' } }), NOW, dev)).toMatchObject({ kind: 'signed-off', text: 'signed off' });
   });
   it('says nothing before the merge or once the steps are done', () => {
     expect(rolloutLine(glob(), steps, admin)).toBeNull();
     expect(rolloutLine(merged([]), [step({ state: 'done' })], admin)).toBeNull();
+  });
+});
+
+describe('needsRelease (the Arm system label)', () => {
+  it('is the first open written rollout step, or an open work step due after the merge', () => {
+    expect(needsRelease([step({ id: 'a', state: 'pending' })])?.id).toBe('a');
+    expect(needsRelease([step({ id: 'a', kind: 'upload_file', due: 'now' }), step({ id: 'b', kind: 'upload_file', due: 'after_merge' })])?.id).toBe('b');
+    expect(needsRelease([step({ id: 'a', state: 'due' })])?.id).toBe('a');
+  });
+  it('is not a predicted placeholder, a done or dismissed step, a machine step or a step due now', () => {
+    expect(needsRelease([step({ state: 'pending', predicted: true })])).toBeNull();
+    expect(needsRelease([step({ state: 'done' }), step({ id: 'x', state: 'dismissed' })])).toBeNull();
+    expect(needsRelease([step({ id: 'machine:merge' })])).toBeNull();
+    expect(needsRelease([step({ kind: 'upload_file', due: 'now' })])).toBeNull();
+    expect(needsRelease([])).toBeNull();
   });
 });
 

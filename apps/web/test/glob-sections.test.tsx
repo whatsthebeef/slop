@@ -208,7 +208,8 @@ describe('glob view: escalation, dependencies and edit fields', () => {
         handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] },
       }),
     );
-    expect(screen.getByTestId('header-status').textContent).toContain('Your turn · Merge');
+    // The header's top right mirrors the card, which has no status for this glob; the turn is the Activity log's.
+    expect(screen.queryByTestId('header-status')).toBeNull();
     const details = screen.getByTestId('activity-pinned');
     expect(details.textContent).toContain("Why you're needed");
     expect(details.textContent).toContain('Reproduce and fix');

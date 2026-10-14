@@ -63,7 +63,7 @@ const escalationReason = (glob: Glob): string | null =>
  * holds a glob in Planning, a merge relation a PR that is open and neither conflicting nor failing, a sign-off relation a merged
  * glob whose labels are all approved (until then the reviewer's turn comes first).
  */
-const appliedHolding = (glob: Glob, holding: readonly Holding[]): Holding[] =>
+export const appliedHolding = (glob: Glob, holding: readonly Holding[]): Holding[] =>
   holding.filter((h) => {
     switch (h.gate) {
       case 'start':

@@ -177,3 +177,15 @@ export const workstreamsEventData = (
   commitSha: from.commitSha,
   runId: from.runId,
 });
+
+/** What a card needs of a workstreams block: whether the work fanned out, and each workstream's name, state and integration conflicts. */
+export interface WorkstreamsSummary {
+  readonly fannedOut: boolean;
+  readonly items: readonly { readonly name: string; readonly state: WorkstreamState; readonly conflicts: readonly string[] }[];
+}
+
+/** The compact form of a block for the board list: no goals, files or plans. */
+export const summariseWorkstreams = (block: WorkstreamsBlock): WorkstreamsSummary => ({
+  fannedOut: block.fannedOut,
+  items: block.workstreams.map((w) => ({ name: w.name, state: w.state, conflicts: [...w.conflicts] })),
+});

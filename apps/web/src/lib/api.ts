@@ -73,6 +73,7 @@ import type {
   RelationUntil,
   RelationsView,
   TargetChange,
+  WorkstreamsSummary,
 } from '@slop/core';
 import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
@@ -93,6 +94,8 @@ export interface GlobView extends Glob {
   readonly relations?: RelationsView;
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
+  /** A fanned-out glob's workstreams in compact form, for the card's workstream states; absent for a small glob or an older API. */
+  readonly workstreams?: WorkstreamsSummary;
   /** True while the size check flagged the glob oversized and it hasn't started (advice only; the card's chip). */
   readonly oversized?: boolean;
   /** The size check: why it was flagged, its evidence and the forecast's workstreams, advice only (single-glob reads only). */
@@ -105,7 +108,7 @@ export interface GlobView extends Glob {
   readonly humanSteps?: readonly ListedHumanStep[];
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
   readonly move?: Move;
-  /** What slop is doing for the glob (board list only). */
+  /** What slop is doing for the glob (board list and glob read; absent on an older API). */
   readonly machineSteps?: readonly MachineStep[];
 }
 

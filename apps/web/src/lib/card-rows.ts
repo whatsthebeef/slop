@@ -6,8 +6,8 @@ import { clickTip, positionClick, statusClick, yourTurnClick } from './chip-acti
 import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
 import type { Position } from './position';
-import { blockedParts, chainTip, statusLine } from './status-line';
-import type { BlockedParts, StatusLine } from './status-line';
+import { blockedParts, holdLine, statusLine, workstreamLine } from './status-line';
+import type { StatusLine } from './status-line';
 
 /**
  * What the card's status says, decided in one place and kept pure: the one status in the card's top right (also the glob view
@@ -74,12 +74,6 @@ const shortProblem = (status: StatusLine, glob: GlobView): string => {
   }
 };
 
-/** "waiting on s15f82 +2": the nearest prerequisite and how many more; the chain and the next glob are in the tooltip. */
-const waitingText = (parts: BlockedParts): string => {
-  const more = parts.ids.length - 1 + parts.more;
-  return `waiting on ${parts.ids[0] ?? ''}${more > 0 ? ` +${String(more)}` : ''}`;
-};
-
 /** Why a Planning glob waits, from what slop learned of its needs, for the tooltip. */
 const learnedReasons = (glob: GlobView): string[] =>
   (glob.impliedAfter ?? [])
@@ -128,7 +122,8 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   }
   const status = statusLine(glob, now, viewer);
   const position = positionOf(glob, now, viewer);
-  const blocked = blockedParts(glob);
+  const held = holdLine(glob);
+  const workstreams = workstreamLine(glob);
   const standby = onStandby(glob);
   const escalation = glob.escalation;
   const escalated = isEscalated(glob);
@@ -138,11 +133,11 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(status === null ? [] : [status.tip]),
       ...(position === null ? [] : [position.tip]),
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
-      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`]),
+      ...(held === null || kind === 'hold' ? [] : [held.tip]),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
     ];
     const hint =
-      click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's related globs" : clickTip(click)];
+      click === null || kind === 'needs-human' ? [] : [kind === 'hold' ? "Opens this glob's related globs" : clickTip(click)];
     const shown = plainText(text);
     // What the text dropped (a time, a commit) stays in the tooltip.
     const detail = shown === text ? [] : [text];
@@ -199,16 +194,17 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       'Merged; the labels are waiting for a person to approve them',
     ]);
   }
+  // A fanned-out glob's workstreams say more than the machine's general position.
+  if (workstreams !== null) {
+    return make('workstreams', workstreams.icon, workstreams.text, workstreams.tone, { kind: 'section', target: cardTargets.actions() }, [workstreams.tip]);
+  }
   if (position?.holder === 'machine') {
     const icon = position.spinning ? 'machine-spinning' : 'machine';
     const isStandby = position.label.toLowerCase() === 'standby';
     return make(isStandby ? 'standby' : 'machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
-  if (blocked !== null) {
-    return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [
-      `Waits for, in order: ${chainTip(glob)}`,
-      ...learnedReasons(glob),
-    ]);
+  if (held !== null) {
+    return make('hold', held.icon, held.text, 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [held.tip, ...learnedReasons(glob)]);
   }
   if (position !== null) {
     const waiting = position.holder === 'waiting';

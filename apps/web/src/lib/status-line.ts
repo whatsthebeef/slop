@@ -1,4 +1,5 @@
 import {
+  appliedHolding,
   behindAdvice,
   behindWarning,
   checksExplanation,
@@ -226,7 +227,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha);
     // Merged with its rollout still open: how far it is, and whose turn.
-    const rollout = glob.humanSteps === undefined ? null : rolloutLine(glob, glob.humanSteps, viewer);
+    const rollout = glob.humanSteps === undefined ? null : rolloutLine(glob, glob.humanSteps, viewer, glob.machineSteps);
     if (rollout !== null)
       return make({
         kind: rollout.turn === null ? 'rollout' : 'ready',
@@ -453,6 +454,77 @@ export const chainTip = (glob: GlobView): string =>
   startHolds(glob)
     .map((h) => `${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
     .join(', ');
+
+export interface HoldLine {
+  /** "waiting · s15f145", "waiting · decision s15k123", "merge held · s15f145", plus " +N" for the other holds. */
+  readonly text: string;
+  /** One line per hold: what it waits for, where that stands and why. */
+  readonly tip: string;
+  /** A person must decide when the first hold is a decision glob; otherwise the hourglass. */
+  readonly icon: 'human' | 'hourglass';
+}
+
+const GATE_WORDS = {
+  start: { head: 'waiting', tip: 'Waits for' },
+  merge: { head: 'merge held', tip: 'Merge waits for' },
+  sign_off: { head: 'sign-off held', tip: 'Sign-off waits for' },
+} as const;
+
+/**
+ * What holds the glob where it stands (a relation to another glob or a decision, at any gate): the corner's words and the
+ * tooltip. Which holds apply is core's `appliedHolding`, the rule `whoseMove` uses. Null when nothing holds it.
+ */
+export const holdLine = (glob: GlobView): HoldLine | null => {
+  const held = appliedHolding(glob, glob.holding ?? []);
+  const [first, ...rest] = held;
+  if (first === undefined) return null;
+  return {
+    text: `${GATE_WORDS[first.gate].head} · ${named(first)}${rest.length > 0 ? ` +${String(rest.length)}` : ''}`,
+    tip: held
+      .map((h) => `${GATE_WORDS[h.gate].tip} ${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
+      .join('\n'),
+    icon: first.toIsDecision ? 'human' : 'hourglass',
+  };
+};
+
+export interface WorkstreamLine {
+  readonly text: string;
+  /** Every workstream with its state (and the files that conflicted). */
+  readonly tip: string;
+  /** A person acts on a failed workstream or a decision; otherwise the machine is on it. */
+  readonly icon: 'human' | 'machine' | 'machine-spinning';
+  readonly tone: string;
+}
+
+/** Joins names for the corner: the first, plus "+N" for the rest. */
+const firstPlus = (names: readonly string[]): string => `${names[0] ?? ''}${names.length > 1 ? ` +${String(names.length - 1)}` : ''}`;
+
+/**
+ * The run state of a fanned-out glob's workstreams, while it is being built (not once it is merged). Most pressing first: a
+ * failed workstream, one waiting for a decision, an integration conflict, then plain progress. Null for a small glob or when
+ * every workstream is done or skipped.
+ */
+export const workstreamLine = (glob: GlobView): WorkstreamLine | null => {
+  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') return null;
+  const items = (glob.workstreams?.items ?? []).filter((w) => w.state !== 'skipped');
+  if (items.length === 0) return null;
+  const inState = (state: string): string[] => items.filter((w) => w.state === state).map((w) => w.name);
+  const tip = items.map((w) => `${w.name}: ${w.state.replace(/_/g, ' ')}${w.conflicts.length === 0 ? '' : ` (conflicts: ${w.conflicts.join(', ')})`}`).join('\n');
+  const failed = inState('failed');
+  if (failed.length > 0) return { text: `failed · ${firstPlus(failed)}`, tip, icon: 'human', tone: 'text-red' };
+  const deciding = inState('waiting_decision');
+  if (deciding.length > 0) return { text: `waiting · decision for ${firstPlus(deciding)}`, tip, icon: 'human', tone: 'text-required' };
+  const conflicting = items.filter((w) => w.state === 'running' && w.conflicts.length > 0).map((w) => w.name);
+  if (conflicting.length > 0) return { text: `integration conflict · ${conflicting.join('+')}`, tip, icon: 'machine-spinning', tone: 'text-muted-foreground' };
+  const running = items.some((w) => w.state === 'running');
+  if (!running && !items.some((w) => w.state === 'not_started')) return null;
+  return {
+    text: `working · ${String(inState('done').length)}/${String(items.length)} workstreams`,
+    tip,
+    icon: running ? 'machine-spinning' : 'machine',
+    tone: 'text-muted-foreground',
+  };
+};
 
 /**
  * The Merge control's warning: the base has moved on since the branch last caught up and no conflict is recorded yet,

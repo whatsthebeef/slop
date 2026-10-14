@@ -33,8 +33,8 @@ describe('GlobHeader', () => {
   };
   const view = (over: Partial<GlobView> = {}): GlobView => ({ ...glob(), boardId: 1, branch: 's1t1', ...over }) as GlobView;
 
-  it('holds only the back arrow, the ID and the status: no title, branch or version', () => {
-    const { getByTestId } = renderBar(view({ title: 'A very long title that would wrap', version: 7 }));
+  it('holds only the back arrow, the ID with its list, and the status: no title, branch or version', () => {
+    const { getByTestId } = renderBar(view({ title: 'A very long title that would wrap', version: 7, status: 'merging', pr: { number: 7, state: 'ready', headSha: 'abc' } }));
     const bar = getByTestId('glob-header');
     expect(getByTestId('glob-back')).toBeTruthy();
     expect(getByTestId('glob-id').textContent).toBe(view().id);
@@ -56,7 +56,7 @@ describe('GlobHeader', () => {
   });
 
   it('scrolls to the Activity log when the status is clicked', () => {
-    const { getByTestId } = renderBar(view());
+    const { getByTestId } = renderBar(view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: 'abc' } }));
     const target = document.createElement('div');
     target.id = ACTIVITY_ID;
     const scrollIntoView = vi.fn();
@@ -119,6 +119,9 @@ describe('GlobHeader', () => {
       ['stalled', () => view({ status: 'failed', failure: { reason: 'Merge conflict with main in a.ts', at: NOW, kind: 'merge', conflict: { base: 'main', files } } })],
       ['your turn', () => prOpen({ allowedActions: ['merge'] })],
       ['prerequisites', () => view({ status: 'planning', holding: [{ relationId: 'rel_1', to: 's1t1', toTitle: null, toIsDecision: false, gate: 'start', until: 'merged', state: 'open', reason: null, source: 'person' }] })],
+      ['workstreams', () => view({ status: 'in_progress', ...live('active'), workstreams: { fannedOut: true, items: [{ name: 'W1', state: 'done', conflicts: [] }, { name: 'W2', state: 'waiting_decision', conflicts: [] }] } })],
+      ['a merged glob whose deploy is still running', () => view({ status: 'reviewing', labels: { QA: 'required' }, pr: { number: 7, state: 'merged', headSha: head }, machineSteps: [{ id: 'm1', kind: 'deploy', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: 'prod', holdsBall: false }], humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] }] })],
+      ['a merge hold', () => view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [{ relationId: 'rel_1', to: 's1k1', toTitle: null, toIsDecision: true, gate: 'merge', until: 'decided', state: 'planning', reason: null, source: 'person' }] })],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
       ['a problem', () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } })],
     ];
@@ -195,13 +198,43 @@ describe('GlobHeader', () => {
           <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
-      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');
-      expect(header).toBe('rollout');
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout 1/2');
+      expect(header).toBe('rollout 1/2');
     });
 
-    it('keeps the lifecycle text only where the shared status has nothing to say', () => {
-      const { getByTestId } = renderBar(view({ status: 'planning' }));
-      expect(getByTestId('header-status').textContent).toBe('Planning');
+    it('shows "ID · list" on the left and, with nothing happening, only the category icon on the right', () => {
+      const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', list: 'planning' }));
+      const left = getByTestId('glob-header');
+      expect(getByTestId('glob-id').nextElementSibling).toBe(getByTestId('glob-list'));
+      expect(getByTestId('glob-list').textContent).toBe('·Planning');
+      expect(getByTestId('glob-list-separator').getAttribute('aria-hidden')).toBe('true');
+      expect(queryByTestId('header-status')).toBeNull();
+      expect(queryByTestId('header-corner-separator')).toBeNull();
+      const corner = getByTestId('header-corner');
+      expect(corner.children).toHaveLength(1);
+      expect(corner.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(view().category);
+      expect(left.textContent).not.toContain('Planning ');
+    });
+
+    it('shows the card\'s corner, a dot, then the category icon for a merging glob, and never the list name', () => {
+      const g = view({ status: 'merging', list: 'doing', pr: { number: 7, state: 'ready', headSha: 'abc' } });
+      const { getByTestId } = renderBar(g);
+      const corner = getByTestId('header-corner');
+      expect(getByTestId('header-status').textContent).toBe('merging');
+      expect([...corner.children].map((c) => c.getAttribute('data-testid') ?? 'category')).toEqual(['header-status', 'header-corner-separator', 'category']);
+      expect(getByTestId('header-status').textContent).not.toContain('Doing');
+      expect(getByTestId('glob-list').textContent).toContain('Doing');
+    });
+
+    it('shows the Arm system label by the list, linking to the board filtered to it', () => {
+      const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
+      const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', humanSteps: [step] }));
+      expect(getByTestId('arm-system-label').textContent).toBe('Arm system');
+      expect(getByTestId('arm-system-label').getAttribute('href')).toBe('/boards/1?arm=1');
+      cleanup();
+      const none = renderBar(view({ status: 'planning', humanSteps: [] }));
+      expect(none.queryByTestId('arm-system-label')).toBeNull();
+      expect(queryByTestId('arm-system-label')).toBeNull();
     });
   });
 });

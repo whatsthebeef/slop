@@ -8,6 +8,7 @@ import { GlobCard } from '../src/components/glob-card';
 import type { CardMove } from '../src/components/glob-card';
 import { actionPresentation } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
+import type { WorkstreamsSummary, WorkstreamState } from '@slop/core';
 import { handoverKey, statusKey } from '../src/lib/dismissals';
 import { cornerStatus } from '../src/lib/card-rows';
 import { statusLine } from '../src/lib/status-line';
@@ -140,7 +141,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Asks you to confirm'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting on s1t1 +3', 'Waits for, in order: s1t1 (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 (Doing)'],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Waiting'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -203,7 +204,7 @@ describe('card rows', () => {
       ...patch,
     });
     const decisionHeld = dom(markup(view({ status: 'planning', holding: [hold('s1k9', { toIsDecision: true, until: 'decided', state: 'planning' })] })));
-    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('waiting on decision s1k9');
+    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('waiting · decision s1k9');
     // A start relation holds nothing once the glob has started, and nothing relation-shaped is left on the card.
     const started = dom(markup(view({ status: 'in_progress', holding: [hold('s1t1')] })));
     expect(started.textContent).not.toContain('waiting on');
@@ -324,29 +325,20 @@ describe('card rows', () => {
     const html = markup(waitingOn());
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
-    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting on s1t1 +3');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting · s1t1 +3');
     expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
     expect(html).not.toContain('after-chip');
-    expect(html).toContain('Waits for, in order: s1t1 (Doing)');
+    expect(html).toContain('Waits for s1t1 (Doing)');
   });
 
-  it('puts the split chip in the chips row as a pill with the branch icon, not in the title or status line', () => {
+  it('has no split chip: a part of a split shows nothing about it on the card', () => {
     const g = view({ status: 'planning', split: { source: 's1t5', part: 1, parts: ['s1t5', 's1t1'] } });
     const root = dom(markup(g));
-    const chip = root.querySelector('[data-testid="split-chip"]');
-    expect(root.querySelector('[data-testid="card-chips"]')?.contains(chip ?? null)).toBe(true);
-    expect(chip?.className).toContain('bg-muted');
-    expect(chip?.className).toContain('rounded-full');
-    expect(chip?.className).toContain('font-sans');
-    expect(chip?.querySelector('svg.lucide-git-branch')).not.toBeNull();
-    expect(chip?.textContent).toBe('s1t5');
-    const link = chip?.querySelector('a');
-    expect(link?.textContent).toBe('s1t5');
-    expect(link?.getAttribute('aria-label')).toBe('Split from s1t5');
-    expect(root.querySelector('[data-testid="card-title"]')?.textContent).not.toContain('split');
-    expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
+    expect(root.querySelector('[data-testid="split-chip"]')).toBeNull();
+    expect(root.querySelector('svg.lucide-git-branch')).toBeNull();
+    expect(visible(markup(g))).not.toContain('s1t5');
   });
 
   it('keeps chip text on one line', () => {
@@ -562,5 +554,148 @@ describe('card interaction', () => {
     expect(root.querySelectorAll('.move-tag')).toHaveLength(1);
     expect(root.querySelector('[data-testid="card-corner"] .move-tag')).not.toBeNull();
     expect(markup(g)).not.toContain('move-tag');
+  });
+});
+
+describe('card indicators: what holds the glob, workstreams, rollout and Arm system', () => {
+  const hold = (to: string, patch: Partial<NonNullable<GlobView['holding']>[number]> = {}) => ({
+    relationId: `rel_${to}`,
+    to,
+    toTitle: null,
+    toIsDecision: false,
+    gate: 'start' as const,
+    until: 'merged' as const,
+    state: 'open' as const,
+    reason: null,
+    source: 'person' as const,
+    ...patch,
+  });
+  const corner = (g: GlobView) => {
+    const root = dom(markup(g));
+    const el = root.querySelector('[data-testid="card-status"]');
+    return { el, text: el?.querySelector('.truncate')?.textContent ?? null, icon: el?.getAttribute('data-icon') ?? null, html: markup(g) };
+  };
+  const step = (patch: Partial<NonNullable<GlobView['humanSteps']>[number]> = {}): NonNullable<GlobView['humanSteps']>[number] => ({
+    id: 'hs_1',
+    kind: 'rollout',
+    title: 'Run the migration',
+    state: 'pending',
+    who: 'admin',
+    due: 'after_merge',
+    blocks: ['sign_off', 'dependants'],
+    ...patch,
+  });
+  const mergedWith = (steps: NonNullable<GlobView['humanSteps']>, patch: Partial<GlobView> = {}) =>
+    view({ status: 'reviewing', pr: { number: 7, state: 'merged', headSha: head }, humanSteps: steps, labels: { QA: 'required' }, ...patch });
+  type Item = readonly [name: string, state: WorkstreamState, conflicts?: readonly string[]];
+  const ws = (items: readonly Item[]): WorkstreamsSummary => ({ fannedOut: true, items: items.map(([name, state, conflicts]) => ({ name, state, conflicts: conflicts ?? [] })) });
+
+  it('a hold by a decision says so with the human icon, and a hold by a glob with the hourglass', () => {
+    const decision = corner(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'store not chosen' })] }));
+    expect(decision).toMatchObject({ text: 'waiting · decision s1k1', icon: 'human' });
+    expect(decision.html).toContain('store not chosen');
+    expect(corner(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 'waiting · s1t1', icon: 'hourglass' });
+  });
+
+  it('a merge gate says "merge held" and several holds are the first plus the others', () => {
+    const g = view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [hold('s1k1', { gate: 'merge', toIsDecision: true, until: 'decided', state: 'planning' })] });
+    expect(corner(g)).toMatchObject({ text: 'merge held · decision s1k1', icon: 'human' });
+    expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('waiting · s1t1 +2');
+  });
+
+  it('the tooltip lists every hold with its reason, and a click opens the Related section', async () => {
+    const holding = [hold('s1t1', { reason: 'uses its store' }), hold('s1t2', { state: 'planning', reason: 'same file' })];
+    const html = markup(view({ status: 'planning', holding }));
+    expect(html).toContain('Waits for s1t1 (Doing): uses its store');
+    expect(html).toContain('Waits for s1t2 (Planning): same file');
+    const user = userEvent.setup();
+    const onOpenSection = vi.fn();
+    render(
+      <MemoryRouter>
+        <GlobCard {...base()} onOpenSection={onOpenSection} glob={view({ status: 'planning', holding })} repo='a/b' />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByTestId('position'));
+    expect(onOpenSection).toHaveBeenCalledWith({ section: 'related' });
+  });
+
+  const states: readonly (readonly [string, readonly Item[], string, string])[] = [
+    ['working', [['W0', 'done'], ['W1', 'running'], ['W2', 'not_started']], 'working · 1/3 workstreams', 'machine-spinning'],
+    ['waiting for a decision', [['W1', 'done'], ['W2', 'waiting_decision']], 'waiting · decision for W2', 'human'],
+    ['failed', [['W1', 'done'], ['W3', 'failed']], 'failed · W3', 'human'],
+    ['an integration conflict', [['W1', 'running', ['a.ts']], ['W2', 'running', ['b.ts']]], 'integration conflict · W1+W2', 'machine-spinning'],
+  ];
+  it.each(states)('workstream state, %s', (_name, items, text, icon) => {
+    const fresh = new Date().toISOString();
+    const r = run({ state: 'active', queuedAt: fresh, startedAt: fresh, lastProgressAt: fresh });
+    const g = view({ status: 'in_progress', runs: [r], currentRun: r, workstreams: ws(items) });
+    expect(corner(g)).toMatchObject({ text, icon });
+  });
+
+  it('workstream states show only while the glob is being built, not once merged', () => {
+    expect(corner(mergedWith([], { workstreams: ws([['W1', 'running']]) })).text).toBe('sign off');
+  });
+
+  it('rollout replaces sign off with the human icon, with no upcoming-steps chip lower on the card', () => {
+    const g = mergedWith([step({ id: 'a', state: 'done' }), step({ id: 'b' }), step({ id: 'c', state: 'pending' })]);
+    expect(corner(g)).toMatchObject({ text: 'rollout 1/3', icon: 'human' });
+    expect(dom(markup(g)).querySelector('[data-testid="upcoming-steps-chip"]')).toBeNull();
+  });
+
+  it('rollout opens the human steps, and the corner returns to sign off, then signed off, when the rollout is done', async () => {
+    const user = userEvent.setup();
+    const onOpenSection = vi.fn();
+    render(
+      <MemoryRouter>
+        <GlobCard {...base()} onOpenSection={onOpenSection} glob={mergedWith([step({ state: 'due' })])} repo='a/b' />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByTestId('position'));
+    expect(onOpenSection).toHaveBeenCalledWith({ section: 'human-steps' });
+    const done = mergedWith([step({ state: 'done' })]);
+    expect(corner(done)).toMatchObject({ text: 'sign off', icon: 'human' });
+    expect(corner(mergedWith([step({ state: 'done' })], { status: 'signed_off', labels: { QA: 'approved' } })).text).toBe('signed off');
+  });
+
+  it('the Arm system label shows for a written rollout or an after_merge step, from Planning on, and not for a prediction or a done step', () => {
+    const label = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="arm-system-label"]');
+    expect(label(view({ status: 'planning', humanSteps: [step()] }))?.textContent).toBe('Arm system');
+    expect(label(view({ status: 'in_progress', humanSteps: [step({ kind: 'upload_file', title: 'Add the key' })] }))).not.toBeNull();
+    expect(label(view({ status: 'planning', humanSteps: [step({ predicted: true })] }))).toBeNull();
+    expect(label(view({ status: 'reviewing', humanSteps: [step({ state: 'done' })] }))).toBeNull();
+    expect(label(view({ status: 'planning', humanSteps: [] }))).toBeNull();
+  });
+
+  it('the Arm system label is a rocket and text in the primary action colour, at the bottom right beside the avatar, with its tooltip', () => {
+    const html = markup(view({ status: 'planning', humanSteps: [step()] }));
+    const root = dom(html);
+    const el = root.querySelector('[data-testid="arm-system-label"]');
+    expect(el?.className).toContain('text-primary');
+    expect(el?.className).not.toMatch(/text-red|text-signal/);
+    expect(el?.querySelector('svg.lucide-rocket')).not.toBeNull();
+    expect(root.querySelector('[data-testid="card-bottom"]')?.lastElementChild?.contains(el ?? null)).toBe(true);
+    expect(html).toContain('A person has a step at release: Run the migration');
+    // The primary action's button uses the same token.
+    const g = view({ status: 'planning' });
+    const start = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} moves={[move('start', g)]} glob={g} />
+      </MemoryRouter>,
+    );
+    expect(start).toContain('bg-primary');
+  });
+
+  it('clicking the Arm system label applies its filter without opening the card', async () => {
+    const user = userEvent.setup();
+    const onFilterArmSystem = vi.fn();
+    const onOpen = vi.fn();
+    render(
+      <MemoryRouter>
+        <GlobCard {...base()} onOpen={onOpen} onFilterArmSystem={onFilterArmSystem} glob={view({ status: 'planning', humanSteps: [step()] })} repo='a/b' />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByTestId('arm-system-label'));
+    expect(onFilterArmSystem).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

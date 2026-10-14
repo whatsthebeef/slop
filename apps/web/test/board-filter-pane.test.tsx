@@ -40,3 +40,18 @@ describe('filter pane Only human toggle', () => {
     expect(onChange).toHaveBeenLastCalledWith({ category: 'feature,task,bug', human: '' });
   });
 });
+
+describe('filter pane Arm system toggle', () => {
+  it('shows the toggle with a rocket, off by default, and turns it on and off', async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<FilterPane open values={{ category: 'feature,task,bug' }} onChange={onChange} onClose={vi.fn()} />);
+    const toggle = screen.getByTestId('filter-arm');
+    expect(toggle.textContent).toBe('Arm system');
+    expect(toggle.querySelector('svg.lucide-rocket')).not.toBeNull();
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    await userEvent.setup().click(toggle);
+    expect(onChange).toHaveBeenLastCalledWith({ category: 'feature,task,bug', arm: '1' });
+    rerender(<FilterPane open values={{ category: 'feature,task,bug', arm: '1' }} onChange={onChange} onClose={vi.fn()} />);
+    expect(screen.getByTestId('filter-arm').getAttribute('aria-pressed')).toBe('true');
+  });
+});

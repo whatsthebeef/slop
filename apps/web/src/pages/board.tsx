@@ -30,19 +30,13 @@ import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
 import type { GlobTarget } from '@/lib/glob-section';
 import { isSlashShortcut } from '@/lib/chat';
 import { listScrollLeft, visibleListIndex } from '@/lib/list-snap';
+import { LIST_TITLES } from '@/lib/list-titles';
 import { cn } from '@/lib/utils';
 import { useCurrentPage, usePageContext } from '@/lib/page-context';
 import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useSstorCopy } from '@/components/sstor-notice';
 import { useToast } from '@/toast';
-
-const LIST_TITLES: Record<List, string> = {
-  planning: 'Planning',
-  doing: 'Doing',
-  reviewing: 'Reviewing',
-  signed_off: 'Signed Off',
-};
 
 type Direction = 'left' | 'right';
 
@@ -506,6 +500,10 @@ export const BoardPage = () => {
                       glob={glob}
                       onOpen={() => openGlob(glob.id)}
                       onOpenSection={(target) => openGlob(glob.id, target)}
+                      onFilterArmSystem={() => {
+                        setFilters({ ...filters, arm: '1' });
+                        setFilterOpen(true);
+                      }}
                       onFilterGroup={(name) => {
                         setFilters({ ...filters, group: name });
                         setFilterOpen(true);

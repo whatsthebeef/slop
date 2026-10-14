@@ -1,11 +1,10 @@
 import { X } from 'lucide-react';
-import { CategoryIcon } from '@/components/glob-card';
+import { CategoryIcon, DotSeparator } from '@/components/glob-card';
 import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
-import { cornerStatus, plainText } from '@/lib/card-rows';
-import { rolloutLine } from '@/lib/human-steps';
+import { cornerStatus } from '@/lib/card-rows';
 import { viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
@@ -57,24 +56,6 @@ export const Link = ({ href, children }: { href: string; children: string }) => 
   </a>
 );
 
-/** The coarse lifecycle text, for a glob nobody is moving and nothing is wrong with. */
-const STATUS_TEXT: Record<GlobView['status'], string> = {
-  planning: 'Planning',
-  implementing: 'A routine is implementing',
-  in_progress: 'In progress',
-  failed: 'Failed',
-  pr_open: 'PR open for review',
-  merging: 'Merging',
-  reviewing: 'Merged; awaiting sign-off',
-  signed_off: 'Signed off',
-};
-
-/** A decision glob uses the same lists for a different journey: it is decided in Doing and signed off once accepted. */
-const DECISION_STATUS_TEXT: Partial<Record<GlobView['status'], string>> = {
-  in_progress: 'Doing: being decided',
-  reviewing: 'Decided; awaiting sign-off',
-};
-
 /** The id of the Activity log, which the header's status scrolls to. */
 export const ACTIVITY_ID = 'glob-activity';
 
@@ -100,49 +81,41 @@ export const useNowState = (glob: GlobView, decision: boolean, disabled: readonl
 export type NowState = ReturnType<typeof useNowState>;
 
 /**
- * The status in the header's top right, one line and truncated: the machine's or the person's position, else the problem,
- * else the lifecycle text. Clicking it opens a live run's session, else scrolls to the Activity log, where its details are.
+ * The header's top right, as on the card: the status, a dot, then the category icon. The status is exactly the card's corner
+ * (`cornerStatus`: text, icon, tooltip) and is left out, with its dot, when the card has none; the list is never shown here
+ * (it sits by the ID). Clicking the status opens a live run's session, else scrolls to the Activity log.
  */
 export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decision: boolean; state: NowState }) => {
-  const { position, move, turn, problem, seen, turnDismissed, now, viewer } = state;
-  // The same status as the card's top right, word for word; the lifecycle text only where it has nothing to say.
+  const { position, now, viewer } = state;
   const corner = decision ? null : cornerStatus(glob, now, viewer);
-  const rollout = decision ? null : rolloutLine(glob, glob.humanSteps ?? [], undefined);
-  // Decision globs have no corner status; their fallback text still gets the person's icon when it is the viewer's turn.
-  const rawText =
-    corner !== null
-      ? corner.text
-      : turn !== null
-        ? `Your turn${turn.reason !== '' && !turnDismissed ? ` · ${headlineReason(turn.reason)}` : ''}`
-        : problem !== null
-          ? seen?.dismissed === true
-            ? capitalised(seen.label)
-            : problem.text
-          : (rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]);
-  const text = corner !== null ? rawText : plainText(rawText);
-  const icon = corner?.icon ?? (turn !== null || rollout?.turn != null ? 'human' : null);
-  const tone = corner !== null ? corner.tone : turn !== null ? undefined : seen?.dismissed === true ? 'text-muted-foreground' : problem?.tone;
   // A live run's status opens that run's session; the activity log has no session link of its own beyond its run entries.
   const live = position?.holder === 'machine' ? position.sessionUrl : null;
   return (
-    <span className="ml-auto inline-flex min-w-0 items-center gap-2" data-testid="header-corner">
-      <button
-        type="button"
-        className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', tone)}
-        aria-label={corner?.kind === 'needs-human' ? corner.label : undefined}
-        title={live !== null ? "Open the machine's session" : (corner?.tip ?? rollout?.tip ?? position?.tip ?? problem?.full ?? text)}
-        data-testid="header-status"
-        data-holder={move?.holder ?? 'none'}
-        onClick={() =>
-          live !== null ? window.open(live, '_blank', 'noreferrer') : document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })
-        }
-      >
-        {/* The text gives way (ellipsis) only when the row is full; the ID before it never shrinks. */}
-        <span className="truncate" data-testid="header-status-text">
-          {text}
-        </span>
-        {icon !== null && <StatusIconView icon={icon} />}
-      </button>
+    <span className="ml-auto inline-flex min-w-0 items-center gap-1.5" data-testid="header-corner">
+      {corner !== null && (
+        <>
+          <button
+            type="button"
+            className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', corner.tone)}
+            aria-label={corner.kind === 'needs-human' ? corner.label : undefined}
+            title={live !== null ? "Open the machine's session" : corner.tip}
+            data-testid="header-status"
+            data-kind={corner.kind}
+            data-icon={corner.icon}
+            data-holder={state.move?.holder ?? 'none'}
+            onClick={() =>
+              live !== null ? window.open(live, '_blank', 'noreferrer') : document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })
+            }
+          >
+            {/* The text gives way (ellipsis) only when the row is full; the ID before it never shrinks. */}
+            <span className="truncate" data-testid="header-status-text">
+              {corner.text}
+            </span>
+            <StatusIconView icon={corner.icon} />
+          </button>
+          <DotSeparator testId="header-corner-separator" />
+        </>
+      )}
       <CategoryIcon category={glob.category} />
     </span>
   );
