@@ -11,7 +11,7 @@ import { GlobReset, useGlobActions } from './glob-view/actions';
 import type { GlobViewContext } from './glob-view/context';
 import { useGlobEdits } from './glob-view/edit-fields';
 import { GlobChips, GlobHeader } from './glob-view/header';
-import { GlobMeta, MachineRuns } from './glob-view/meta';
+import { GlobMeta } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
 import { useNowState } from './glob-view/status';
@@ -182,8 +182,7 @@ export const GlobDetail = ({
             {AFTER_SECTION[name]?.(sectionProps)}
           </Fragment>
         ))}
-        <GlobMeta ctx={ctx} decision={decision} />
-        <MachineRuns ctx={ctx} />
+        <GlobMeta ctx={ctx} />
         <GlobReset ctx={ctx} state={actionState} onDelete={onDelete} />
       </div>
     </article>
