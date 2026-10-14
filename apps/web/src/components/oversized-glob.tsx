@@ -135,8 +135,7 @@ export const useOversized = ({
         title: p.title,
         plan: p.plan,
         ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
-        // Absent in proposals stored before overlaps and low-risk subs existed.
-        ...(index > 0 && (p.overlaps?.length ?? 0) > 0 ? { overlaps: [...(p.overlaps ?? [])] } : {}),
+        // Absent in proposals stored before low-risk subs existed.
         ...(index > 0 && p.type !== undefined ? { type: p.type } : {}),
       }));
       return api.splitGlob(glob.id, glob.version, parts, key);
@@ -199,9 +198,6 @@ export const OversizedGlob = ({ glob, size }: { glob: GlobView; size: OversizedS
               {index === 0 ? ` (stays ${glob.id})` : ''}
               {p.type === 'sub' && <span className='text-muted-foreground'> (sub)</span>}
               {p.after.length > 0 && <span className='text-muted-foreground'>, needs {p.after.map((n) => `part ${n + 1}`).join(', ')}</span>}
-              {(p.overlaps?.length ?? 0) > 0 && (
-                <span className='text-muted-foreground'>, may overlap {(p.overlaps ?? []).map((n) => `part ${n + 1}`).join(', ')}</span>
-              )}
             </li>
           ))}
         </ol>

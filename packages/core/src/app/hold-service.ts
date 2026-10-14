@@ -1,7 +1,7 @@
 import { openRefactors } from '../domain/decision-glob.js';
 import { exclusiveFiles, MAX_HOLD_PATHS, namesExclusivePath, plannedChangesName } from '../domain/exclusive-paths.js';
 import type { Board, Glob, ImpliedAfter } from '../domain/types.js';
-import { reaches } from '../domain/waiting.js';
+import { startReaches } from '../domain/relations.js';
 import type { BranchFiles, Store } from '../ports.js';
 import { PREDICT_MIN, predictedFiles } from '../domain/dependency-rules.js';
 import type { MergePolicy } from '../domain/merge-policy.js';
@@ -67,10 +67,11 @@ const findRefactorHolds = async (store: Store, board: Board, candidate: HoldCand
     const decisions = await tx.listGlobs(board.id, { include: 'decisions', origins: ['hotspot'] });
     if (decisions.length === 0) return [];
     const works = new Map((await tx.listGlobs(board.id, {})).map((g) => [g.id, g]));
+    const relations = await tx.listRelations(board.id);
     const holds: ImpliedAfter[] = [];
     for (const { path, glob } of openRefactors(decisions, (id) => works.get(id))) {
       if (glob.id === candidate.id || skip.has(glob.id) || holds.some((h) => h.id === glob.id)) continue;
-      if (candidate.id !== null && reaches(glob.id, candidate.id, (id) => works.get(id))) continue;
+      if (candidate.id !== null && startReaches(relations, glob.id, candidate.id)) continue;
       if ((candidate.files ?? []).includes(path) || plannedChangesName(candidate.plan, path)) holds.push({ id: glob.id, paths: [path] });
     }
     return holds;
@@ -90,14 +91,14 @@ const findPolicyHolds = async (
     const guess = hits(candidate.files ?? []).length > 0;
     if (!guess && !namesExclusivePath(policy, candidate.plan)) return null;
     const globs = await tx.listGlobs(board.id, {});
-    const byId = new Map(globs.map((g) => [g.id, g]));
+    const relations = await tx.listRelations(board.id);
     const others = globs.filter(
       (g) =>
         g.id !== candidate.id &&
         !skip.has(g.id) &&
         hasBranch(g) &&
         // A glob that waits (even through others) for the candidate can't be waited for.
-        (candidate.id === null || !reaches(g.id, candidate.id, (id) => byId.get(id))),
+        (candidate.id === null || !startReaches(relations, g.id, candidate.id)),
     );
     const plans = new Map<string, string>();
     for (const other of others) {

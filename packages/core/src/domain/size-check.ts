@@ -191,8 +191,6 @@ export interface ProposedPart {
   readonly plan: string;
   /** Indexes of earlier parts this one needs merged before it starts (`after` in split_glob's shape): direct prerequisites only. */
   readonly after: readonly number[];
-  /** Earlier parts that touch the same files or both need a migration: they order the merges but never block a start. Absent in older proposals. */
-  readonly overlaps?: readonly number[];
   /** `sub` for a small, low-risk part (it starts by itself); absent: the original's type. Never set on part 0. */
   readonly type?: 'sub';
 }
@@ -258,13 +256,6 @@ export interface ModelPart {
 
 const lower = (s: string): string => s.toLowerCase();
 
-/** Whether two parts change the same files or both need a migration: they overlap (merge order), but neither needs the other. */
-const sharesWork = (a: string, b: string): boolean => {
-  const fa = extractPlanFeatures(a);
-  const fb = extractPlanFeatures(b);
-  return fa.filePaths.some((p) => fb.filePaths.includes(p)) || (fa.areas.includes('migration') && fb.areas.includes('migration'));
-};
-
 /** The most tasks a part may have and still start by itself as a sub. */
 const SUB_PART_MAX_TASKS = 2;
 
@@ -279,8 +270,7 @@ const lowRisk = (plan: string): boolean => {
  * on when the model made it so. A section of the plan with no task is context, never a part: a part the model made of one
  * (no task line, while the plan has tasks) is dropped, and every context section a part doesn't already carry is copied
  * into it. A part needs only what the model said it needs, cut down to direct prerequisites (a part that needs part 0
- * through another part does not name part 0 as well); sharing files or both needing a migration is an overlap, never a
- * need. Low-risk parts after part 0 are subs. Null when fewer than 2 parts remain.
+ * through another part does not name part 0 as well). Low-risk parts after part 0 are subs. Null when fewer than 2 parts remain.
  */
 export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): SizeProposal | null => {
   const hasTasks = extractPlanFeatures(plan).tasks > 0;
@@ -295,22 +285,17 @@ export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): S
       return { title: p.title.trim().slice(0, 120), plan: carried, own: p.plan.trim(), after: p.after };
     });
   if (parts.length < 2) return null;
-  // Everything each part needs, directly or through others, to cut direct needs down and keep overlaps from repeating them.
+  // Everything each part needs, directly or through others, to cut direct needs down.
   const reach: Set<number>[] = [];
   const built: ProposedPart[] = parts.map((p, index) => {
     const wanted = index === 0 ? [] : [...new Set(p.after.filter((n) => Number.isInteger(n) && n >= 0 && n < index))];
     const direct = wanted.filter((n) => !wanted.some((m) => m !== n && reach[m]?.has(n) === true));
     const reached = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
     reach[index] = reached;
-    const overlaps: number[] = [];
-    for (let earlier = 0; earlier < index; earlier++) {
-      if (!reached.has(earlier) && sharesWork(parts[earlier]?.own ?? '', p.own)) overlaps.push(earlier);
-    }
     return {
       title: p.title,
       plan: p.plan,
       after: direct.sort((a, b) => a - b),
-      overlaps,
       ...(index > 0 && lowRisk(p.own) ? { type: 'sub' as const } : {}),
     };
   });

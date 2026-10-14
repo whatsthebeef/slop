@@ -47,7 +47,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
   const reasonText = dismissReason(reason);
   return (
     <li
-      className={cn('grid gap-1 rounded border p-2 text-xs', mine && step.state === 'due' && 'border-foreground')}
+      className={cn('grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 rounded border p-2 text-xs', mine && step.state === 'due' && 'border-foreground')}
       data-testid='human-step'
       data-state={step.state}
       data-kind={step.kind}
@@ -64,18 +64,18 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
           />
         )}
         <HumanIcon decorative />
-        <span className={cn('font-medium', (step.state === 'dismissed' || step.state === 'done') && 'text-muted-foreground line-through')} data-testid='step-title'>
+        <span className={cn('min-w-0 break-words font-medium [overflow-wrap:anywhere]', (step.state === 'dismissed' || step.state === 'done') && 'text-muted-foreground line-through')} data-testid='step-title'>
           {step.title}
         </span>
         <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
         {mine && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
-      <div className='flex flex-wrap gap-x-3 text-[11px] text-muted-foreground'>
+      <div className='flex flex-wrap gap-x-3 break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]'>
         <span data-testid='step-who'>for {whoText(step.who)}</span>
         <span data-testid='step-state'>{stateText(step)}</span>
         {step.check != null && step.check !== '' && <span data-testid='step-check'>checked by slop: {step.check}</span>}
       </div>
-      {step.detail != null && step.detail !== '' && <p className='whitespace-pre-wrap break-words'>{step.detail}</p>}
+      {step.detail != null && step.detail !== '' && <p className='whitespace-pre-wrap break-words [overflow-wrap:anywhere]'>{step.detail}</p>}
       {script !== null && (
         <div className='flex flex-wrap items-center gap-2 text-[11px]'>
           {'path' in script ? (
@@ -83,7 +83,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
               {script.path}
             </code>
           ) : (
-            <Link className='underline' to={scriptArtifactPath(glob.boardId, glob.id, script)} data-testid='step-script-link'>
+            <Link className='min-w-0 break-words underline [overflow-wrap:anywhere]' to={scriptArtifactPath(glob.boardId, glob.id, script)} data-testid='step-script-link'>
               Rollout script: {script.artifact}
             </Link>
           )}
@@ -108,7 +108,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
             });
           }}
         >
-          <Label className='grow'>
+          <Label className='min-w-0 grow'>
             Why is this step wrong?
             <Input value={reason} onChange={(e) => setReason(e.target.value)} data-testid='dismiss-reason' />
           </Label>
@@ -129,7 +129,7 @@ const AddStep = ({ busy, onAdd, onClose }: { busy: boolean; onAdd: StepActions['
   const input = stepInput(draft);
   return (
     <form
-      className='grid gap-2 rounded border p-2'
+      className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border p-2'
       data-testid='add-step-form'
       onSubmit={(e) => {
         e.preventDefault();
@@ -149,7 +149,7 @@ const AddStep = ({ busy, onAdd, onClose }: { busy: boolean; onAdd: StepActions['
         Detail (optional)
         <Input value={draft.detail} onChange={(e) => setDraft({ ...draft, detail: e.target.value })} data-testid='step-detail-input' />
       </Label>
-      <div className='grid gap-2 sm:grid-cols-2'>
+      <div className='grid grid-cols-[minmax(0,1fr)] gap-2 sm:grid-cols-2'>
         <Label>
           Who (a role or an email)
           <Input value={draft.who} onChange={(e) => setDraft({ ...draft, who: e.target.value })} data-testid='step-who-input' />
@@ -223,7 +223,7 @@ export const HumanSteps = ({
   const wrapped: StepActions = { onAdd: guarded(actions.onAdd), onComplete: guarded(actions.onComplete), onDismiss: guarded(actions.onDismiss) };
   const left = steps.filter((s) => s.state === 'due' || s.state === 'pending').length;
   return (
-    <section className='grid gap-2' aria-label='Human steps' data-testid='human-steps'>
+    <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2' aria-label='Human steps' data-testid='human-steps'>
       <div className='flex items-center gap-2'>
         <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>
           Human steps ({steps.length})
@@ -252,7 +252,7 @@ export const HumanSteps = ({
       {open && (
         <>
           {steps.length > 0 && (
-            <ul className='grid gap-2'>
+            <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
               {steps.map((s) => (
                 <Step
                   key={s.id}

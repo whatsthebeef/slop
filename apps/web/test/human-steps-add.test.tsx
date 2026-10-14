@@ -63,3 +63,26 @@ describe('Human steps section', () => {
     expect(screen.getByTestId('add-step-form')).not.toBeNull();
   });
 });
+
+describe('Human steps with long text', () => {
+  it('wraps a long unbroken title and detail instead of widening the page', () => {
+    const long = 'x'.repeat(200);
+    const glob = {
+      ...coreGlob(),
+      list: 'planning',
+      branch: 's1t1',
+      currentRun: null,
+      humanSteps: [{ id: 'hs1', title: long, detail: long, kind: 'manual', state: 'pending', who: 'anyone', due: 'after_merge', script: null }],
+    } as unknown as GlobView;
+    render(
+      <MemoryRouter>
+        <HumanSteps glob={glob} canAdd startOpen onAdd={vi.fn()} onComplete={vi.fn()} onDismiss={vi.fn()} />
+      </MemoryRouter>,
+    );
+    const title = screen.getByTestId('step-title');
+    expect(title.className).toContain('break-words');
+    expect(title.className).toContain('min-w-0');
+    expect(screen.getByTestId('human-step').className).toContain('min-w-0');
+    expect(screen.getByTestId('human-steps').className).toContain('grid-cols-[minmax(0,1fr)]');
+  });
+});

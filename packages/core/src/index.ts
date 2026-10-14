@@ -15,7 +15,7 @@ export * from './domain/knowledge-page.js';
 export * from './domain/local-run.js';
 export * from './domain/merge-policy.js';
 export * from './domain/exclusive-paths.js';
-export * from './domain/waiting.js';
+export * from './domain/relations.js';
 export * from './domain/agent-set.js';
 export * from './domain/kb.js';
 export * from './domain/kb-glob.js';

@@ -6,6 +6,8 @@
 import { RISK_TIERS } from './knowledge.js';
 import type { RiskTier } from './knowledge.js';
 import { contextSectionList } from './intake-learning.js';
+import { RELATION_GATES, RELATION_UNTILS } from './types.js';
+import type { RelationGate, RelationUntil } from './types.js';
 import { MAX_PROPOSED_PARTS } from './size-check.js';
 import type { ProposedPart, SizeProposal, SizeThreshold } from './size-check.js';
 
@@ -32,10 +34,14 @@ export interface InvestigationPart {
   readonly needs: readonly string[];
 }
 
-/** A dependency on another open glob that the investigator found in the code, with the evidence it read. */
-export interface InvestigationDependency {
-  readonly id: string;
-  readonly kind: 'needs' | 'overlaps';
+/**
+ * A relation to another open glob or a decision glob that the investigator found in the code or the plan, with the evidence it
+ * read: this glob can't pass `gate` (default `start`) until `to` reaches `until` (default `merged`; `decided` for a decision).
+ */
+export interface InvestigationRelation {
+  readonly to: string;
+  readonly gate: RelationGate;
+  readonly until: RelationUntil;
   /** One line naming the file or symbol that shows it, e.g. "uses humanSteps() from s15f100". */
   readonly reason: string;
   readonly files: readonly string[];
@@ -53,10 +59,11 @@ export interface Investigation {
   readonly needsHuman: { readonly needed: boolean; readonly reason: string | null };
   readonly confidence: InvestigationConfidence;
   /**
-   * The other open globs this one needs or overlaps, from the code the investigator read. Absent when it did not say;
-   * an empty list says it looked and found none, which drops the needs slop had guessed from the plan.
+   * The other open globs (and open decisions) this one is held back by, from the code the investigator read. Absent when it did
+   * not say; an empty list says it looked and found none, which drops the needs slop had guessed from the plan. An investigation
+   * stored with the old `dependencies` list reads the same: its needs are start relations, its overlaps are dropped.
    */
-  readonly dependencies?: readonly InvestigationDependency[];
+  readonly relations?: readonly InvestigationRelation[];
   /** The investigator predicts the change needs a rollout (a person's steps after the merge); absent when not said. */
   readonly needsRollout?: boolean;
   /** sha256 (hex) of plan.md as it was when the investigation was made. */
@@ -180,8 +187,28 @@ export const parseInvestigation = (content: string): InvestigationParse => {
 
   if (!INVESTIGATION_CONFIDENCES.includes(raw.confidence as InvestigationConfidence))
     errors.push(`confidence must be one of ${INVESTIGATION_CONFIDENCES.join(', ')}`);
-  const dependencies: InvestigationDependency[] = [];
-  if (raw.dependencies !== undefined) {
+  const relations: InvestigationRelation[] = [];
+  if (raw.relations !== undefined) {
+    if (!Array.isArray(raw.relations)) errors.push('relations must be a list of {to, gate?, until?, reason, files?} when given');
+    else
+      raw.relations.forEach((d: unknown, i) => {
+        const gate = isRecord(d) ? (d.gate === undefined ? 'start' : RELATION_GATES.find((g) => g === d.gate)) : undefined;
+        const until = isRecord(d) ? (d.until === undefined ? 'merged' : RELATION_UNTILS.find((u) => u === d.until)) : undefined;
+        if (
+          !isRecord(d) ||
+          typeof d.to !== 'string' ||
+          d.to.trim() === '' ||
+          gate === undefined ||
+          until === undefined ||
+          typeof d.reason !== 'string' ||
+          d.reason.trim() === '' ||
+          (d.files !== undefined && !isStringList(d.files))
+        ) {
+          errors.push(`relations[${String(i)}] needs a to, an optional gate (${RELATION_GATES.join(', ')}) and until (${RELATION_UNTILS.join(', ')}), a reason and optional files (a list of paths)`);
+        } else relations.push({ to: d.to.trim(), gate, until, reason: d.reason.trim(), files: d.files ?? [] });
+      });
+  } else if (raw.dependencies !== undefined) {
+    // The older shape: {id, kind needs|overlaps, reason, files}. A need is a start relation; an overlap is no relation.
     if (!Array.isArray(raw.dependencies)) errors.push('dependencies must be a list of {id, kind, reason, files} when given');
     else
       raw.dependencies.forEach((d: unknown, i) => {
@@ -195,7 +222,7 @@ export const parseInvestigation = (content: string): InvestigationParse => {
           (d.files !== undefined && !isStringList(d.files))
         ) {
           errors.push(`dependencies[${String(i)}] needs an id, a kind of needs or overlaps, a reason and files (a list of paths)`);
-        } else dependencies.push({ id: d.id.trim(), kind: d.kind, reason: d.reason.trim(), files: d.files ?? [] });
+        } else if (d.kind === 'needs') relations.push({ to: d.id.trim(), gate: 'start', until: 'merged', reason: d.reason.trim(), files: d.files ?? [] });
       });
   }
   if (raw.needsRollout !== undefined && typeof raw.needsRollout !== 'boolean') errors.push('needsRollout must be a boolean when given');
@@ -219,7 +246,7 @@ export const parseInvestigation = (content: string): InvestigationParse => {
         reason: (human as { reason: string | null }).reason,
       },
       confidence: raw.confidence as InvestigationConfidence,
-      ...(raw.dependencies !== undefined ? { dependencies } : {}),
+      ...(raw.relations !== undefined || raw.dependencies !== undefined ? { relations } : {}),
       ...(raw.needsRollout === true ? { needsRollout: true } : {}),
       planHash: raw.planHash as string,
       baseCommit: raw.baseCommit as string,

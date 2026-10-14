@@ -174,7 +174,7 @@ describe('hotspot decisions', () => {
     expect(linked).toBeDefined();
     const refactor = await glob(linked ?? '');
     expect(refactor.title).toBe('Refactor glob-dialog.tsx so parallel work stops conflicting');
-    expect(refactor.after).toEqual([touching.id]);
+    expect([...store.state.relations.values()].filter((r) => r.from === refactor.id).map((r) => [r.to, r.gate, r.source])).toEqual([[touching.id, 'start', 'person']]);
     expect(refactor.category).toBe('task');
     // Repeating the accept's creation step makes no second glob.
     const again = unwrap(await globs.create(ADMIN, { boardId, title: 'x', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: `hotspot-refactor:${decision?.id ?? ''}`, plan: 'x' }));

@@ -1,5 +1,5 @@
-import type { ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
-import { cleanFileName, invalidInput, machine, notFound, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
+import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
+import { cleanFileName, invalidInput, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -15,6 +15,7 @@ import type { SignedLinks } from '../signed-links.js';
 import { parseLabelCommand } from '../http/labels.js';
 import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
+import { addRelationSchema, relationInput, relationInputs, relationInputSchema } from '../http/relation-schemas.js';
 import { isDate, parseBound, toRequest } from '../search-request.js';
 import { requestMetrics } from '../request-metrics.js';
 import { compactKbItem, compactSizeProposal, errorBody, globView, globViewOf, onBoard } from '../http/views.js';
@@ -58,6 +59,10 @@ export interface McpDeps {
 const json = (value: unknown): CallToolResult => ({
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
 });
+
+/** What `relations` mean, for the tools that take them. */
+const RELATIONS_HELP =
+  "Relations beside `needs`/`after` (which stay as the shorthand for a start relation until merged): `[{to, gate?, until?, reason?}]`. This glob can't pass `gate` until `to` reaches `until`. `gate`: `start` (the default: can't start), `merge` (can't be merged; an armed merge-when-green waits and goes on by itself) or `sign_off` (can't be signed off). `until`: `merged` (the default), `decided` (`to` is a decision glob whose outcome was accepted or rejected, not needs-work; the default when `to` is a decision) or `signed_off`. `to` must be a glob or decision on the same board, not this glob, with no cycle; at most 20 per gate. Add one only when the work really can't go ahead without it: a glob that merely touches the same files is not a relation. Give a `reason`, one line.";
 
 /** A deploy as agents see it: enough to tell the developer what's deploying, live or failed. */
 const deployView = (d: Deploy) => ({
@@ -169,13 +174,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is an overlap.',
+            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is not a need.',
           ),
-        overlaps: z
-          .array(z.string().min(1))
-          .max(20)
-          .optional()
-          .describe('IDs of globs on this board that may change the same files. Never blocks a start; it only orders the merges (the later one rebases on main as usual).'),
         after: z
           .array(z.string().min(1))
           .max(20)
@@ -183,6 +183,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .describe(
             'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the plan',
           ),
+        relations: z.array(relationInputSchema).max(60).optional().describe(RELATIONS_HELP),
       },
     },
     async (input) => {
@@ -259,7 +260,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         idempotencyKey: input.idempotencyKey,
         ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
         ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
-        ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
+        ...(input.relations === undefined ? {} : { relations: relationInputs(input.relations) }),
+        relationsBy: 'agent' as const,
         ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
@@ -273,7 +275,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         else uploadProblems.push(`${f.fileName}: ${made.error.message}`);
       }
       await deps.outbox.drain(created.value.id);
-      return reply(await globs.get(email, created.value.id), ({ glob }) => ({
+      return reply(await globs.get(email, created.value.id), ({ glob, relations }) => ({
         ...(uploads.length === 0 ? {} : { uploads, next: UPLOAD_NEXT }),
         ...(uploadProblems.length === 0 ? {} : { uploadProblems }),
         id: glob.id,
@@ -285,13 +287,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: glob.category,
         group: glob.group,
         environment: glob.environment,
-        ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
+        ...(startIds(relations).length === 0 ? {} : { after: startIds(relations) }),
         ...(glob.waiting == null ? {} : { waiting: true }),
-        ...(glob.impliedAfter === undefined || glob.impliedAfter.length === 0 ? {} : { impliedAfter: glob.impliedAfter }),
         // Not applied: pass `after` to wait for them.
-        ...(suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)).length === 0
+        ...(suggestedAfter.filter((id) => !startIds(relations).includes(id)).length === 0
           ? {}
-          : { suggestedAfter: suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)) }),
+          : { suggestedAfter: suggestedAfter.filter((id) => !startIds(relations).includes(id)) }),
       }));
     },
   );
@@ -300,7 +301,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0); parts that touch the same files go in `overlaps`, which orders merges and never blocks a start. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
+        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0). Split creates relations: each `after` is a start relation (start until merged, source `split`) from the part to the earlier part, and the glob you cut (part 0) gets a sign-off relation (sign-off until merged, source `split`) to every other part, so it cannot be signed off until every part has merged (`get_glob` shows them under `relations`, as 3/5 parts merged). Parts that touch the same files are not related. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -313,7 +314,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               category: z.enum(WORK_CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
               after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part needs merged before it starts'),
-              overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts that may change the same files; never blocks a start'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
             }),
           )
@@ -325,16 +325,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const split = await globs.split(email, id, version, {
         idempotencyKey,
         planBy: 'sessionator',
-        parts: parts.map(({ attachments, after, overlaps, category, type, ...rest }) => ({
+        parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
           ...rest,
           ...(attachments === undefined ? {} : { attachments }),
           ...(after === undefined ? {} : { after }),
-          ...(overlaps === undefined ? {} : { overlaps }),
           ...(category === undefined ? {} : { category }),
           ...(type === undefined ? {} : { type }),
         })),
       });
       if (split.ok) for (const glob of split.value) await deps.outbox.drain(glob.id);
+      const relations = split.ok ? await globs.peekRelations(split.value.map((g) => g.id)) : new Map<string, Relation[]>();
       return reply(split, (list) => ({
         parts: list.map((glob, index) => ({
           part: index,
@@ -344,7 +344,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           type: glob.type,
           category: glob.category,
           status: glob.status,
-          ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
+          ...(startIds(relations.get(glob.id) ?? []).length === 0 ? {} : { after: startIds(relations.get(glob.id) ?? []) }),
           ...(glob.waiting == null ? {} : { waiting: true }),
           ...(glob.autoStart === true ? { autoStart: true } : {}),
         })),
@@ -356,7 +356,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the dependency `edges`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape while the glob is held for it; afterwards each part has its title, needs and overlaps, a short `planSummary` and `planChars`, and `include: ['size_proposal']` returns the plans); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
+        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, inferred, learned or split), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, the decision taken (kept_whole or split) and the proposed split (parts in split_glob's shape while the glob is held for it; afterwards each part has its title, needs and overlaps, a short `planSummary` and `planChars`, and `include: ['size_proposal']` returns the plans); a flagged sub or auto-triggered same is held in Planning until a person splits it or keeps it whole, so do not start it. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
       inputSchema: {
         id: z.string(),
         runId: z.string().optional(),
@@ -418,7 +418,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, type, category, group, environment or `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
+        "Change a glob's title, type, category, group, environment, `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them) or `relations` (added or changed, any gate; they never remove one: use dismiss_relation). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -429,14 +429,56 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         environment: z.string().nullable().optional(),
         needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
         after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
-        overlaps: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs that may change the same files; never blocks a start'),
+        relations: z.array(relationInputSchema).max(60).optional().describe(RELATIONS_HELP),
         autoStart: z.boolean().optional().describe("false: a same from a split stops waiting to start by itself when its needs merge (it keeps them); start it with start_glob"),
       },
     },
-    async ({ id, version, needs, ...changes }) => {
+    async ({ id, version, needs, relations, ...changes }) => {
       const merged = needs === undefined && changes.after === undefined ? changes : { ...changes, after: [...new Set([...(needs ?? []), ...(changes.after ?? [])])] };
       const clean = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
-      return reply(await globs.update(email, id, version, clean), (g) => globView(g));
+      const stated = relations === undefined ? {} : { relations: relationInputs(relations), relationsBy: 'agent' as const };
+      return reply(await globs.update(email, id, version, { ...clean, ...stated }), (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'add_relation',
+    {
+      description:
+        "Add one relation to a glob. Give `to` (this glob can't pass `gate` until `to` reaches `until`; pass the version you read) or `holdsBack` (a decision glob, or any glob, holds that other glob back until this one reaches `until`; no version). " +
+        RELATIONS_HELP +
+        " Refused: the same glob, another board's glob, a cycle, a 21st relation for one gate, `decided` for a glob that is not a decision, and a decision glob as the one held back. A dismissed relation to the same glob and gate is replaced. Answers with the glob's view (`relations`).",
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int().optional().describe('The version you read: required with `to`'),
+        to: z.string().min(1).optional().describe('The glob or decision this glob waits for'),
+        holdsBack: z.string().min(1).optional().describe('A glob that waits for this one (this glob is a decision or any glob it must reach `until` first)'),
+        gate: relationInputSchema.shape.gate,
+        until: relationInputSchema.shape.until,
+        reason: relationInputSchema.shape.reason,
+      },
+    },
+    async ({ id, ...rest }) => {
+      const parsed = addRelationSchema.safeParse(Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)));
+      if (!parsed.success) return { ...json({ code: 'invalid_input', message: parsed.error.issues.map((i) => i.message).join('; ') }), isError: true };
+      const { to, holdsBack, version, ...fields } = parsed.data;
+      const added = await globs.addRelation(email, id, version ?? null, relationInput({ ...fields, to: to ?? holdsBack ?? '' }), to === undefined ? 'holds_back' : 'held_by', 'agent');
+      if (added.ok) await deps.outbox.drain(added.value.id);
+      return added.ok ? reply(await globs.get(email, id), (v) => globViewOf(v)) : reply(added);
+    },
+  );
+
+  server.registerTool(
+    'dismiss_relation',
+    {
+      description:
+        "Say a relation of this glob is not a dependency (the relation's `relationId` is in `get_glob`'s `relations.holding`). It stops holding: a glob held in Planning for it starts, a merge held for it goes on. Slop remembers a dismissal of an inferred relation until the plan changes. A split's relation cannot be dismissed. Pass the version you read.",
+      inputSchema: { id: z.string(), version: z.number().int(), relationId: z.string().min(1) },
+    },
+    async ({ id, version, relationId }) => {
+      const result = await globs.dismissRelation(email, id, version, relationId);
+      if (result.ok) await deps.outbox.drain(result.value.id);
+      return result.ok ? reply(await globs.get(email, id), (v) => globViewOf(v)) : reply(result);
     },
   );
 

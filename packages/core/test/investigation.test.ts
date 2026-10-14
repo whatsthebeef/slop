@@ -29,13 +29,28 @@ describe('parseInvestigation', () => {
     }
   });
 
-  it('reads the dependencies the investigator found, and keeps an empty list apart from none', () => {
+  it('reads the relations the investigator found, and keeps an empty list apart from none', () => {
     const none = parseInvestigation(wrap(BLOCK));
-    expect(none.ok && none.investigation.dependencies).toBeUndefined();
+    expect(none.ok && none.investigation.relations).toBeUndefined();
+    const empty = parseInvestigation(wrap({ ...BLOCK, relations: [] }));
+    expect(empty.ok && empty.investigation.relations).toEqual([]);
+    const found = parseInvestigation(wrap({ ...BLOCK, relations: [{ to: 's1t2', reason: 'uses humanSteps()', files: ['a.ts'] }] }));
+    expect(found.ok && found.investigation.relations).toEqual([{ to: 's1t2', gate: 'start', until: 'merged', reason: 'uses humanSteps()', files: ['a.ts'] }]);
+    const full = parseInvestigation(wrap({ ...BLOCK, relations: [{ to: 's1k4', gate: 'merge', until: 'decided', reason: 'the store is open' }] }));
+    expect(full.ok && full.investigation.relations).toEqual([{ to: 's1k4', gate: 'merge', until: 'decided', reason: 'the store is open', files: [] }]);
+    const bad = parseInvestigation(wrap({ ...BLOCK, relations: [{ to: 's1t2', gate: 'finish', reason: '' }] }));
+    expect(!bad.ok && bad.errors[0]).toContain('relations[0]');
+    const unknownUntil = parseInvestigation(wrap({ ...BLOCK, relations: [{ to: 's1t2', until: 'soon', reason: 'x' }] }));
+    expect(!unknownUntil.ok && unknownUntil.errors[0]).toContain('relations[0]');
+  });
+
+  it('still accepts the older dependencies list: needs become start relations, overlaps are dropped', () => {
+    const old = parseInvestigation(
+      wrap({ ...BLOCK, dependencies: [{ id: 's1t2', kind: 'needs', reason: 'uses humanSteps()', files: ['a.ts'] }, { id: 's1t3', kind: 'overlaps', reason: 'same file' }] }),
+    );
+    expect(old.ok && old.investigation.relations).toEqual([{ to: 's1t2', gate: 'start', until: 'merged', reason: 'uses humanSteps()', files: ['a.ts'] }]);
     const empty = parseInvestigation(wrap({ ...BLOCK, dependencies: [] }));
-    expect(empty.ok && empty.investigation.dependencies).toEqual([]);
-    const found = parseInvestigation(wrap({ ...BLOCK, dependencies: [{ id: 's1t2', kind: 'needs', reason: 'uses humanSteps()', files: ['a.ts'] }] }));
-    expect(found.ok && found.investigation.dependencies).toEqual([{ id: 's1t2', kind: 'needs', reason: 'uses humanSteps()', files: ['a.ts'] }]);
+    expect(empty.ok && empty.investigation.relations).toEqual([]);
     const bad = parseInvestigation(wrap({ ...BLOCK, dependencies: [{ id: 's1t2', kind: 'blocks', reason: '' }] }));
     expect(!bad.ok && bad.errors[0]).toContain('dependencies[0]');
   });

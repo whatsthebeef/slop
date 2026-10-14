@@ -15,7 +15,7 @@ import type { BlockedParts, StatusLine } from './status-line';
  */
 
 /** Which icon leads the status: the machine (spinning while a step runs), a warning, a person, an hourglass, or "needs a <person>". */
-export type StatusIcon = 'machine' | 'machine-spinning' | 'alert' | 'human' | 'hourglass' | 'needs-human';
+export type StatusIcon = 'machine' | 'machine-spinning' | 'alert' | 'human' | 'hourglass' | 'needs-human' | 'check';
 
 export interface CornerStatus {
   /** What the status is about, for styling and tests: stalled, needs-human, ready, a problem's kind, machine, human, waiting, standby. */
@@ -33,6 +33,8 @@ export interface CornerStatus {
 }
 
 const STANDBY_TIP = "The machine is on standby, listening to GitHub: it fixes new CI failures or review comments until it's merged.";
+
+const PROVISIONING_TIP = 'slop could not create the branch and draft PR; it retries in the background';
 
 const isEscalated = (glob: GlobView): boolean => glob.escalation != null && glob.status === 'planning';
 
@@ -118,6 +120,12 @@ export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewe
  */
 export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CornerStatus | null => {
   if (decisionOf(glob) !== null) return null;
+  // Signed off is the glob's whole state: nothing else shows, and the date lives in the tooltip.
+  if (glob.status === 'signed_off') {
+    const when = glob.signedOffAt == null ? '' : ` ${new Date(glob.signedOffAt).toLocaleString()}`;
+    const tip = `Signed off${when}`;
+    return { kind: 'signed-off', icon: 'check', text: 'signed off', label: 'signed off', tip, tone: 'text-muted-foreground', click: null };
+  }
   const status = statusLine(glob, now, viewer);
   const position = positionOf(glob, now, viewer);
   const blocked = blockedParts(glob);
@@ -130,11 +138,11 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(status === null ? [] : [status.tip]),
       ...(position === null ? [] : [position.tip]),
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
-      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`, ...learnedReasons(glob)]),
+      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`]),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
     ];
     const hint =
-      click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's prerequisites" : clickTip(click)];
+      click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's related globs" : clickTip(click)];
     const shown = plainText(text);
     // What the text dropped (a time, a commit) stays in the tooltip.
     const detail = shown === text ? [] : [text];
@@ -152,11 +160,23 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
       return make('ready', 'human', status.text, status.tone, click, [position.tip, `Stalled: ${cause}${minutes}`, status.tip]);
     }
+    // A failed provisioning stalls the glob; it says what failed, with the click that retries it (the actions section).
+    if (glob.provisioning === 'failed') {
+      return make('stalled', 'alert', 'provisioning failed', 'text-red', { kind: 'section', target: cardTargets.actions() }, [
+        PROVISIONING_TIP,
+        position.tip,
+      ]);
+    }
     return make('stalled', 'alert', `${cause}${minutes}`, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
   if (escalated && escalation != null) {
     return make('needs-human', 'needs-human', 'needs a', 'text-required', { kind: 'section', target: cardTargets.escalation() }, [
       `Needs a person: ${escalation.reason}. Opens the reason`,
+    ]);
+  }
+  if (glob.provisioning === 'failed') {
+    return make('provisioning', 'alert', 'provisioning failed', 'text-red', { kind: 'section', target: cardTargets.actions() }, [
+      PROVISIONING_TIP,
     ]);
   }
   if (status !== null && status.kind === 'ready') {
@@ -185,9 +205,8 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make(isStandby ? 'standby' : 'machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
   if (blocked !== null) {
-    return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.prerequisites() }, [
+    return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [
       `Waits for, in order: ${chainTip(glob)}`,
-      ...(blocked.next === null ? [] : [`Next to start: ${blocked.next}`]),
       ...learnedReasons(glob),
     ]);
   }
@@ -199,7 +218,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       position.label,
       position.tone,
       positionClick(position, glob, repo),
-      [position.tip, ...(waiting ? learnedReasons(glob) : [])],
+      [position.tip],
     );
   }
   if (standby !== null) return make('standby', 'machine', 'standby', 'text-muted-foreground', null, [STANDBY_TIP]);
@@ -208,7 +227,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
 
 /**
  * Whether something blocks the glob, so the card offers no action and the status line says what is wrong: unmerged needs, a
- * conflict, failed checks, a stall, or an escalation or step waiting on a decision. A glob that is merely behind, overlaps or
+ * conflict, failed checks, a stall, or an escalation or step waiting on a decision. A glob that is merely behind or
  * clashes with another, or whose checks are still running is not blocked.
  */
 export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {

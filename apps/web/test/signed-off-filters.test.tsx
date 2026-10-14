@@ -125,7 +125,8 @@ describe('Signed Off view cards', () => {
     await user.click(within(await screen.findByTestId('card-s1b2')).getByLabelText('Sign-off labels'));
     expect(await screen.findByText('Open review')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^(approve|re-open)$/i })).toBeNull();
-    expect(within(screen.getByTestId('card-s1f1')).getByTestId('card-signed-off')).toBeTruthy();
-    expect(within(screen.getByTestId('card-s1b2')).queryByTestId('card-signed-off')).toBeNull();
+    expect(within(screen.getByTestId('card-s1f1')).getByTestId('card-status').getAttribute('data-kind')).toBe('signed-off');
+    expect(within(screen.getByTestId('card-s1f1')).queryByTestId('card-signed-off')).toBeNull();
+    expect(within(screen.getByTestId('card-s1b2')).getByTestId('card-status').getAttribute('data-kind')).not.toBe('signed-off');
   });
 });

@@ -8,7 +8,7 @@ import {
   stuckHint,
   yourTurn,
 } from '@slop/core';
-import type { Action, BlockedBy, Edge, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
+import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
 import { rolloutLine } from './human-steps';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
@@ -385,111 +385,57 @@ export const viewStatusLine = (
 /** How many blocking IDs the card and dialog name before folding the rest into "+N". */
 const SHOWN_AHEAD = 2;
 
+/**
+ * What keeps a glob from starting: its unmet start relations (the server computes them, with the board's old globs read).
+ * Only a glob in Planning is held, or a failed one that Retrigger would refuse; once started a start relation holds nothing.
+ */
+const startHolds = (glob: GlobView): readonly Holding[] =>
+  glob.status === 'planning' || glob.status === 'failed' ? (glob.holding ?? []).filter((h) => h.gate === 'start') : [];
+
+/** What a holding names: the glob ID, or "decision s15k190" for a decision glob. */
+const named = (h: Pick<Holding, 'to' | 'toIsDecision'>): string => (h.toIsDecision ? `decision ${h.to}` : h.to);
+
 export interface BlockedParts {
-  /** The IDs to name, direct prerequisites first, then the transitive ones. */
+  /** The names to say: glob IDs, and "decision <id>" for a decision. */
   readonly ids: readonly string[];
-  /** How many more are ahead, not named. */
+  /** How many more are held back on, not named. */
   readonly more: number;
-  /** The startable glob to show after the IDs, unless it is already named; null otherwise. */
-  readonly next: string | null;
 }
 
-/** What a blocked glob's line names: "s15f82, s15f84 +2", then the glob to start next. Null when nothing is ahead. */
+/** What a held glob's line names: "s15f82, decision s15k190 +2". Null when nothing holds its start. */
 export const blockedParts = (glob: GlobView): BlockedParts | null => {
-  const ahead = [...(glob.blockedBy ?? [])].sort((a, b) => a.depth - b.depth);
+  const ahead = startHolds(glob).map(named);
   if (ahead.length === 0) return null;
-  const all = ahead.map((b) => b.id);
-  // Three or more fold to two names and a count, but never fold away the glob to start next.
-  const ids = all.length > SHOWN_AHEAD + 1 ? all.slice(0, SHOWN_AHEAD) : all;
-  const next = glob.nextStartable ?? null;
-  return {
-    ids,
-    more: all.length - ids.length,
-    next: next === null || ids.includes(next) ? null : next,
-  };
+  // Three or more fold to two names and a count.
+  const ids = ahead.length > SHOWN_AHEAD + 1 ? ahead.slice(0, SHOWN_AHEAD) : ahead;
+  return { ids, more: ahead.length - ids.length };
 };
 
-/** "blocked by s15f82, s15f84 +2 · next: s15f38" for a glob with unmerged prerequisites; null when none. */
-export const blockedLine = (glob: GlobView): string | null => {
-  const parts = blockedParts(glob);
-  if (parts === null) return null;
-  const more = parts.more > 0 ? ` +${String(parts.more)}` : '';
-  return `blocked by ${parts.ids.join(', ')}${more}${parts.next === null ? '' : ` · next: ${parts.next}`}`;
-};
-
-/** The chain for a tip, nearest first, each with its state: "s15f41 (Planning), s15f40 (Planning, 2 links away)". */
-export const chainTip = (glob: GlobView): string =>
-  (glob.blockedBy ?? [])
-    .map(
-      (b) =>
-        `${b.id} (${statusWords(b.status)}${b.depth > 1 ? `, ${String(b.depth)} links away` : ''})`,
-    )
-    .join(', ');
-
-export const statusWords = (status: GlobView['status'] | null): string => {
-  switch (status) {
-    case null:
-      return 'deleted';
+/** Where what a glob waits for stands, in the board's words. */
+const holdState = (state: Holding['state']): string => {
+  switch (state) {
     case 'planning':
       return 'Planning';
-    case 'implementing':
-    case 'in_progress':
+    case 'open':
       return 'Doing';
-    case 'failed':
-      return 'failed';
-    case 'pr_open':
-      return 'PR open';
-    default:
-      return status;
+    case 'rollout':
+      return 'rollout open';
+    case 'decided':
+      return 'decided';
+    case 'merged':
+      return 'merged';
+    case 'signed_off':
+      return 'signed off';
+    case 'missing':
+      return 'deleted';
   }
 };
 
-/** One direct need of a glob, with its status and why it waits. */
-export interface NeedRow {
-  readonly id: string;
-  /** The status word ("Doing", "PR open", ...); the board's own words, from the blocking chain. */
-  readonly status: string | null;
-  readonly why: string;
-  /** A recorded edge a person may dismiss with the ✕ (not one they set themselves). */
-  readonly dismissible: boolean;
-}
-
-/**
- * Whether a row's ✕ ("Not a dependency") applies: a recorded edge (implied, learned or inferred), not one a person set and
- * not one already dismissed.
- */
-export const isDismissible = (edge: Edge | undefined): boolean =>
-  edge !== undefined && edge.source !== 'explicit' && edge.dismissedPlanHash === undefined;
-
-/** What the glob view's Dependencies section shows. */
-export interface DependencySummary {
-  /** Direct needs, each with status and why. */
-  readonly needs: readonly NeedRow[];
-  /** The rest of the chain ahead (depth above 1), nearest first; the data doesn't say which need each hangs off. */
-  readonly alsoAhead: readonly BlockedBy[];
-  /** Globs that may change the same files (merge order only). */
-  readonly overlaps: readonly Edge[];
-  readonly waitedOnBy: readonly string[];
-}
-
-/** The Dependencies section's content, or null when there is nothing to list. */
-export const dependencySummary = (glob: GlobView): DependencySummary | null => {
-  const chain = glob.blockedBy ?? [];
-  const needs = (glob.waitingFor ?? []).map((w) => {
-    const ahead = chain.find((b) => b.id === w.id);
-    const edge = (glob.edges ?? []).find((e) => e.id === w.id);
-    return { id: w.id, status: ahead === undefined ? null : statusWords(ahead.status), why: w.why, dismissible: isDismissible(edge) };
-  });
-  const alsoAhead = chain.filter((b) => b.depth > 1).sort((a, b) => a.depth - b.depth);
-  const overlaps = (glob.edges ?? []).filter((e) => e.kind === 'overlaps' && e.dismissedPlanHash === undefined);
-  const waitedOnBy = glob.waitedOnBy ?? [];
-  if (
-    needs.length + alsoAhead.length + overlaps.length + waitedOnBy.length === 0 &&
-    chain.length === 0
-  )
-    return null;
-  return { needs, alsoAhead, overlaps, waitedOnBy };
-};
+/** What the tip says glob waits for, each with its state and why: "s15f41 (Planning): uses humanSteps()". */
+export const chainTip = (glob: GlobView): string =>
+  startHolds(glob)
+    .map((h) => `${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
+    .join(', ');
 
 /**
  * The Merge control's warning: the base has moved on since the branch last caught up and no conflict is recorded yet,

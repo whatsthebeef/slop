@@ -16,12 +16,19 @@ const mergeConflictStall = () =>
     failure: { reason: `Merge conflict with main in ${files.join(', ')}`, at: NOW, kind: 'merge', conflict: { base: 'main', files } },
   });
 const openConflict = () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } });
-const ahead = (ids: string[], nextStartable: string | null = null) =>
-  view({
-    status: 'planning',
-    blockedBy: ids.map((id, i) => ({ id, state: 'open' as const, status: 'implementing' as const, depth: i + 1 })),
-    nextStartable,
-  });
+const hold = (to: string, patch: Partial<NonNullable<GlobView['holding']>[number]> = {}): NonNullable<GlobView['holding']>[number] => ({
+  relationId: `rel_${to}`,
+  to,
+  toTitle: null,
+  toIsDecision: false,
+  gate: 'start',
+  until: 'merged',
+  state: 'open',
+  reason: null,
+  source: 'person',
+  ...patch,
+});
+const ahead = (ids: string[]) => view({ status: 'planning', holding: ids.map((id) => hold(id)) });
 const escalated = () => view({ status: 'planning', escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'] });
 const live = (state: 'queued' | 'active' | 'watching') => {
   const r = run({ state });
@@ -78,6 +85,20 @@ describe('cornerStatus', () => {
     expect(at(g)?.tip).toContain('run failed · 18 min');
   });
 
+  it('says "signed off" with the date in the tooltip', () => {
+    const status = at(view({ status: 'signed_off', signedOffAt: NOW }));
+    expect(status).toMatchObject({ kind: 'signed-off', icon: 'check', text: 'signed off', click: null });
+    expect(status?.tip).toContain(new Date(NOW).toLocaleString());
+    expect(status?.text).not.toMatch(/\d/);
+  });
+
+  it('says "provisioning failed" in the corner, opening the actions', () => {
+    const status = at(view({ status: 'planning', provisioning: 'failed' }));
+    expect(status).toMatchObject({ kind: 'stalled', text: 'provisioning failed', icon: 'alert' });
+    expect(status?.tip).toContain('slop could not create the branch and draft PR');
+    expect(status?.click).toEqual({ kind: 'section', target: { section: 'actions' } });
+  });
+
   it('puts standby in a stall\'s tooltip, not a second status', () => {
     const g = view({ status: 'failed', failure: { reason: 'run gave up', at: NOW }, ...live('watching') });
     const status = at(g);
@@ -126,14 +147,24 @@ describe('cornerStatus', () => {
   });
 
   it('says what it waits on once, with the chain in the tooltip and no "blocked by"', () => {
-    const status = at(ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t9'));
+    const status = at(ahead(['s1t1', 's1t2', 's1t3', 's1t4']));
     expect(status).toMatchObject({ kind: 'waiting-on', icon: 'hourglass', text: 'waiting on s1t1 +3' });
     expect(status?.tip).toContain('Waits for, in order: s1t1 (Doing)');
     expect(JSON.stringify(status)).not.toMatch(/blocked by/i);
   });
 
+  it('names a decision it waits on, with the reason in the tooltip', () => {
+    const g = view({ status: 'planning', holding: [hold('s15k190', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'the store is not chosen' })] });
+    expect(at(g)).toMatchObject({ kind: 'waiting-on', text: 'waiting on decision s15k190' });
+    expect(at(g)?.tip).toContain('Waits for, in order: decision s15k190 (Planning): the store is not chosen');
+  });
+
+  it('only a glob in Planning is held by a start relation: a started one shows no prerequisite wait', () => {
+    expect(at({ ...ahead(['s1t1']), status: 'in_progress' })?.kind).not.toBe('waiting-on');
+  });
+
   it('lets the machine running win over what it waits on, which goes in the tooltip', () => {
-    const status = at({ ...ahead(['s1t1']), status: 'in_progress', ...live('active') });
+    const status = at({ ...ahead(['s1t1']), ...live('active') });
     expect(status?.text).toBe('implementing');
     expect(status?.tip).toContain('Waits for, in order: s1t1');
   });
@@ -201,7 +232,7 @@ describe('cornerStatus text stays a word or two', () => {
     ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'starting'],
     ['merge conflict stall', mergeConflictStall, ''],
     ['open conflict', openConflict, 'conflicts with main'],
-    ['waiting on prerequisites', () => ahead(['s1t1', 's1t2', 's1t3', 's1t4'], 's1t9'), 'waiting on s1t1 +3'],
+    ['waiting on prerequisites', () => ahead(['s1t1', 's1t2', 's1t3', 's1t4']), 'waiting on s1t1 +3'],
     ['waiting on one prerequisite', () => ahead(['s1t1']), 'waiting on s1t1'],
     ['escalated', escalated, 'needs a'],
     ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'Merge'],
