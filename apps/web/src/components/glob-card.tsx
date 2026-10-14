@@ -684,9 +684,13 @@ export const GlobCard = ({
     >
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
         {/* The ID never truncates: the status text gives way first, the category icon never moves. */}
-        <span className='shrink-0 whitespace-nowrap' data-testid='card-id'>
-          {glob.id} · {decision ? 'decision' : glob.type}
-          {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
+        <span className='inline-flex shrink-0 gap-[3px] whitespace-nowrap' data-testid='card-id'>
+          <span>{glob.id}</span>
+          <span aria-hidden='true'>·</span>
+          <span data-testid='card-type'>
+            {decision ? 'decision' : glob.type}
+            {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
+          </span>
         </span>
         <span className='inline-flex min-w-0 items-center justify-end gap-1.5' data-testid='card-corner'>
           {status !== null && <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />}

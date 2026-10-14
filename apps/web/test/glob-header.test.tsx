@@ -51,6 +51,7 @@ describe('GlobHeader', () => {
     expect(cls).toContain('leading-5');
     expect(cls).toContain('items-center');
     expect(cls).not.toMatch(/\b(h-\d+|min-h-\S+)\b/);
+    expect(cls).not.toMatch(/(^|\s)mb-/);
     expect(getByTestId('glob-back').className).toContain('p-1.5');
   });
 
