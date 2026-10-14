@@ -10,6 +10,7 @@ import { sameCommit } from '../domain/signals.js';
 import type { TestRun } from '../domain/test-runs.js';
 import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
+import type { ChatFeedback } from '../domain/chat-feedback.js';
 import type { ReviewFinding, ReviewSource } from '../domain/findings.js';
 import { EFFECT_CHECK_GLOBS_DEFAULT } from '../domain/effect-check.js';
 import { KNOWLEDGE_PAGE_INTERVAL_DEFAULT } from '../domain/knowledge-page.js';
@@ -114,6 +115,7 @@ interface State {
   decisionSources: DecisionSource[];
   chatMessages: ChatMessage[];
   chats: ChatThread[];
+  chatFeedback: ChatFeedback[];
   inboxItems: InboxItem[];
   inboxLinks: InboxLink[];
   integrationTokens: IntegrationToken[];
@@ -212,6 +214,7 @@ const clone = (state: State): State => ({
   decisionSources: [...state.decisionSources],
   chatMessages: [...state.chatMessages],
   chats: [...state.chats],
+  chatFeedback: [...state.chatFeedback],
   inboxItems: [...state.inboxItems],
   inboxLinks: [...state.inboxLinks],
   integrationTokens: [...state.integrationTokens],
@@ -286,6 +289,7 @@ export class MemoryStore implements Store {
     decisionSources: [],
     chatMessages: [],
     chats: [],
+    chatFeedback: [],
     inboxItems: [],
     inboxLinks: [],
     integrationTokens: [],
@@ -1253,6 +1257,27 @@ export class MemoryStore implements Store {
         s.chatMessages = s.chatMessages.filter((m) => m.chatId !== chatId);
         return Promise.resolve();
       },
+      upsertChatFeedback: (feedback) => {
+        const earlier = s.chatFeedback.find((f) => f.messageId === feedback.messageId && f.email === feedback.email);
+        const stored: ChatFeedback = earlier === undefined
+          ? { ...feedback, id: this.nextRowId++, updatedAt: feedback.createdAt }
+          : { ...feedback, id: earlier.id, createdAt: earlier.createdAt, updatedAt: feedback.createdAt };
+        s.chatFeedback = [...s.chatFeedback.filter((f) => f.id !== stored.id), stored];
+        return Promise.resolve(stored);
+      },
+      listChatFeedback: (boardId, filter) =>
+        Promise.resolve(
+          s.chatFeedback
+            .filter((f) => f.boardId === boardId && (filter.rating === undefined || f.rating === filter.rating) && (filter.since === undefined || f.createdAt >= filter.since))
+            .sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id)
+            .slice(0, filter.limit),
+        ),
+      listMyChatFeedback: (boardId, chatId, email) =>
+        Promise.resolve(
+          s.chatFeedback
+            .filter((f) => f.boardId === boardId && f.chatId === chatId && f.email === email)
+            .sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id),
+        ),
       insertInboxItem: (input) => {
         const existing =
           s.inboxItems.find((i) => input.sourceRef !== '' && i.boardId === input.boardId && i.source === input.source && i.sourceRef === input.sourceRef) ??

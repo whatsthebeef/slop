@@ -1,4 +1,4 @@
-import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -498,6 +498,23 @@ const toChatMessage = (row: typeof schema.boardChatMessages.$inferSelect): ChatM
   ...(row.uncited ? { uncited: true } : {}),
   ...(row.miss ? { miss: true } : {}),
   createdAt: row.createdAt.toISOString(),
+});
+
+const toChatFeedback = (row: typeof schema.chatFeedback.$inferSelect): ChatFeedback => ({
+  id: row.id,
+  boardId: row.boardId,
+  chatId: row.chatId,
+  messageId: row.messageId,
+  email: row.email,
+  rating: row.rating,
+  note: row.note,
+  question: row.question,
+  answer: row.answer,
+  citations: row.citations,
+  tools: row.tools,
+  page: row.page,
+  createdAt: row.createdAt.toISOString(),
+  updatedAt: row.updatedAt.toISOString(),
 });
 
 const toInboxItem = (row: typeof schema.inboxItems.$inferSelect): InboxItem => ({
@@ -2253,6 +2270,41 @@ export class PgStore implements Store {
       },
       deleteChat: async (chatId) => {
         await t.delete(schema.boardChats).where(eq(schema.boardChats.id, chatId));
+      },
+      upsertChatFeedback: async (feedback) => {
+        const f = schema.chatFeedback;
+        const values = {
+          ...feedback,
+          citations: feedback.citations === null ? null : [...feedback.citations],
+          tools: feedback.tools === null ? null : [...feedback.tools],
+          createdAt: new Date(feedback.createdAt),
+          updatedAt: new Date(feedback.createdAt),
+        };
+        const [row] = await t
+          .insert(f)
+          .values(values)
+          .onConflictDoUpdate({
+            target: [f.messageId, f.email],
+            set: { rating: values.rating, note: values.note, question: values.question, answer: values.answer, citations: values.citations, tools: values.tools, page: values.page, updatedAt: values.updatedAt },
+          })
+          .returning();
+        if (row === undefined) throw new Error('chat feedback upsert returned no row');
+        return toChatFeedback(row);
+      },
+      listChatFeedback: async (boardId, filter) => {
+        const f = schema.chatFeedback;
+        const rows = await t
+          .select()
+          .from(f)
+          .where(and(eq(f.boardId, boardId), filter.rating === undefined ? undefined : eq(f.rating, filter.rating), filter.since === undefined ? undefined : gte(f.createdAt, new Date(filter.since))))
+          .orderBy(desc(f.createdAt), desc(f.id))
+          .limit(filter.limit);
+        return rows.map(toChatFeedback);
+      },
+      listMyChatFeedback: async (boardId, chatId, email) => {
+        const f = schema.chatFeedback;
+        const rows = await t.select().from(f).where(and(eq(f.boardId, boardId), eq(f.chatId, chatId), eq(f.email, email))).orderBy(desc(f.createdAt), desc(f.id));
+        return rows.map(toChatFeedback);
       },
       insertInboxItem: async (input) => {
         const n = schema.inboxItems;

@@ -291,4 +291,45 @@ describe('PgStore', () => {
     expect([uncited?.uncited, uncited?.miss]).toEqual([true, undefined]);
     expect([miss?.uncited, miss?.miss]).toEqual([undefined, true]);
   });
+  it('keeps chat feedback one per person and answer, scoped to the board, newest first, and past deleteChat (s15f139)', async () => {
+    const at = '2026-10-05T12:00:00.000Z';
+    const later = '2026-10-06T12:00:00.000Z';
+    const citation = { n: 1, source: 'decision' as const, sourceLabel: 'Decision', title: 'T', date: at, link: null, globId: null, status: 'active' as const, supersededBy: null };
+    const chat = await store.transaction((tx) => tx.createChat({ boardId: 1, email: 'fb@example.com', title: 'fb', createdAt: at }));
+    const row = (messageId: number, email: string, rating: 'up' | 'down', createdAt: string, boardId = 1) => ({
+      boardId,
+      chatId: chat.id,
+      messageId,
+      email,
+      rating,
+      note: rating === 'down' ? 'wrong' : null,
+      question: `q${String(messageId)}`,
+      answer: `a${String(messageId)}`,
+      citations: [citation],
+      tools: ['Searched'],
+      page: { type: 'glob' as const, id: 's1t1' },
+      createdAt,
+    });
+    const first = await store.transaction((tx) => tx.upsertChatFeedback(row(9001, 'fb@example.com', 'up', at)));
+    const replaced = await store.transaction((tx) => tx.upsertChatFeedback({ ...row(9001, 'fb@example.com', 'down', later), question: 'edited' }));
+    expect(replaced).toMatchObject({ id: first.id, rating: 'down', note: 'wrong', question: 'edited', createdAt: at, updatedAt: later });
+    expect(replaced.citations).toEqual([citation]);
+    expect(replaced.tools).toEqual(['Searched']);
+    expect(replaced.page).toEqual({ type: 'glob', id: 's1t1' });
+    await store.transaction(async (tx) => {
+      await tx.upsertChatFeedback(row(9001, 'peer@example.com', 'up', at));
+      await tx.upsertChatFeedback(row(9002, 'fb@example.com', 'down', later));
+      await tx.upsertChatFeedback({ ...row(9003, 'fb@example.com', 'down', later), page: null, citations: null, tools: null });
+    });
+    const down = await store.transaction((tx) => tx.listChatFeedback(1, { rating: 'down', limit: 10 }));
+    expect(down.map((f) => f.messageId)).toEqual([9003, 9002, 9001]);
+    expect(down[0]).toMatchObject({ page: null, citations: null, tools: null });
+    expect(await store.transaction((tx) => tx.listChatFeedback(1, { rating: 'down', since: later, limit: 10 }))).toHaveLength(2);
+    expect(await store.transaction((tx) => tx.listChatFeedback(1, { limit: 2 }))).toHaveLength(2);
+    expect((await store.transaction((tx) => tx.listChatFeedback(1, { limit: 10 }))).filter((f) => f.rating === 'up').map((f) => f.email)).toEqual(['peer@example.com']);
+    expect(await store.transaction((tx) => tx.listChatFeedback(2, { limit: 10 }))).toEqual([]);
+    expect((await store.transaction((tx) => tx.listMyChatFeedback(1, chat.id, 'fb@example.com'))).map((f) => f.messageId)).toEqual([9003, 9002, 9001]);
+    await store.transaction((tx) => tx.deleteChat(chat.id));
+    expect(await store.transaction((tx) => tx.listChatFeedback(1, { rating: 'down', limit: 10 }))).toHaveLength(3);
+  });
 });
