@@ -190,7 +190,7 @@ describe('GroupService', () => {
     it('refuses a name that another group has (that is a merge), a blank or reserved name, and a long one', async () => {
       await create();
       await create({ group: 'other' });
-      for (const to of ['Other', '  ', 'backfill', 'x'.repeat(61)]) {
+      for (const to of ['Other', '  ', '--', 'backfill', 'x'.repeat(61)]) {
         const result = await groups.rename(DEV, boardId, 'chat', to);
         expect(!result.ok && result.error.code).toBe('invalid_input');
       }

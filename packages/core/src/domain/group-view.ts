@@ -8,7 +8,7 @@ import type { Holding, ToState } from './relations.js';
 import type { Glob, Relation, RelationGate, RelationSource, RelationUntil, SlopType, Status } from './types.js';
 import type { Move } from './whose-move.js';
 
-/** The name `GET /groups/backfill` already answers to; a group can't be called that. */
+/** The name `POST /groups/backfill` already answers to; a group can't be called that. */
 export const RESERVED_GROUP_NAMES: readonly string[] = ['backfill'];
 
 /** One glob of a group as the service read it. */

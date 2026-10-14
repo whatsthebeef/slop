@@ -95,7 +95,7 @@ export class GroupService {
     const members = all.filter((g) => inGroup(g, from));
     if (members.length === 0) return notFound(`No group ${from} on board ${boardId}`);
     const wanted = target.trim().replace(/\s+/g, ' ');
-    if (wanted === '') return invalidInput('A group needs a name');
+    if (!/[\p{L}\p{N}]/u.test(wanted)) return invalidInput('A group needs a name with a letter or a digit');
     if (wanted.length > MAX_GROUP_NAME) return invalidInput(`A group name is limited to ${MAX_GROUP_NAME} characters`);
     if (RESERVED_GROUP_NAMES.includes(normaliseGroup(wanted))) return invalidInput(`${wanted} is reserved: pick another name`);
     const same = normaliseGroup(wanted) === normaliseGroup(from);
