@@ -230,7 +230,7 @@ export class SizeCheckService implements SizeAssessor {
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      if (actor.value.role === 'qa' && glob.type !== 'sub') return forbidden('QA members can only decide subs');
+      if (actor.value.role === 'qa' && glob.type !== 'sub' && glob.escalation?.criterion !== 'size') return forbidden('QA members can only decide subs');
       const check = await tx.getSizeCheck(globId);
       if (check === null || !check.flagged) return invalidInput(`${globId} is not flagged oversized`);
       if (glob.status !== 'planning') return invalidInput(`${globId} has started, so the flag can no longer be answered`);
@@ -525,7 +525,7 @@ export class SizeCheckService implements SizeAssessor {
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      if (actor.value.role === 'qa' && glob.type !== 'sub') return forbidden('QA members can only decide subs');
+      if (actor.value.role === 'qa' && glob.type !== 'sub' && glob.escalation?.criterion !== 'size') return forbidden('QA members can only decide subs');
       const check = await tx.getSizeCheck(globId);
       if (check === null || !check.flagged) return invalidInput(`${globId} is not flagged oversized`);
       if (glob.status !== 'planning') return invalidInput(`${globId} has started, so the flag can no longer be answered`);

@@ -211,6 +211,27 @@ describe('learned size check', () => {
     expect((await get(sub.id)).version).toBe(flagged.version);
   });
 
+  it('QA members can answer the flag of the sub they created: keep whole and start', async () => {
+    const QA = 'qa@example.com';
+    await store.transaction((tx) => tx.upsertUser({ email: QA, name: QA, active: true }));
+    unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).setMember(ADMIN, boardId, QA, 'qa'));
+    const sub = await create('sub', BIG);
+    expect(sub.type).toBe('same');
+    unwrap(await service.keepWhole(QA, sub.id));
+    const started = unwrap(await globs.startAnyway(QA, sub.id, sub.version));
+    expect(started.status).toBe('implementing');
+    // A same that was not size-escalated is still the developers' to decide.
+    const plain = await create('same', BIG);
+    expect((await service.keepWhole(QA, plain.id)).ok).toBe(false);
+  });
+
+  it('an admin setting a size-escalated same back to a sub takes the size escalation with it', async () => {
+    const glob = await create('sub', BIG);
+    const back = unwrap(await globs.update(ADMIN, glob.id, glob.version, { type: 'sub' }));
+    expect(back.type).toBe('sub');
+    expect(back.escalation ?? null).toBeNull();
+  });
+
   it('splitting a sub the size check made a same makes subs again, without the size escalation', async () => {
     const glob = await create('sub', BIG);
     expect(glob.type).toBe('same');

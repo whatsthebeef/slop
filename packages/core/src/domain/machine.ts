@@ -753,7 +753,7 @@ export const released = (
 
 /** Sames and supers are started, retried and picked up by developers and admins; QA and PO members only do that for subs. */
 const restrictedFrom = (actor: Actor, glob: Glob): boolean =>
-  (actor.role === 'qa' || actor.role === 'po') && glob.type !== 'sub';
+  (actor.role === 'qa' || actor.role === 'po') && glob.type !== 'sub' && glob.escalation?.criterion !== 'size';
 
 export interface PickUpOptions {
   readonly takeOver: boolean;
@@ -1634,6 +1634,8 @@ export const changeFields = (
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
   const b = new Builder(glob, ctx).set({ ...patch, ...attributes }).event('FieldsChanged', diff);
+  // Setting a size-escalated same back to a sub is a person's override: the size escalation goes with it.
+  if (glob.escalation?.criterion === 'size' && type === 'sub') b.set({ escalation: null });
   if (('type' in diff || 'environment' in diff) && glob.pr !== null) {
     b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   }

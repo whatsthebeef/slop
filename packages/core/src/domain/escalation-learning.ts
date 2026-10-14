@@ -207,6 +207,8 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
     const windowEnd = merged === undefined ? 0 : Date.parse(merged.at) + SUB_LIMIT_WINDOW_DAYS * DAY_MS;
     if (escalated !== undefined) {
       const criterion = criterionOf(escalated.data.criterion, text(escalated.data.reason), text(escalated.data.evidence));
+      // Size escalations are slop's own, made by the size check (it has its own learning): agents never raise them.
+      if (criterion === 'size') continue;
       const deescalated = events.find((e) => e.type === 'Deescalated' && e.at >= escalated.at);
       if (deescalated !== undefined) {
         add({
