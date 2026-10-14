@@ -27,9 +27,13 @@ export class HintHub implements Notifier {
     const set = this.listeners.get(boardId) ?? new Set<Listener>();
     set.add(listener);
     this.listeners.set(boardId, set);
+    let done = false;
     return () => {
+      if (done) return;
+      done = true;
       set.delete(listener);
-      if (set.size === 0) this.listeners.delete(boardId);
+      // Only clear the entry if it is still ours: a later subscriber may have put a new set there.
+      if (set.size === 0 && this.listeners.get(boardId) === set) this.listeners.delete(boardId);
     };
   }
 }
