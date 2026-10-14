@@ -29,6 +29,7 @@ const callbacks = () => ({
   ),
   onReviewLabel: vi.fn(),
   onDismissEdge: vi.fn(() => Promise.resolve(true)),
+  onAddRelation: vi.fn(() => Promise.resolve(true)),
   onDismiss: vi.fn(() => Promise.resolve(true)),
   onDecide: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),

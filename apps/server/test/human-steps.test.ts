@@ -112,7 +112,7 @@ describe('human steps in Postgres', () => {
     expect(g).not.toBeNull();
     if (g === null) return;
     const open = await store.transaction((tx) => tx.listOpenHumanSteps(boardId));
-    const view = globViewFor(g, DEV, 'dev', [], undefined, null, false, open.filter((s) => s.globId === g.id));
+    const view = globViewFor(g, DEV, 'dev', [], undefined, [], false, open.filter((s) => s.globId === g.id));
     expect(view.humanSteps).toEqual([
       { id: 'hs-2', kind: 'rollout', title: 'Step hs-2', state: 'due', who: 'admin', due: 'now', blocks: [] },
     ]);

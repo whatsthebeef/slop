@@ -130,11 +130,11 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(status === null ? [] : [status.tip]),
       ...(position === null ? [] : [position.tip]),
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
-      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`, ...learnedReasons(glob)]),
+      ...(blocked === null || kind === 'waiting-on' ? [] : [`Waits for, in order: ${chainTip(glob)}`]),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
     ];
     const hint =
-      click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's prerequisites" : clickTip(click)];
+      click === null || kind === 'needs-human' ? [] : [kind === 'waiting-on' ? "Opens this glob's related globs" : clickTip(click)];
     const shown = plainText(text);
     // What the text dropped (a time, a commit) stays in the tooltip.
     const detail = shown === text ? [] : [text];
@@ -185,9 +185,8 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make(isStandby ? 'standby' : 'machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
   if (blocked !== null) {
-    return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.prerequisites() }, [
+    return make('waiting-on', 'hourglass', waitingText(blocked), 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [
       `Waits for, in order: ${chainTip(glob)}`,
-      ...(blocked.next === null ? [] : [`Next to start: ${blocked.next}`]),
       ...learnedReasons(glob),
     ]);
   }
@@ -199,7 +198,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       position.label,
       position.tone,
       positionClick(position, glob, repo),
-      [position.tip, ...(waiting ? learnedReasons(glob) : [])],
+      [position.tip],
     );
   }
   if (standby !== null) return make('standby', 'machine', 'standby', 'text-muted-foreground', null, [STANDBY_TIP]);
@@ -208,7 +207,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
 
 /**
  * Whether something blocks the glob, so the card offers no action and the status line says what is wrong: unmerged needs, a
- * conflict, failed checks, a stall, or an escalation or step waiting on a decision. A glob that is merely behind, overlaps or
+ * conflict, failed checks, a stall, or an escalation or step waiting on a decision. A glob that is merely behind or
  * clashes with another, or whose checks are still running is not blocked.
  */
 export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {

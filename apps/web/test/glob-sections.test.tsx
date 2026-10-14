@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Action } from '@slop/core';
+import type { Action, Holding, RelationsView } from '@slop/core';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobDetail } from '../src/components/glob-dialog';
@@ -29,6 +29,7 @@ const callbacks = () => ({
   ),
   onReviewLabel: vi.fn(),
   onDismissEdge: vi.fn(() => Promise.resolve(true)),
+  onAddRelation: vi.fn(() => Promise.resolve(true)),
   onDismiss: vi.fn(() => Promise.resolve(true)),
   onAddStep: vi.fn(() => Promise.resolve(true)),
   onCompleteStep: vi.fn(() => Promise.resolve(true)),
@@ -224,24 +225,115 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('header-status').textContent).not.toContain('Touches auth');
   });
 
-  it('has no Waits for input: a glob in Planning shows only the edges slop inferred, with a ✕ to dismiss one', () => {
+  it('has no Related section content but the Add button for a glob with no relations, and never a Waits for input', () => {
     renderGlob(view({ status: 'planning', provisioning: 'none' }));
-    expect(screen.queryByTestId('dependencies')).toBeNull();
+    expect(screen.getByTestId('related').textContent).toContain('Related');
+    expect(screen.queryByTestId('related-holding')).toBeNull();
+    expect(screen.getByTestId('add-relation').textContent).toBe('Add relation…');
     expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
-    expect(screen.queryByText('Waits for (glob IDs)')).toBeNull();
+    expect(screen.queryByTestId('dependencies')).toBeNull();
   });
 
-  it('lists an inferred edge with its reason and a ✕, and never an input', () => {
+  const hold = (to: string, patch: Partial<Holding> = {}): Holding => ({
+    relationId: `rel_${to}`,
+    to,
+    toTitle: `Title of ${to}`,
+    toIsDecision: false,
+    gate: 'start',
+    until: 'merged',
+    state: 'open',
+    reason: null,
+    source: 'person',
+    ...patch,
+  });
+  const related = (patch: Partial<RelationsView>): RelationsView => ({ holding: [], holdsBack: [], done: [], ...patch });
+
+  it('groups the relations: holding, decisions, parts, holds back and a collapsed Done, each row with its gate in words, reason and source', () => {
     renderGlob(
       view({
         status: 'planning',
         provisioning: 'none',
-        edges: [{ id: 's1t2', kind: 'overlaps', source: 'inferred', paths: [], evidence: 'both edit glob-dialog.tsx' }],
+        relations: related({
+          holding: [
+            hold('s1t2', { reason: 'uses the endpoint it adds', source: 'inferred' }),
+            hold('s1k4', { toIsDecision: true, until: 'decided', state: 'planning' }),
+            hold('s1t5', { gate: 'sign_off', source: 'split', parts: { merged: 3, total: 5 } }),
+          ],
+          holdsBack: [{ relationId: 'rel_h', from: 's1t8', fromTitle: 'Later work', gate: 'merge', until: 'merged', reason: null, source: 'person' }],
+          done: [{ relationId: 'rel_d', to: 's1t0', toTitle: 'Earlier', gate: 'start', until: 'merged', reason: null, source: 'learned', how: 'met' }],
+        }),
       }),
     );
-    expect(screen.getByTestId('overlaps').textContent).toContain('both edit glob-dialog.tsx');
-    expect(screen.getByTestId('dismiss-edge-s1t2')).toBeTruthy();
-    expect(screen.queryByPlaceholderText('s15t7, s15b18')).toBeNull();
+    expect(within(screen.getByTestId('related-holding')).getByText("· can't start until merged")).toBeTruthy();
+    expect(screen.getByTestId('related-holding').textContent).toContain('uses the endpoint it adds');
+    expect(screen.getByTestId('related-holding').textContent).toContain('inferred by slop');
+    expect(screen.getByTestId('related-decisions').textContent).toContain("can't start until decided");
+    expect(screen.getByTestId('related-parts').textContent).toContain("can't sign off until merged");
+    expect(screen.getByTestId('related-parts-merged').textContent).toBe('3/5 parts merged');
+    expect(screen.getByTestId('related-holds-back').textContent).toContain("can't merge until this is merged");
+    const done = screen.getByTestId('related-done');
+    expect(done.tagName).toBe('DETAILS');
+    expect(done.hasAttribute('open')).toBe(false);
+    expect(done.textContent).toContain('s1t0');
+  });
+
+  it('puts a ✕ on a relation a person or slop made, dismissing it by its relation, and none on a split part, holds back or done row', async () => {
+    const cb = renderGlob(
+      view({
+        status: 'planning',
+        provisioning: 'none',
+        relations: related({
+          holding: [hold('s1t2', { source: 'inferred' }), hold('s1t3', { source: 'person' }), hold('s1t5', { gate: 'sign_off', source: 'split' })],
+          holdsBack: [{ relationId: 'rel_h', from: 's1t8', fromTitle: null, gate: 'start', until: 'merged', reason: null, source: 'inferred' }],
+          done: [{ relationId: 'rel_d', to: 's1t0', toTitle: null, gate: 'start', until: 'merged', reason: null, source: 'inferred', how: 'dismissed' }],
+        }),
+      }),
+    );
+    expect(screen.getAllByRole('button', { name: /^Not a dependency/ })).toHaveLength(2);
+    expect(screen.queryByTestId('dismiss-edge-s1t5')).toBeNull();
+    expect(screen.queryByTestId('dismiss-edge-s1t8')).toBeNull();
+    expect(screen.queryByTestId('dismiss-edge-s1t0')).toBeNull();
+    await userEvent.click(screen.getByTestId('dismiss-edge-s1t2'));
+    expect(cb.onDismissEdge).toHaveBeenCalledWith('rel_s1t2');
+  });
+
+  it('adds a relation: the gate defaults to start, and the version of this glob goes with it', async () => {
+    const cb = renderGlob(view({ status: 'planning', provisioning: 'none', version: 7 }));
+    await userEvent.click(screen.getByTestId('add-relation'));
+    await userEvent.type(screen.getByLabelText('Glob or decision'), 's1t9');
+    expect(screen.getByLabelText<HTMLSelectElement>('Gate').value).toBe('start');
+    await userEvent.type(screen.getByLabelText('Reason (optional)'), 'needs its schema');
+    await userEvent.click(screen.getByTestId('add-relation-submit'));
+    expect(cb.onAddRelation).toHaveBeenCalledWith({ gate: 'start', reason: 'needs its schema', to: 's1t9', version: 7 });
+  });
+
+  it('keeps the form open and the text when the add failed', async () => {
+    const cb = renderGlob(view({ status: 'planning', provisioning: 'none' }));
+    cb.onAddRelation.mockResolvedValueOnce(false);
+    await userEvent.click(screen.getByTestId('add-relation'));
+    await userEvent.type(screen.getByLabelText('Glob or decision'), 's1t9');
+    await userEvent.click(screen.getByTestId('add-relation-submit'));
+    expect(screen.getByLabelText<HTMLInputElement>('Glob or decision').value).toBe('s1t9');
+  });
+
+  it('a decision glob has a Holds back list instead of Related, and adds a glob it holds back', async () => {
+    const cb = renderGlob(
+      view({
+        category: 'decision',
+        status: 'in_progress',
+        allowedActions: ['decide'],
+        attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'submitted' }, channel: 'human', outcome: null },
+        relations: related({ holdsBack: [{ relationId: 'rel_h', from: 's1t8', fromTitle: 'Later work', gate: 'start', until: 'decided', reason: 'waits on the choice', source: 'person' }] }),
+      }),
+    );
+    expect(screen.queryByTestId('related')).toBeNull();
+    expect(screen.getByTestId('holds-back').textContent).toContain("can't start until this is decided");
+    expect(screen.getByTestId('holds-back').textContent).toContain('waits on the choice');
+    await userEvent.click(screen.getByTestId('add-relation'));
+    await userEvent.type(screen.getByLabelText('Glob it holds back'), 's1t3');
+    await userEvent.selectOptions(screen.getByLabelText('Gate'), 'merge');
+    await userEvent.click(screen.getByTestId('add-relation-submit'));
+    expect(cb.onAddRelation).toHaveBeenCalledWith({ gate: 'merge', holdsBack: 's1t3' });
   });
 
   it('offers Save and Discard once the group is edited, and Discard clears them', async () => {

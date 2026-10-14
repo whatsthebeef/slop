@@ -355,7 +355,7 @@ describe('size forecast', () => {
       expect(parts.map((p) => p.title.split(' ')[0])).toEqual(['infra', 'apps/server', 'apps/web']);
       expect(parts[2]?.after).toEqual([1]);
       expect(parts[1]?.after).toEqual([]);
-      expect(parts[1]?.overlaps).toEqual([0]);
+      expect(parts[1]).not.toHaveProperty('overlaps');
       expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
     });
 

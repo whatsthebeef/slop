@@ -118,7 +118,7 @@ describe('GlobHeader', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') })],
       ['stalled', () => view({ status: 'failed', failure: { reason: 'Merge conflict with main in a.ts', at: NOW, kind: 'merge', conflict: { base: 'main', files } } })],
       ['your turn', () => prOpen({ allowedActions: ['merge'] })],
-      ['prerequisites', () => view({ status: 'planning', blockedBy: [{ id: 's1t1', state: 'open', status: 'implementing', depth: 1 }], nextStartable: 's1t9' })],
+      ['prerequisites', () => view({ status: 'planning', holding: [{ relationId: 'rel_1', to: 's1t1', toTitle: null, toIsDecision: false, gate: 'start', until: 'merged', state: 'open', reason: null, source: 'person' }] })],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
       ['a problem', () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } })],
     ];

@@ -31,16 +31,16 @@ import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
-  chainRefusal,
-  dependencyIds,
-  explicitOverlaps,
-  NO_CHAIN,
+  awaitedOf,
+  holdWords,
+  NO_RELATIONS,
+  overrideEdits,
   refusalText,
-  waitingFor,
+  startIds,
+  unmet,
   waitSummary,
-} from './waiting.js';
-import type { BlockingChain } from './waiting.js';
-import type { DependencyState } from './waiting.js';
+} from './relations.js';
+import type { RelationEdit, RelationFacts, Unmet } from './relations.js';
 import { rolloutPending } from './human-steps.js';
 import type { BlockProgress } from './human-steps.js';
 import type {
@@ -83,6 +83,8 @@ export interface Transition {
   readonly changed: boolean;
   readonly events: readonly DomainEvent[];
   readonly effects: readonly Effect[];
+  /** Changes to the glob's relations (rows beside it) that go with this transition; the service writes them in the same transaction. */
+  readonly relationEdits?: readonly RelationEdit[];
 }
 
 export type Action =
@@ -128,17 +130,13 @@ export type Action =
 export interface ActionFacts {
   /** The commit SHA of the glob's latest implementation record, or null without one (or without a SHA). */
   readonly recordSha?: string | null;
-  /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
-  readonly dependencies?: ReadonlyMap<string, DependencyState>;
-  /** Everything unmerged ahead of the glob, where loaded (Start and Retrigger refuse while it isn't empty). */
-  readonly chain?: BlockingChain;
+  /** The glob's relations and the state of every glob they point at (a missing entry reads as deleted); absent when not loaded. */
+  readonly relations?: RelationFacts;
   /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
   readonly sizeHeld?: boolean;
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
   readonly rollout?: BlockProgress;
 }
-
-const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
 
 /** The latest implementation record's commit SHA among a glob's artifact summaries (a legacy postplan counts until migrated). */
 export const recordShaOf = (
@@ -227,6 +225,7 @@ class Builder {
   private readonly events: DomainEvent[] = [];
   private readonly effects: Effect[] = [];
   private changed = false;
+  private edits: readonly RelationEdit[] = [];
 
   constructor(
     private glob: Glob,
@@ -377,14 +376,32 @@ class Builder {
     return this.set({ generation: this.glob.generation + 1 });
   }
 
+  /** Relation rows to change with this transition (Start now overrides the inferred and learned start relations). */
+  relationEdits(edits: readonly RelationEdit[]): this {
+    this.edits = edits;
+    return this;
+  }
+
   done(): Result<Transition> {
     const glob = this.changed ? { ...this.glob, updatedAt: this.ctx.now } : this.glob;
-    return ok({ glob, changed: this.changed, events: this.events, effects: this.effects });
+    return ok({
+      glob,
+      changed: this.changed,
+      events: this.events,
+      effects: this.effects,
+      ...(this.edits.length === 0 ? {} : { relationEdits: this.edits }),
+    });
   }
 }
 
 const unchanged = (glob: Glob): Result<Transition> =>
   ok({ glob, changed: false, events: [], effects: [] });
+
+/**
+ * The glob's relations changed (rows beside it, written by the service with their own events): the glob itself is as it was, but
+ * its version and `updatedAt` move, so live updates and stale-form checks see the change.
+ */
+export const relationsChanged = (glob: Glob, ctx: Context): Result<Transition> => new Builder(glob, ctx).set({}).done();
 
 const invalidTransition = (glob: Glob, actor: Actor | null, message: string): Result<never> =>
   err({
@@ -414,9 +431,7 @@ export interface CreateInput {
   readonly environment: string | null;
   /** Same only: start a routine run immediately (explicit instruction or `autoTrigger`). */
   readonly autoTrigger: boolean;
-  /** Globs to start after, already checked and without merged ones (see `checkAfter`). */
-  readonly after?: readonly string[];
-  /** Merge-policy holds found for this glob before it was created. */
+  /** Predicted overlaps found for this glob before it was created (merge-policy holds; they never hold a start). */
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set when the size check flagged the glob oversized: a sub or auto-triggered same waits in Planning, with this as the reason, until a person splits or keeps it whole. */
   readonly sizeHold?: string;
@@ -430,7 +445,8 @@ export const create = (
   input: CreateInput,
   board: Board,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  /** The relations the new glob starts with (made by the service, already checked) and the state of what they point at. */
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!isValidCombination(input.type, input.category)) {
@@ -450,9 +466,8 @@ export const create = (
   const envCheck = checkEnvironment(board, environment);
   if (!envCheck.ok) return envCheck;
 
-  const after = input.after ?? [];
   const impliedAfter = input.impliedAfter ?? [];
-  const awaited = waitingFor({ after, impliedAfter }, dependencies);
+  const awaited = awaitedOf(relations);
   const startsBySelf = input.type === 'same' && input.autoStart === true && awaited.length > 0;
   const wantsStart =
     input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
@@ -491,7 +506,6 @@ export const create = (
     updatedAt: ctx.now,
     signedOffAt: null,
     doingSince: listOf(status) === 'doing' ? ctx.now : null,
-    ...(after.length > 0 && { after }),
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
     ...(startsBySelf && { autoStart: true }),
@@ -534,28 +548,18 @@ export const checkEnvironment = (board: Board, environment: string | null): Resu
 export const start = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
-  /** Holds the board's merge policy found for this start (another open glob may change the same exclusive paths). */
+  relations: RelationFacts = NO_RELATIONS,
+  /** Overlaps the board's merge policy predicted for this start (another open glob may change the same exclusive paths). */
   newHolds: readonly ImpliedAfter[] = [],
-  chain: BlockingChain = NO_CHAIN,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
-  if (chain.blockedBy.length > 0) return invalidTransition(glob, actor, chainRefusal(chain));
-  const awaited = waitingFor(glob, dependencies);
+  const awaited = awaitedOf(relations);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
-  // A merge-policy hold keeps the request: the same waits in Planning and starts when the other glob merges.
-  const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
-  if (holding.length > 0) {
-    return new Builder(glob, ctx)
-      .set({ impliedAfter: mergeImplied(glob.impliedAfter, newHolds), waiting: { since: ctx.now } })
-      .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
-      .done();
-  }
-  // Overlaps the policy predicted never hold the start; they stay on the glob as a note and order the merges.
+  // Overlaps the policy predicted never hold the start; they stay on the glob as internal data for conflicts and learning.
   const overlaps =
     newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
   return new Builder(glob, ctx)
@@ -643,7 +647,7 @@ export const investigationPushed = (
 export const startAnyway = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
@@ -663,10 +667,12 @@ export const startAnyway = (
       'Only a sub or same in planning, or one picked up with no routine run, can be started anyway',
     );
   }
-  const awaited = waitingFor(glob, dependencies);
+  const awaited = awaitedOf(relations);
   if (awaited.length === 0 && glob.waiting == null) {
     return invalidTransition(glob, actor, 'Nothing holds this glob; use Start');
   }
+  // The inferred and learned start relations are marked overridden (a person's and a split's keep holding on paper, but the
+  // glob starts); the predicted overlaps on the glob are kept as they are, so a recheck doesn't replace them.
   return new Builder(glob, ctx)
     .set({
       waiting: null,
@@ -674,29 +680,10 @@ export const startAnyway = (
         ? {}
         : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
     })
+    .relationEdits(overrideEdits(relations.relations, ctx.now))
     .event('HoldOverridden', { for: awaited.map((a) => a.id) })
     .status('implementing')
     .queueRun(actor.email)
-    .done();
-};
-
-/**
- * A person says a recorded edge (implied, learned or inferred) is not a dependency: it stops holding and `planHash` is
- * kept so a changed plan may infer it again. Explicit edges (`after`, explicit overlaps) are never dismissed. A repeat
- * on an edge already dismissed is a no-op.
- */
-export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: Context): Result<Transition> => {
-  requireActor(ctx);
-  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person and cannot be dismissed`);
-  const edge = (glob.impliedAfter ?? []).find((i) => i.id === edgeId);
-  if (edge === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
-  if (edge.source === 'explicit') return invalidInput(`The edge to ${edgeId} was set by a person and cannot be dismissed`);
-  if (edge.overridden === true && edge.dismissedPlanHash !== undefined) return unchanged(glob);
-  return new Builder(glob, ctx)
-    .set({
-      impliedAfter: (glob.impliedAfter ?? []).map((i) => (i.id === edgeId ? { ...i, overridden: true as const, dismissedPlanHash: planHash } : i)),
-    })
-    .event('EdgeDismissed', { edgeId, kind: edge.kind ?? 'overlaps', source: edge.source ?? 'implied', planHash })
     .done();
 };
 
@@ -708,26 +695,19 @@ export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: C
 export const released = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
-  /** Holds found when checking again just before starting: another glob may have taken the exclusive paths meanwhile. */
+  relations: RelationFacts = NO_RELATIONS,
+  /** Overlaps found when checking again just before starting: another glob may have taken the exclusive paths meanwhile. */
   newHolds: readonly ImpliedAfter[] = [],
 ): Result<Transition> => {
   if (glob.waiting == null || glob.status !== 'planning' || glob.type === 'super')
     return unchanged(glob);
-  if (waitingFor(glob, dependencies).length > 0) return unchanged(glob);
-  const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
-  if (holding.length > 0) {
-    return new Builder(glob, ctx)
-      .set({ impliedAfter: mergeImplied(glob.impliedAfter, newHolds) })
-      .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
-      .done();
-  }
+  if (awaitedOf(relations).length > 0) return unchanged(glob);
   return new Builder(glob, ctx)
     .set({
       waiting: null,
       ...(newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) }),
     })
-    .event('Released', { after: dependencyIds(glob) })
+    .event('Released', { after: startIds(relations.relations) })
     .status('implementing')
     .queueRun(glob.creator)
     .done();
@@ -741,8 +721,8 @@ export interface PickUpOptions {
   readonly takeOver: boolean;
   /** Chosen at pick-up: must exist on the board and allow branch deploys. */
   readonly environment?: string | null;
-  /** The state of the globs the glob waits for: picking up a held glob works, and notes what hadn't merged. */
-  readonly dependencies?: ReadonlyMap<string, DependencyState>;
+  /** The glob's relations: picking up a held glob works, and notes what hadn't merged. */
+  readonly relations?: RelationFacts;
 }
 
 /** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
@@ -829,7 +809,7 @@ export const pickUp = (
   }
   // A person may go ahead on a glob that still waits; the event records what hadn't merged.
   const unmerged =
-    glob.status === 'planning' ? waitingFor(glob, options.dependencies ?? NO_DEPENDENCIES) : [];
+    glob.status === 'planning' ? awaitedOf(options.relations ?? NO_RELATIONS) : [];
   b.event('PickedUp', {
     takeOver: false,
     ...(unmerged.length > 0 && { waitingFor: unmerged.map((a) => a.id) }),
@@ -889,7 +869,7 @@ export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
 export const retrigger = (
   glob: Glob,
   ctx: Context,
-  chain: BlockingChain = NO_CHAIN,
+  relations: RelationFacts = NO_RELATIONS,
   anyway = false,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -898,8 +878,8 @@ export const retrigger = (
   }
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot retry ${glob.type}s`);
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (chain.blockedBy.length > 0 && !anyway)
-    return invalidTransition(glob, actor, chainRefusal(chain));
+  const awaited = awaitedOf(relations);
+  if (awaited.length > 0 && !anyway) return invalidTransition(glob, actor, refusalText(awaited));
   return new Builder(glob, ctx)
     .bumpGeneration()
     .set({ implementer: null, failure: null })
@@ -1122,7 +1102,7 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
 export const startAgain = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
@@ -1147,7 +1127,7 @@ export const startAgain = (
     .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
     .effect({ kind: 'delete_branch', globId: glob.id, generation });
   // A sub that waits for an unmerged glob goes back to Planning, held, instead of starting again.
-  const awaited = glob.type === 'sub' ? waitingFor(glob, dependencies) : [];
+  const awaited = glob.type === 'sub' ? awaitedOf(relations) : [];
   if (awaited.length > 0) {
     b.set({ waiting: { since: ctx.now } })
       .status('planning')
@@ -1176,11 +1156,22 @@ const headChecksPassed = (glob: Glob): boolean =>
 const headChecksFailed = (glob: Glob): boolean =>
   glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'failed';
 
+/** The unmet `merge` relations of a glob, where its relations were loaded (none otherwise). */
+const mergeGate = (relations: RelationFacts | undefined): Unmet[] => (relations === undefined ? [] : unmet(relations, 'merge'));
+
+/** "Can't merge until s15f82 is merged": what the unmet relations of a gate say, for a refusal. */
+const gateText = (held: readonly Unmet[]): string => {
+  const text = held.map((u) => holdWords(u.relation)).join('; ');
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+};
+
 /** Why Merge can't be pressed on a ready same or super right now (not armed, no conflict, checks not failed), or null. */
-const mergeBlocker = (glob: Glob): string | null => {
+const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
   if (glob.status !== 'pr_open' || glob.type === 'sub')
     return 'Only a same or super with a ready PR can be merged';
   if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
+  const held = mergeGate(relations);
+  if (held.length > 0) return gateText(held);
   // Passing checks say nothing about mergeability once the base has moved: GitHub would refuse and fail the glob.
   if (glob.conflict != null)
     return `Conflicts with the base branch since ${glob.conflict.since ?? 'the last push'}: merge the base into the branch and push before merging`;
@@ -1200,7 +1191,7 @@ export const requestMerge = (
   options: MergeOptions = { continue: false },
 ): Result<Transition> => {
   const actor = requireActor(ctx);
-  const blocked = mergeBlocker(glob);
+  const blocked = mergeBlocker(glob, options.facts?.relations);
   if (blocked !== null) return invalidTransition(glob, actor, blocked);
   const head = glob.pr?.headSha ?? '';
   const passed = headChecksPassed(glob);
@@ -1233,7 +1224,7 @@ export const cancelMerge = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!isMergeArmed(glob)) return invalidTransition(glob, actor, 'Merge is not waiting for checks');
   return new Builder(glob, ctx)
-    .set({ mergeMode: null })
+    .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
     .event('MergeDisarmed', { reason: 'cancelled' })
     .done();
 };
@@ -1249,7 +1240,7 @@ const canRetryMerge = (glob: Glob): boolean =>
   glob.headChecks.state === 'passed';
 
 /** Retry merge: a glob whose merge failed (e.g. GitHub hadn't decided mergeability) goes back to merging. */
-export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
+export const retryMerge = (glob: Glob, ctx: Context, relations?: RelationFacts): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!canRetryMerge(glob))
     return invalidTransition(
@@ -1257,6 +1248,8 @@ export const retryMerge = (glob: Glob, ctx: Context): Result<Transition> => {
       actor,
       'Only a failed merge on a ready PR with passing checks can be retried',
     );
+  const held = mergeGate(relations);
+  if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
   return new Builder(glob, ctx)
     .set({ failure: null, mergeMode: null })
     .status('merging', { retry: true })
@@ -1336,6 +1329,8 @@ export const reviewLabel = (
   ctx: Context,
   /** Work steps holding back sign-off: a merged glob's labels can't be approved until they are done (QA checks the change as rolled out). */
   rollout: BlockProgress | null = null,
+  /** The glob's relations: labels stay approvable while a `sign_off` relation is unmet, but the glob doesn't move to Signed off. */
+  relations?: RelationFacts,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   const from = glob.labels[name];
@@ -1352,8 +1347,10 @@ export const reviewLabel = (
       .set({ labels })
       .event('LabelChanged', { ...detail, label: name, from, to });
     const allApproved = Object.values(labels).every((s) => s === 'approved');
+    const signOffHeld = relations === undefined ? [] : unmet(relations, 'sign_off');
     if (glob.status === 'reviewing' && allApproved && (rollout === null || rollout.open === 0)) {
-      b.set({ signedOffAt: ctx.now }).status('signed_off');
+      if (signOffHeld.length > 0) b.event('SignOffHeld', { for: signOffHeld.map((u) => u.relation.to) });
+      else releaseWaiting(b.set({ signedOffAt: ctx.now }).status('signed_off'), glob);
     } else if (glob.status === 'signed_off' && !allApproved) {
       b.set({ signedOffAt: null }).status('reviewing');
     }
@@ -1511,12 +1508,13 @@ export interface FieldChanges {
   readonly category?: Category;
   readonly group?: string | null;
   readonly environment?: string | null;
-  /** Globs to start after, already checked (`checkAfter`): editable while the glob has no branch. */
-  readonly after?: readonly string[];
-  /** Merge-policy holds found for a same becoming a sub (set by the service, not by clients). */
+  /**
+   * The globs this one starts after, from and to, when a person changed them: set by the service, which writes the relations
+   * (already checked) and passes their facts. Editable while the glob has no branch.
+   */
+  readonly after?: { readonly from: readonly string[]; readonly to: readonly string[] };
+  /** Overlaps predicted for a same becoming a sub (set by the service, not by clients). */
   readonly impliedAfter?: readonly ImpliedAfter[];
-  /** Globs this one overlaps, already checked (`checkOverlaps`): replaces the overlaps a person set, at any time (they never block). */
-  readonly overlaps?: readonly string[];
   /** A decision's scope (the only attribute a client edits); checked by `changeFields`. */
   readonly attributes?: unknown;
   /** Turn a same's start-when-unblocked off (or back on): off ends its wait and keeps what it needs. */
@@ -1529,7 +1527,8 @@ export const changeFields = (
   changes: FieldChanges,
   board: Board,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  /** The glob's relations as they will be once the change is written (the service has checked and planned them). */
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (
@@ -1556,8 +1555,9 @@ export const changeFields = (
     changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
   if (!scope.ok) return scope;
 
-  const afterChanged =
-    changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
+  // A set, not a list: stores return the start relations in different orders, so an echoed `after` must not read as an edit.
+  const asSet = (ids: readonly string[]): string => [...new Set(ids)].sort().join('\n');
+  const afterChanged = changes.after !== undefined && asSet(changes.after.to) !== asSet(changes.after.from);
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
     return invalidTransition(
       glob,
@@ -1566,7 +1566,7 @@ export const changeFields = (
     );
   }
 
-  const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes'>]: FieldChanges[K] } = {};
+  const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes' | 'after'>]: FieldChanges[K] } = {};
   const diff: { [key: string]: JsonValue } = {};
   for (const key of ['title', 'type', 'category', 'group', 'environment'] as const) {
     const value = key === 'title' ? changes.title?.trim() : changes[key];
@@ -1575,24 +1575,8 @@ export const changeFields = (
       diff[key] = { from: glob[key], to: value };
     }
   }
-  if (afterChanged) {
-    Object.assign(patch, { after: changes.after });
-    diff['after'] = { from: [...(glob.after ?? [])], to: [...changes.after] };
-  }
-  if (changes.overlaps !== undefined) {
-    const before = (glob.impliedAfter ?? [])
-      .filter((i) => i.source === 'explicit' && i.kind === 'overlaps')
-      .map((i) => i.id);
-    if (before.join('\n') !== changes.overlaps.join('\n')) {
-      const kept = (glob.impliedAfter ?? []).filter(
-        (i) => !(i.source === 'explicit' && i.kind === 'overlaps'),
-      );
-      const added = explicitOverlaps(changes.overlaps).filter(
-        (o) => !kept.some((k) => k.id === o.id),
-      );
-      Object.assign(patch, { impliedAfter: [...kept, ...added] });
-      diff['overlaps'] = { from: before, to: [...changes.overlaps] };
-    }
+  if (changes.after !== undefined && afterChanged) {
+    diff['after'] = { from: [...changes.after.from], to: [...changes.after.to] };
   }
   let attributes: Partial<Glob> = {};
   if (scope.value !== null) {
@@ -1631,7 +1615,7 @@ export const changeFields = (
     const impliedAfter = becomesSub
       ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? [])
       : glob.impliedAfter;
-    const awaited = waitingFor({ after: changes.after ?? glob.after, impliedAfter }, dependencies);
+    const awaited = awaitedOf(relations);
     if (awaited.length > 0) {
       if (!wasHeld) {
         b.set({
@@ -1926,13 +1910,15 @@ export const overlapsRechecked = (
     readonly dropReasons: ReadonlyMap<string, string>;
   },
   ctx: Context,
+  /** The globs this one starts after (their start relations): an overlap with one of them isn't recorded. */
+  needs: readonly string[] = [],
 ): Result<Transition> => {
   if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
   const existing = glob.impliedAfter ?? [];
   const before = existing.filter(isReplaceableOverlap);
   const kept = existing.filter((e) => !isReplaceableOverlap(e));
   const edges = result.edges.filter(
-    (e) => !kept.some((k) => k.id === e.id) && !(glob.after ?? []).includes(e.id),
+    (e) => !kept.some((k) => k.id === e.id) && !needs.includes(e.id),
   );
   const same = (a: ImpliedAfter, b: ImpliedAfter) =>
     a.id === b.id && a.paths.join('\n') === b.paths.join('\n');
@@ -1962,13 +1948,15 @@ export const edgesInferred = (
   glob: Glob,
   result: { readonly edges: readonly ImpliedAfter[]; readonly notes: readonly string[]; readonly planHash: string },
   ctx: Context,
+  /** The globs this one starts after (their start relations): an inferred edge to one of them is dropped. */
+  needs: readonly string[] = [],
 ): Result<Transition> => {
   if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
   if (glob.type === 'super') return unchanged(glob);
   const existing = glob.impliedAfter ?? [];
   const started = glob.status !== 'planning';
   const fresh = result.edges.map((e) => (started && e.kind === 'needs' ? { ...e, kind: 'overlaps' as const } : e));
-  const next = mergeInferred(existing, fresh, glob.after ?? [], result.planHash);
+  const next = mergeInferred(existing, fresh, needs, result.planHash);
   const before = existing.filter((e) => isReplaceableInferred(e, result.planHash));
   const after = next.filter((e) => isReplaceableInferred(e, result.planHash));
   // The reason is the model's wording and changes between answers: the edge is the same while its glob and kind are.
@@ -2215,6 +2203,17 @@ const withConflict = (b: Builder, conflict: MergeConflict | undefined, ctx: Cont
   return b;
 };
 
+/**
+ * A merge that would have started waits for a `merge` relation: the hold is recorded on the glob (once per head and set of
+ * globs, so a repeated webhook adds no event) and the merge stays as it is (armed, or a sub's passed gate).
+ */
+const holdMerge = (b: Builder, glob: Glob, sha: string, held: readonly Unmet[], ctx: Context): Builder => {
+  const waitingFor = held.map((u) => u.relation.to);
+  const same = glob.mergeHold != null && glob.mergeHold.sha === sha && glob.mergeHold.for.join(',') === waitingFor.join(',');
+  if (same) return b;
+  return b.set({ mergeHold: { since: ctx.now, sha, for: waitingFor } }).event('MergeHeld', { for: waitingFor, sha });
+};
+
 /** Required checks finished on a commit; only the PR's current head counts. */
 export const checksCompleted = (
   glob: Glob,
@@ -2231,6 +2230,8 @@ export const checksCompleted = (
     real?: { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null };
   },
   ctx: Context,
+  /** The glob's relations: an armed merge waits while a `merge` relation is unmet. */
+  relations?: RelationFacts,
 ): Result<Transition> => {
   if (glob.pr?.headSha !== checks.sha) return unchanged(glob);
   // A conflict on an open PR is not failed checks: it sets `conflict` only, and the head keeps its last real result.
@@ -2278,8 +2279,11 @@ export const checksCompleted = (
         .event('MergeDisarmed', { reason: checks.conflict !== undefined ? 'conflict' : 'checks failed' })
         .done();
     }
+    const held = mergeGate(relations);
+    // Merge when checks pass stays armed while a merge relation is unmet; the release resumes it (`gateReleased`).
+    if (held.length > 0) return holdMerge(b, glob, checks.sha, held, ctx).done();
     return b
-      .set({ mergeMode: null })
+      .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha })
       .done();
@@ -2580,6 +2584,8 @@ export const subGateCompleted = (
     limit?: number;
   },
   ctx: Context,
+  /** The glob's relations: a passed gate waits while a `merge` relation is unmet. */
+  relations?: RelationFacts,
 ): Result<Transition> => {
   if (glob.status !== 'pr_open' || glob.type !== 'sub' || glob.pr?.headSha !== gate.sha) {
     return unchanged(glob);
@@ -2595,7 +2601,11 @@ export const subGateCompleted = (
     ...(gate.limit !== undefined && { limit: gate.limit }),
   });
   if (gate.passed) {
+    const held = mergeGate(relations);
+    // The sub stays in pr_open with its passed gate: `gateReleased` merges it once the relations are met.
+    if (held.length > 0) return holdMerge(b, glob, gate.sha, held, ctx).done();
     return b
+      .set(glob.mergeHold == null ? {} : { mergeHold: null })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: gate.sha })
       .done();
@@ -2634,6 +2644,7 @@ export const merged = (
         pr: null,
         headChecks: null,
         mergeMode: null,
+        ...(glob.mergeHold == null ? {} : { mergeHold: null }),
         failure: null,
         ...(glob.conflict == null ? {} : { conflict: null }),
       })
@@ -2653,6 +2664,7 @@ export const merged = (
       checklists: {},
       failure: null,
       mergeMode: null,
+      ...(glob.mergeHold == null ? {} : { mergeHold: null }),
       pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
       ...(glob.conflict == null ? {} : { conflict: null }),
     })
@@ -2889,14 +2901,12 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (isAgentSetGlob(glob)) return agentSetActions(glob, actor);
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
-  // Held: waiting for another glob to merge. Without the dependencies loaded, the glob's own mark says it.
+  // Held: waiting for another glob to merge. Without the relations loaded, the glob's own mark says it.
   const held =
     glob.status === 'planning' &&
     glob.type !== 'super' &&
     (facts.sizeHeld === true ||
-      (facts.dependencies === undefined
-        ? glob.waiting != null
-        : waitingFor(glob, facts.dependencies).length > 0));
+      (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0));
   if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (canReviewNow(glob)) actions.push('review_now');
@@ -2945,7 +2955,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (isMergeArmed(glob)) {
     if (!restricted) actions.push('cancel_merge');
-  } else if (mergeBlocker(glob) === null) {
+  } else if (mergeBlocker(glob, facts.relations) === null) {
     actions.push('merge');
     if (headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
   }
@@ -3142,6 +3152,13 @@ export interface DecideInput {
 }
 
 /**
+ * What other globs wait for in this one can have been reached (it was decided, or signed off): the outbox's `release_waiting`
+ * starts and resumes them. Idempotent, like the release after a merge.
+ */
+const releaseWaiting = (b: Builder, glob: Glob): Builder =>
+  b.effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation });
+
+/**
  * Rows D4, D5, D7 and D11. The caller has already applied the knowledge change in the same transaction. Accept goes to
  * Reviewing, reject to Signed off (archived); needs work and retarget stay in Doing (needs work records the linked glob,
  * retarget only an event, since the item is redrafted before it can be accepted).
@@ -3194,6 +3211,8 @@ export const decideDecision = (
     case 'retarget':
       break;
   }
+  // Accepted or rejected: the decision is made, so what waited for it is released (not for needs work or retarget).
+  if (input.outcome === 'accept' || input.outcome === 'accept_with_edits' || input.outcome === 'reject') releaseWaiting(b, glob);
   return b.event('DecisionDecided', { outcome: outcomeJson(outcome) }).done();
 };
 
@@ -3222,7 +3241,7 @@ export const decideReplacement = (
     at: ctx.now,
     ...(reason === '' ? {} : { reason }),
   };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome) })
@@ -3239,7 +3258,7 @@ export const closeReplacement = (
   const attributes = decisionAttributesOf(glob);
   if (attributes.origin.kind !== 'replacement') return unchanged(glob);
   const outcome: DecisionOutcome = { kind: 'closed', by: 'slop', at: ctx.now, reason };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome) })
@@ -3261,24 +3280,67 @@ export const decisionWorkLanded = (glob: Glob, ctx: Context): Result<Transition>
 };
 
 /** Row D8: sign off an accepted decision. */
-export const signOffDecision = (glob: Glob, ctx: Context, rollout: BlockProgress | null = null): Result<Transition> => {
+export const signOffDecision = (
+  glob: Glob,
+  ctx: Context,
+  rollout: BlockProgress | null = null,
+  relations?: RelationFacts,
+): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'decision') return notDecision(glob, actor);
   if (!mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
   if (glob.status !== 'reviewing')
     return invalidTransition(glob, actor, 'Only a decision in Reviewing can be signed off');
   if (rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
-  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).status('signed_off').done();
+  const held = relations === undefined ? [] : unmet(relations, 'sign_off');
+  if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
+  return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).status('signed_off').done();
 };
 
 /**
  * The last work step holding back sign-off was done or dismissed: a merged glob whose labels are all approved moves on to
  * Signed off (one still short of approvals just stays in Reviewing, and now shows there). A no-op while any step is open.
  */
-export const rolloutSettled = (glob: Glob, rollout: BlockProgress, ctx: Context): Result<Transition> => {
+export const rolloutSettled = (glob: Glob, rollout: BlockProgress, ctx: Context, relations?: RelationFacts): Result<Transition> => {
   if (rollout.open > 0 || glob.category === 'decision' || glob.status !== 'reviewing') return unchanged(glob);
   if (!Object.values(glob.labels).every((s) => s === 'approved')) return unchanged(glob);
-  return new Builder(glob, ctx).set({ signedOffAt: ctx.now }).event('RolloutDone', {}).status('signed_off').done();
+  // A `sign_off` relation still unmet: `gateReleased` moves the glob when the last one is met.
+  if (relations !== undefined && unmet(relations, 'sign_off').length > 0) return unchanged(glob);
+  return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).event('RolloutDone', {}).status('signed_off').done();
+};
+
+/**
+ * A relation of this glob's was met (what it waits for merged, was decided or signed off, or was deleted, dismissed or removed):
+ * resumes a merge held for a `merge` relation, and moves a Reviewing glob with approved labels and nothing else holding it to
+ * Signed off. Idempotent: a no-op while any gate it needs is still unmet and once it has run, so the outbox and every release
+ * path may call it any number of times.
+ */
+export const gateReleased = (
+  glob: Glob,
+  relations: RelationFacts,
+  rollout: BlockProgress | null,
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.category === 'decision') return unchanged(glob);
+  if (glob.status === 'pr_open' && glob.pr?.headSha != null) {
+    const head = glob.pr.headSha;
+    // Merge when checks pass was armed, or a sub's gate passed, and the merge only waited for the relation.
+    const armed = isMergeArmed(glob);
+    const subPassed = glob.type === 'sub' && glob.mergeHold != null && glob.mergeHold.sha === head;
+    if ((!armed && !subPassed) || glob.conflict != null || !headChecksPassed(glob)) return unchanged(glob);
+    if (mergeGate(relations).length > 0) return unchanged(glob);
+    return new Builder(glob, ctx)
+      .set({ mergeMode: null, mergeHold: null })
+      .event('MergeResumed', { sha: head })
+      .status('merging')
+      .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
+      .done();
+  }
+  if (glob.status !== 'reviewing') return unchanged(glob);
+  if (rollout !== null && rollout.open > 0) return unchanged(glob);
+  if (!Object.values(glob.labels).every((s) => s === 'approved')) return unchanged(glob);
+  if (unmet(relations, 'sign_off').length > 0) return unchanged(glob);
+  return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).event('SignOffReleased', {}).status('signed_off').done();
 };
 
 /** Row D9: an accepted decision goes back to Doing, its outcome cleared, to be chosen again. */
@@ -3321,7 +3383,7 @@ export const closeDecision = (
   const links = (glob.links ?? []).filter(
     (l) => link === null || !(l.id === link.id && l.kind === link.kind),
   );
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes, links: link === null ? links : [...links, link], signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', {
@@ -3396,7 +3458,7 @@ export const decisionApproved = (
     at: ctx.now,
     ...(reason === null ? {} : { reason }),
   };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, false) })
     .status('reviewing')
     .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })
@@ -3418,7 +3480,7 @@ export const decisionRejected = (
     at: ctx.now,
     reason: rejection.reason,
   };
-  return new Builder(glob, ctx)
+  return releaseWaiting(new Builder(glob, ctx), glob)
     .set({ attributes: withOutcome(attributes, outcome, true), signedOffAt: ctx.now })
     .status('signed_off')
     .event('DecisionDecided', { outcome: outcomeJson(outcome), via: 'knowledge' })

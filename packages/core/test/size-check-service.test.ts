@@ -10,7 +10,6 @@ import type { GlobOutcome } from '../src/domain/intake-learning.js';
 import * as machine from '../src/domain/machine.js';
 import { DEFAULT_SIZE_THRESHOLD } from '../src/domain/size-check.js';
 import type { Glob } from '../src/domain/types.js';
-import { edgesOf } from '../src/domain/waiting.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
 const unwrap = <T>(result: Result<T>): T => {
@@ -328,13 +327,13 @@ describe('learned size check', () => {
       { title: 'Web', summary: 'w', plan: '## Tasks\n4. web card\n5. web page\n6. web test', after: [0] },
       { title: 'CLI', summary: 'c', plan: '## Tasks\n7. cli command in apps/server/src/shared.ts', after: [0] },
     ];
+    const needsOf = (id: string | undefined): string[] => [...store.state.relations.values()].filter((r) => r.from === id && r.gate === 'start').map((r) => r.to);
     const splitAsProposed = async (glob: Glob): Promise<Glob[]> => {
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
       const parts = (check?.proposal?.parts ?? []).map((p, index) => ({
         title: p.title,
         plan: p.plan,
         ...(index > 0 && p.after.length > 0 ? { after: [...p.after] } : {}),
-        ...(index > 0 && (p.overlaps ?? []).length > 0 ? { overlaps: [...(p.overlaps ?? [])] } : {}),
         ...(index > 0 && p.type !== undefined ? { type: p.type } : {}),
       }));
       return unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
@@ -376,24 +375,27 @@ describe('learned size check', () => {
       expect((await get(glob.id)).status).toBe('implementing');
     });
 
-    it('splits a shared schema and three consumers into part 0 plus three parts that need only part 0; shared files are overlaps', async () => {
+    it('splits a shared schema and three consumers into part 0 plus three parts that need only part 0; shared files make no relation', async () => {
       proposed = contractParts;
       const glob = await create('same', BIG);
       const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
       expect(check?.proposal?.parts.map((p) => p.after)).toEqual([[], [0], [0], [0]]);
-      expect(check?.proposal?.parts.map((p) => p.overlaps)).toEqual([[], [], [], [1]]);
+      expect(check?.proposal?.parts.every((p) => !('overlaps' in p))).toBe(true);
       // Small, low-risk parts are subs; the 3-task part stays the glob's own type.
       expect(check?.proposal?.parts.map((p) => p.type)).toEqual([undefined, 'sub', undefined, 'sub']);
       const created = await splitAsProposed(glob);
       expect(created).toHaveLength(4);
       const [first, server, web, cli] = created;
-      expect(server?.after).toEqual([first?.id]);
-      expect(web?.after).toEqual([first?.id]);
-      expect(cli?.after).toEqual([first?.id]);
+      expect(needsOf(server?.id)).toEqual([first?.id]);
+      expect(needsOf(web?.id)).toEqual([first?.id]);
+      expect(needsOf(cli?.id)).toEqual([first?.id]);
       expect(created.map((g) => g.type)).toEqual(['same', 'sub', 'same', 'sub']);
-      // The file overlap is an edge that never blocks, not a need.
-      expect(edgesOf(cli ?? {}).map((e) => [e.id, e.kind])).toEqual([[first?.id, 'needs'], [server?.id, 'overlaps']]);
-      expect(cli?.after).not.toContain(server?.id);
+      // The file overlap is not a relation at all: only the need on part 0 is.
+      expect(needsOf(cli?.id)).not.toContain(server?.id);
+      // The source can't be signed off until each part has merged.
+      expect([...store.state.relations.values()].filter((r) => r.gate === 'sign_off').map((r) => [r.from, r.to, r.source])).toEqual(
+        [server, web, cli].map((p) => [first?.id, p?.id, 'split']),
+      );
     });
 
     it('a split same starts its routine on its own when its last need merges, and a person can turn that off', async () => {
@@ -405,7 +407,8 @@ describe('learned size check', () => {
       expect(web.waiting).not.toBeNull();
       // Turn it off on the web part: the wait ends, the need stays.
       const off = unwrap(await globs.update(DEV, web.id, web.version, { autoStart: false }));
-      expect(off).toMatchObject({ autoStart: false, waiting: null, status: 'planning', after: [first.id] });
+      expect(off).toMatchObject({ autoStart: false, waiting: null, status: 'planning' });
+      expect(needsOf(web.id)).toEqual([first.id]);
       unwrap(await globs.applyEvent(first.id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
       const released = await globs.releaseDependents(first.id, boardId);
       expect(released).toContain(cli.id);

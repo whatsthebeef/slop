@@ -1,7 +1,7 @@
 import { ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { proposeSplitGroups } from '../domain/group.js';
-import type { Glob } from '../domain/types.js';
+import type { Glob, Relation } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { adminOf } from './access.js';
 import type { GlobService } from './glob-service.js';
@@ -23,8 +23,12 @@ export interface GroupBackfillResult {
   readonly items: readonly GroupBackfillItem[];
 }
 
-/** Needs and overlaps alike: the split check on the titles keeps an unrelated edge from joining two splits. */
-const linksOf = (glob: Glob): string[] => [...(glob.after ?? []), ...(glob.impliedAfter ?? []).map((i) => i.id)];
+/** Relations (either way) and predicted overlaps alike: the split check on the titles keeps an unrelated edge from joining two splits. */
+const linksOf = (glob: Glob, relations: readonly Relation[]): string[] => [
+  ...relations.filter((r) => r.from === glob.id).map((r) => r.to),
+  ...relations.filter((r) => r.to === glob.id).map((r) => r.from),
+  ...(glob.impliedAfter ?? []).map((i) => i.id),
+];
 
 /**
  * Proposes groups for a board's open globs that have none (the globs made before new ones always got a group), and with `apply`
@@ -43,12 +47,12 @@ export class GroupBackfillService {
   async run(email: string, boardId: number, apply: boolean): Promise<Result<GroupBackfillResult>> {
     const read = await this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
-      return actor.ok ? ok(await tx.listGlobs(boardId, {})) : actor;
+      return actor.ok ? ok({ globs: await tx.listGlobs(boardId, {}), relations: await tx.listRelations(boardId) }) : actor;
     });
     if (!read.ok) return read;
     // Decisions and signed-off globs are history: their group is not worth rewriting.
-    const open = read.value.filter((g) => g.category !== 'decision' && g.status !== 'signed_off');
-    const existing = [...new Set(read.value.flatMap((g) => (g.group === null ? [] : [g.group])))];
+    const open = read.value.globs.filter((g) => g.category !== 'decision' && g.status !== 'signed_off');
+    const existing = [...new Set(read.value.globs.flatMap((g) => (g.group === null ? [] : [g.group])))];
     const byId = new Map(open.map((g) => [g.id, g]));
     const items: GroupBackfillItem[] = [];
     const proposed = new Set<string>();
@@ -57,7 +61,7 @@ export class GroupBackfillService {
       proposed.add(item.id);
     };
 
-    const splits = proposeSplitGroups(open.map((g) => ({ id: g.id, title: g.title, group: g.group, linked: linksOf(g) })), existing);
+    const splits = proposeSplitGroups(open.map((g) => ({ id: g.id, title: g.title, group: g.group, linked: linksOf(g, read.value.relations) })), existing);
     for (const p of splits) add({ id: p.id, group: p.group, why: 'split' });
     for (const glob of open) {
       if (glob.group !== null || proposed.has(glob.id)) continue;

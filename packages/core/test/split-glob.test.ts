@@ -90,8 +90,14 @@ describe('split a glob into parts', () => {
     expect(new Set([first.id, second.id, third.id]).size).toBe(3);
     expect(second.category).toBe('feature');
     expect(second.group).toBe('grp');
-    expect(second.after).toEqual([first.id]);
-    expect(third.after).toEqual([first.id, second.id]);
+    const needs = (id: string) => [...store.state.relations.values()].filter((r) => r.from === id && r.gate === 'start').map((r) => [r.to, r.source]);
+    expect(needs(second.id)).toEqual([[first.id, 'split']]);
+    expect(needs(third.id)).toEqual([[first.id, 'split'], [second.id, 'split']]);
+    // The glob that was cut can't be signed off until each other part has merged.
+    expect([...store.state.relations.values()].filter((r) => r.gate === 'sign_off').map((r) => [r.from, r.to, r.until, r.source])).toEqual([
+      [first.id, second.id, 'merged', 'split'],
+      [first.id, third.id, 'merged', 'split'],
+    ]);
     expect(await planOf(first.id)).toContain(`First, then ${second.id} and ${third.id}`);
     expect(await planOf(second.id)).toContain(`Second, needs ${first.id}`);
     expect(await planOf(second.id)).toContain(`Split from ${first.id} on 2026-10-09`);

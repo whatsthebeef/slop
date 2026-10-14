@@ -6,7 +6,8 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
 import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/components/board-filter-pane';
 import type { BoardShellContext } from '@/components/board-shell';
-import { GroupChip } from '@/components/glob-card';
+import { GlobCard } from '@/components/glob-card';
+import { globPath } from '@/lib/glob-section';
 import { ContextSection } from '@/components/context-report';
 import { JobStatus } from '@/components/job-status';
 import { ReadinessChecklist } from '@/components/readiness';
@@ -934,16 +935,16 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
 };
 
 const DEPENDENCY_CAUSE_TEXT: Record<DependencyCause, string> = {
-  clean_overlap: 'An overlap merged with no conflict or rework',
-  conflicted_overlap: 'An overlap conflicted or needed a rebase',
+  clean_overlap: 'Globs predicted to share files merged with no conflict or rework',
+  conflicted_overlap: 'Globs predicted to share files conflicted or needed a rebase',
   unmerged_prerequisite: 'A run failed because a prerequisite was not merged',
-  start_anyway_succeeded: 'A need was started anyway and merged without it',
-  edge_dismissed: 'A person dismissed an inferred dependency as wrong',
+  start_anyway_succeeded: 'A relation was started anyway and merged without it',
+  edge_dismissed: 'A person dismissed an inferred relation as wrong',
   reset: 'An admin reset the rule',
 };
 
 /**
- * The path patterns the board predicts overlaps from (overlaps order merges, they never hold a start), each with the
+ * The path patterns the board predicts shared files from (a prediction never holds a start), each with the
  * catalog default and what the board learned from outcomes. Admins reset a rule to its default. Everything is rendered as text.
  */
 const DependencyRules = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
@@ -967,10 +968,10 @@ const DependencyRules = ({ boardId, admin }: { boardId: number; admin: boolean }
   return (
     <div className='grid gap-2' data-testid='dependency-rules'>
       <p className='text-xs text-muted-foreground'>
-        A glob that needs another cannot start until it merges. Globs that only may change the same files overlap: they start
-        at once and the later merge rebases. Slop predicts overlaps from these path patterns. A pattern whose overlaps merged
-        cleanly is weakened and stops being predicted below {predictMin}; one that conflicted is strengthened. A run that failed
-        for unmerged prerequisites teaches the board a need.
+        Slop predicts from these path patterns which globs may change the same files, to warn about conflicts and order merges. A
+        prediction never holds a glob back: a glob waits for another only through a relation (a need, a decision or a split part).
+        A pattern whose predictions merged cleanly is weakened and stops being used below {predictMin}; one that conflicted is
+        strengthened. A run that failed for unmerged prerequisites teaches the board a relation.
       </p>
       {list.length === 0 ? (
         <p className='text-xs text-muted-foreground'>No patterns yet: set exclusive paths in the merge policy.</p>
@@ -1282,6 +1283,8 @@ const DeploySettings = ({
   </div>
 );
 
+const noop = () => undefined;
+
 export const SignedOffPage = () => {
   const boardId = Number(useParams().boardId);
   usePageContext({ type: 'signed_off' });
@@ -1309,7 +1312,7 @@ export const SignedOffPage = () => {
   }, [linked, boardId, navigate]);
 
   return (
-    <main className='mx-auto grid w-full max-w-[63rem] gap-4 p-6'>
+    <main className='mx-auto grid w-full max-w-[90rem] gap-4 p-6'>
       {headerActions !== null &&
         createPortal(<FilterToggle open={filterOpen} active={filtering} onClick={() => setFilterOpen(!filterOpen)} />, headerActions)}
       <FilterPane
@@ -1326,23 +1329,30 @@ export const SignedOffPage = () => {
           {loaded.length === 0 ? 'Nothing signed off yet.' : 'No globs match the filter'}
         </p>
       )}
-      {globs.map((g) => (
-        <button
-          key={g.id}
-          type='button'
-          // The list item has no actions; the glob page (fetched fresh) has them.
-          onClick={() => void navigate(`/boards/${String(boardId)}/globs/${encodeURIComponent(g.id)}`)}
-          className='flex items-center gap-2 rounded-md border bg-card p-2 text-left text-sm hover:bg-muted'
-          data-testid={`signed-off-${g.id}`}
-        >
-          <span className='font-mono text-xs text-muted-foreground'>{g.id}</span>
-          <span className='flex-1'>{g.title}</span>
-          {g.group !== null && <GroupChip name={g.group} />}
-          <span className='text-xs text-muted-foreground'>
-            {g.signedOffAt === null ? '' : new Date(g.signedOffAt).toLocaleDateString()}
-          </span>
-        </button>
-      ))}
+      {globs.length > 0 && (
+        <div className='grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,17rem),1fr))]' data-testid='signed-off-grid'>
+          {globs.map((g) => (
+            <div key={g.id} className='contents' data-testid={`signed-off-${g.id}`}>
+              {/* Read-only: no moves, actions or label changes; the glob page (fetched fresh) has them. */}
+              <GlobCard
+                glob={g}
+                onOpen={() => void navigate(globPath(boardId, g.id))}
+                onOpenSection={(target) => void navigate(globPath(boardId, g.id, target))}
+                onFilterGroup={(name) => {
+                  setFilters({ ...filters, group: name });
+                  setFilterOpen(true);
+                }}
+                moves={[]}
+                previewing={null}
+                onPreview={noop}
+                onMove={noop}
+                onArrow={noop}
+                viewer={viewer}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       {pages.hasNextPage && (
         <Button variant='outline' onClick={() => void pages.fetchNextPage()}>
           Load more

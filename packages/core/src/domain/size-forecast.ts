@@ -439,28 +439,21 @@ export const forecastUnits = (forecast: SizeForecast): number => Math.ceil(forec
  */
 export const FORECAST_MIN_PARTS = 3;
 
-/** The forecast's parts in build order, with each one's direct needs and overlaps as indexes of earlier parts. */
+/** The forecast's parts in build order, with each one's direct needs as indexes of earlier parts. */
 const arranged = (
   forecast: SizeForecast,
-): { readonly ordered: readonly ForecastPart[]; readonly after: readonly (readonly number[])[]; readonly overlaps: readonly (readonly number[])[] } => {
+): { readonly ordered: readonly ForecastPart[]; readonly after: readonly (readonly number[])[] } => {
   const ordered = orderParts(forecast.parts).slice(0, MAX_PROPOSED_PARTS);
   const reach: Set<number>[] = [];
   const after: number[][] = [];
-  const overlaps: number[][] = [];
   for (const [index, part] of ordered.entries()) {
     const wanted = ordered.flatMap((other, earlier) => (earlier < index && part.needs.includes(other.name) ? [earlier] : []));
     // Direct needs only: a part that needs another through a third does not name it as well.
     const direct = wanted.filter((n) => !wanted.some((m) => m !== n && reach[m]?.has(n) === true));
     reach[index] = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
     after.push(direct);
-    // Both change a migration: they order the merges but neither blocks the other's start.
-    overlaps.push(
-      ordered.flatMap((other, earlier) =>
-        earlier < index && !reach[index]?.has(earlier) && part.files.some(isMigrationPath) && other.files.some(isMigrationPath) ? [earlier] : [],
-      ),
-    );
   }
-  return { ordered, after, overlaps };
+  return { ordered, after };
 };
 
 /** The shape of the forecast's parts (the longest chain of needs, the most that can run at once). */
@@ -498,11 +491,11 @@ export const forecastEvidence = (forecast: SizeForecast): string[] => [
 /**
  * The fan-out proposal from the forecast's part file sets (pure): one part per forecast part, part 0 stays the original
  * glob. Plan tasks that name a part's files or module go to it (the rest to part 0), context sections go to every part.
- * A part starts after the parts it `needs` (direct needs only); two parts that both change a migration `overlap`. Null
+ * A part starts after the parts it `needs` (direct needs only). Null
  * below 2 parts, and for a chain (parts waiting on each other in one line gain nothing from a split).
  */
 export const proposalFromForecast = (plan: string, forecast: SizeForecast): SizeProposal | null => {
-  const { ordered, after, overlaps } = arranged(forecast);
+  const { ordered, after } = arranged(forecast);
   if (ordered.length < 2) return null;
   const tasks = planTaskLines(plan);
   const owner = (task: string): number => {
@@ -527,7 +520,6 @@ export const proposalFromForecast = (plan: string, forecast: SizeForecast): Size
       summary: `The change in ${part.name}: ${part.files.slice(0, 3).join(', ')}${part.files.length > 3 ? ', ...' : ''}`,
       plan: body.join('\n\n'),
       after: after[index] ?? [],
-      overlaps: overlaps[index] ?? [],
     };
   });
   const proposal: SizeProposal = { parts, ...splitShape(parts) };

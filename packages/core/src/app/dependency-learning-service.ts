@@ -18,9 +18,9 @@ import type {
   DependencyRuleChange,
   DependencyRuleView,
 } from '../domain/dependency-rules.js';
-import type { ImpliedAfter, Glob } from '../domain/types.js';
-import { dependencyState, edgesOf, reaches } from '../domain/waiting.js';
-import type { Catalog, Notifier, Store, Tx } from '../ports.js';
+import type { ImpliedAfter, Glob, Relation } from '../domain/types.js';
+import { MAX_RELATIONS, hasMerged, isActive, wouldCycle } from '../domain/relations.js';
+import type { Catalog, IdGenerator, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import { readMergePolicy } from './knowledge-service.js';
 
@@ -42,7 +42,10 @@ export interface DependencyRulesView {
 /** The strings in a stored list; anything else is ignored. */
 const stringsOf = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
-const merged = (glob: Glob): boolean => glob.status === 'reviewing' || glob.status === 'signed_off';
+const merged = hasMerged;
+
+/** The overlaps predicted for a glob (internal data kept on the glob; never shown): entries with no kind, or `overlaps`, not overridden. */
+const predictedOverlaps = (glob: Glob): ImpliedAfter[] => (glob.impliedAfter ?? []).filter((i) => (i.kind ?? 'overlaps') === 'overlaps' && i.overridden !== true);
 
 /**
  * Learns, per board, which dependency edges are real (spec, Dependencies). Outcomes move the weight of the path patterns
@@ -61,6 +64,8 @@ export class DependencyLearningService {
       store: Store;
       notifier: Notifier;
       clock: { now(): string };
+      /** Names the relations it writes (learned needs). */
+      ids: IdGenerator;
       /** Absent: no defaults, so only the board's merge policy is predicted from. */
       catalog?: Catalog;
     },
@@ -115,14 +120,13 @@ export class DependencyLearningService {
       if (glob === null || !merged(glob)) return null;
       const policy = await readMergePolicy(tx, glob.boardId);
       const patterns = candidatePatterns(policy.exclusivePaths, defaults);
-      const events = (await tx.listBoardEvents(glob.boardId, glob.createdAt, ['ConflictFlagged', 'BehindChanged', 'HoldOverridden', 'EdgeDismissed'])).filter(
+      const events = (await tx.listBoardEvents(glob.boardId, glob.createdAt, ['ConflictFlagged', 'BehindChanged', 'HoldOverridden', 'EdgeDismissed', 'RelationDismissed'])).filter(
         (e) => e.globId === glob.id,
       );
       const conflicted = events.some((e) => e.type === 'ConflictFlagged');
       const reworked = events.some((e) => e.type === 'BehindChanged' && typeof e.data['behindBy'] === 'number' && e.data['behindBy'] > 0 && Array.isArray(e.data['files']) && e.data['files'].length > 0);
       let touched = false;
-      for (const edge of edgesOf(glob)) {
-        if (edge.kind !== 'overlaps' || edge.overridden === true) continue;
+      for (const edge of predictedOverlaps(glob)) {
         const cause: DependencyCause = conflicted || reworked ? 'conflicted_overlap' : 'clean_overlap';
         const evidence = `${glob.id} merged ${conflicted ? 'after a conflict' : reworked ? 'after rebasing on main' : 'with no conflict or rework'}; overlap with ${edge.id}`;
         for (const pattern of patternsCovering(edge.paths, patterns)) {
@@ -131,10 +135,15 @@ export class DependencyLearningService {
       }
       // A person dismissed an inferred edge: the inference was wrong, so weaken the patterns it came from. Start now
       // (overridden without a dismissal) is not a signal here.
-      for (const e of events.filter((ev) => ev.type === 'EdgeDismissed' && ev.data['source'] === 'inferred')) {
-        const id = typeof e.data['edgeId'] === 'string' ? e.data['edgeId'] : null;
+      const mine = await tx.listRelationsFrom([glob.id]);
+      for (const e of events.filter((ev) => (ev.type === 'EdgeDismissed' || ev.type === 'RelationDismissed') && ev.data['source'] === 'inferred')) {
+        const id = typeof e.data['edgeId'] === 'string' ? e.data['edgeId'] : typeof e.data['to'] === 'string' ? e.data['to'] : null;
         if (id === null) continue;
-        const paths = edgesOf(glob).find((edge) => edge.id === id)?.paths ?? [];
+        // Only a dismissed need teaches the file patterns: a decision or a merge or sign-off relation says nothing about overlaps.
+        if (e.data['gate'] !== undefined && e.data['gate'] !== 'start') continue;
+        const dismissed = mine.find((r) => r.to === id && r.gate === 'start');
+        if (dismissed?.until === 'decided') continue;
+        const paths = dismissed?.evidence ?? [];
         const evidence = `${glob.id} dismissed the inferred edge to ${id} as not a dependency`;
         const covering = patternsCovering(paths, patterns);
         if (covering.length === 0) {
@@ -142,22 +151,21 @@ export class DependencyLearningService {
         }
         for (const pattern of covering) if (await this.move(tx, glob.boardId, defaults, pattern, 'edge_dismissed', glob.id, evidence)) touched = true;
       }
-      // Start now on a need, then a merge that never failed for it: the need was an overlap.
+      // Start now on a need, then a merge that never failed for it: the need was an overlap. Only the inferred and learned
+      // relations Start now overrode (`overriddenAt`) are downgraded: the relation goes and the predicted overlap stays.
       const overridden = events.filter((e) => e.type === 'HoldOverridden').flatMap((e) => stringsOf(e.data['for']));
       const history = await tx.listDependencyRuleChanges(glob.boardId);
       const failedFor = new Set(history.filter((c) => c.globId === glob.id && c.cause === 'unmerged_prerequisite').map((c) => c.evidence));
       let next: Glob = glob;
+      const released: Relation[] = [];
       for (const id of new Set(overridden)) {
-        const edge = edgesOf(next).find((e) => e.id === id && e.kind === 'needs');
+        const edge = mine.find((r) => r.to === id && r.gate === 'start' && r.overriddenAt !== null);
         if (edge === undefined || [...failedFor].some((text) => text.includes(id))) continue;
         const evidence = `${glob.id} started anyway without ${id} and merged without failing for it`;
-        const downgraded: ImpliedAfter = { id, paths: edge.paths, kind: 'overlaps', source: 'learned', evidence };
-        next = {
-          ...next,
-          after: (next.after ?? []).filter((a) => a !== id),
-          impliedAfter: [...(next.impliedAfter ?? []).filter((i) => i.id !== id), downgraded],
-        };
-        const covering = patternsCovering(edge.paths, patterns);
+        const downgraded: ImpliedAfter = { id, paths: edge.evidence, kind: 'overlaps', source: 'learned', evidence };
+        next = { ...next, impliedAfter: [...(next.impliedAfter ?? []).filter((i) => i.id !== id), downgraded] };
+        released.push(edge);
+        const covering = patternsCovering(edge.evidence, patterns);
         if (covering.length === 0) {
           await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: this.deps.clock.now(), pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'start_anyway_succeeded', globId: glob.id, evidence });
         }
@@ -165,6 +173,10 @@ export class DependencyLearningService {
         touched = true;
       }
       if (next !== glob && !(await tx.updateGlob({ ...next, version: glob.version + 1 }, glob.version))) throw new Error(`${glob.id} changed during dependency learning`);
+      for (const r of released) await tx.deleteRelation(r.id);
+      if (released.length > 0) {
+        await tx.appendEvents(released.map((r) => ({ type: 'RelationReleased' as const, globId: glob.id, actor: null, at: this.deps.clock.now(), data: { to: r.to, gate: r.gate, reason: 'downgraded to an overlap: it started anyway and merged without failing for it' } })));
+      }
       return touched ? glob.boardId : null;
     });
     if (changed !== null) this.deps.notifier.publish({ kind: 'board.changed', boardId: changed });
@@ -182,33 +194,58 @@ export class DependencyLearningService {
       const named = [...new Set(reason.match(/\bs\d+[a-z]\d+\b/g) ?? [])].filter((id) => id !== glob.id);
       const found = named.length === 0 ? [] : await tx.getGlobs(named);
       const byId = new Map(found.filter((g) => g.boardId === glob.boardId).map((g) => [g.id, g]));
+      // The board's relations are read under its lock: two failures learning needs on each other must see each other's.
+      await tx.lockBoardRelations(glob.boardId);
+      const board = await tx.listRelations(glob.boardId);
       const ids = unmergedPrerequisiteIds(reason, new Set(byId.keys()), glob.id).filter((id) => {
         const dep = byId.get(id);
-        return dep !== undefined && dependencyState(dep) !== 'merged' && !reaches(id, glob.id, (x) => byId.get(x));
+        return dep !== undefined && !hasMerged(dep) && !wouldCycle(board, { from: glob.id, to: id, gate: 'start', until: 'merged' });
       });
       if (ids.length === 0) return [];
       const policy = await readMergePolicy(tx, glob.boardId);
       const patterns = candidatePatterns(policy.exclusivePaths, defaults);
       let next: Glob = glob;
       const added: string[] = [];
+      const now = this.deps.clock.now();
       for (const id of ids) {
         const evidence = `${glob.id} failed: ${reason.slice(0, 160)}`;
-        const existing = edgesOf(next).find((e) => e.id === id);
-        if (existing?.kind === 'needs') {
+        if (board.some((r) => r.from === glob.id && r.to === id && r.gate === 'start')) {
           // Already a need: the failure confirms it (and keeps a later start now from downgrading it).
-          await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: this.deps.clock.now(), pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'unmerged_prerequisite', globId: glob.id, evidence });
+          await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: now, pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'unmerged_prerequisite', globId: glob.id, evidence });
           continue;
         }
+        // The limit every relation writer keeps: a glob with this many start relations learns no more.
+        if (board.filter((r) => r.from === glob.id && r.gate === 'start' && isActive(r)).length >= MAX_RELATIONS) continue;
         added.push(id);
-        const edge: ImpliedAfter = { id, paths: existing?.paths ?? [], kind: 'needs', source: 'learned', evidence };
-        next = { ...next, impliedAfter: [...(next.impliedAfter ?? []).filter((i) => i.id !== id), edge] };
-        const covering = patternsCovering(edge.paths, patterns);
+        // A predicted overlap on the same glob is upgraded: its paths become the need's evidence and the overlap entry goes.
+        const overlap = (glob.impliedAfter ?? []).find((i) => i.id === id && (i.kind ?? 'overlaps') === 'overlaps');
+        const paths = overlap?.paths ?? [];
+        const relation: Relation = {
+          id: `rel_${this.deps.ids.runId()}`,
+          boardId: glob.boardId,
+          from: glob.id,
+          to: id,
+          gate: 'start',
+          until: 'merged',
+          reason: evidence,
+          evidence: paths,
+          source: 'learned',
+          dismissedAt: null,
+          dismissedPlanHash: null,
+          overriddenAt: null,
+          createdAt: now,
+        };
+        await tx.insertRelation(relation);
+        board.push(relation);
+        await tx.appendEvents([{ type: 'RelationAdded', globId: glob.id, actor: null, at: now, data: { to: id, gate: 'start', until: 'merged', source: 'learned', reason: evidence } }]);
+        next = { ...next, impliedAfter: (next.impliedAfter ?? []).filter((i) => i.id !== id) };
+        const covering = patternsCovering(paths, patterns);
         if (covering.length === 0) {
           await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: this.deps.clock.now(), pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'unmerged_prerequisite', globId: glob.id, evidence });
         }
         for (const pattern of covering) await this.move(tx, glob.boardId, defaults, pattern, 'unmerged_prerequisite', glob.id, evidence);
       }
-      if (next === glob) return [];
+      if (added.length === 0) return [];
       if (!(await tx.updateGlob({ ...next, version: glob.version + 1 }, glob.version))) throw new Error(`${glob.id} changed during dependency learning`);
       return added;
     });
