@@ -693,7 +693,14 @@ export const GlobCard = ({
           </span>
         </span>
         <span className='inline-flex min-w-0 items-center justify-end gap-1.5' data-testid='card-corner'>
-          {status !== null && <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />}
+          {status !== null && (
+            <>
+              <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />
+              <span aria-hidden='true' className='shrink-0' data-testid='card-corner-separator'>
+                ·
+              </span>
+            </>
+          )}
           <CategoryIcon category={glob.category} />
         </span>
       </div>
