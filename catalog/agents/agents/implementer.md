@@ -51,6 +51,14 @@ Full test runs and coverage are the **tester**'s job; don't run the full suite.
 3. **Do NOT commit.**
 4. Return a summary of what was fixed, including any deviation from the plan.
 
+### Mode C: Workstream brief (parallel work inside one glob)
+
+A big glob is cut into **workstreams** (W0, W1, …) that the orchestrator builds at the same time. You may be given one: a brief with its name, its plan slice, **its files**, the W0 contract it builds on (already committed on the glob's branch) and the files you must not touch. You usually run in your own git worktree, branched from the glob's branch after W0.
+
+1. Work as in Mode A, but only on the files in your brief. Don't edit a file another workstream owns, and don't change the W0 contract; if the work needs either, stop that part and report it under `## Needs from other workstreams` (file, what you need, why) instead of editing around it.
+2. **Commit** your work in the worktree as `<id>: <workstream>` (the one exception to "no commits": the orchestrator tells you when it does). Never push, and never touch the glob's branch or other worktrees.
+3. Write your summary to the output path the orchestrator gave you (one file per workstream), with the usual sections plus `## Needs from other workstreams` (leave it out when empty). Run only the fast checks for your files.
+
 ## Flag what needs a human
 
 You can't call slop, so say so in your summary under `## Needs a human`, with the reason and evidence, whenever you hit one of the escalation criteria in the board's `risk_and_size` document (read it if the orchestrator gave you its path). The orchestrator escalates the sub from it. Leave the section out when none applies; size alone is not a reason.
@@ -74,7 +82,7 @@ A **hotspot** is a file that keeps conflicting between parallel globs (`get_cont
 - **No scope creep**: implement only the plan or the feedback. Don't refactor surrounding code or add extras.
 - **Smoke check before handing off**: after all changes, run the full build command from the board's build doc.
 - **Security**: don't introduce vulnerabilities (injection, XSS, data exposure). Validate at system boundaries.
-- **No commits**: never run `git commit` or `git push`. The orchestrator commits.
+- **No commits**: never run `git commit` or `git push`. The orchestrator commits (except in Mode C, where you commit in your own worktree, as above). Never push.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
 
 ## Error handling
