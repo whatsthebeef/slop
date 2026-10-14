@@ -80,7 +80,7 @@ const Column = ({
   filtered: boolean;
 }) => (
   <section
-    className='list-well flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2 max-sm:w-full max-sm:flex-none max-sm:shrink-0 max-sm:snap-start max-sm:overflow-y-auto'
+    className='list-well flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2 max-sm:w-full max-sm:flex-none max-sm:shrink-0 max-sm:snap-start max-sm:overflow-y-auto max-sm:overscroll-y-contain'
     aria-label={LIST_TITLES[list]}
     data-testid={`list-${list}`}
   >
@@ -448,16 +448,18 @@ export const BoardPage = () => {
         }}
       />
 
-      <nav className='flex justify-center gap-2 pt-1.5 sm:hidden' aria-label='Lists' data-testid='list-dots'>
+      <nav className='flex justify-center pt-1 sm:hidden' aria-label='Lists' data-testid='list-dots'>
         {LISTS.map((list, i) => (
           <button
             key={list}
             type='button'
-            className={cn('h-2.5 w-2.5 rounded-full border border-foreground/60', i === activeList && 'bg-foreground')}
+            className='flex h-8 w-8 items-center justify-center'
             aria-label={LIST_TITLES[list]}
             aria-current={i === activeList ? 'true' : undefined}
             onClick={() => listsRow.current?.scrollTo({ left: listScrollLeft(i, listsRow.current.clientWidth), behavior: 'smooth' })}
-          />
+          >
+            <span className={cn('h-2.5 w-2.5 rounded-full border border-foreground/60', i === activeList && 'bg-foreground')} />
+          </button>
         ))}
       </nav>
 
@@ -469,7 +471,7 @@ export const BoardPage = () => {
       >
         <div
           ref={listsRow}
-          className='relative flex min-h-full min-w-full items-stretch gap-3 max-sm:h-full max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto max-sm:scroll-smooth'
+          className='relative flex min-h-full min-w-full items-stretch gap-3 max-sm:h-full max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto max-sm:overscroll-x-contain'
           data-testid='lists'
           onScroll={(e) => setActiveList(visibleListIndex(e.currentTarget.scrollLeft, e.currentTarget.clientWidth, LISTS.length))}
         >
