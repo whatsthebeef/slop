@@ -46,8 +46,6 @@ export interface RelatedGroups {
   readonly holding: readonly RelatedRow[];
   /** Unmet relations that wait for a decision. */
   readonly decisions: readonly RelatedRow[];
-  /** Split relations still unmet: the earlier parts, and for the source the parts that must merge before sign-off. */
-  readonly parts: readonly RelatedRow[];
   /** Other globs this one holds back. */
   readonly holdsBack: readonly RelatedRow[];
   /** Relations that stopped holding (met, deleted, dismissed, overridden). */
@@ -61,7 +59,7 @@ const rowOf = (h: Holding): RelatedRow => ({
   words: gateWords(h.gate, h.until),
   reason: h.reason,
   source: h.source,
-  dismissible: true,
+  dismissible: h.source !== 'split',
 });
 
 const HOW_WORDS = { met: 'done', deleted: 'deleted', dismissed: 'dismissed', overridden: 'started anyway' } as const;
@@ -72,9 +70,8 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
   if (view === undefined) return null;
   const holding = view.holding;
   const groups: RelatedGroups = {
-    holding: holding.filter((h) => h.source !== 'split' && !h.toIsDecision).map(rowOf),
-    decisions: holding.filter((h) => h.source !== 'split' && h.toIsDecision).map(rowOf),
-    parts: holding.filter((h) => h.source === 'split').map(rowOf),
+    holding: holding.filter((h) => !h.toIsDecision).map(rowOf),
+    decisions: holding.filter((h) => h.toIsDecision).map(rowOf),
     holdsBack: view.holdsBack.map((h) => ({
       relationId: h.relationId,
       id: h.from,
@@ -95,7 +92,7 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
       how: HOW_WORDS[d.how],
     })),
   };
-  const empty = groups.holding.length + groups.decisions.length + groups.parts.length + groups.holdsBack.length + groups.done.length === 0;
+  const empty = groups.holding.length + groups.decisions.length + groups.holdsBack.length + groups.done.length === 0;
   return empty ? null : groups;
 };
 
@@ -266,7 +263,7 @@ export const RelationsHeader = ({
 
 /**
  * The Related section of a work glob: what holds it back (with the gate in words, why and who said so), the decisions it waits
- * for, its split parts, what it holds back, and what no longer holds (collapsed). Slop infers relations; a person can dismiss one
+ * for, the glob it was split from, what it holds back, and what no longer holds (collapsed). Slop infers relations; a person can dismiss one
  * that isn't, or add one.
  */
 export const RelatedSection = ({
@@ -283,7 +280,7 @@ export const RelatedSection = ({
   const groups = relatedGroups(glob);
   const boardId = glob.boardId;
   const splitFrom = glob.split !== undefined && glob.split.part > 0 ? glob.split.source : null;
-  const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length + groups.parts.length;
+  const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length;
   const count = groups === null ? 0 : holding + groups.holdsBack.length + groups.done.length;
   // Starts open while something holds the glob back, until the viewer toggles it.
   const [toggled, setToggled] = useState<boolean | null>(null);
@@ -320,18 +317,10 @@ export const RelatedSection = ({
           ))}
         </Group>
       )}
-      {((groups !== null && groups.parts.length > 0) || splitFrom !== null) && (
-        <div data-testid="related-parts">
-          <span className="font-medium">Parts / split from</span>
-          {splitFrom !== null && (
-            <p className="text-xs text-muted-foreground">
-              Split from <GlobLink boardId={boardId} id={splitFrom} />
-            </p>
-          )}
-          <ul className="ml-4 list-disc">
-            {groups?.parts.map((r) => <Row key={r.relationId} boardId={boardId} row={r} onDismiss={null} />)}
-          </ul>
-        </div>
+      {splitFrom !== null && (
+        <p className="text-xs text-muted-foreground" data-testid="related-split-from">
+          Split from <GlobLink boardId={boardId} id={splitFrom} />
+        </p>
       )}
       {groups !== null && groups.holdsBack.length > 0 && (
         <Group name="Holds back" testId="related-holds-back">
