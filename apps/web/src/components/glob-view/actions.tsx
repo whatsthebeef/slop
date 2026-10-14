@@ -112,7 +112,8 @@ export const useGlobActions = ({
     setBriefOpen(false);
   }, [glob.id]);
   // Dismissing a message is stored per person on the server; the page reloads the glob afterwards.
-  const dismiss = (key: string, on: boolean) => run(async () => {
+  const dismiss = (key: string, on: boolean) =>
+    run(async () => {
       await onDismiss(key, on);
     });
 
@@ -129,7 +130,8 @@ export const useGlobActions = ({
   const [stepsSignal, setStepsSignal] = useState(0);
   // A stalled glob's step names the one action to lead with and one alternative to follow it.
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
-  const leading = stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+  const leading =
+    stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
   const main = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
   const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
@@ -170,7 +172,8 @@ export const useGlobActions = ({
       return;
     }
     // Resume reopens your own session: nothing starts, so there is nothing to confirm.
-    const resuming = action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
+    const resuming =
+      action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
     if (
       !resuming &&
       ((oversized &&
@@ -178,8 +181,8 @@ export const useGlobActions = ({
           action === 'start_anyway' ||
           action === 'pick_up' ||
           action === 'take_over')) ||
-      (brief !== null &&
-        (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
+        (brief !== null &&
+          (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
     ) {
       setConfirmingOversized(action);
       return;
@@ -285,7 +288,12 @@ const Clamped = ({ text }: { text: string }) => {
   return (
     <>
       {more ? text : `${text.slice(0, CLAMP_AT).trimEnd()}…`}{' '}
-      <button type="button" className="cursor-pointer text-xs underline" data-testid="clamp-toggle" onClick={() => setMore(!more)}>
+      <button
+        type="button"
+        className="cursor-pointer text-xs underline"
+        data-testid="clamp-toggle"
+        onClick={() => setMore(!more)}
+      >
         {more ? 'show less' : 'show more'}
       </button>
     </>
@@ -386,8 +394,20 @@ const StepMainButton = ({
   const [copied, setCopied] = useState(false);
   useEffect(() => setCopied(false), [step.id]);
   const copy = async () => {
-    const text = await scriptCopyText(glob.boardId, glob.id, step.script ?? { path: '' }, api.rolloutScript, window.location.origin);
-    setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
+    const text = await scriptCopyText(
+      glob.boardId,
+      glob.id,
+      step.script ?? { path: '' },
+      api.rolloutScript,
+      window.location.origin,
+    );
+    setCopied(
+      await copyOrSelect(
+        text,
+        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
+        () => undefined,
+      ),
+    );
   };
   const tick = () => void onComplete?.(step.id);
   const asCopy = main.kind === 'copy' && !copied;
@@ -396,26 +416,30 @@ const StepMainButton = ({
   return (
     <>
       <div className="inline-flex">
-      <Tip text={main.kind === 'wait' ? main.reason : step.title}>
-        <span>
-          <Button
-            size="sm"
-            className={menu === undefined ? undefined : 'rounded-r-none'}
-            data-testid="main-action"
-            data-step={step.id}
-            data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
-            disabled={busy || unavailable}
-            onClick={asCopy ? () => void copy() : tick}
-          >
-            <HumanIcon decorative />
-            {label}
-          </Button>
-        </span>
-      </Tip>
-      {menu}
+        <Tip text={main.kind === 'wait' ? main.reason : step.title}>
+          <span>
+            <Button
+              size="sm"
+              className={menu === undefined ? undefined : 'rounded-r-none'}
+              data-testid="main-action"
+              data-step={step.id}
+              data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
+              disabled={busy || unavailable}
+              onClick={asCopy ? () => void copy() : tick}
+            >
+              <HumanIcon decorative />
+              {label}
+            </Button>
+          </span>
+        </Tip>
+        {menu}
       </div>
       <span className="text-xs text-muted-foreground" data-testid="main-action-note">
-        {main.kind === 'wait' ? `${step.title}: ${main.reason}` : main.kind === 'done' && main.text !== null ? `${step.title}: ${main.text}` : step.title}
+        {main.kind === 'wait'
+          ? `${step.title}: ${main.reason}`
+          : main.kind === 'done' && main.text !== null
+            ? `${step.title}: ${main.text}`
+            : step.title}
       </span>
     </>
   );
@@ -424,17 +448,7 @@ const StepMainButton = ({
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
 export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
   const { glob } = ctx;
-  const {
-    busy,
-    pending,
-    main,
-    stepTurn,
-    actions,
-    tiers,
-    disabled,
-    brief,
-    oversized,
-  } = state;
+  const { busy, pending, main, stepTurn, actions, tiers, disabled, brief, oversized } = state;
   const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
   // The menu closes on select, so the More button shows the action it started while it runs.
   const moreRunning =
@@ -498,7 +512,13 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {main === null && stepTurn !== null && (
-              <StepMainButton step={stepTurn.step} glob={glob} busy={busy} onComplete={state.completeStep} menu={menu} />
+              <StepMainButton
+                step={stepTurn.step}
+                glob={glob}
+                busy={busy}
+                onComplete={state.completeStep}
+                menu={menu}
+              />
             )}
             {main !== null && (
               <div className="inline-flex" data-testid="split-button">

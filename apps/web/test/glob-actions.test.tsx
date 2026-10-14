@@ -232,6 +232,7 @@ describe('glob view: main button', () => {
     const menu = await screen.findByTestId('more-menu');
     expect(within(menu).getByTestId('more-retrigger').textContent).toContain('Retry');
     expect(within(menu).queryByTestId('more-pick_up')).toBeNull();
+    expect(within(menu).queryByTestId('more-start_again')).toBeNull();
   });
 
   it('calls onAction with the action when clicked', async () => {

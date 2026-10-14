@@ -96,6 +96,11 @@ describe('mainAction after repeated failures', () => {
     expect(failedRepeatedly({ runs: [run('failed'), run('superseded'), run('failed')] })).toBe(true);
   });
 
+  it('leaves a due blocking step as the main button, even after repeated failures', () => {
+    expect(mainAction(['retrigger', 'pick_up'], failed, false, true)).toBe('retrigger');
+    expect(mainAction(['pick_up'], failed, false, true)).toBeNull();
+  });
+
   it('does not count while a run is in progress', () => {
     expect(failedRepeatedly({ runs: [run('failed'), run('failed'), run(null, undefined, 'active')] })).toBe(false);
   });

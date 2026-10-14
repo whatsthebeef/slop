@@ -10,6 +10,7 @@ export const REPEATED_FAILURES = 2;
 /**
  * Whether the glob's latest runs all failed for the same cause since the last one that didn't. The cause is the kind of run
  * (an implementing run, a conflict fix, an investigation): a conflict fix that fails again is the same failure.
+ * A run that ended without an outcome, or with a different one, breaks the streak.
  */
 export const failedRepeatedly = (glob: Pick<Subject, 'runs'>): boolean => {
   const runs = glob.runs ?? [];
@@ -62,7 +63,7 @@ export const mainAction = (
 ): Action | null => {
   if (preferred !== undefined && available.includes(preferred)) return preferred;
   // The machine has failed again after a retry: a person takes over, and Retry moves into the menu.
-  if (failedRepeatedly(glob)) {
+  if (!stepFirst && failedRepeatedly(glob)) {
     const person = TAKE_OVERS.find((action) => available.includes(action));
     if (person !== undefined) return person;
   }
