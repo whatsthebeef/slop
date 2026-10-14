@@ -16,6 +16,7 @@ import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { GLOB_VIEW_SECTIONS } from './glob-view/sections';
 import { useNowState } from './glob-view/status';
 import { GlobTitle } from './glob-title';
+import { isOversized, useOversized } from './oversized-glob';
 
 /** A section's anchor: found by `?section=`, and left below the sticky header (its measured height) when scrolled to. Hidden while empty. */
 const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) => (
@@ -28,6 +29,7 @@ const Anchor = ({ name, children }: { name: GlobSection; children: ReactNode }) 
 export const GlobDetail = ({
   board,
   glob,
+  groups = [],
   initialArtifact,
   section = null,
   openLabel = null,
@@ -47,6 +49,8 @@ export const GlobDetail = ({
 }: {
   board: BoardView;
   glob: GlobView;
+  /** The board's existing groups, suggested in the Group field. */
+  groups?: readonly string[];
   /** The artifact to show first (from a card icon). */
   initialArtifact: ArtifactRef | null;
   /** The section to scroll to once it has rendered (from `?section=`); unknown or null stays at the top. */
@@ -106,6 +110,7 @@ export const GlobDetail = ({
   const ctx: GlobViewContext = {
     board,
     glob,
+    groups,
     busy,
     onAction,
     onUpdate,
@@ -116,6 +121,7 @@ export const GlobDetail = ({
   };
 
   const [splitting, setSplitting] = useState(false);
+  const size = useOversized({ glob, enabled: !actionState.decision && isOversized(glob), onDone: onClose });
   useEffect(() => setSplitting(false), [glob.id]);
   // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
   const confirming = actionState.confirmDelete || actionState.confirmingAgain || splitting;
@@ -152,6 +158,7 @@ export const GlobDetail = ({
     onSelectArtifact: setArtifact,
     applied,
     onApply: setApplied,
+    size,
     splitting,
     onSplitting: setSplitting,
     onClose,

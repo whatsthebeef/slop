@@ -298,6 +298,50 @@ describe('pick up (rows 6–10)', () => {
   });
 });
 
+describe('QA and PO and sames and supers', () => {
+  const qa = { email: 'qa@example.com', role: 'qa' } as const;
+  const gated = ['start', 'start_anyway', 'retrigger', 'start_again', 'pick_up', 'take_over', 'resolve_conflict'] as const;
+  const planningSame = glob({ type: 'same', status: 'planning' });
+  const failedSame = glob({ type: 'same', status: 'failed', failure: { kind: 'run', reason: 'x', at: NOW } as never });
+  const superGlob = glob({ type: 'super', category: 'feature', status: 'in_progress', implementer: dev.email });
+
+  it('QA and PO are offered none of start, retry, start again or pick up on a same or super', () => {
+    for (const actor of [po, qa]) {
+      for (const g of [planningSame, failedSame, superGlob]) {
+        const offered = m.allowedActions(g, actor);
+        for (const action of gated) expect(offered).not.toContain(action);
+      }
+    }
+  });
+
+  it('developers and admins keep them', () => {
+    expect(m.allowedActions(planningSame, dev)).toContain('start');
+    expect(m.allowedActions(failedSame, dev)).toContain('retrigger');
+    expect(m.allowedActions(failedSame, dev)).toContain('start_again');
+    expect(m.allowedActions(superGlob, other)).toContain('start_again');
+  });
+
+  it('QA and PO keep the actions on a sub', () => {
+    const sub = glob({ type: 'sub', status: 'failed', failure: { kind: 'run', reason: 'x', at: NOW } as never });
+    expect(m.allowedActions(sub, po)).toEqual(expect.arrayContaining(['retrigger', 'start_again', 'pick_up']));
+  });
+
+  it('start, retrigger and startAgain are forbidden for QA and PO on a same', () => {
+    for (const actor of [po, qa]) {
+      expect(errorCode(m.start(planningSame, ctx(actor)))).toBe('forbidden');
+      expect(errorCode(m.retrigger(failedSame, ctx(actor)))).toBe('forbidden');
+      expect(errorCode(m.startAgain(failedSame, ctx(actor)))).toBe('forbidden');
+      expect(errorCode(m.startAgain(superGlob, ctx(actor)))).toBe('forbidden');
+      expect(errorCode(m.resolveConflict(failedSame, ctx(actor)))).toBe('forbidden');
+      expect(errorCode(m.startAnyway(planningSame, ctx(actor)))).toBe('forbidden');
+      expect(errorCode(m.startAnyway(glob({ type: 'same', status: 'in_progress', implementer: dev.email }), ctx(actor)))).toBe(
+        'forbidden',
+      );
+    }
+    expect(m.start(planningSame, ctx(dev)).ok).toBe(true);
+  });
+});
+
 describe('environment at pick-up', () => {
   it('sets a valid environment, records the change and relabels the PR', () => {
     const t = value(m.pickUp(glob({ status: 'pr_open' }), ctx(), board, { takeOver: false, environment: 'dev' }));

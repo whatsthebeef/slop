@@ -22,6 +22,7 @@ import {
   processingNote,
   visibleItems,
 } from '@/lib/inbox';
+import { groupNames } from '@/lib/group-names';
 import { globsKey, inboxKey, useLiveInbox } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { cn } from '@/lib/utils';
@@ -350,7 +351,7 @@ const Card = ({
       {creating !== null && board !== undefined && (
         <CreateGlobDialog
           board={board}
-          groups={[...new Set(globs.flatMap((g) => (g.group === null ? [] : [g.group])))].sort()}
+          groups={groupNames(globs)}
           open
           initialRequest={creating.request}
           fromInbox={{ id: item.id, title: item.title, key: creating.key }}

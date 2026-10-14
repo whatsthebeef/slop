@@ -17,6 +17,7 @@ import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, haltedBy } from '@/lib/action-presentation';
 import { cardMoves } from '@/lib/card-moves';
+import { groupNames } from '@/lib/group-names';
 import { hasBlocker } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
@@ -407,7 +408,7 @@ export const BoardPage = () => {
   // A rejected or closed decision (archived) never shows.
   const filterContext = { now: new Date().toISOString(), viewer };
   const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters, filterContext));
-  const groups = [...new Set(all.flatMap((g) => (g.group === null ? [] : [g.group])))].sort();
+  const groups = groupNames(globs.data.filter((g) => decisionOf(g)?.archived !== true));
   const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
   return (

@@ -1,10 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import type { SizeForecast } from '@slop/core';
 import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { api, RequestError } from '@/lib/api';
 import type { GlobView, SplitPartInput } from '@/lib/api';
-import { SplitGlob } from './split-glob';
 
 const pct = (n: number): string => `${Math.round(n * 100)}%`;
 
@@ -61,31 +59,34 @@ export const SizeForecastView = ({ forecast }: { forecast: SizeForecast }) => (
 export const isOversized = (glob: GlobView): boolean => glob.oversized === true && glob.status === 'planning';
 
 /**
- * The size check's answer for a flagged glob: why it is flagged, the proposed split, and the three ways to answer it.
- * Split as proposed calls the split service with the proposal; Edit split opens its editor pre-filled; Keep whole records
- * the decision (it is read as an outcome when the glob merges) and starts a glob that was held for the flag.
+ * The size check's answer for a flagged glob, as the moves the actions menu offers: Split as proposed calls the split
+ * service with the proposal; Keep whole records the decision (it is read as an outcome when the glob merges) and starts a
+ * glob that was held for the flag; Propose again asks for a new proposal. Edit split is the page's split form.
  */
-export const OversizedGlob = ({
+export const useOversized = ({
   glob,
-  canKeep,
+  enabled,
   onDone,
 }: {
   glob: GlobView;
-  /** QA members can only decide subs, so Keep whole is hidden from them elsewhere. */
-  canKeep: boolean;
+  /** Only an oversized glob loads or acts on the proposal. */
+  enabled: boolean;
   /** After a split or Keep whole: the caller refreshes the board. */
   onDone: () => void;
 }) => {
   // The board list carries only the flag; the proposal comes with the single-glob read.
-  const full = useQuery({ queryKey: ['size-check', glob.id], queryFn: () => api.glob(glob.id), enabled: glob.sizeCheck === undefined });
+  const full = useQuery({
+    queryKey: ['size-check', glob.id],
+    queryFn: () => api.glob(glob.id),
+    enabled: enabled && glob.sizeCheck === undefined,
+  });
   const check = glob.sizeCheck ?? full.data?.sizeCheck;
-  const [editing, setEditing] = useState(false);
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingKeep, setConfirmingKeep] = useState(false);
   const proposal = check?.proposal ?? null;
-  // Proposing runs in the background: the button spins until the stored check's time moves (or a minute passes).
+  // Proposing runs in the background: the menu spins until the stored check's time moves (or a minute passes).
   const [proposingFrom, setProposingFrom] = useState<string | null>(null);
   const proposing = proposingFrom !== null && check?.updatedAt === proposingFrom;
   useEffect(() => {
@@ -102,6 +103,10 @@ export const OversizedGlob = ({
       clearTimeout(stop);
     };
   }, [proposingFrom, check?.updatedAt]);
+  useEffect(() => {
+    setConfirmingKeep(false);
+    setError(null);
+  }, [glob.id]);
   // The web has no plan hash: a plan saved after the check was last made means the proposal may not reflect it.
   const planSavedAt = (glob.artifacts ?? full.data?.artifacts)?.find((a) => a.kind === 'plan' && a.label === '')?.createdAt;
   const planChanged = check !== undefined && planSavedAt !== undefined && planSavedAt > check.updatedAt;
@@ -136,7 +141,35 @@ export const OversizedGlob = ({
       }));
       return api.splitGlob(glob.id, glob.version, parts, key);
     });
-  if (editing) return <SplitGlob glob={glob} proposal={proposal ?? undefined} onCancel={() => setEditing(false)} onDone={onDone} />;
+  const keepWhole = () => {
+    setConfirmingKeep(false);
+    return act(() => api.keepWhole(glob.id));
+  };
+  return {
+    check,
+    loadFailed: full.isError,
+    proposal,
+    planChanged,
+    busy,
+    proposing,
+    error,
+    confirmingKeep,
+    setConfirmingKeep,
+    splitAsProposed,
+    proposeAgain,
+    keepWhole,
+  };
+};
+
+export type OversizedState = ReturnType<typeof useOversized>;
+
+/**
+ * The size check's explanation for a flagged glob: why it is flagged, the forecast, the proposed parts and whether the
+ * plan changed since. It has no buttons: the answers (Split as proposed, Edit split, Propose again, Keep whole) are in the
+ * glob's actions.
+ */
+export const OversizedGlob = ({ glob, size }: { glob: GlobView; size: OversizedState }) => {
+  const { check, proposal, planChanged } = size;
   return (
     <div className='grid gap-2 rounded border border-amber/60 bg-amber/10 p-3 text-xs' data-testid='oversized-proposal'>
       <p className='font-semibold'>Oversized: this looks like more than one PR's worth of work</p>
@@ -174,47 +207,15 @@ export const OversizedGlob = ({
         </ol>
       )}
       {check === undefined ? (
-        <p className='text-muted-foreground'>{full.isError ? 'Could not load the proposed split.' : 'Loading the proposed split…'}</p>
+        <p className='text-muted-foreground'>{size.loadFailed ? 'Could not load the proposed split.' : 'Loading the proposed split…'}</p>
       ) : (
         proposal === null && (
           <p className='text-muted-foreground'>No split was proposed (the model gave none). Propose again, or cut it yourself with Edit split.</p>
         )
       )}
-      <div className='flex flex-wrap items-center gap-2'>
-        {proposal !== null && (
-          <Button size='sm' disabled={busy} data-testid='split-as-proposed' onClick={() => void splitAsProposed()}>
-            Split as proposed
-          </Button>
-        )}
-        {check !== undefined && (
-          <Button size='sm' variant='outline' disabled={busy || proposing} data-testid='propose-split' onClick={proposeAgain}>
-            {proposing ? 'Proposing…' : proposal === null ? 'Propose split' : 'Propose again'}
-          </Button>
-        )}
-        {planChanged && <span className='text-muted-foreground' data-testid='plan-changed'>The plan changed since this proposal</span>}
-        <Button size='sm' variant='outline' disabled={busy} data-testid='edit-split' onClick={() => setEditing(true)}>
-          Edit split
-        </Button>
-        {canKeep && (
-          <Button size='sm' variant='outline' disabled={busy} data-testid='keep-whole' onClick={() => setConfirmingKeep(true)}>
-            Keep whole
-          </Button>
-        )}
-      </div>
-      {confirmingKeep && (
-        <div role='alert' className='flex flex-wrap items-center gap-2'>
-          <span className='flex-1'>Keep it as one glob? slop learns from how it goes.</span>
-          <Button size='sm' variant='ghost' onClick={() => setConfirmingKeep(false)}>
-            Cancel
-          </Button>
-          <Button size='sm' disabled={busy} data-testid='confirm-keep-whole' onClick={() => void act(() => api.keepWhole(glob.id))}>
-            Keep whole
-          </Button>
-        </div>
-      )}
-      {error !== null && (
-        <p role='alert' className='text-red' data-testid='oversized-failure'>
-          {error}
+      {planChanged && (
+        <p className='text-muted-foreground' data-testid='plan-changed'>
+          The plan changed since this proposal
         </p>
       )}
     </div>

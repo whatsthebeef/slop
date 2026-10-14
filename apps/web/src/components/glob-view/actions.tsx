@@ -16,6 +16,7 @@ import { mainAction, promotedAction } from '@/lib/main-action';
 import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
 import { api } from '@/lib/api';
 import { copyOrSelect } from '@/lib/plan-text';
+import { takeOverConfirmation } from '@/lib/sstor-command';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { findSection } from '@/lib/glob-scroll';
 import { workingLabel } from '@/lib/card-pending';
@@ -28,9 +29,11 @@ import { chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { isOversized } from '../oversized-glob';
+import type { OversizedState } from '../oversized-glob';
 import { Tip } from '../ui/tip';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
+import { splittable } from './size';
 
 /**
  * The state the actions, the type chip and the reset area share: what is running, which confirmation is
@@ -97,6 +100,8 @@ export const useGlobActions = ({
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
+  // Pick up from a live machine run stops it: say what happens and the command to run first.
+  const [confirmingTakeOver, setConfirmingTakeOver] = useState(false);
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
@@ -107,6 +112,7 @@ export const useGlobActions = ({
   const [briefOpen, setBriefOpen] = useState(false);
   useEffect(() => {
     setConfirmingAgain(false);
+    setConfirmingTakeOver(false);
     setTypeFailure(null);
     setConfirmingOversized(null);
     setBriefOpen(false);
@@ -169,6 +175,10 @@ export const useGlobActions = ({
       setConfirmingAgain(true);
       return;
     }
+    if (action === 'take_over') {
+      setConfirmingTakeOver(true);
+      return;
+    }
     if (action === 'retrigger' && (glob.blockedBy?.length ?? 0) > 0) {
       setConfirmingRetrigger(true);
       return;
@@ -178,13 +188,8 @@ export const useGlobActions = ({
       action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
     if (
       !resuming &&
-      ((oversized &&
-        (action === 'start' ||
-          action === 'start_anyway' ||
-          action === 'pick_up' ||
-          action === 'take_over')) ||
-        (brief !== null &&
-          (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
+      ((oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up')) ||
+        (brief !== null && (action === 'start_anyway' || action === 'pick_up')))
     ) {
       setConfirmingOversized(action);
       return;
@@ -226,6 +231,8 @@ export const useGlobActions = ({
     setConfirmDelete,
     confirmingAgain,
     setConfirmingAgain,
+    confirmingTakeOver,
+    setConfirmingTakeOver,
     confirmingRetrigger,
     setConfirmingRetrigger,
     confirmingOversized,
@@ -447,18 +454,174 @@ const StepMainButton = ({
   );
 };
 
+/** Pick up from a live machine run: what happens to the run and the branch, and the command that carries on. */
+const TakeOverConfirmation = ({
+  ctx,
+  state,
+}: {
+  ctx: GlobViewContext;
+  state: GlobActionsState;
+}) => {
+  const says = takeOverConfirmation(ctx.glob);
+  const [copied, setCopied] = useState(false);
+  const copy = async () =>
+    setCopied(
+      await copyOrSelect(
+        says.command,
+        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
+        () => undefined,
+      ),
+    );
+  return (
+    <div
+      role="alertdialog"
+      aria-label={says.title}
+      data-testid="take-over-confirmation"
+      className="grid gap-2 rounded border border-amber/60 bg-amber/10 p-3 text-xs"
+    >
+      <strong>{says.title}</strong>
+      <p data-testid="take-over-happens">{says.happens}</p>
+      {state.oversized && (
+        <p data-testid="take-over-oversized">
+          This glob is flagged oversized: it is probably more than one PR&apos;s worth of work.
+        </p>
+      )}
+      {state.brief !== null && (
+        <p data-testid="handover-confirmation">{handoverConfirmation('take_over', state.brief)}</p>
+      )}
+      <div className="flex items-center gap-2">
+        <code className="flex-1 rounded bg-muted px-2 py-1" data-testid="take-over-command">
+          {says.command}
+        </code>
+        <Button
+          size="sm"
+          variant="outline"
+          data-testid="take-over-copy"
+          onClick={() => void copy()}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      <p>{says.how}</p>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => state.setConfirmingTakeOver(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={state.busy}
+          data-testid="confirm-take-over"
+          onClick={() =>
+            void state.run(async () => {
+              state.setConfirmingTakeOver(false);
+              await ctx.onAction('take_over');
+            })
+          }
+        >
+          Pick up
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+/** A split move: not a machine action, so it has no presentation entry; it opens the split form or calls the size check. */
+interface SplitMove {
+  id: 'split-as-proposed' | 'split' | 'edit-split' | 'propose-split' | 'keep-whole';
+  label: string;
+  tip: string;
+  run: () => void;
+}
+
+const SPLIT_TIP =
+  'Cut this glob into parts: part 1 stays here, the others are created with their share of the plan';
+
+/**
+ * The split moves for the glob: Split… in the menu of a splittable glob; on an oversized one Split as proposed (or Split…
+ * when nothing was proposed) leads, and Edit split, Propose again and Keep whole head the menu.
+ */
+const splitMoves = (
+  ctx: GlobViewContext,
+  state: GlobActionsState,
+  size: OversizedState,
+  onSplitting: (splitting: boolean) => void,
+): { lead: SplitMove | null; menu: SplitMove[] } => {
+  const { glob, board } = ctx;
+  const open = () => onSplitting(true);
+  if (state.decision) return { lead: null, menu: [] };
+  if (!state.oversized)
+    return {
+      lead: null,
+      menu: splittable(glob, state.decision)
+        ? [{ id: 'split', label: 'Split…', tip: SPLIT_TIP, run: open }]
+        : [],
+    };
+  // The proposal comes with the single-glob read: until it is here there is nothing to lead with. If the read failed,
+  // the glob is treated as having no proposal, so splitting by hand and Keep whole stay possible.
+  if (size.check === undefined && !size.loadFailed) return { lead: null, menu: [] };
+  const canKeep = board.role !== 'qa' || glob.type === 'sub';
+  const hasProposal = size.proposal !== null;
+  const menu: SplitMove[] = [];
+  if (hasProposal)
+    menu.push({
+      id: 'edit-split',
+      label: 'Edit split',
+      tip: 'Open the split form, pre-filled with the proposal',
+      run: open,
+    });
+  if (size.check !== undefined)
+    menu.push({
+      id: 'propose-split',
+      label: size.proposing ? 'Proposing…' : hasProposal ? 'Propose again' : 'Propose split',
+      tip: 'Ask slop for a new proposed split',
+      run: size.proposeAgain,
+    });
+  if (canKeep)
+    menu.push({
+      id: 'keep-whole',
+      label: 'Keep whole',
+      tip: 'Keep it as one glob; slop learns from how it goes',
+      run: () => size.setConfirmingKeep(true),
+    });
+  const lead: SplitMove = hasProposal
+    ? {
+        id: 'split-as-proposed',
+        label: 'Split as proposed',
+        tip: 'Cut it into the proposed parts: part 1 stays here, the others are created with their share of the plan',
+        run: () => void size.splitAsProposed(),
+      }
+    : { id: 'split', label: 'Split…', tip: SPLIT_TIP, run: open };
+  return { lead, menu };
+};
+
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
-export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
+export const GlobActions = ({
+  ctx,
+  state,
+  size,
+  onSplitting,
+}: {
+  ctx: GlobViewContext;
+  state: GlobActionsState;
+  size: OversizedState;
+  onSplitting: (splitting: boolean) => void;
+}) => {
   const { glob } = ctx;
-  const { busy, pending, main, stepTurn, actions, tiers, disabled, brief, oversized } = state;
+  const { pending, stepTurn, actions, tiers, disabled, brief, oversized } = state;
+  const busy = state.busy || size.busy;
+  const moves = splitMoves(ctx, state, size, onSplitting);
+  // A due step still leads; otherwise an oversized glob's split leads and the action that would have moves into the menu.
+  const lead = stepTurn === null ? moves.lead : null;
+  const main = lead === null ? state.main : null;
   const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
   // The menu closes on select, so the More button shows the action it started while it runs.
   const moreRunning =
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
+  const moveRunning = size.busy || size.proposing;
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
-  const hasMain = main !== null || stepTurn !== null;
-  const hasMenu = hasMain && moreActions.length + disabled.length > 0;
+  const hasMain = main !== null || stepTurn !== null || lead !== null;
+  const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -469,14 +632,31 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
           aria-label="More actions"
           data-testid="more-actions"
         >
-          {moreRunning === null ? (
+          {moreRunning === null && !moveRunning ? (
             <ChevronDown className="size-3.5" aria-hidden />
           ) : (
-            <Loader2 className="size-3.5 animate-spin" aria-label={workingLabel(moreRunning)} />
+            <Loader2
+              className="size-3.5 animate-spin"
+              aria-label={moreRunning === null ? 'Working' : workingLabel(moreRunning)}
+            />
           )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-testid="more-menu">
+        {moves.menu.map((move) => (
+          <DropdownMenuItem
+            key={move.id}
+            disabled={move.id === 'propose-split' && size.proposing}
+            data-testid={`more-${move.id}`}
+            onSelect={move.run}
+          >
+            <span className="flex items-center gap-1.5 font-medium">
+              <HumanIcon decorative />
+              {move.label}
+            </span>
+            <span className="text-xs text-muted-foreground">{move.tip}</span>
+          </DropdownMenuItem>
+        ))}
         {moreActions.map((action) => {
           const shown = actionPresentation(action, glob, false, state.viewer?.email);
           return (
@@ -521,6 +701,28 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
                 menu={menu}
               />
             )}
+            {lead !== null && (
+              <div className="inline-flex" data-testid="split-button">
+                <Tip text={lead.tip}>
+                  <Button
+                    size="sm"
+                    className={hasMenu ? 'rounded-r-none' : undefined}
+                    disabled={busy}
+                    data-testid="main-action"
+                    data-move={lead.id}
+                    onClick={lead.run}
+                  >
+                    {size.busy ? (
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                    ) : (
+                      <HumanIcon decorative />
+                    )}
+                    {lead.label}
+                  </Button>
+                </Tip>
+                {menu}
+              </div>
+            )}
             {main !== null && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>
@@ -560,6 +762,30 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
               </Button>
             </div>
           )}
+          {size.confirmingKeep && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+            >
+              <span className="flex-1">Keep it as one glob? slop learns from how it goes.</span>
+              <Button size="sm" variant="ghost" onClick={() => size.setConfirmingKeep(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy}
+                data-testid="confirm-keep-whole"
+                onClick={() => void size.keepWhole()}
+              >
+                Keep whole
+              </Button>
+            </div>
+          )}
+          {size.error !== null && (
+            <p role="alert" className="text-xs text-red" data-testid="oversized-failure">
+              {size.error}
+            </p>
+          )}
           {confirmingOversized !== null && (
             <div
               role="alert"
@@ -594,6 +820,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
               </Button>
             </div>
           )}
+          {state.confirmingTakeOver && <TakeOverConfirmation ctx={ctx} state={state} />}
           {state.confirmingRetrigger && (
             <div
               role="alert"
