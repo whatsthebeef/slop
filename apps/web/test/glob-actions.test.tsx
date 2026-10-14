@@ -468,6 +468,14 @@ describe('glob view: Reset', () => {
     expect(cb.onAction).toHaveBeenCalledWith('start_again');
   });
 
+  it('shows only its buttons, with no "Reset" heading', () => {
+    renderGlob(discardable());
+    const area = screen.getByTestId('reset-area');
+    expect(within(area).queryByText('Reset')).toBeNull();
+    expect(within(area).getByTestId('reset-start_again')).toBeTruthy();
+    expect(within(area).getByRole('button', { name: /^Delete…/ })).toBeTruthy();
+  });
+
   it('asks before Delete and only confirming calls onDelete', async () => {
     const user = userEvent.setup();
     const cb = renderGlob(discardable());
