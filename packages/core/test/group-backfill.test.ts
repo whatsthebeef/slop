@@ -5,6 +5,7 @@ import { GlobService } from '../src/app/glob-service.js';
 import { GroupBackfillService } from '../src/app/group-backfill-service.js';
 import { IntakeService } from '../src/app/intake-service.js';
 import type { Result } from '../src/domain/errors.js';
+import { createDecisionInTx } from '../src/app/decision-glob.js';
 import { decisionGroup, proposeSplitGroups } from '../src/domain/group.js';
 import type { GroupableGlob } from '../src/domain/group.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -109,6 +110,48 @@ describe('group backfill', () => {
     expect(await groupOf(b)).toBe('big-thing');
     expect(await groupOf(grouped)).toBe('mine');
     expect(unwrap(await backfill.run(ADMIN, boardId, false)).items).toEqual([]);
+  });
+
+  describe('decision globs', () => {
+    const clock = { now: () => '2026-10-13T12:00:00.000Z' };
+    const decide = (key: string, attributes: DecisionAttributes, group?: string | null) =>
+      store.transaction(async (tx) => {
+        const made = unwrap(
+          await createDecisionInTx(tx, { clock }, { boardId, actor: { email: DEV, role: 'dev' }, title: key, payload: key, attributes, creationKey: key, ...(group === undefined ? {} : { group }) }),
+        );
+        return made.glob.id;
+      });
+    const scoped = (ref: string): DecisionAttributes => ({ scope: { kind: 'glob', ref }, origin: { kind: 'extracted', decisionId: 1 }, channel: 'human', outcome: null });
+    const decisionGroupOf = async (id: string) => (await store.transaction((tx) => tx.getGlob(id)))?.group ?? null;
+
+    it('start in the group of the glob they govern, and in hotspots for a hotspot', async () => {
+      const work = await create('Work', 'wg');
+      expect(await decisionGroupOf(await decide('a', scoped(work)))).toBe('wg');
+      expect(await decisionGroupOf(await decide('b', { scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: 'a.ts' }, channel: 'mined', outcome: null }))).toBe('hotspots');
+      expect(await decisionGroupOf(await decide('c', scoped(work), 'own'))).toBe('own');
+    });
+
+    it('are backfilled when open and group-less, keeping a person\'s group and skipping a scope with none', async () => {
+      const work = await create('Work', 'wg');
+      const plain = await create('Plain');
+      const orphan = await decide('a', scoped(work));
+      const none = await decide('n', scoped(plain));
+      const hotspot = await decide('b', { scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: 'a.ts' }, channel: 'mined', outcome: null });
+      const kept = await decide('c', scoped(work), 'own');
+      // Decisions made before groups existed have none.
+      await store.transaction(async (tx) => {
+        for (const id of [orphan, hotspot]) {
+          const glob = await tx.getGlob(id);
+          if (glob === null || !(await tx.updateGlob({ ...glob, group: null, version: glob.version + 1 }, glob.version))) throw new Error('seed failed');
+        }
+      });
+      expect(await backfill.backfillDecisionGroups(boardId)).toBe(2);
+      expect(await decisionGroupOf(orphan)).toBe('wg');
+      expect(await decisionGroupOf(hotspot)).toBe('hotspots');
+      expect(await decisionGroupOf(none)).toBeNull();
+      expect(await decisionGroupOf(kept)).toBe('own');
+      expect(await backfill.backfillDecisionGroups(boardId)).toBe(0);
+    });
   });
 
   it('is for the board admins', async () => {
