@@ -10,4 +10,8 @@ describe('glob view section registry', () => {
   it('lists every section a deep link can open', () => {
     expect([...GLOB_VIEW_SECTIONS].sort()).toEqual([...GLOB_SECTIONS].sort());
   });
+
+  it('renders Related directly below Artifacts', () => {
+    expect(GLOB_VIEW_SECTIONS.indexOf('related')).toBe(GLOB_VIEW_SECTIONS.indexOf('artifacts') + 1);
+  });
 });
