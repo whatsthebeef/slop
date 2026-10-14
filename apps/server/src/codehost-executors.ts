@@ -12,6 +12,8 @@ const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
 
 /** How often a run held for pending files looks again. */
 const FILES_POLL_MS = 15_000;
+/** How soon a run whose branch is still being created looks again (it starts within this of the branch existing). */
+const PROVISION_POLL_MS = 3_000;
 /** GitHub's refusal when a merge names a head the PR no longer has. */
 const HEAD_MODIFIED = /head branch was modified/i;
 
@@ -508,7 +510,12 @@ export const codeHostExecutors = (
       if (filesWait > 0) return { state: 'pending', retryAfterMs: Math.min(filesWait, FILES_POLL_MS), reason: 'Waiting for uploaded files' };
       // A routine works on the glob's branch, so it is only fired once that exists. An investigate-only run works on the
       // base branch of a glob in Planning, which has no branch yet.
-      if (effect.purpose !== 'investigate' && glob.provisioning !== 'ok') throw new Error(`${glob.id} is not provisioned yet`);
+      // Provisioning in flight is a wait, not a failure: look again shortly without spending an attempt. Any other state
+      // (failed, never queued) keeps throwing, so the job's attempts run out instead of it polling for ever.
+      if (effect.purpose !== 'investigate' && glob.provisioning !== 'ok') {
+        if (glob.provisioning === 'pending') return { state: 'pending', retryAfterMs: PROVISION_POLL_MS, reason: 'Waiting for the branch' };
+        throw new Error(`${glob.id} is not provisioned yet`);
+      }
       const secret = await routines.secretFor(effect.routineOwner, glob.boardId);
       if (secret === null) {
         await globs.applyEvent(glob.id, (g, ctx) =>

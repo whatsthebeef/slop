@@ -150,4 +150,19 @@ describe('a glob whose branch cannot be created', () => {
     expect(await provision(id)).toBe('done');
     expect(await bar()).toHaveLength(0);
   });
+
+  it('a run waiting for its branch retries shortly without spending an attempt', async () => {
+    const id = await newSub('Not provisioned yet');
+    const glob = await globs.peek(id);
+    const run = glob?.runs.at(-1);
+    const fire = executors.fire_routine;
+    if (glob === null || run === undefined || fire === undefined) throw new Error('setup');
+    const effect = { kind: 'fire_routine', globId: id, generation: glob.generation, runId: run.id, routineOwner: DEV } as const;
+    const outcome = await fire(effect, glob, { globs });
+    expect(outcome).toMatchObject({ state: 'pending', retryAfterMs: 3_000 });
+    host.failure = hostError(502, 'Bad Gateway');
+    await expect(provision(id, { final: false })).rejects.toThrow('Bad Gateway');
+    await expect(fire(effect, (await globs.peek(id)) as Glob, { globs })).rejects.toThrow('not provisioned yet');
+    host.failure = null;
+  });
 });
