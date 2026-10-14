@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isSetupFailure, checksExplanation, failureLines, jobOwnLog, failureSummary, inheritedFailure, recordBaseChecks, sameFailure, stuckHint } from '../src/index.js';
-import type { BaseChecks, CheckFailure, Result, Transition } from '../src/index.js';
+import type { BaseChecks, CheckFailure, Glob, Result, Transition } from '../src/index.js';
 import * as m from '../src/domain/machine.js';
 import { NOW, ctx, glob, run } from './fixtures.js';
 
@@ -253,6 +253,24 @@ describe('base branch green again', () => {
     const t = value(m.commitPushed(failedInherited(), { sha: 'newhead', runId: null }, ctx(null)));
     expect(t.glob.headChecks).toBeNull();
     expect(t.effects.map((e) => e.kind)).toContain('refresh_checks');
+  });
+});
+
+describe('a push after an auto-fix failure', () => {
+  const gaveUp = { reason: "Auto-fix didn't respond to failed checks (sub-gate) on bcc355b", at: NOW };
+  const open = (failure: Glob['failure']) =>
+    glob({ status: 'pr_open', failure, pr: { number: 1, state: 'ready', headSha: 'bcc355b' } });
+
+  it('clears the failure about the old head, so the glob waits on the new head\'s checks', () => {
+    const t = value(m.commitPushed(open(gaveUp), { sha: 'newhead', runId: null }, ctx(null)));
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.headChecks).toBeNull();
+    expect(t.effects.map((e) => e.kind)).toContain('refresh_checks');
+  });
+
+  it('keeps a failure of another kind', () => {
+    const pairing = { reason: 'Needs a decision', at: NOW, kind: 'needs_pairing' as const, decision: 'which?' };
+    expect(value(m.commitPushed(open(pairing), { sha: 'newhead', runId: null }, ctx(null))).glob.failure).toEqual(pairing);
   });
 });
 
