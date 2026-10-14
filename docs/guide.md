@@ -80,6 +80,7 @@ The chat panel, opened from the board, answers questions in plain words. It sear
 
 - A **cited** answer comes from the sources it names.
 - An answer under **Not from the board's records** has no source. Treat it as a best guess, not a fact about your board.
+- When the first search finds nothing cited, the chat tries again before giving up, within a small step budget: a second search with other words and all time included, then the code (on a board with a repository), then the stronger model. It stops at the first cited answer, shows progress while it works ("Searching again…", "Looking at the code…") and lists each step under the answer.
 - When nothing answers, the chat says what it searched and offers **Think harder** (one answer from a stronger model), **Look at the code** (on a board with a repository) and **Create a glob**.
 - **Save to knowledge** turns a cited answer into a learning proposal. The Include history box makes a question search older and replaced material too.
 
