@@ -7,6 +7,7 @@ import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from
 import type { EnvironmentCommit, NewTestRun, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
+import type { ChatFeedback, ChatFeedbackFilter, NewChatFeedback } from './domain/chat-feedback.js';
 import type { Decision, DecisionPatch, DecisionSource, NewDecision } from './domain/decisions.js';
 import type { InboxItem, InboxLink, InboxStatus, NewInboxItem } from './domain/inbox.js';
 import type { IntegrationToken } from './domain/integration-tokens.js';
@@ -468,6 +469,12 @@ export interface Tx {
   touchChat(chatId: number, at: string): Promise<void>;
   /** Deletes a conversation and its messages. */
   deleteChat(chatId: number): Promise<void>;
+  /** Stores a rating of an answer; the person's earlier rating of it is replaced (its `createdAt` is kept). Feedback outlives `deleteChat`. */
+  upsertChatFeedback(feedback: NewChatFeedback): Promise<ChatFeedback>;
+  /** A board's feedback, newest first. */
+  listChatFeedback(boardId: number, filter: ChatFeedbackFilter): Promise<ChatFeedback[]>;
+  /** The person's ratings in one conversation, newest first. */
+  listMyChatFeedback(boardId: number, chatId: number, email: string): Promise<ChatFeedback[]>;
   /**
    * Stores a pasted or delivered item (status `new`, summary pending). A board's item with the same content hash, or
    * the same source and non-empty source ref, is returned instead, with `created: false`.

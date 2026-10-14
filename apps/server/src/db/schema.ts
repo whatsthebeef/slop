@@ -17,6 +17,7 @@ import type {
   PlanFeatures,
   ChatAction,
   ChatCitation,
+  PageContext,
   NotificationAction,
   NotificationClears,
   ReviewBoardSettings,
@@ -1245,6 +1246,32 @@ export const boardChatMessages = pgTable(
   (t) => [index('board_chat_messages_chat_idx').on(t.chatId, t.id)],
 );
 
+/**
+ * A person's 👍/👎 on a chat answer, with a copy of the question and answer. `chat_id` and `message_id` have no foreign
+ * key on purpose: members can delete their conversations, and a 👎 test case must outlive that.
+ */
+export const chatFeedback = pgTable(
+  'chat_feedback',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    email: text('email').notNull(),
+    rating: text('rating', { enum: ['up', 'down'] }).notNull(),
+    note: text('note'),
+    question: text('question').notNull(),
+    answer: text('answer').notNull(),
+    citations: jsonb('citations').$type<ChatCitation[]>(),
+    tools: jsonb('tools').$type<string[]>(),
+    page: jsonb('page').$type<PageContext>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex('chat_feedback_message_idx').on(t.messageId, t.email), index('chat_feedback_board_idx').on(t.boardId, t.rating, t.createdAt)],
+);
 
 /**
  * The board inbox (spec, Inbox and ingest): pasted text with its summary step's state. The search item (`item_id`) is a
