@@ -250,6 +250,23 @@ describe('relations over REST and MCP (Postgres)', () => {
     expect(held?.holding).toMatchObject([{ to: d.id, toIsDecision: true, until: 'decided' }]);
   });
 
+  it('a decision holds a whole group back over REST and MCP (holdsBackGroup), and exactly one target is required', async () => {
+    const d = await decision('s1k93');
+    const a = await make('Group A', { group: 'wide' });
+    const b = await make('Group B', { group: 'wide' });
+    const added = await rest('POST', `/api/globs/${d.id}/relations`, { holdsBackGroup: 'Wide' });
+    expect(added.status).toBe(200);
+    expect((added.body as unknown as { groupHold: { held: string[]; failed: unknown[] } }).groupHold).toMatchObject({ failed: [] });
+    expect(added.body.relations?.holdsBack.map((r) => r.from).sort()).toEqual([a.id, b.id].sort());
+    expect((await rows(a.id)).map((r) => [r.to, r.group, r.source])).toEqual([[d.id, 'wide', 'person']]);
+    const both = await rest('POST', `/api/globs/${d.id}/relations`, { holdsBackGroup: 'wide', holdsBack: a.id });
+    expect(both.status).toBe(422);
+    const d2 = await decision('s1k94');
+    const viaMcp = await tool('add_relation', { id: d2.id, holdsBackGroup: 'wide' });
+    expect(viaMcp.error).toBe(false);
+    expect((await rows(b.id)).filter((r) => r.to === d2.id).map((r) => r.source)).toEqual(['agent']);
+  });
+
   it('PATCH and POST accept relations; overlaps are not an input and not an output', async () => {
     const a = await make('Patch A');
     const b = await make('Patch B');

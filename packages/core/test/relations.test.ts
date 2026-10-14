@@ -269,7 +269,7 @@ describe('a write to a glob\'s relations', () => {
     expect(result.relations.map((r) => r.to)).toEqual(['s1t3', 's1t4', 's1t9']);
     expect(result.relations[0]).toMatchObject({ dismissedAt: NOW, dismissedPlanHash: 'h' });
     expect(result.inserted).toEqual([
-      { id: 'rel_1', boardId: 1, from: 's1t1', to: 's1t9', gate: 'start', until: 'merged', reason: 'r', evidence: ['a'], source: 'inferred', dismissedAt: null, dismissedPlanHash: null, overriddenAt: null, createdAt: NOW },
+      { id: 'rel_1', boardId: 1, from: 's1t1', to: 's1t9', gate: 'start', until: 'merged', reason: 'r', evidence: ['a'], source: 'inferred', group: null, dismissedAt: null, dismissedPlanHash: null, overriddenAt: null, createdAt: NOW },
     ]);
   });
 });
