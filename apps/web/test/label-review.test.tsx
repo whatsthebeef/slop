@@ -260,6 +260,23 @@ describe('approving', () => {
     expect(api.calls.at(-1)).toEqual(['CR', { kind: 'approve' }]);
   });
 
+  it('clicks in the confirmation dialog do not reach the card around the popover', async () => {
+    const api = server(start({ CR: 'required' }));
+    await api.review('CR', { kind: 'save_draft_item', text: 'x' });
+    const onCard = vi.fn();
+    render(
+      <div onClick={onCard}>
+        <Host api={api} popover />
+      </div>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('Sign-off labels'));
+    await user.click(screen.getByRole('button', { name: 'Approve anyway' }));
+    onCard.mockClear();
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(onCard).not.toHaveBeenCalled();
+  });
+
   it('drafts are not counted as items in the state text', async () => {
     const api = server(start());
     await api.review('CR', { kind: 'save_draft_item', text: 'x' });

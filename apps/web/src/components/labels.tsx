@@ -64,24 +64,32 @@ const ApproveConfirm = ({
   onCancel: () => void;
   onConfirm: () => void;
 }) => (
-  <Dialog open={label !== null && counts.open > 0} onOpenChange={(o) => !o && onCancel()}>
-    <DialogContent title={`Approve ${label ?? ''}?`}>
-      <div className="grid gap-3 text-sm">
-        <p>
-          {counts.open === 1 ? '1 item is' : `${counts.open} items are`} still open. Approve anyway?
-          {counts.drafts > 0 && ' Unsent drafts will be discarded.'}
-        </p>
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button variant="outline" size="sm" onClick={onConfirm}>
-            Approve anyway
-          </Button>
+  // React events bubble through the dialog's portal to the host: on the card that would open the glob or start a drag.
+  <div
+    className="contents"
+    onClick={(e) => e.stopPropagation()}
+    onPointerDown={(e) => e.stopPropagation()}
+  >
+    <Dialog open={label !== null && counts.open > 0} onOpenChange={(o) => !o && onCancel()}>
+      <DialogContent title={`Approve ${label ?? ''}?`}>
+        <div className="grid gap-3 text-sm">
+          <p>
+            {counts.open === 1 ? '1 item is' : `${counts.open} items are`} still open. Approve
+            anyway?
+            {counts.drafts > 0 && ' Unsent drafts will be discarded.'}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button variant="outline" size="sm" onClick={onConfirm}>
+              Approve anyway
+            </Button>
+          </div>
         </div>
-      </div>
-    </DialogContent>
-  </Dialog>
+      </DialogContent>
+    </Dialog>
+  </div>
 );
 
 const stateText = (state: LabelState, items: readonly ChecklistItem[]): string => {
@@ -330,6 +338,8 @@ const DraftRow = ({
         className="h-7 w-7"
         aria-label={`Remove ${name} item ${index}`}
         disabled={disabled}
+        // Keep focus in the edited input: its blur would save and disable this button before the click lands.
+        onMouseDown={(e) => e.preventDefault()}
         onClick={onRemove}
       >
         ×
