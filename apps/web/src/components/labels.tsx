@@ -101,6 +101,9 @@ const stateText = (state: LabelState, items: readonly ChecklistItem[]): string =
     : `Resubmitted · ${done} of ${items.length} done`;
 };
 
+/** Every state a label's text can take in the popover, so its column can reserve room for the widest. */
+const RESERVED_STATES: readonly LabelState[] = ['required', 'added', 'approved'];
+
 const CHIP_TIPS: Record<LabelState, string> = {
   required: 'waiting for the reviewer',
   added: "items added: the developer's turn",
@@ -183,36 +186,62 @@ export const LabelPopover = ({
                 <div key={name} className="flex items-center justify-between gap-1.5 text-sm">
                   <span className="flex items-baseline gap-1.5">
                     <span className="font-semibold">{name}</span>
-                    {(state !== 'required' || items.length > 0) && (
-                      <span className="text-xs text-muted-foreground">
-                        {stateText(state, items)}
-                      </span>
-                    )}
+                    {/* Every state's text shares one cell, so the column is as wide as the widest and approving doesn't resize the popover. */}
+                    <span className="grid text-xs text-muted-foreground">
+                      {RESERVED_STATES.filter((s) => s !== 'required' || items.length > 0).map(
+                        (s) => (
+                          <span
+                            key={s}
+                            data-reserved-state={s}
+                            aria-hidden={s !== state || undefined}
+                            className={cn('col-start-1 row-start-1', s !== state && 'invisible')}
+                          >
+                            {stateText(s, items)}
+                          </span>
+                        ),
+                      )}
+                    </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1">
                     <Button size="sm" variant="ghost" onClick={() => onOpenReview(name)}>
                       Open review
                     </Button>
-                    {onReview === undefined ? null : state === 'approved' ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void onReview(name, { kind: 'reopen' })}
-                      >
-                        Re-open
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={hold !== null}
-                        title={hold ?? undefined}
-                        onClick={() =>
-                          open > 0 ? setConfirming(name) : void onReview(name, { kind: 'approve' })
-                        }
-                      >
-                        {open > 0 ? 'Approve anyway' : 'Approve'}
-                      </Button>
+                    {onReview === undefined ? null : (
+                      <span className="grid">
+                        {/* The widest action ("Approve anyway") is kept in the cell, hidden, whichever button shows. */}
+                        <span
+                          aria-hidden
+                          className="invisible col-start-1 row-start-1 px-3 text-sm"
+                          data-reserved-action
+                        >
+                          Approve anyway
+                        </span>
+                        {state === 'approved' ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="col-start-1 row-start-1"
+                            onClick={() => void onReview(name, { kind: 'reopen' })}
+                          >
+                            Re-open
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="col-start-1 row-start-1"
+                            disabled={hold !== null}
+                            title={hold ?? undefined}
+                            onClick={() =>
+                              open > 0
+                                ? setConfirming(name)
+                                : void onReview(name, { kind: 'approve' })
+                            }
+                          >
+                            {open > 0 ? 'Approve anyway' : 'Approve'}
+                          </Button>
+                        )}
+                      </span>
                     )}
                   </span>
                 </div>
