@@ -231,6 +231,23 @@ export const proposalOfStored = (stored: StoredSizeProposal | null): SizeProposa
   };
 };
 
+/**
+ * A workstream read from untrusted JSON (a stored check, a model's reply): null unless it has a name and a plan; `goal` falls
+ * back to the plan's first line, `files` keeps only non-empty strings (no duplicates), and `needs` keeps only distinct indexes
+ * of earlier workstreams (`index` is this one's place), in order.
+ */
+export const parseWorkstream = (value: unknown, index: number): Workstream | null => {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.name !== 'string' || v.name.trim() === '' || typeof v.plan !== 'string' || v.plan.trim() === '') return null;
+  const files = Array.isArray(v.files) ? [...new Set(v.files.filter((f): f is string => typeof f === 'string' && f.trim() !== '').map((f) => f.trim()))] : [];
+  const needs = Array.isArray(v.needs)
+    ? [...new Set(v.needs.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) < index))].sort((a, b) => a - b)
+    : [];
+  const goal = typeof v.goal === 'string' && v.goal.trim() !== '' ? v.goal.trim() : goalOf(v.plan);
+  return { name: v.name.trim(), goal, files, plan: v.plan, needs };
+};
+
 /** The first line of a plan that is text, not a heading, list item or numbered task: what the work is for. */
 export const goalOf = (plan: string): string =>
   plan
