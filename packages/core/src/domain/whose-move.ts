@@ -189,7 +189,9 @@ export const whoseMove = (
             .join('; ');
     return { holder: 'waiting', reason, since: earliest(waits), waitingOn: on };
   }
-  if (rollouts.length > 0 && quiet.length === 0 && !machineSteps.some((s) => s.state === 'failed')) {
+  // A rollout is only waited for once there is something to roll out: a Planning glob's predicted placeholder is not a wait,
+  // or the card would hide Start on a glob that is free to start.
+  if (glob.status !== 'planning' && rollouts.length > 0 && quiet.length === 0 && !machineSteps.some((s) => s.state === 'failed')) {
     const first = rollouts[0];
     return { holder: 'waiting', reason: `waiting for ${first?.title ?? 'a step'}`, since: null, waitingOn: rollouts.map((s) => s.id) };
   }

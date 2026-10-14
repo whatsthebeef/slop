@@ -622,6 +622,7 @@ export const GlobCard = ({
   environments,
   atf,
   viewer,
+  waitingOnThis = 0,
   onFilterGroup,
   groupHref,
   groupProgress,
@@ -665,6 +666,8 @@ export const GlobCard = ({
   atf?: readonly AtfRun[];
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
+  /** How many globs in Planning wait for this one to merge. */
+  waitingOnThis?: number;
 }) => {
   // A person implementing shows; otherwise (unassigned, or the machine implementing) the planner. Slop-created globs show the robot head.
   const person = glob.implementer ?? glob.planner;
@@ -757,6 +760,13 @@ export const GlobCard = ({
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
             <SplitChip glob={glob} />
+            {waitingOnThis > 0 && (
+              <Tip text={`${String(waitingOnThis)} in Planning wait for this glob to merge. Opens its related globs`}>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.related())} className='font-mono text-[11px] text-muted-foreground' testId='waiting-on-this-chip'>
+                  {waitingOnThis} waiting on this
+                </ChipButton>
+              </Tip>
+            )}
             <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
             {glob.clash != null && (
               <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
