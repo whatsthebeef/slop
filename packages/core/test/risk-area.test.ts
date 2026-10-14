@@ -11,6 +11,7 @@ import {
   DEFAULT_RISK_AREAS,
   applyOutcome,
   defaultAreas,
+  isNarrowPattern,
   matchRiskAreas,
   pathsMatchArea,
   splitEvidence,
@@ -26,7 +27,7 @@ const DEV = 'dev@example.com';
 const DAY = 24 * 60 * 60 * 1000;
 const MERGED = '2026-09-01T12:00:00.000Z';
 const NOW = '2026-10-11T12:00:00.000Z';
-const FILES = ['apps/billing/src/charge.ts', 'apps/billing/src/refund.ts'];
+const FILES = ['apps/billing/src/payments/charge.ts', 'apps/billing/src/payments/refund.ts'];
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -38,10 +39,20 @@ const must = <T>(value: T | undefined): T => {
   return value;
 };
 
+const LEARNED = 'Learned: apps/billing/src/payments';
+
 const outcome = (kind: RiskOutcome['kind'], paths: readonly string[] = FILES, globId = 's1t1'): RiskOutcome => ({ kind, globId, paths, at: NOW });
+
+type Applied = ReturnType<typeof applyOutcome>;
+const history = (...applied: Applied[]) => applied.flatMap((a) => a.changes);
 
 describe('risk areas (pure)', () => {
   const defaults = defaultAreas(1, NOW);
+  /** The learned payments area, once two separate globs reverted. */
+  const learnedArea = (): RiskArea[] => {
+    const first = applyOutcome(1, defaults, outcome('reverted'));
+    return [...applyOutcome(1, defaults, outcome('reverted', FILES, 's1t0'), history(first)).put];
+  };
 
   it('ships generic defaults for the five risk areas, matched against paths', () => {
     expect(DEFAULT_RISK_AREAS.map((a) => a.name)).toEqual([
@@ -59,14 +70,44 @@ describe('risk areas (pure)', () => {
     expect(pathsMatchArea(byName('Auth and security'), ['apps/web/src/pages/board.tsx'])).toBe(false);
   });
 
-  it('adds a learned area for a reverted sub\'s paths, and strengthens it the next time', () => {
+  it('waits for a second glob before adding a learned area, then strengthens it the next time', () => {
     const first = applyOutcome(1, defaults, outcome('reverted'));
-    expect(first.put).toEqual([expect.objectContaining({ name: 'Learned: apps/billing/src', pathPatterns: ['apps/billing/src/**'], source: 'learned', strength: 1 })]);
-    expect(first.changes).toEqual([expect.objectContaining({ kind: 'added', cause: 'reverted', globId: 's1t1' })]);
-    const areas = [...defaults, ...first.put];
-    const second = applyOutcome(1, areas, outcome('bug', FILES, 's1t2'));
-    expect(second.put).toEqual([expect.objectContaining({ name: 'Learned: apps/billing/src', strength: 2, cleanCount: 0 })]);
-    expect(second.changes).toEqual([expect.objectContaining({ kind: 'strengthened', cause: 'bug' })]);
+    expect(first.put).toEqual([]);
+    expect(first.changes).toEqual([expect.objectContaining({ kind: 'candidate', areaName: LEARNED, cause: 'reverted', globId: 's1t1' })]);
+    const second = applyOutcome(1, defaults, outcome('bug', FILES, 's1t2'), history(first));
+    expect(second.put).toEqual([expect.objectContaining({ name: LEARNED, pathPatterns: ['apps/billing/src/payments/**'], source: 'learned', strength: 2 })]);
+    expect(second.changes).toEqual([expect.objectContaining({ kind: 'added', cause: 'bug', globId: 's1t2' })]);
+    // The same glob again (another cause) is not a second glob.
+    expect(applyOutcome(1, defaults, outcome('deploy_failed'), history(first)).put).toEqual([]);
+    const third = applyOutcome(1, [...defaults, ...second.put], outcome('reverted', FILES, 's1t3'), history(first, second));
+    expect(third.put).toEqual([expect.objectContaining({ name: LEARNED, strength: 3, cleanCount: 0 })]);
+    expect(third.changes).toEqual([expect.objectContaining({ kind: 'strengthened', cause: 'reverted' })]);
+  });
+
+  it('never learns a package or app root from files that are spread over it', () => {
+    const a = outcome('reverted', ['apps/web/src/a.tsx'], 's1t1');
+    const b = outcome('reverted', ['apps/web/src/lib/b.ts'], 's1t2');
+    const first = applyOutcome(1, defaults, a);
+    const second = applyOutcome(1, defaults, b, history(first));
+    const third = applyOutcome(1, defaults, { ...a, globId: 's1t3' }, history(first, second));
+    // Each file is its own narrow candidate; the common parent (`apps/web/src`) is never an area.
+    const names = [...first.changes, ...second.changes, ...third.changes].map((c) => c.areaName);
+    expect(names).not.toContain('Learned: apps/web/src');
+    expect(names).toEqual(['Learned: apps/web/src/a.tsx', 'Learned: apps/web/src/lib', 'Learned: apps/web/src/a.tsx']);
+    // a.tsx has two separate globs now: a file area.
+    expect(third.put).toEqual([expect.objectContaining({ name: 'Learned: apps/web/src/a.tsx', pathPatterns: ['apps/web/src/a.tsx'], source: 'learned' })]);
+    // Deep files in one module share the module directory.
+    const deep = applyOutcome(1, defaults, outcome('reverted', ['packages/core/src/domain/x.ts', 'packages/core/src/domain/y.ts'], 's1t4'));
+    expect(deep.changes).toEqual([expect.objectContaining({ areaName: 'Learned: packages/core/src/domain', kind: 'candidate' })]);
+  });
+
+  it('tells narrow patterns from wide ones', () => {
+    expect(isNarrowPattern('packages/core/src/domain/**')).toBe(true);
+    expect(isNarrowPattern('packages/core/src/domain/merge-policy.ts')).toBe(true);
+    expect(isNarrowPattern('apps/web/src/**')).toBe(false);
+    expect(isNarrowPattern('packages/core/src/**')).toBe(false);
+    expect(isNarrowPattern('apps/*/src/domain/**')).toBe(false);
+    expect(isNarrowPattern('**/*.ts')).toBe(false);
   });
 
   it('strengthens a default area a failed deploy touched, without adding another', () => {
@@ -75,14 +116,14 @@ describe('risk areas (pure)', () => {
   });
 
   it('removes a learned area after repeated clean outcomes, and only marks a default sub-safe', () => {
-    let areas: RiskArea[] = [...defaults, ...applyOutcome(1, defaults, outcome('reverted')).put];
+    let areas: RiskArea[] = [...defaults, ...learnedArea()];
     for (let i = 0; i < CLEAN_TO_REMOVE - 1; i++) {
       const applied = applyOutcome(1, areas, outcome('clean', FILES, `s1t${i + 2}`));
       areas = areas.map((a) => applied.put.find((p) => p.name === a.name) ?? a);
     }
     expect(areas.find((a) => a.source === 'learned')?.cleanCount).toBe(CLEAN_TO_REMOVE - 1);
     const last = applyOutcome(1, areas, outcome('clean', FILES, 's1t9'));
-    expect(last.removed).toEqual(['Learned: apps/billing/src']);
+    expect(last.removed).toEqual(['Learned: apps/billing/src/payments']);
     expect(last.changes).toEqual([expect.objectContaining({ kind: 'removed', cause: 'clean' })]);
 
     let migrations = defaults;
@@ -98,12 +139,14 @@ describe('risk areas (pure)', () => {
   });
 
   it('weights a person\'s change of type heavily, in both directions', () => {
-    const toSame = applyOutcome(1, defaults, outcome('type_to_same'));
-    expect(toSame.put[0]).toMatchObject({ source: 'learned', strength: CORRECTION_WEIGHT });
+    const first = applyOutcome(1, defaults, outcome('type_to_same'));
+    expect(first.put).toEqual([]);
+    const toSame = applyOutcome(1, defaults, outcome('type_to_same', FILES, 's1t5'), history(first));
+    expect(toSame.put[0]).toMatchObject({ source: 'learned', strength: CORRECTION_WEIGHT + 1 });
     expect(toSame.changes[0]).toMatchObject({ kind: 'correction', cause: 'type_to_same' });
     // One correction to sub is enough to wear a learned area away.
     const toSub = applyOutcome(1, [...defaults, ...toSame.put], outcome('type_to_sub', FILES, 's1t2'));
-    expect(toSub.removed).toEqual(['Learned: apps/billing/src']);
+    expect(toSub.removed).toEqual(['Learned: apps/billing/src/payments']);
     expect(toSub.changes[0]).toMatchObject({ kind: 'removed', cause: 'type_to_sub' });
   });
 
@@ -149,6 +192,7 @@ describe('RiskAreaService', () => {
     expect(view.areas.map((a) => a.name)).toEqual(DEFAULT_RISK_AREAS.map((a) => a.name));
     expect(view.areas.every((a) => a.source === 'default' && !a.subSafe)).toBe(true);
     await service.record(boardId, outcome('reverted'));
+    await service.record(boardId, outcome('reverted', FILES, 's1t2'));
     expect((await areas()).some((a) => a.source === 'learned')).toBe(true);
     // Only admins reset.
     expect((await service.reset(DEV, boardId)).ok).toBe(false);
@@ -161,15 +205,26 @@ describe('RiskAreaService', () => {
   it('applies an outcome once per glob and kind', async () => {
     expect(await service.record(boardId, outcome('reverted'))).toBe(true);
     expect(await service.record(boardId, outcome('reverted'))).toBe(false);
-    expect((await areas()).find((a) => a.source === 'learned')?.strength).toBe(1);
+    // One glob is a candidate only; a second one adds the area.
+    expect((await areas()).some((a) => a.source === 'learned')).toBe(false);
+    expect(await service.record(boardId, outcome('bug', FILES, 's1t2'))).toBe(true);
+    expect((await areas()).find((a) => a.source === 'learned')?.strength).toBe(2);
   });
 
   it('learns from a revert: the reverted sub\'s merge files get a learned area', async () => {
-    addGlobs(sub('s1t1'));
+    addGlobs(sub('s1t1'), sub('s1t2'));
     addEvents(event('Merged', 's1t1', MERGED, { sha: 'm1' }), event('MergeReverted', 's1t1', MERGED, { sha: 'm1' }));
     expect(await service.learn(boardId, NOW)).toBe(1);
-    expect((await areas()).find((a) => a.source === 'learned')).toMatchObject({ name: 'Learned: apps/billing/src', strength: 1 });
-    expect(await history()).toEqual([expect.objectContaining({ cause: 'reverted', kind: 'added', globId: 's1t1' })]);
+    // One revert alone produces no area.
+    expect((await areas()).some((a) => a.source === 'learned')).toBe(false);
+    addEvents(event('Merged', 's1t2', MERGED, { sha: 'm2' }), event('MergeReverted', 's1t2', MERGED, { sha: 'm2' }));
+    expect(await service.learn(boardId, NOW)).toBe(1);
+    expect((await areas()).find((a) => a.source === 'learned')).toMatchObject({ name: 'Learned: apps/billing/src/payments', strength: 2 });
+    // Newest first.
+    expect(await history()).toEqual([
+      expect.objectContaining({ cause: 'reverted', kind: 'added', globId: 's1t2' }),
+      expect.objectContaining({ cause: 'reverted', kind: 'candidate', globId: 's1t1' }),
+    ]);
     // Run again: nothing more.
     expect(await service.learn(boardId, NOW)).toBe(0);
   });
@@ -187,6 +242,7 @@ describe('RiskAreaService', () => {
   });
 
   it('wears a learned area away with repeated clean subs, once their window has passed', async () => {
+    await service.record(boardId, outcome('reverted', FILES, 's1t8'));
     await service.record(boardId, outcome('reverted', FILES, 's1t9'));
     const ids = ['s1t1', 's1t2', 's1t3'];
     addGlobs(...ids.map(sub));
@@ -195,7 +251,95 @@ describe('RiskAreaService', () => {
     expect(await service.learn(boardId, new Date(Date.parse(MERGED) + 2 * DAY).toISOString())).toBe(0);
     expect(await service.learn(boardId, NOW)).toBe(3);
     expect((await areas()).some((a) => a.source === 'learned')).toBe(false);
-    expect((await history())[0]).toMatchObject({ kind: 'removed', cause: 'clean' });
+    expect((await history()).some((c) => c.kind === 'removed' && c.cause === 'clean')).toBe(true);
+  });
+
+  describe('cleanup of learned areas', () => {
+    const learnedArea = (name: string, pattern: string): RiskArea => ({
+      boardId,
+      name,
+      pathPatterns: [pattern],
+      why: 'A sub that changed it was reverted',
+      source: 'learned',
+      strength: 2,
+      cleanCount: 0,
+      updatedAt: NOW,
+    });
+    const put = async (...list: RiskArea[]) => {
+      await store.transaction(async (tx) => {
+        for (const a of defaultAreas(boardId, NOW)) await tx.putRiskArea(a);
+        for (const a of list) await tx.putRiskArea(a);
+      });
+    };
+    const evidence = (name: string, ...globIds: string[]) =>
+      store.transaction(async (tx) => {
+        for (const globId of globIds) await tx.insertRiskAreaChange({ boardId, at: NOW, areaName: name, kind: 'added', globId, cause: 'reverted' });
+      });
+    const escalated = (id: string, reason: string, status: 'planning' | 'implementing' = 'planning') =>
+      glob({ id, boardId, type: 'same', status, pr: null, escalation: { reason, criterion: 'risk_area', by: ADMIN, at: NOW } });
+
+    it('drops the package and app roots, keeps a narrow well-evidenced area, and records why', async () => {
+      await put(
+        learnedArea('Learned: apps/web/src', 'apps/web/src/**'),
+        learnedArea('Learned: packages/core/src', 'packages/core/src/**'),
+        learnedArea('Learned: packages/core/src/domain', 'packages/core/src/domain/**'),
+        learnedArea('Learned: apps/server/src/db', 'apps/server/src/db/**'),
+      );
+      await evidence('Learned: apps/web/src', 's1t1', 's1t2');
+      await evidence('Learned: packages/core/src', 's1t1', 's1t2');
+      await evidence('Learned: packages/core/src/domain', 's1t1', 's1t2');
+      // Narrow, but one glob is not enough evidence.
+      await evidence('Learned: apps/server/src/db', 's1t3');
+      expect(await service.cleanup(boardId)).toEqual(['Learned: apps/web/src', 'Learned: packages/core/src', 'Learned: apps/server/src/db']);
+      expect((await areas()).filter((a) => a.source === 'learned').map((a) => a.name)).toEqual(['Learned: packages/core/src/domain']);
+      const removed = (await history()).filter((c) => c.kind === 'removed');
+      expect(removed.map((c) => [c.areaName, c.cause, c.globId])).toEqual([
+        ['Learned: apps/server/src/db', 'cleanup', null],
+        ['Learned: packages/core/src', 'cleanup', null],
+        ['Learned: apps/web/src', 'cleanup', null],
+      ]);
+      // The evidence stays in the history for the System page, and a second pass changes nothing.
+      expect(await service.cleanup(boardId)).toEqual([]);
+    });
+
+    it('de-escalates unstarted globs escalated only for dropped areas', async () => {
+      const globs = new GlobService({ store, notifier: new RecordingNotifier(), clock: { now: () => now }, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) } });
+      const lifting = new RiskAreaService({ store, clock: { now: () => now }, changes, lift: (b, names) => globs.liftRiskAreaEscalations(b, names) });
+      await put(learnedArea('Learned: apps/web/src', 'apps/web/src/**'), learnedArea('Learned: packages/core/src', 'packages/core/src/**'), learnedArea('Learned: packages/core/src/domain', 'packages/core/src/domain/**'));
+      await evidence('Learned: packages/core/src/domain', 's1t1', 's1t2');
+      addGlobs(
+        escalated('s1t10', "Touches the board's risk areas: Learned: apps/web/src, Learned: packages/core/src"),
+        // Also escalated for an area that stays.
+        escalated('s1t11', "Touches the board's risk areas: Learned: apps/web/src, Learned: packages/core/src/domain"),
+        // Already started.
+        escalated('s1t12', "Touches the board's risk areas: Learned: apps/web/src", 'implementing'),
+        // Escalated for another reason.
+        glob({ id: 's1t13', boardId, type: 'same', status: 'planning', escalation: { reason: 'Needs a design decision', criterion: 'design_decision', by: ADMIN, at: NOW } }),
+      );
+      await lifting.cleanup(boardId);
+      const after = (id: string) => store.transaction((tx) => tx.getGlob(id));
+      expect(await after('s1t10')).toMatchObject({ type: 'sub', escalation: null, status: 'implementing' });
+      for (const id of ['s1t11', 's1t12', 's1t13']) expect(await after(id)).toMatchObject({ type: 'same' });
+      const events = store.state.events.filter((e) => e.globId === 's1t10');
+      expect(events.map((e) => e.type)).not.toContain('Deescalated');
+      expect(events.find((e) => e.type === 'FieldsChanged')?.data).toMatchObject({ type: { from: 'same', to: 'sub' }, note: expect.stringContaining('dropped') as unknown });
+    });
+
+    it('lets an admin remove a learned area, but not a default', async () => {
+      await put(learnedArea('Learned: packages/core/src/domain', 'packages/core/src/domain/**'));
+      expect((await service.remove(DEV, boardId, 'Learned: packages/core/src/domain')).ok).toBe(false);
+      expect((await service.remove(ADMIN, boardId, 'Auth and security')).ok).toBe(false);
+      const view = unwrap(await service.remove(ADMIN, boardId, 'Learned: packages/core/src/domain'));
+      expect(view.areas.some((a) => a.source === 'learned')).toBe(false);
+      expect(view.history[0]).toMatchObject({ kind: 'removed', areaName: 'Learned: packages/core/src/domain' });
+    });
+
+    it('shows the evidence globs of a learned area', async () => {
+      await put(learnedArea('Learned: packages/core/src/domain', 'packages/core/src/domain/**'));
+      await evidence('Learned: packages/core/src/domain', 's1t1', 's1t2');
+      const view = unwrap(await service.view(DEV, boardId));
+      expect([...(view.areas.find((a) => a.source === 'learned')?.evidence ?? [])].sort()).toEqual(['s1t1', 's1t2']);
+    });
   });
 
   it('marks an outcome that changes no area as done, so learn() does not read the diff again', async () => {
@@ -230,6 +374,7 @@ describe('RiskAreaService', () => {
     await store.transaction((tx) =>
       tx.insertSubLimitChange({ boardId, at: NOW, fromLines: 2000, toLines: 2000, outcome: 'needed_fixes', globId: 's1t2', changedLines: 5, evidence: 'x', step: 500 }),
     );
+    await service.record(boardId, outcome('reverted', FILES, 's1t8'));
     await service.record(boardId, outcome('reverted', FILES, 's1t9'));
     await service.learn(boardId, NOW);
     expect((await areas()).find((a) => a.source === 'learned')?.cleanCount).toBe(0);
@@ -243,7 +388,7 @@ describe('RiskAreaService', () => {
       await globs.create(ADMIN, {
         boardId,
         title: 'Change charge',
-        plan: 'Change apps/billing/src/charge.ts.\n\nDone when: it works.',
+        plan: 'Change apps/billing/src/payments/charge.ts.\n\nDone when: it works.',
         type: 'sub',
         category: 'feature',
         group: null,
@@ -252,16 +397,18 @@ describe('RiskAreaService', () => {
         idempotencyKey: null,
       }),
     );
+    // An earlier revert of another sub in the same module is the first piece of evidence.
+    await service.record(boardId, outcome('reverted', FILES, 's1t9'));
     unwrap(await globs.update(DEV, created.id, created.version, { type: 'same' }));
     await store.transaction((tx) => tx.appendEvents([event('Merged', created.id, now, { sha: 'abc' })]));
     const learning = new IntakeLearningService({ store, clock, riskAreas: service });
     await learning.run(boardId, now);
     const learned = (await areas()).find((a) => a.source === 'learned');
-    expect(learned).toMatchObject({ name: 'Learned: apps/billing/src', strength: CORRECTION_WEIGHT });
-    expect(await history()).toEqual([expect.objectContaining({ kind: 'correction', cause: 'type_to_same', globId: created.id })]);
+    expect(learned).toMatchObject({ name: 'Learned: apps/billing/src/payments', strength: CORRECTION_WEIGHT + 1 });
+    expect((await history()).filter((c) => c.globId === created.id)).toEqual([expect.objectContaining({ kind: 'correction', cause: 'type_to_same' })]);
     // Refreshing the outcome doesn't count it again.
     await learning.run(boardId, now);
-    expect((await areas()).find((a) => a.source === 'learned')?.strength).toBe(CORRECTION_WEIGHT);
+    expect((await areas()).find((a) => a.source === 'learned')?.strength).toBe(CORRECTION_WEIGHT + 1);
   });
 });
 

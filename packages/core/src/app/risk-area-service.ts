@@ -1,9 +1,12 @@
-import { notFound, ok } from '../domain/errors.js';
+import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import {
   CLEAN_WINDOW_DAYS,
   applyOutcome,
   defaultAreas,
+  evidenceGlobs,
+  isWideArea,
+  MIN_EVIDENCE_GLOBS,
   subSafe,
 } from '../domain/risk-area.js';
 import type { RiskArea, RiskAreaView, RiskOutcome } from '../domain/risk-area.js';
@@ -38,6 +41,11 @@ export class RiskAreaService {
       clock: { now(): string };
       /** Null without a code host: a merged sub's paths come from its plan only. */
       changes?: ChangeSource | null;
+      /**
+       * De-escalates the globs in Planning that were escalated only for the named (dropped) risk areas, and returns how many.
+       * Absent: the cleanup drops areas but leaves the globs as they are.
+       */
+      lift?: (boardId: number, names: readonly string[]) => Promise<number>;
     },
   ) {}
 
@@ -65,6 +73,45 @@ export class RiskAreaService {
     });
   }
 
+  /** Admins: removes one learned area (a default is reset instead); the history keeps why it was there. */
+  async remove(email: string, boardId: number, name: string): Promise<Result<RiskAreaView>> {
+    const now = this.deps.clock.now();
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await adminOf(tx, email, boardId);
+      if (!actor.ok) return actor;
+      if ((await tx.getBoard(boardId)) === null) return notFound(`No board ${boardId}`);
+      const area = (await tx.listRiskAreas(boardId)).find((a) => a.name === name);
+      if (area === undefined) return notFound(`No risk area ${name}`);
+      if (area.source !== 'learned') return invalidInput('Only a learned area can be removed; reset restores the defaults');
+      await tx.deleteRiskArea(boardId, name);
+      await tx.insertRiskAreaChange({ boardId, at: now, areaName: name, kind: 'removed', globId: null, cause: 'reset' });
+      return ok(await this.read(tx, boardId));
+    });
+  }
+
+  /**
+   * Drops the learned areas that break the rule for them (a package or app root, or fewer than `MIN_EVIDENCE_GLOBS` separate
+   * globs of evidence in the history), keeping a `removed` row for each in the history, then de-escalates the globs in
+   * Planning that were escalated only for a dropped area. Idempotent. Returns the dropped names.
+   */
+  async cleanup(boardId: number): Promise<string[]> {
+    const now = this.deps.clock.now();
+    const dropped = await this.deps.store.transaction(async (tx) => {
+      const history = await tx.listRiskAreaChanges(boardId);
+      const names: string[] = [];
+      for (const area of await tx.listRiskAreas(boardId)) {
+        if (area.source !== 'learned') continue;
+        if (!isWideArea(area) && evidenceGlobs(history, area.name).length >= MIN_EVIDENCE_GLOBS) continue;
+        await tx.deleteRiskArea(boardId, area.name);
+        await tx.insertRiskAreaChange({ boardId, at: now, areaName: area.name, kind: 'removed', globId: null, cause: 'cleanup' });
+        names.push(area.name);
+      }
+      return names;
+    });
+    if (dropped.length > 0) await this.deps.lift?.(boardId, dropped);
+    return dropped;
+  }
+
   /**
    * Applies one outcome, once per glob and kind. Returns whether it changed anything (an outcome already applied, or
    * one no area is affected by, doesn't).
@@ -74,7 +121,7 @@ export class RiskAreaService {
       const history = await tx.listRiskAreaChanges(boardId);
       if (history.some((c) => c.globId === outcome.globId && c.cause === outcome.kind)) return false;
       const areas = await seeded(tx, boardId, outcome.at);
-      const applied = applyOutcome(boardId, areas, outcome);
+      const applied = applyOutcome(boardId, areas, outcome, history);
       for (const area of applied.put) await tx.putRiskArea(area);
       for (const name of applied.removed) await tx.deleteRiskArea(boardId, name);
       for (const change of applied.changes) await tx.insertRiskAreaChange(change);
@@ -91,6 +138,7 @@ export class RiskAreaService {
    * recorded by the sub-limit learning is clean. Returns how many outcomes changed areas.
    */
   async learn(boardId: number, now: string): Promise<number> {
+    await this.cleanup(boardId);
     const read = await this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
       if (board === null) return null;
@@ -177,9 +225,10 @@ export class RiskAreaService {
 
   private async read(tx: Tx, boardId: number): Promise<RiskAreaView> {
     const areas = await seeded(tx, boardId, this.deps.clock.now());
+    const history = await tx.listRiskAreaChanges(boardId);
     return {
-      areas: areas.map((a) => ({ ...a, subSafe: subSafe(a) })),
-      history: await tx.listRiskAreaChanges(boardId),
+      areas: areas.map((a) => ({ ...a, subSafe: subSafe(a), evidence: a.source === 'learned' ? evidenceGlobs(history, a.name) : [] })),
+      history,
     };
   }
 }

@@ -279,6 +279,11 @@ export const mountKnowledge = (
   if (riskAreas !== undefined) {
     app.get('/api/boards/:b/risk-areas', async (c) => send(c, await riskAreas.view(c.get('email'), Number(c.req.param('b')))));
     app.post('/api/boards/:b/risk-areas/reset', async (c) => send(c, await riskAreas.reset(c.get('email'), Number(c.req.param('b')))));
+    app.post('/api/boards/:b/risk-areas/remove', async (c) => {
+      const body = await parse(c, z.object({ name: z.string().min(1).max(500) }));
+      if (body instanceof Response) return body;
+      return send(c, await riskAreas.remove(c.get('email'), Number(c.req.param('b')), body.name));
+    });
   }
 
   // The board's learned size threshold (oversized flag), its bounds and its history, for members.

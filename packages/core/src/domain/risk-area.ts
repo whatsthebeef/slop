@@ -26,10 +26,10 @@ export const RISK_OUTCOMES = [
 export type RiskOutcomeKind = (typeof RISK_OUTCOMES)[number];
 
 /** A change's cause: the outcome, or a person's reset. */
-export const RISK_AREA_CAUSES = [...RISK_OUTCOMES, 'reset'] as const;
+export const RISK_AREA_CAUSES = [...RISK_OUTCOMES, 'reset', 'cleanup'] as const;
 export type RiskAreaCause = (typeof RISK_AREA_CAUSES)[number];
 
-export const RISK_AREA_CHANGE_KINDS = ['added', 'strengthened', 'clean', 'removed', 'reset', 'correction'] as const;
+export const RISK_AREA_CHANGE_KINDS = ['added', 'strengthened', 'clean', 'removed', 'reset', 'correction', 'candidate'] as const;
 export type RiskAreaChangeKind = (typeof RISK_AREA_CHANGE_KINDS)[number];
 
 /** Clean outcomes (a correction to `sub` counts as `CORRECTION_WEIGHT`) after which a learned area is removed. */
@@ -40,6 +40,10 @@ export const CORRECTION_WEIGHT = 3;
 export const CLEAN_WINDOW_DAYS = 14;
 /** The most learned areas one outcome adds. */
 const MAX_NEW_AREAS = 3;
+/** The fewest path segments a learned directory area has (`apps/server/src/db`): a package or app root (`apps/web/src`) is too wide. */
+export const MIN_AREA_DEPTH = 4;
+/** The fewest separate globs a learned area needs as evidence before it is added. */
+export const MIN_EVIDENCE_GLOBS = 2;
 
 export interface RiskArea {
   readonly boardId: number;
@@ -79,7 +83,11 @@ export interface RiskOutcome {
 
 /** The board's risk areas and history, for board settings. */
 export interface RiskAreaView {
-  readonly areas: readonly (RiskArea & { readonly subSafe: boolean })[];
+  readonly areas: readonly (RiskArea & {
+    readonly subSafe: boolean;
+    /** The globs whose bad outcomes put a learned area here (empty for a default). */
+    readonly evidence: readonly string[];
+  })[];
   readonly history: readonly RiskAreaChange[];
 }
 
@@ -165,14 +173,43 @@ export const splitEvidence = (sourceId: string, match: { readonly areas: readonl
 /** A default area clean subs have shown safe: kept (it is a default), but intake leans `sub` there. */
 export const subSafe = (area: RiskArea): boolean => area.source === 'default' && area.strength === 0 && area.cleanCount >= CLEAN_TO_REMOVE;
 
-/** The directory (at most three levels) a learned area covers for `path`; the path itself at the repo root. */
+/**
+ * The narrow scope a learned area covers for `path`: its module directory (at most `MIN_AREA_DEPTH` levels) when that is deep
+ * enough, else the file itself. Never a package or app root.
+ */
 const scopeOf = (path: string): string => {
   const parts = path.split('/');
-  return parts.length === 1 ? path : parts.slice(0, Math.min(3, parts.length - 1)).join('/');
+  const dir = parts.slice(0, -1);
+  return dir.length >= MIN_AREA_DEPTH ? dir.slice(0, MIN_AREA_DEPTH).join('/') : path;
 };
 
+/** Whether a learned area's path pattern is narrow: a module directory deep enough (`dir/**`) or one exact file. */
+export const isNarrowPattern = (pattern: string): boolean => {
+  if (pattern.includes('*') && !pattern.endsWith('/**')) return false;
+  if (!pattern.endsWith('/**')) return !pattern.includes('*') && pattern !== '';
+  const base = pattern.slice(0, -3);
+  return !base.includes('*') && base.split('/').length >= MIN_AREA_DEPTH;
+};
+
+/** Whether a learned area breaks the rule for learned areas: every one of its patterns must be narrow. */
+export const isWideArea = (area: Pick<RiskArea, 'pathPatterns'>): boolean => !area.pathPatterns.every(isNarrowPattern);
+
+const BAD_CHANGE_KINDS: readonly RiskAreaChangeKind[] = ['added', 'strengthened', 'candidate', 'correction'];
+
+/**
+ * The separate globs whose bad outcomes are evidence for a learned area: those the history names it for with a change that
+ * adds or strengthens it (or notes it as a candidate), not the clean ones.
+ */
+export const evidenceGlobs = (history: readonly Pick<RiskAreaChange, 'areaName' | 'kind' | 'globId' | 'cause'>[], areaName: string): string[] => [
+  ...new Set(
+    history
+      .filter((c) => c.areaName === areaName && c.globId !== null && BAD_CHANGE_KINDS.includes(c.kind) && !isClean(c.cause))
+      .map((c) => c.globId as string),
+  ),
+];
+
 const outcomeWeight = (kind: RiskOutcomeKind): number => (kind === 'type_to_same' || kind === 'type_to_sub' ? CORRECTION_WEIGHT : 1);
-const isClean = (kind: RiskOutcomeKind): boolean => kind === 'clean' || kind === 'type_to_sub';
+const isClean = (kind: RiskAreaCause): boolean => kind === 'clean' || kind === 'type_to_sub';
 
 const WHY: Record<RiskOutcomeKind, string> = {
   reverted: 'A sub that changed it was reverted',
@@ -200,7 +237,13 @@ export interface AppliedOutcome {
  * clean for the areas the paths fall under; a learned area with `CLEAN_TO_REMOVE` clean outcomes is removed, a default
  * one only turns sub-safe. A person's change of type is recorded as a `correction`.
  */
-export const applyOutcome = (boardId: number, areas: readonly RiskArea[], outcome: RiskOutcome): AppliedOutcome => {
+export const applyOutcome = (
+  boardId: number,
+  areas: readonly RiskArea[],
+  outcome: RiskOutcome,
+  /** The board's history so far: a new learned area needs `MIN_EVIDENCE_GLOBS` separate globs in it (this outcome's included). */
+  history: readonly Pick<RiskAreaChange, 'areaName' | 'kind' | 'globId' | 'cause'>[] = [],
+): AppliedOutcome => {
   const weight = outcomeWeight(outcome.kind);
   const correction = outcome.kind === 'type_to_same' || outcome.kind === 'type_to_sub';
   const record = (areaName: string | null, kind: RiskAreaChangeKind): NewRiskAreaChange => ({
@@ -237,14 +280,20 @@ export const applyOutcome = (boardId: number, areas: readonly RiskArea[], outcom
   const scopes = [...new Set(uncovered.map(scopeOf))].slice(0, MAX_NEW_AREAS);
   for (const scope of scopes) {
     const name = `Learned: ${scope}`;
-    const pattern = scope.includes('/') ? `${scope}/**` : scope;
+    const pattern = uncovered.includes(scope) ? scope : `${scope}/**`;
+    // One glob is not a pattern: the area waits as a candidate until a second, separate glob has the same bad outcome.
+    const globs = new Set([...evidenceGlobs(history, name), outcome.globId]);
+    if (globs.size < MIN_EVIDENCE_GLOBS) {
+      changes.push(record(name, 'candidate'));
+      continue;
+    }
     put.push({
       boardId,
       name,
       pathPatterns: [pattern],
       why: WHY[outcome.kind],
       source: 'learned',
-      strength: weight,
+      strength: weight + (globs.size - 1),
       cleanCount: 0,
       updatedAt: outcome.at,
     });
