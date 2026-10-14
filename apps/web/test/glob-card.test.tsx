@@ -158,7 +158,11 @@ describe('card rows', () => {
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
     expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
-    expect(corner?.lastElementChild?.previousElementSibling?.getAttribute('data-testid')).toBe('card-status');
+    const separator = corner?.lastElementChild?.previousElementSibling;
+    expect(separator?.getAttribute('data-testid')).toBe('card-corner-separator');
+    expect(separator?.textContent).toBe('·');
+    expect(separator?.getAttribute('aria-hidden')).toBe('true');
+    expect(separator?.previousElementSibling?.getAttribute('data-testid')).toBe('card-status');
     expect(header?.firstElementChild?.getAttribute('data-testid')).toBe('card-id');
     expect(header?.firstElementChild?.className).toContain('shrink-0');
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
