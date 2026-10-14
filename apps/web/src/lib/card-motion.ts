@@ -36,8 +36,13 @@ const RECONNECT_QUIET_MS = 2000;
 /** A short note on a card moved elsewhere; `n` changes per move so its fade restarts. */
 export interface MoveTag {
   readonly text: string;
+  /** The actor behind the move, shown beside the text; absent for none. */
+  readonly icon?: 'machine' | 'human';
   readonly n: number;
 }
+
+/** What `describeRemote` returns: the tag's words and optional icon, before the move's number is added. */
+export type RemoteTag = Omit<MoveTag, 'n'>;
 
 /** A copy of a record without one key. */
 const without = <T>(record: Record<string, T>, key: string): Record<string, T> =>
@@ -65,7 +70,7 @@ export interface CardMotionOptions<T> {
   readonly idOf: (item: T) => string;
   readonly groupOf: (item: T) => string;
   /** A short tag for a card another person or slop moved to another group; null for none. */
-  readonly describeRemote: (before: T, after: T) => string | null;
+  readonly describeRemote: (before: T, after: T) => RemoteTag | null;
 }
 
 /**
@@ -149,14 +154,14 @@ export const useCardMotion = <T>(
     return () => window.removeEventListener('resize', refresh);
   }, []);
 
-  const showTag = (id: string, text: string) => {
+  const showTag = (id: string, remote: RemoteTag) => {
     tagCount.current += 1;
-    const tag: MoveTag = { text, n: tagCount.current };
+    const tag: MoveTag = { ...remote, n: tagCount.current };
     setTags((t) => ({ ...t, [id]: tag }));
     later(`tag:${id}`, () => setTags((t) => without(t, id)), TAG_MS);
   };
 
-  const flash = (id: string, kind: 'local' | 'remote', tag: string | null) => {
+  const flash = (id: string, kind: 'local' | 'remote', tag: RemoteTag | null) => {
     setLocks((l) => ({ ...l, [id]: kind }));
     later(`lock:${id}`, () => setLocks((l) => without(l, id)), LOCK_MS + 20);
     if (tag !== null) showTag(id, tag);

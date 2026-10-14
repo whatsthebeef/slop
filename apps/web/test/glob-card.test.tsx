@@ -415,4 +415,21 @@ describe('card interaction', () => {
     expect(onOpen).not.toHaveBeenCalled();
     expect(onAct).not.toHaveBeenCalled();
   });
+
+  it('shows a move tag in the status slot in place of the status, with no separate line', () => {
+    const g = conflicting();
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={g} repo='a/b' tag={{ text: 'picked up by JB', icon: 'human', n: 1 }} />
+      </MemoryRouter>,
+    );
+    const root = dom(html);
+    const statuses = root.querySelectorAll('[data-testid="card-status"]');
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.getAttribute('data-kind')).toBe('move-tag');
+    expect(statuses[0]?.textContent).toBe('picked up by JB');
+    expect(root.querySelectorAll('.move-tag')).toHaveLength(1);
+    expect(root.querySelector('[data-testid="card-corner"] .move-tag')).not.toBeNull();
+    expect(markup(g)).not.toContain('move-tag');
+  });
 });
