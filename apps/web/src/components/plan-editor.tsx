@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -29,6 +29,8 @@ export const PlanEditor = ({
     queryKey: ['plan-versions', globId, current?.version ?? 0],
     queryFn: () => api.artifactVersions(globId, 'plan', ''),
     enabled: opened && versionCount > 1,
+    // A live update bumps the key; the viewed version stays on screen while the list refetches.
+    placeholderData: keepPreviousData,
   });
   const viewedVersion = viewed === null || viewed === current?.version ? null : (past.data?.find((v) => v.version === viewed) ?? null);
   const saved = current?.content ?? null;
