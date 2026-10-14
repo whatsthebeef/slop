@@ -66,6 +66,15 @@ describe('groupContext', () => {
     ]);
   });
 
+  it('leaves out dismissed relations and does not list a decision as holding its own context', () => {
+    const me = g('s1t1');
+    const outside = g('s1k1', { group: null, category: 'decision', status: 'planning' });
+    const self = g('s1k2', { category: 'decision', status: 'planning' });
+    const rels = [relation('s1t1', 's1k1', { gate: 'merge', until: 'decided', dismissedAt: NOW })];
+    expect(groupContext(me, [me], rels, new Map(), [outside], NOW)).toBeNull();
+    expect(groupContext(self, [self, g('s1t2')], [], new Map(), [], NOW)?.decisions).toEqual([]);
+  });
+
   it('caps the neighbours and says how many were left out', () => {
     const members = Array.from({ length: 15 }, (_, i) => g(`s1t${i + 1}`));
     const ctx = groupContext(members[0] as Glob, members, [], new Map(), [], NOW);

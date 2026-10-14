@@ -241,6 +241,14 @@ export const planLine = (plan: string | null): string => {
   return '';
 };
 
+/** The group's other work globs that are open or merged in the last `GROUP_CONTEXT_MERGED_DAYS` days, open ones first. */
+export const contextNeighbours = (glob: Glob, members: readonly Glob[], now: string): Glob[] => {
+  const cutoff = new Date(new Date(now).getTime() - GROUP_CONTEXT_MERGED_DAYS * 86_400_000).toISOString();
+  return members
+    .filter((g) => !isDecisionGlob(g) && g.id !== glob.id && (!hasMerged(g) || g.updatedAt >= cutoff))
+    .sort((a, b) => Number(hasMerged(a)) - Number(hasMerged(b)) || a.id.localeCompare(b.id, 'en', { numeric: true }));
+};
+
 /**
  * The group section of `get_context` for `glob`: its group's other work globs that are open or merged in the last
  * `GROUP_CONTEXT_MERGED_DAYS` days, and the open decisions (those holding a glob of the group, and the group's own).
@@ -257,10 +265,7 @@ export const groupContext = (
 ): GroupContext | null => {
   if (glob.group === null || normaliseGroup(glob.group) === '') return null;
   const work = members.filter((g) => !isDecisionGlob(g));
-  const cutoff = new Date(new Date(now).getTime() - GROUP_CONTEXT_MERGED_DAYS * 86_400_000).toISOString();
-  const neighbours = work
-    .filter((g) => g.id !== glob.id && (!hasMerged(g) || g.updatedAt >= cutoff))
-    .sort((a, b) => Number(hasMerged(a)) - Number(hasMerged(b)) || a.id.localeCompare(b.id, 'en', { numeric: true }));
+  const neighbours = contextNeighbours(glob, members, now);
   const held = new Map<string, string[]>();
   const byId = new Map([...others, ...members].map((g) => [g.id, g]));
   const workIds = new Set(work.map((g) => g.id));
@@ -271,7 +276,7 @@ export const groupContext = (
     held.set(r.to, [...(held.get(r.to) ?? []), r.from]);
   }
   for (const g of members) {
-    if (!isDecisionGlob(g) || held.has(g.id)) continue;
+    if (!isDecisionGlob(g) || g.id === glob.id || held.has(g.id)) continue;
     const state = toState(g);
     if (state === 'open' || state === 'planning') held.set(g.id, []);
   }

@@ -16,7 +16,7 @@ import type { GlobAttributes } from '../domain/attributes.js';
 import { recheckOverlapsEffect } from '../domain/events.js';
 import { handoverBrief, openFindings, resumePhase } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
-import { groupContext, inGroup } from '../domain/group-view.js';
+import { GROUP_CONTEXT_MAX_GLOBS, contextNeighbours, groupContext, inGroup } from '../domain/group-view.js';
 import type { GroupContext } from '../domain/group-view.js';
 import { humanSteps } from '../domain/human-steps.js';
 import type { HumanStep } from '../domain/human-steps.js';
@@ -660,13 +660,10 @@ export class ArtifactService {
     const relations = await tx.listRelationsFrom(members.filter((g) => g.category !== 'decision').map((g) => g.id));
     const memberIds = new Set(members.map((g) => g.id));
     const others = await tx.getGlobs([...new Set(relations.map((r) => r.to))].filter((id) => !memberIds.has(id)));
-    const plans = new Map<string, string>();
-    for (const g of members) {
-      if (g.id === glob.id || g.category === 'decision') continue;
-      const plan = (await tx.listArtifacts(g.id, 'plan'))[0];
-      if (plan !== undefined) plans.set(g.id, plan.content);
-    }
-    return groupContext(glob, members, relations, plans, others.filter((g) => g.category === 'decision'), this.deps.clock.now());
+    // Plans only for the neighbours the context shows, in one read.
+    const shown = contextNeighbours(glob, members, this.deps.clock.now()).slice(0, GROUP_CONTEXT_MAX_GLOBS);
+    const plans = new Map((await tx.latestArtifacts(shown.map((g) => g.id), ['plan'])).map((a) => [a.globId, a.content]));
+    return groupContext(glob, members, relations, plans, others.filter((g) => g.category === 'decision' && !isArchivedDecision(g)), this.deps.clock.now());
   }
 
   /** The latest version of one artifact (kind and, for attachments, label) in full. */
