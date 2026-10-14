@@ -347,8 +347,14 @@ export interface Glob {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Decisions only: how this decision relates to others (never a dependency; see `GlobLink`). */
   readonly links?: readonly GlobLink[];
-  /** Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. */
-  readonly waiting?: { readonly since: string } | null;
+  /**
+   * Set while the glob is held in Planning for its `after`; cleared when released, started anyway or picked up. With
+   * `investigation`, Start was pressed while an investigate-only run was live: the glob starts by itself when that run ends.
+   */
+  readonly waiting?: {
+    readonly since: string;
+    readonly investigation?: { readonly runId: string; readonly by: string };
+  } | null;
   /**
    * Set while a merge that would have started is held back by an unmet `merge` relation (an armed merge-when-green whose checks
    * passed, or a sub whose gate passed): `sha` is the head it would merge. `gateReleased` resumes it; cleared on merge, disarm or a new head.

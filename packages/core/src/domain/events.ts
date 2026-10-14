@@ -57,6 +57,8 @@ export const DOMAIN_EVENT_TYPES = [
   'Waiting',
   /** What a glob waited for merged: it started by itself. */
   'Released',
+  /** Start was pressed during an investigation: the glob starts when that run ends (data: the investigation's run ID). */
+  'StartQueued',
   /** A person started a held glob (or picked it up) before what it waits for merged. */
   'HoldOverridden',
   /** A person said a recorded edge is not a dependency (data: the other glob, its kind and source, the plan hash). */

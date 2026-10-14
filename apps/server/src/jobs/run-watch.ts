@@ -28,7 +28,9 @@ export class RunWatch {
     const due = await this.store.transaction(async (tx) => {
       const found: { id: string; runId: string; reason: string }[] = [];
       for (const board of await tx.listAllBoards()) {
-        for (const glob of await tx.listGlobs(board.id, { status: ['planning', 'implementing', 'pr_open', 'failed'] })) {
+        for (const glob of await tx.listGlobs(board.id, { status: ['planning', 'implementing', 'pr_open', 'failed', 'in_progress'] })) {
+          // A picked-up glob keeps only its investigation running (pick-up leaves it); no other run is watched there.
+          if (glob.status === 'in_progress' && machine.liveInvestigation(glob) === null) continue;
           const reason = machine.runTimeoutReason(glob, board, now);
           const run = machine.currentRun(glob);
           if (reason !== null && run !== null) found.push({ id: glob.id, runId: run.id, reason });

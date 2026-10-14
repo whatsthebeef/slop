@@ -191,7 +191,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make('machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
   if (status !== null) {
-    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' ? 'hourglass' : status.kind === 'rollout' ? 'human' : 'alert';
+    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' || status.kind === 'start-queued' ? 'hourglass' : status.kind === 'rollout' ? 'human' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
   if (awaitingSignOff(glob) && position === null) {
