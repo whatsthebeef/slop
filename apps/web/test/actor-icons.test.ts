@@ -23,6 +23,13 @@ describe('actor icons', () => {
     expect(html).toContain('lucide-bot');
     expect(html).toContain('aria-label="machine"');
   });
+  it('turns the robot head only while working, and not for reduced motion', () => {
+    const still = renderToStaticMarkup(createElement(MachineIcon));
+    const turning = renderToStaticMarkup(createElement(MachineIcon, { working: true }));
+    expect(still).not.toContain('animate-spin');
+    expect(turning).toContain('animate-spin');
+    expect(turning).toContain('motion-reduce:animate-none');
+  });
   it('hides a decorative icon from screen readers', () => {
     const html = renderToStaticMarkup(createElement(HumanIcon, { decorative: true }));
     expect(html).toContain('aria-hidden="true"');

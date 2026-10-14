@@ -118,8 +118,8 @@ describe('board filters', () => {
     expect(toggleOption(category, 'bug', 'bug')).toBe('');
   });
 
-  it('has only the category and ID filters', () => {
-    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['category', 'id']);
+  it('has the category and ID filters and the temporary group filter', () => {
+    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['category', 'id', 'group']);
   });
 
   it('ignores the removed yourTurn, move and human parameters in old links', () => {
@@ -130,5 +130,20 @@ describe('board filters', () => {
     expect(writeFilters(new URLSearchParams('yourTurn=1&move=stalled&human=rollout'), values).toString()).toBe(
       'yourTurn=1&move=stalled&human=rollout',
     );
+  });
+
+  it('filters by exact group name, hiding globs with no group, and round-trips through the URL', () => {
+    const values = parse('group=glob-groups');
+    expect(values).toEqual({ category: 'feature,task,bug', group: 'glob-groups' });
+    expect(matchesFilters(view({ group: 'glob-groups' }), values)).toBe(true);
+    expect(matchesFilters(view({ group: 'glob' }), values)).toBe(false);
+    expect(matchesFilters(view({ group: null }), values)).toBe(false);
+    expect(matchesFilters(view({ group: 'glob-groups', category: 'decision' }), values)).toBe(false);
+    expect(matchesFilters(view({ group: 'glob-groups', id: 's9t9' }), { ...values, id: 'zzz' })).toBe(false);
+    expect(activeCount(values)).toBe(1);
+    const params = writeFilters(new URLSearchParams(), values);
+    expect(params.toString()).toBe('group=glob-groups');
+    expect(parseFilters(params)).toEqual(values);
+    expect(writeFilters(params, defaultFilters()).toString()).toBe('');
   });
 });

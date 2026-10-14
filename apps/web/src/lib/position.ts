@@ -9,13 +9,15 @@ import type { GlobView } from './api';
  */
 export interface Position {
   readonly holder: 'human' | 'machine' | 'waiting' | 'stalled';
-  /** One short line: "implementing", "queued 3 min", "checks running on abc1234", "stalled: ...". */
+  /** One short line: "implementing", "starting", "queued 3 min", "checks running on abc1234", "stalled: ...". */
   readonly text: string;
   /** The card's single line: a few words (the move's short label where it has one), never a file path or a sentence. */
   readonly label: string;
   readonly tip: string;
   /** Spins while the machine is running. */
   readonly spinning: boolean;
+  /** True when the machine's step is waiting to start (queued or starting), not yet running. */
+  readonly queued: boolean;
   readonly tone: string;
   /** The session or run the indicator is about, when it has one. */
   readonly sessionUrl: string | null;
@@ -78,7 +80,7 @@ const machineText = (step: MachineStep, now: string): string => {
   if (step.kind === 'merge') return DOING.merge;
   if (step.state === 'queued') {
     const n = minutesSince(step.startedAt, now);
-    return n === null || n < 1 ? 'queued' : `queued ${String(n)} min`;
+    return n === null || n < 1 ? 'starting' : `queued ${String(n)} min`;
   }
   return DOING[step.kind];
 };
@@ -99,6 +101,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       label: `committing agent set v${String(agentSetVersionOfTitle(glob.title))}`,
       tip: 'Slop commits the agent set to this branch shortly after the board changes it, then marks the PR ready. Nobody works on it.',
       spinning: false,
+      queued: false,
       tone: 'text-muted-foreground',
       sessionUrl: null,
       onChecks: false,
@@ -119,6 +122,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
         label: text,
         tip: tip.join('\n'),
         spinning: lead?.state === 'running',
+        queued: lead?.state === 'queued' && lead.kind !== 'merge',
         tone: 'text-muted-foreground',
         sessionUrl: session,
         onChecks: false,
@@ -136,6 +140,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
           ? 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.'
           : `Waiting: ${move.reason}`,
         spinning: steps.some((s) => s.kind === 'checks' && s.state === 'running'),
+        queued: false,
         tone: 'text-muted-foreground',
         sessionUrl: null,
         onChecks: checks,
@@ -149,6 +154,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
         label: move.label ?? `stalled: ${move.reason}`,
         tip: `Stalled: ${move.reason}\nNobody is moving this glob. The first step in Your turn gets it going.${session === null ? '' : `\nSession: ${session}`}`,
         spinning: false,
+        queued: false,
         tone: 'text-required',
         sessionUrl: session,
         onChecks: false,
@@ -167,6 +173,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
             ? `${move.who ?? 'Someone'} picked this up and no machine run is working on it. A local session isn't visible to slop. Start hands it to the machine.`
             : `${move.who ?? 'Someone'}'s turn: ${move.reason}`,
         spinning: false,
+        queued: false,
         tone: 'text-muted-foreground',
         sessionUrl: null,
         onChecks: false,

@@ -276,13 +276,16 @@ describe('position indicator', () => {
 
   it('names the run states', () => {
     expect(positionOf(withRun('active', {}, { status: 'in_progress' }), NOW)?.text).toBe('implementing');
-    expect(positionOf(withRun('queued', {}, { status: 'in_progress' }), NOW)?.text).toBe('queued');
+    expect(positionOf(withRun('queued', {}, { status: 'in_progress' }), NOW)?.text).toBe('starting');
   });
 
   it('says how long a run has been queued', () => {
     const g = withRun('queued', { queuedAt: NOW }, { status: 'in_progress' });
     expect(positionOf(g, later(3))?.text).toBe('queued 3 min');
     expect(positionOf(g, later(3))?.tip).toMatch(/^Machine run queued/);
+    // A queued step is not spinning and says so; a running one spins and names its verb.
+    expect(positionOf(g, later(3))).toMatchObject({ queued: true, spinning: false });
+    expect(positionOf(withRun('active', {}, { status: 'in_progress' }), NOW)).toMatchObject({ queued: false, spinning: true, text: 'implementing' });
   });
 
   it('stalls a run that has been queued past the threshold, in the warning tone', () => {
@@ -321,7 +324,7 @@ describe('investigate runs', () => {
         NOW,
       );
       expect(label?.holder).toBe('machine');
-      expect(label?.text).toBe(state === 'queued' ? 'queued' : 'investigating');
+      expect(label?.text).toBe(state === 'queued' ? 'starting' : 'investigating');
       expect(label?.sessionUrl).toBe('https://claude.ai/code/s');
     }
   });

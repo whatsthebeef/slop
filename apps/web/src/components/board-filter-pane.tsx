@@ -105,6 +105,7 @@ const Control = ({
       </span>
     );
   }
+  if (filter.control === 'tag') return null;
   const on = selectedOptions(value);
   return (
     <div className="flex gap-1" role="group" aria-label={filter.label}>
@@ -175,7 +176,7 @@ export const FilterPane = ({
         >
           <X className="h-4 w-4" aria-hidden />
         </button>
-        {BOARD_FILTERS.map((filter) => (
+        {BOARD_FILTERS.filter((filter) => filter.control !== 'tag').map((filter) => (
           <div key={filter.key} className="flex items-center gap-2 text-xs text-muted-foreground">
             {!filter.hideLabel && <span>{filter.label}</span>}
             <Control
@@ -184,6 +185,24 @@ export const FilterPane = ({
               onChange={(value) => onChange({ ...values, [filter.key]: value })}
             />
           </div>
+        ))}
+        {BOARD_FILTERS.filter((filter) => filter.control === 'tag' && (values[filter.key] ?? '') !== '').map((filter) => (
+          <span
+            key={filter.key}
+            className="inline-flex h-7 items-center gap-1 rounded-full border border-foreground bg-muted pr-1 pl-2.5 text-xs font-medium"
+            data-testid={`filter-${filter.key}-chip`}
+          >
+            {filter.label}: {values[filter.key]}
+            <button
+              type="button"
+              className="rounded-full p-0.5 hover:bg-background"
+              aria-label={`Remove ${filter.label.toLowerCase()} filter`}
+              data-testid={`filter-${filter.key}-remove`}
+              onClick={() => onChange({ ...values, [filter.key]: '' })}
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </span>
         ))}
         {activeCount(values) > 0 && (
           <button
