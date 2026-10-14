@@ -1,6 +1,7 @@
 import { decisionOf, machine } from '@slop/core';
 import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -372,11 +373,14 @@ const StepMainButton = ({
   glob,
   busy,
   onComplete,
+  menu,
 }: {
   step: NonNullable<ReturnType<typeof mainStep>>['step'];
   glob: GlobViewContext['glob'];
   busy: boolean;
   onComplete: ((stepId: string) => Promise<boolean>) | undefined;
+  /** The ▾ of the split button, joined to the button. */
+  menu?: ReactNode;
 }) => {
   const main = stepMain(step);
   const [copied, setCopied] = useState(false);
@@ -391,10 +395,12 @@ const StepMainButton = ({
   const unavailable = main.kind === 'wait' || (!asCopy && onComplete === undefined);
   return (
     <>
+      <div className="inline-flex">
       <Tip text={main.kind === 'wait' ? main.reason : step.title}>
         <span>
           <Button
             size="sm"
+            className={menu === undefined ? undefined : 'rounded-r-none'}
             data-testid="main-action"
             data-step={step.id}
             data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
@@ -406,6 +412,8 @@ const StepMainButton = ({
           </Button>
         </span>
       </Tip>
+      {menu}
+      </div>
       <span className="text-xs text-muted-foreground" data-testid="main-action-note">
         {main.kind === 'wait' ? `${step.title}: ${main.reason}` : main.kind === 'done' && main.text !== null ? `${step.title}: ${main.text}` : step.title}
       </span>
@@ -432,71 +440,81 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   const moreRunning =
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
+  // The ▾ is the other half of the main button: with no main button there is nothing to attach it to, so nothing shows
+  // (the status in the header says what the machine is doing).
+  const hasMain = main !== null || stepTurn !== null;
+  const hasMenu = hasMain && moreActions.length + disabled.length > 0;
+  const menu = hasMenu ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          className="rounded-l-none border-l-primary-foreground/40 px-1.5"
+          disabled={busy}
+          aria-label="More actions"
+          data-testid="more-actions"
+        >
+          {moreRunning === null ? (
+            <ChevronDown className="size-3.5" aria-hidden />
+          ) : (
+            <Loader2 className="size-3.5 animate-spin" aria-label={workingLabel(moreRunning)} />
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-testid="more-menu">
+        {moreActions.map((action) => {
+          const shown = actionPresentation(action, glob, false, state.viewer?.email);
+          return (
+            <DropdownMenuItem
+              key={action}
+              data-testid={`more-${action}`}
+              onSelect={() => state.begin(action)}
+            >
+              <span className="flex items-center gap-1.5 font-medium">
+                <ActorIcon actor={shown.icon} decorative />
+                {shown.label}
+              </span>
+              <span className="whitespace-pre-line text-xs text-muted-foreground">
+                {tipOf(action, glob, state.viewer?.email)}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+        {disabled.map(({ action, label, icon, tip }) => (
+          <DropdownMenuItem key={action} disabled>
+            <span className="flex items-center gap-1.5 font-medium">
+              <ActorIcon actor={icon} decorative />
+              {label}
+            </span>
+            <span className="text-xs text-muted-foreground">{tip}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : undefined;
   return (
     <>
-      {(main !== null || actions.length + disabled.length > 0 || stepTurn !== null) && (
+      {hasMain && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
-            {main === null && stepTurn !== null && <StepMainButton step={stepTurn.step} glob={glob} busy={busy} onComplete={state.completeStep} />}
-            {main !== null && (
-              <Tip text={tipOf(main, glob, state.viewer?.email)}>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  data-testid="main-action"
-                  onClick={() => state.begin(main)}
-                >
-                  <ActionContent action={main} ctx={ctx} state={state} />
-                </Button>
-              </Tip>
+            {main === null && stepTurn !== null && (
+              <StepMainButton step={stepTurn.step} glob={glob} busy={busy} onComplete={state.completeStep} menu={menu} />
             )}
-            {moreActions.length + disabled.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" disabled={busy} data-testid="more-actions">
-                    {moreRunning === null ? (
-                      <>
-                        More
-                        <ChevronDown className="size-3.5" aria-hidden />
-                      </>
-                    ) : (
-                      <>
-                        <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                        {workingLabel(moreRunning)}
-                      </>
-                    )}
+            {main !== null && (
+              <div className="inline-flex" data-testid="split-button">
+                <Tip text={tipOf(main, glob, state.viewer?.email)}>
+                  <Button
+                    size="sm"
+                    className={hasMenu ? 'rounded-r-none' : undefined}
+                    disabled={busy}
+                    data-testid="main-action"
+                    onClick={() => state.begin(main)}
+                  >
+                    <ActionContent action={main} ctx={ctx} state={state} />
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent data-testid="more-menu">
-                  {moreActions.map((action) => {
-                    const shown = actionPresentation(action, glob, false, state.viewer?.email);
-                    return (
-                      <DropdownMenuItem
-                        key={action}
-                        data-testid={`more-${action}`}
-                        onSelect={() => state.begin(action)}
-                      >
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <ActorIcon actor={shown.icon} decorative />
-                          {shown.label}
-                        </span>
-                        <span className="whitespace-pre-line text-xs text-muted-foreground">
-                          {tipOf(action, glob, state.viewer?.email)}
-                        </span>
-                      </DropdownMenuItem>
-                    );
-                  })}
-                  {disabled.map(({ action, label, icon, tip }) => (
-                    <DropdownMenuItem key={action} disabled>
-                      <span className="flex items-center gap-1.5 font-medium">
-                        <ActorIcon actor={icon} decorative />
-                        {label}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{tip}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                </Tip>
+                {menu}
+              </div>
             )}
           </div>
           {state.confirmingReady && (

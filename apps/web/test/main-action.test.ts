@@ -1,6 +1,6 @@
 import type { Action, PullRequest } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { mainAction } from '../src/lib/main-action';
+import { failedRepeatedly, mainAction } from '../src/lib/main-action';
 
 const glob = (over: Partial<Parameters<typeof mainAction>[1]> = {}) => ({
   type: 'same' as const,
@@ -68,5 +68,35 @@ describe('mainAction', () => {
     expect(mainAction(['merge', 'resolve_conflict'], glob({ status: 'pr_open', pr: pr('ready') }), false, true)).toBe('resolve_conflict');
     expect(mainAction(['merge'], glob({ status: 'pr_open', pr: pr('ready') }), false, true)).toBeNull();
     expect(mainAction(['merge'], glob({ status: 'pr_open', pr: pr('ready') }))).toBe('merge');
+  });
+});
+
+describe('mainAction after repeated failures', () => {
+  const run = (outcome: 'failed' | 'completed' | 'superseded' | null, purpose?: 'resolve_conflict', state: 'ended' | 'active' = 'ended') =>
+    ({ id: 'r', state, outcome, purpose }) as NonNullable<Parameters<typeof failedRepeatedly>[0]['runs']>[number];
+  const failed = glob({ status: 'in_progress', runs: [run('failed'), run('failed')] });
+
+  it('keeps Retry as main after the first failure', () => {
+    expect(pick(['retrigger', 'pick_up'], glob({ status: 'in_progress', runs: [run('failed')] }))).toBe('retrigger');
+  });
+
+  it('makes Pick up main once a retry failed the same way', () => {
+    expect(pick(['retrigger', 'pick_up'], failed)).toBe('pick_up');
+    expect(pick(['resolve_conflict', 'pick_up'], glob({ status: 'in_progress', runs: [run('failed', 'resolve_conflict'), run('failed', 'resolve_conflict')] }))).toBe('pick_up');
+  });
+
+  it('uses take_over while it is the only way in, and keeps Retry when no one can pick it up', () => {
+    expect(pick(['retrigger', 'take_over'], failed)).toBe('take_over');
+    expect(pick(['retrigger'], failed)).toBe('retrigger');
+  });
+
+  it('counts only failures of the same kind since the last success', () => {
+    expect(failedRepeatedly({ runs: [run('failed', 'resolve_conflict'), run('failed')] })).toBe(false);
+    expect(failedRepeatedly({ runs: [run('failed'), run('completed'), run('failed')] })).toBe(false);
+    expect(failedRepeatedly({ runs: [run('failed'), run('superseded'), run('failed')] })).toBe(true);
+  });
+
+  it('does not count while a run is in progress', () => {
+    expect(failedRepeatedly({ runs: [run('failed'), run('failed'), run(null, undefined, 'active')] })).toBe(false);
   });
 });
