@@ -18,7 +18,7 @@ import type { GlobView, NewGlob } from '@/lib/api';
 import { actionLabel, haltedBy } from '@/lib/action-presentation';
 import { cardMoves } from '@/lib/card-moves';
 import { groupNames } from '@/lib/group-names';
-import { hasBlocker } from '@/lib/card-rows';
+import { hasBlocker, waitingOnCounts } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
 import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
@@ -413,6 +413,7 @@ export const BoardPage = () => {
   // A rejected or closed decision (archived) never shows.
   const filterContext = { now: new Date().toISOString(), viewer };
   const all = (shown ?? globs.data).filter((g) => decisionOf(g)?.archived !== true && matchesFilters(g, filters, filterContext));
+  const waitingOn = waitingOnCounts(globs.data);
   const groups = groupNames(globs.data.filter((g) => decisionOf(g)?.archived !== true));
   const haltLabel = haltConfirm === null ? '' : actionLabel(haltConfirm.action, haltConfirm.glob);
 
@@ -519,6 +520,7 @@ export const BoardPage = () => {
                       environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
+                      waitingOnThis={waitingOn.get(glob.id) ?? 0}
                     />
                   );
                 })}

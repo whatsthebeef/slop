@@ -240,3 +240,13 @@ export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (isEscalated(glob) || status?.turn === 'decide') return true;
   return status !== null && ['provisioning', 'base-red', 'checks', 'stuck'].includes(status.kind);
 };
+
+/** How many globs in Planning wait for each glob to merge (their unmet start relations), for the card's "N waiting on this". */
+export const waitingOnCounts = (globs: readonly Pick<GlobView, 'id' | 'status' | 'holding'>[]): ReadonlyMap<string, number> => {
+  const counts = new Map<string, number>();
+  for (const g of globs) {
+    if (g.status !== 'planning') continue;
+    for (const to of new Set((g.holding ?? []).filter((h) => h.gate === 'start').map((h) => h.to))) counts.set(to, (counts.get(to) ?? 0) + 1);
+  }
+  return counts;
+};

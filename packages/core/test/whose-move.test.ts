@@ -96,6 +96,16 @@ describe('whoseMove: priority', () => {
     expect(move(g, {}, { stored: [rollout] })).toMatchObject({ holder: 'waiting', reason: 'waiting for Deploy the host stack' });
   });
 
+  it('a predicted rollout placeholder is not a wait in Planning: the glob is free to start', () => {
+    const placeholder: StoredHumanStep = {
+      id: 'hs-2', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Rollout: steps to be written', detail: null, who: 'admin', due: 'after_merge',
+      state: 'open', blocks: ['sign_off'], check: null, script: null, origin: 'investigation', createdBy: dev.email, createdAt: NOW,
+      doneBy: null, doneAt: null, dismissedReason: null,
+    };
+    const g = glob({ status: 'planning', type: 'same', runs: [run({ state: 'ended', outcome: 'completed' })] });
+    expect(move(g, {}, { stored: [placeholder] }).holder).toBe('idle');
+  });
+
   it('a person by state alone: review asked for, an escalation', () => {
     const reviewing = glob({ status: 'reviewing', implementer: dev.email, labels: { QA: 'required' } });
     expect(move(reviewing)).toMatchObject({ holder: 'you', reason: 'Review needed' });
