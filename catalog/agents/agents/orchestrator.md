@@ -194,7 +194,7 @@ When resuming from a phase, read the output files of the earlier phases. The dev
 
 6. **Check the size.** Do this after the context is written and before Phase 2. Size is advice, not a hold, and an oversized glob is **not split on the board**: never call `split_glob` here. People size a glob for review (one glob, one PR, one QA, one sign-off); the agents divide the work inside the run as **workstreams** (Phase 2 and 3), which never appear on the board.
    - If `get_glob` or `get_context` flags the glob as oversized (`oversized` is true; `sizeCheck` / `size`, with `size.forecast`'s parts) or plan.md clearly holds more separate parts than the board's `risk_and_size` document allows for one PR, pass that to the investigator as candidate workstreams.
-   - **Scope cut (interactive only).** Only when a workstream could ship on its own and nothing else needs it, offer the developer to make it an independent follow-up glob (`create_glob` in group `workstreams`, with `after: [<id>]` if it needs this glob's code). Ask once with `AskUserQuestion`, record the answer as `Clarifications`, and keep that scope out of this glob's plan. **Never in a routine:** unattended, keep the whole scope in this glob, and note the possible cut under `## Open items` in the record.
+   - A possible scope cut is judged in Phase 2b, once the investigator has flagged it, not here.
    - If the glob was big but slop hadn't flagged it, submit an `agent-behaviour` learning in Phase 6 (name the glob and what in the plan showed it), as evidence for the size threshold.
 
 ### Phase 2: Investigation
@@ -237,6 +237,7 @@ Between Phase 2 and Phase 3, read the plan file's `## Workstreams` (and the inve
 - **Fan out** when at least 2 workstreams can run at the same time and each is worth an agent. Check the ownership rule yourself first: no file may be owned by two workstreams. Merge two that would edit the same file, or move the file to W0.
 - Order the workstreams by their needs (W0 first) and write the `## Workstreams` table into `.reviews/<id>-record.md` with every workstream `not started`. Push the record (`put_artifact`, as in Phase 2 step 7), so a later run or a person sees the plan.
 - Record the decision (fan out or not, and why) under `## Decisions`.
+- **Scope cut (interactive only).** If the investigator flagged a workstream that could ship on its own and nothing else needs it, offer the developer to make it an independent follow-up glob (`create_glob` in group `workstreams`, with `after: [<id>]` if it needs this glob's code). Ask once with `AskUserQuestion` and record the answer as `Clarifications`. If they accept, remove that workstream from the plan file's `## Workstreams`, the investigation block's `parts` and the work to do, and note the cut in `## Decisions`. **Never in a routine:** unattended, keep the whole scope in this glob and note the possible cut under `## Open items` in the record.
 
 ### Phase 3: Implementation
 
