@@ -215,7 +215,7 @@ export interface CodeHost {
   /** Lines changed (the commit's stats) and files touched by commit `sha` against its first parent: a merged sub's size. */
   commitDiffSummary(repo: Repo, sha: string, signal?: AbortSignal): Promise<DiffSummary>;
   /** The head commit of `ref` (a branch) and its subject line; null when the branch doesn't exist. */
-  headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string } | null>;
+  headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string; parent: string | null } | null>;
   /**
    * The state of the checks on a commit and, when one failed, the first failing check's name, failed step and first
    * error lines from its log. Explaining is best effort: a failure with no lines still names the check.

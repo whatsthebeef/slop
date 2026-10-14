@@ -133,10 +133,12 @@ export const mainRedNotification = (
   const failure = checks.failure;
   const setup = failure !== undefined && isSetupFailure(failure);
   const test = firstFailingTest(failure);
-  const blamed = checks.since === null ? '' : ` (${checks.since})`;
+  // The first red commit, not the latest head: `since` names the glob that commit merged.
+  const redSha = checks.redSha ?? checks.sha;
+  const cause = checks.since === null ? `the cause is unclear (red since ${redSha.slice(0, 7)})` : `red since ${redSha.slice(0, 7)} (${checks.since})`;
   const title = setup
     ? `CI setup failing: ${failure.step ?? failure.name}`
-    : `⚠ ${baseBranch} is red since ${checks.sha.slice(0, 7)}${blamed}${test === null ? '' : ` · ${test}`} · fixing: ${fix.glob ?? 'nobody yet'}`;
+    : `⚠ ${baseBranch} is ${checks.since === null ? 'red; ' : ''}${cause}${test === null ? '' : ` · ${test}`} · fixing: ${fix.glob ?? 'nobody yet'}`;
   const link = failure?.url ?? null;
   const createFix = `/boards/${String(boardId)}?${new URLSearchParams({
     newGlob: `${baseBranch} is red: ${test ?? 'checks fail'}`,
