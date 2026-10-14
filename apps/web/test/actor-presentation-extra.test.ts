@@ -138,10 +138,11 @@ describe('status-line activity icons (s15f88)', () => {
     });
   });
 
-  it('renders the standby marker with a decorative icon beside the text', () => {
+  it('renders the standby marker as a decorative icon with an accessible name', () => {
     const html = card(view({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...live('watching') }));
     expect(html).toContain('data-kind="standby"');
-    expect(html).toContain('>standby<');
+    expect(html).toContain('aria-label="Machine on standby"');
+    expect(html).not.toContain('>standby<');
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain('aria-label="machine"');
   });
