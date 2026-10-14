@@ -8,7 +8,7 @@ import type { RiskTier } from './knowledge.js';
 import { contextSectionList } from './intake-learning.js';
 import { RELATION_GATES, RELATION_UNTILS } from './types.js';
 import type { RelationGate, RelationUntil } from './types.js';
-import { MAX_PROPOSED_PARTS, goalOf, splitShape } from './size-check.js';
+import { MAX_PROPOSED_PARTS, applyOwnership, goalOf } from './size-check.js';
 import type { SizeProposal, SizeThreshold, Workstream } from './size-check.js';
 
 export const CHANGE_KINDS = ['create', 'modify', 'delete'] as const;
@@ -327,7 +327,7 @@ export const proposalFromParts = (
       needs: part.needs.map((n) => sorted.findIndex((p) => p.name === n)).filter((n) => n >= 0).sort((a, b) => a - b),
     };
   });
-  return { workstreams: built, ...splitShape(built) };
+  return applyOwnership(built);
 };
 
 /**

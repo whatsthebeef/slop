@@ -66,7 +66,7 @@ export class InvestigationService implements InvestigationReactor {
           checkFrom(
             globId,
             glob.boardId,
-            { planHash: previous?.planHash ?? hash(read.plan), estimate, evidence: evidenceOf(estimate), threshold: read.threshold, flagged: true, reasons: oversize.reasons, proposal: oversize.proposal },
+            { planHash: previous?.planHash ?? hash(read.plan), estimate, evidence: [...evidenceOf(estimate), ...(oversize.proposal?.notes ?? [])], threshold: read.threshold, flagged: true, reasons: oversize.reasons, proposal: oversize.proposal },
             previous,
             this.deps.clock.now(),
           ),
