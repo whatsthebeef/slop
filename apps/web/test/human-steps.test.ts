@@ -223,4 +223,21 @@ describe('section markup', () => {
     expect(html(merged([]), admin, false)).toBe('');
     expect(html(merged([]))).toContain('Add step');
   });
+
+  it('shows a predicted rollout as a muted prediction with no tick, dismiss or turn', () => {
+    const predicted = step({ id: 'hs_p', title: 'Rollout: steps to be written', state: 'pending', who: 'anyone', predicted: true });
+    const out = html(merged([predicted], { status: 'planning', pr: null }));
+    expect(out).toContain('Rollout predicted: the run writes the steps');
+    expect(out).not.toContain('Rollout: steps to be written');
+    expect(out).toContain('predicted by the investigator');
+    expect(out).not.toContain('step-tick');
+    expect(out).not.toContain('step-dismiss');
+    expect(out).not.toContain('Your turn');
+  });
+
+  it('never makes a predicted rollout anyone\'s turn, even once merged', () => {
+    const predicted = step({ id: 'hs_p', who: 'anyone', predicted: true });
+    expect(blockingTurn([predicted], glob(), admin)).toBeNull();
+    expect(blockingTurn([step({ who: 'anyone' })], glob(), admin)).not.toBeNull();
+  });
 });

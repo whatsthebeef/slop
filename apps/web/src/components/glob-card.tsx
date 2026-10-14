@@ -520,7 +520,7 @@ const UpcomingStepsChip = ({ glob, onOpen }: { glob: GlobView; onOpen: () => voi
   const [first, ...more] = upcoming.kinds;
   const tip = steps
     .filter((s) => s.state === 'pending')
-    .map((s) => `${s.title}: due ${dueText(s.due)}`)
+    .map((s) => (s.predicted === true ? 'Rollout predicted: the run writes the steps' : `${s.title}: due ${dueText(s.due)}`))
     .join('\n');
   return (
     <Tip text={tip}>

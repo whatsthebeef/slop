@@ -47,6 +47,9 @@ export type HumanStepScript = { readonly artifact: string } | { readonly path: s
 /** What a step's chip runs: a state-machine action, or opening the run's session (a link, not a state change). */
 export type StepAction = Action | 'open_session';
 
+/** The title of the placeholder step the investigator leaves when it predicts a rollout (origin `investigation`). */
+export const PREDICTED_ROLLOUT_TITLE = 'Rollout: steps to be written';
+
 export interface HumanStep {
   readonly id: string;
   readonly kind: HumanStepKind;
@@ -65,6 +68,8 @@ export interface HumanStep {
   readonly source: 'machine' | 'work';
   readonly doneBy: string | null;
   readonly doneAt: string | null;
+  /** The investigator's open rollout placeholder: a prediction the run replaces with real steps, not a task anyone can do yet. */
+  readonly predicted?: true;
   /** The one action the step's chip runs; its label is the title. Absent when the step needs input in the glob view. */
   readonly action?: StepAction;
   /** The one other action the glob view offers beside `action`; never shown on the card. */
@@ -207,6 +212,7 @@ const fromStored = (glob: Glob, s: StoredHumanStep): HumanStep => ({
   source: 'work',
   doneBy: s.doneBy,
   doneAt: s.doneAt,
+  ...(s.origin === 'investigation' && s.title === PREDICTED_ROLLOUT_TITLE && s.state === 'open' ? { predicted: true as const } : {}),
 });
 
 const STATE_RANK: Readonly<Record<HumanStepState, number>> = { due: 0, pending: 1, done: 2, dismissed: 3 };
@@ -285,9 +291,9 @@ export const upcomingSteps = (steps: readonly Pick<HumanStep, 'kind' | 'state'>[
 };
 
 /** The compact form on board and glob views: enough for the card, the filters and the status line, without detail text. */
-export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'action' | 'alternative'>;
+export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'predicted' | 'action' | 'alternative'>;
 
-export const compactStep = ({ id, kind, title, state, who, due, blocks, action, alternative }: HumanStep): CompactHumanStep => ({
+export const compactStep = ({ id, kind, title, state, who, due, blocks, predicted, action, alternative }: HumanStep): CompactHumanStep => ({
   id,
   kind,
   title,
@@ -295,6 +301,7 @@ export const compactStep = ({ id, kind, title, state, who, due, blocks, action, 
   who,
   due,
   blocks,
+  ...(predicted === undefined ? {} : { predicted }),
   ...(action === undefined ? {} : { action }),
   ...(alternative === undefined ? {} : { alternative }),
 });
@@ -316,8 +323,9 @@ export interface BlockProgress {
   readonly total: number;
 }
 
-export const blockProgress = (steps: readonly (Pick<HumanStep, 'state' | 'blocks'> & Partial<Pick<HumanStep, 'source'>>)[], block: HumanStepBlock): BlockProgress => {
-  const holding = steps.filter((s) => s.source !== 'machine' && s.state !== 'dismissed' && s.blocks.includes(block));
+export const blockProgress = (steps: readonly (Pick<HumanStep, 'state' | 'blocks'> & Partial<Pick<HumanStep, 'source' | 'predicted'>>)[], block: HumanStepBlock): BlockProgress => {
+  // A prediction isn't work anyone can do before the merge, so it doesn't count then.
+  const holding = steps.filter((s) => s.source !== 'machine' && s.state !== 'dismissed' && s.blocks.includes(block) && !(s.predicted === true && s.state === 'pending'));
   return { open: holding.filter(isOpenStep).length, total: holding.length };
 };
 

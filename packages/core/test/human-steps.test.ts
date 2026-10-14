@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compactStep, derivedSteps, dueText, humanSteps, isHumanStepDue, isForViewer, stepsForViewer, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
+import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, derivedSteps, dueText, humanSteps, isHumanStepDue, isForViewer, stepsForViewer, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
 import { NOW, glob, run } from './fixtures.js';
@@ -214,5 +214,22 @@ describe('upcoming marker and compact form', () => {
     expect(step).toBeDefined();
     if (step === undefined) return;
     expect(compactStep(step)).toEqual({ id: 'hs-1', kind: 'rollout', title: 'Deploy the host stack', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] });
+  });
+
+  describe('the investigator\'s predicted rollout', () => {
+    const placeholder = stored({ id: 'hs-p', title: PREDICTED_ROLLOUT_TITLE, origin: 'investigation', blocks: ['sign_off', 'dependants'] });
+
+    it('is flagged while open, and the flag reaches the compact step', () => {
+      const [step] = humanSteps(glob(), {}, [placeholder]);
+      expect(step?.predicted).toBe(true);
+      expect(step === undefined ? null : compactStep(step).predicted).toBe(true);
+      expect(humanSteps(glob(), {}, [stored({ blocks: ['sign_off'] })])[0]?.predicted).toBeUndefined();
+      expect(humanSteps(glob(), {}, [{ ...placeholder, state: 'dismissed' }])[0]?.predicted).toBeUndefined();
+    });
+
+    it('does not count towards sign-off before the merge, and does once merged', () => {
+      expect(blockProgress(humanSteps(glob(), {}, [placeholder]), 'sign_off')).toEqual({ open: 0, total: 0 });
+      expect(blockProgress(humanSteps(glob({ status: 'reviewing' }), {}, [placeholder]), 'sign_off')).toEqual({ open: 1, total: 1 });
+    });
   });
 });

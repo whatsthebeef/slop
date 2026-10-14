@@ -16,7 +16,7 @@ type Subject = Pick<Glob, 'implementer' | 'planner'>;
 
 /** The due, blocking work step that is the viewer's, or null: the glob view's main button and the status line's Your turn. */
 export const blockingTurn = (steps: readonly ListedHumanStep[], glob: Subject, viewer: HumanStepViewer | undefined): ListedHumanStep | null =>
-  viewer === undefined ? null : yourTurn(steps.filter((s) => isWorkStep(s) && isBlockingStep(s)), glob, viewer);
+  viewer === undefined ? null : yourTurn(steps.filter((s) => isWorkStep(s) && isBlockingStep(s) && s.predicted !== true), glob, viewer);
 
 /** The main button for a due blocking step: "Rollout" for a rollout, the step's title for other kinds. */
 export const mainStep = (
@@ -85,11 +85,15 @@ export const writeStepsOpen = (open: boolean): void => writeSectionOpen(STORAGE_
 /** Starts expanded while a step is still to do (or the link asked for it); an all-done or empty list starts collapsed. */
 export const defaultStepsOpen = (steps: readonly ListedHumanStep[]): boolean => steps.some((s) => s.state === 'due' || s.state === 'pending');
 
+/** What the glob view says in place of a predicted rollout's title, state and actions: the run writes the real steps. */
+export const PREDICTED_ROLLOUT_TEXT = 'Rollout predicted: the run writes the steps';
+
 /** Who a step is for, in words. */
 export const whoText = (who: string): string => (who === 'anyone' ? 'anyone' : who.includes('@') ? who : `the ${who}`);
 
 /** The state as the section shows it: when a pending step falls due, who ticked a done one. */
 export const stateText = (step: ListedHumanStep): string => {
+  if (step.predicted === true) return 'predicted by the investigator';
   switch (step.state) {
     case 'due':
       return 'due now';
