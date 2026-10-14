@@ -124,20 +124,35 @@ describe('inherited failures', () => {
 });
 
 describe('base checks transitions', () => {
-  const red = { sha: 'm1', passed: false, failure: typecheck, merged: 's1f5' };
+  const red = { sha: 'm1', passed: false, failure: typecheck, merged: 's1f5', fromGreen: true };
 
   it('turning red names the glob whose merge did it', () => {
     const c = recordBaseChecks(null, red, NOW);
-    expect(c.next).toMatchObject({ state: 'failed', since: 's1f5', redAt: NOW });
+    expect(c.next).toMatchObject({ state: 'failed', since: 's1f5', redSha: 'm1', redAt: NOW });
     expect(c.changed).toBe(true);
     expect(c.turnedGreen).toBe(false);
   });
 
+  it('a first red commit whose parent is not known to be green names no glob', () => {
+    const c = recordBaseChecks(null, { ...red, fromGreen: false, merged: null }, NOW);
+    expect(c.next).toMatchObject({ state: 'failed', since: null, redSha: 'm1' });
+  });
+
   it('staying red on a newer commit keeps the glob that broke it and when', () => {
-    const c = recordBaseChecks(redBase(), { ...red, sha: 'm2', merged: 's1b5' }, LATER);
-    expect(c.next).toMatchObject({ sha: 'm2', since: 's1f5', redAt: NOW });
+    const c = recordBaseChecks(redBase({ redSha: 'm1' }), { ...red, sha: 'm2', merged: 's1b5', fromGreen: false }, LATER);
+    expect(c.next).toMatchObject({ sha: 'm2', redSha: 'm1', since: 's1f5', redAt: NOW });
     expect(c.changed).toBe(true);
     expect(c.turnedGreen).toBe(false);
+  });
+
+  it('staying red with nobody blamed does not blame the next merge', () => {
+    const c = recordBaseChecks(redBase({ since: null, redSha: 'm1' }), { ...red, sha: 'm2', merged: 's1b5', fromGreen: false }, LATER);
+    expect(c.next).toMatchObject({ sha: 'm2', redSha: 'm1', since: null });
+  });
+
+  it('red again after a green parent starts a new red run', () => {
+    const c = recordBaseChecks(redBase({ redSha: 'm1' }), { ...red, sha: 'm5', merged: 's1b7' }, LATER);
+    expect(c.next).toMatchObject({ sha: 'm5', redSha: 'm5', since: 's1b7', redAt: LATER });
   });
 
   it('the same result again changes nothing', () => {

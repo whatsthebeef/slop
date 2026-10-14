@@ -1183,16 +1183,25 @@ describe('checks and merging (slice 2)', () => {
     const failure = { name: 'Type check', step: null, lines: [], url: 'https://ci/1' };
     const merged = (type: 'sub' | 'same' | 'super') =>
       glob({ type, status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'bbb' } });
-    const t = value(m.mergeTurnedBaseRed(merged('sub'), { sha: 'm1', failure, base: 'main' }, ctx(null)));
+    const t = value(m.mergeTurnedBaseRed(merged('sub'), { sha: 'm1', failure, base: 'main', parent: 'm0' }, ctx(null)));
     expect(t.glob.status).toBe('failed');
     expect(t.glob.failure?.kind).toBe('reverted');
     expect(t.glob.failure?.reason).toContain('Reverted from main');
     expect(t.glob.failure?.reason).toContain('https://ci/1');
     expect(t.effects).toEqual([{ kind: 'revert_merge', globId: 's1t1', generation: 1, sha: 'm1' }]);
-    expect(value(m.mergeTurnedBaseRed(merged('same'), { sha: 'm1', failure, base: 'main' }, ctx(null))).changed).toBe(false);
-    expect(value(m.mergeTurnedBaseRed(merged('super'), { sha: 'm1', failure, base: 'main' }, ctx(null))).changed).toBe(false);
+    expect(value(m.mergeTurnedBaseRed(merged('same'), { sha: 'm1', failure, base: 'main', parent: 'm0' }, ctx(null))).changed).toBe(false);
+    expect(value(m.mergeTurnedBaseRed(merged('super'), { sha: 'm1', failure, base: 'main', parent: 'm0' }, ctx(null))).changed).toBe(false);
     const failed = t.glob;
     expect(value(m.revertFailed(failed, 'by hand', ctx(null))).glob.failure?.reason).toContain('by hand');
+    expect(t.events.find((e) => e.type === 'MergeReverted')?.data).toMatchObject({ sha: 'm1', parent: 'm0', parentChecks: 'passed' });
+  });
+
+  it('declining a revert keeps the merged sub as it is and records the decision', () => {
+    const sub = glob({ type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'bbb' } });
+    const t = value(m.revertDeclined(sub, { sha: 'm2', parent: 'm1', parentChecks: 'failed', reason: 'already red' }, ctx(null)));
+    expect(t.glob.status).toBe('reviewing');
+    expect(t.effects).toEqual([]);
+    expect(t.events.find((e) => e.type === 'MergeRevertDeclined')?.data).toMatchObject({ sha: 'm2', parentChecks: 'failed' });
   });
 
   it('a check change queues a refresh without changing the glob', () => {

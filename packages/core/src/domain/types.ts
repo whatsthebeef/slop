@@ -148,7 +148,12 @@ export interface BaseChecks {
   readonly sha: string;
   readonly state: 'passed' | 'failed';
   readonly failure?: CheckFailure;
-  /** The glob whose merge turned the base red (from the squash commit's `<id>: <title>`); null when unknown or green. */
+  /** The first commit seen red in this red run (`sha` is the latest head, which may be a later commit that stays red). */
+  readonly redSha?: string;
+  /**
+   * The glob whose squash commit is `redSha` (from its `<id>: <title>`), only when that commit's parent was green; null when the
+   * cause is unclear (the base was already red, the parent's checks are unknown, or no glob merged it) or the base is green.
+   */
   readonly since: string | null;
   /** When the base was first seen red, kept across new commits that stay red. */
   readonly redAt?: string;

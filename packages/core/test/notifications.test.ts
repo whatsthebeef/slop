@@ -171,6 +171,17 @@ describe('board notifications', () => {
       expect(n?.detail).toContain('Globs failing the same way are waiting');
     });
 
+    it('names the first red commit with its glob, not the latest head', () => {
+      const n = mainRedNotification(1, 'main', { ...failed, sha: 'm9', redSha: 'm1' });
+      expect(n?.title).toContain('main is red since m1 (s1f5)');
+      expect(n?.title).not.toContain('m9');
+    });
+
+    it('says the cause is unclear when no glob is blamed', () => {
+      const n = mainRedNotification(1, 'main', { ...failed, sha: 'm9', redSha: 'm1', since: null });
+      expect(n?.title).toContain('main is red; the cause is unclear (red since m1)');
+    });
+
     it('is raised while the base is red and cleared when it is green', async () => {
       await service.syncMainRed(1, 'main', failed);
       expect(await list()).toHaveLength(1);

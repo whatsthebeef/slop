@@ -283,7 +283,7 @@ export class BoardService {
    */
   async recordBaseChecks(
     boardId: number,
-    result: { sha: string; passed: boolean; failure: CheckFailure | null; merged: string | null },
+    result: { sha: string; passed: boolean; failure: CheckFailure | null; merged: string | null; fromGreen?: boolean },
     now: string,
   ): Promise<{ checks: BaseChecks; change: BaseChecksChange } | null> {
     const recorded = await this.deps.store.transaction(async (tx) => {

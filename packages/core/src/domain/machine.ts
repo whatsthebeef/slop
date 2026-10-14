@@ -2611,7 +2611,7 @@ export const mergeFailed = (
  */
 export const mergeTurnedBaseRed = (
   glob: Glob,
-  red: { sha: string; failure: CheckFailure | null; base: string },
+  red: { sha: string; failure: CheckFailure | null; base: string; parent: string },
   ctx: Context,
 ): Result<Transition> => {
   if (glob.type !== 'sub' || glob.status !== 'reviewing' || glob.pr?.state !== 'merged')
@@ -2628,10 +2628,32 @@ export const mergeTurnedBaseRed = (
     })
     .event('MergeReverted', {
       sha: red.sha,
+      parent: red.parent,
+      parentChecks: 'passed',
       ...(red.failure === null ? {} : { check: red.failure.name }),
     })
     .status('failed')
     .effect({ kind: 'revert_merge', globId: glob.id, generation: glob.generation, sha: red.sha })
+    .done();
+};
+
+/**
+ * A merged sub's commit is the first red one's neighbour but not clearly the cause (the base was already red, or its
+ * parent's checks aren't known to have passed): nothing is reverted, and the decision is recorded on the glob's activity.
+ */
+export const revertDeclined = (
+  glob: Glob,
+  declined: { sha: string; parent: string | null; parentChecks: string; reason: string },
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.type !== 'sub' || glob.status !== 'reviewing' || glob.pr?.state !== 'merged') return unchanged(glob);
+  return new Builder(glob, ctx)
+    .event('MergeRevertDeclined', {
+      sha: declined.sha,
+      parent: declined.parent,
+      parentChecks: declined.parentChecks,
+      reason: declined.reason,
+    })
     .done();
 };
 
