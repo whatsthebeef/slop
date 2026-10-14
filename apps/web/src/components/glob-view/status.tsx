@@ -1,9 +1,10 @@
 import { X } from 'lucide-react';
-import { MachineIcon } from '@/components/actor-icons';
+import { CategoryIcon } from '@/components/glob-card';
+import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
-import { cornerStatus } from '@/lib/card-rows';
+import { cornerStatus, plainText } from '@/lib/card-rows';
 import { rolloutLine } from '@/lib/human-steps';
 import { viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
@@ -107,7 +108,8 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
   // The same status as the card's top right, word for word; the lifecycle text only where it has nothing to say.
   const corner = decision ? null : cornerStatus(glob, now, viewer);
   const rollout = decision ? null : rolloutLine(glob, glob.humanSteps ?? [], undefined);
-  const text =
+  // Decision globs have no corner status; their fallback text still gets the person's icon when it is the viewer's turn.
+  const rawText =
     corner !== null
       ? corner.text
       : turn !== null
@@ -117,20 +119,27 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
             ? capitalised(seen.label)
             : problem.text
           : (rollout?.text ?? (decision ? DECISION_STATUS_TEXT[glob.status] : undefined) ?? STATUS_TEXT[glob.status]);
+  const text = corner !== null ? rawText : plainText(rawText);
+  const icon = corner?.icon ?? (turn !== null || rollout?.turn != null ? 'human' : null);
   const tone = corner !== null ? corner.tone : turn !== null ? undefined : seen?.dismissed === true ? 'text-muted-foreground' : problem?.tone;
   return (
-    <button
-      type="button"
-      className={cn('ml-auto min-w-0 max-w-[60%] cursor-pointer truncate rounded px-1 text-right text-sm font-medium hover:bg-muted', tone)}
-      title={rollout?.tip ?? position?.tip ?? problem?.full ?? text}
-      data-testid="header-status"
-      data-holder={move?.holder ?? 'none'}
-      onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
-    >
-      {(corner?.icon === 'machine' || corner?.icon === 'machine-spinning') && (
-        <MachineIcon className="mr-1 inline" working={corner.icon === 'machine-spinning'} decorative />
-      )}
-      {text}
-    </button>
+    <span className="ml-auto inline-flex min-w-0 items-center gap-2" data-testid="header-corner">
+      <button
+        type="button"
+        className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', tone)}
+        aria-label={corner?.kind === 'needs-human' ? corner.label : undefined}
+        title={corner?.tip ?? rollout?.tip ?? position?.tip ?? problem?.full ?? text}
+        data-testid="header-status"
+        data-holder={move?.holder ?? 'none'}
+        onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
+      >
+        {/* The text gives way (ellipsis) only when the row is full; the ID before it never shrinks. */}
+        <span className="truncate" data-testid="header-status-text">
+          {text}
+        </span>
+        {icon !== null && <StatusIconView icon={icon} />}
+      </button>
+      <CategoryIcon category={glob.category} />
+    </span>
   );
 };

@@ -174,7 +174,7 @@ describe('escalation chip (s15f88)', () => {
     );
     expect(html.split('Needs a person: touches billing')).toHaveLength(2);
     expect(html).toMatch(
-      /<span aria-hidden="true" class="inline-flex items-center gap-1">needs a <svg[^>]*aria-hidden="true"/,
+      /<span class="truncate" data-testid="status-text">needs a<\/span><svg[^>]*aria-hidden="true"/,
     );
   });
 
@@ -254,7 +254,7 @@ describe('a conflict-fix run that went to standby (s15b86)', () => {
     const justNow = new Date().toISOString();
     const fresh = view({ ...fixed('active'), runs: [run({ state: 'active', purpose: 'resolve_conflict', startedAt: justNow, lastProgressAt: justNow })] });
     const fixing = card(fresh);
-    expect(fixing).toMatch(/data-testid="position"[^>]*>.*?<span class="truncate">fixing the conflict<\/span>/);
+    expect(fixing).toMatch(/data-testid="position"[^>]*>.*?<span class="truncate" data-testid="status-text">fixing the conflict<\/span>/);
     expect(fixing).toContain('animate-spin');
   });
 

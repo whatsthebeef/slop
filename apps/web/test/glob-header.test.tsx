@@ -93,6 +93,42 @@ describe('GlobHeader', () => {
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
       ['a problem', () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } })],
     ];
+    it('orders the header corner: text, then the status icon, then the category icon, and lets the text truncate', () => {
+      const { getByTestId } = renderBar(view({ status: 'in_progress', ...live('active') }));
+      const corner = getByTestId('header-corner');
+      const button = getByTestId('header-status');
+      expect(corner.firstElementChild).toBe(button);
+      expect(button.firstElementChild?.getAttribute('data-testid')).toBe('header-status-text');
+      expect(button.firstElementChild?.className).toContain('truncate');
+      expect(button.lastElementChild?.tagName.toLowerCase()).toBe('svg');
+      expect(corner.lastElementChild?.getAttribute('role') ?? corner.lastElementChild?.querySelector('[role="img"]')?.getAttribute('role')).toBe('img');
+      expect(getByTestId('glob-id').className).toContain('shrink-0');
+    });
+
+    it('agrees with the card on the human outline: your turn, awaiting sign-off, escalated Planning', () => {
+      const humans: readonly GlobView[] = [
+        prOpen({ allowedActions: ['merge'] }),
+        view({ status: 'reviewing', labels: { CR: 'required' } }),
+        view({ status: 'planning', escalation: { reason: 'touches billing', at: NOW } as GlobView['escalation'] }),
+      ];
+      for (const g of humans) {
+        const { getByTestId } = renderBar(g);
+        const header = getByTestId('header-status');
+        expect(header.lastElementChild?.tagName.toLowerCase()).toBe('svg');
+        const text = header.textContent;
+        cleanup();
+        const { container } = render(
+          <MemoryRouter>
+            <GlobCard glob={g} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
+          </MemoryRouter>,
+        );
+        const status = container.querySelector('[data-testid="card-status"]');
+        expect(['human', 'needs-human']).toContain(status?.getAttribute('data-icon'));
+        expect(status?.querySelector('.truncate')?.textContent).toBe(text);
+        cleanup();
+      }
+    });
+
     it.each(cases)('%s: the card status and the header status say the same words', (_name, make) => {
       const g = make();
       const { getByTestId } = renderBar(g);
