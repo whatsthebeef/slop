@@ -80,6 +80,19 @@ const createBoardSchema = z.object({
   environments: z.array(environmentSchema).default([]),
 });
 
+/** The board's ATF integration setting. */
+export const atfSettingSchema = z.object({
+  provider: z.literal('codebuild'),
+  // Slop assumes roleArn with its own credentials and puts region in URLs, so each is checked for shape here.
+  region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d+$/),
+  project: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/),
+  roleArn: z
+    .string()
+    .regex(/^arn:aws:iam::\d{12}:role\/[\w+=,.@/-]{1,512}$/)
+    .optional(),
+  mode: z.enum(['pull', 'push']),
+});
+
 const settingsSchema = z.object({
   version: z.number().int(),
   name: z.string().min(1).optional(),
@@ -118,16 +131,7 @@ const settingsSchema = z.object({
     ])
     .nullable()
     .optional(),
-  atf: z
-    .object({
-      provider: z.literal('codebuild'),
-      region: z.string(),
-      project: z.string(),
-      roleArn: z.string().min(1).optional(),
-      mode: z.enum(['pull', 'push']),
-    })
-    .nullable()
-    .optional(),
+  atf: atfSettingSchema.nullable().optional(),
   readinessTicks: z
     .object({ routines: z.boolean(), routine_repo: z.boolean(), claude_app: z.boolean() })
     .partial()
