@@ -1,6 +1,7 @@
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { formatId, parseId } from '../domain/ids.js';
+import { decisionGroup } from '../domain/group.js';
 import * as machine from '../domain/machine.js';
 import type { Context, Transition } from '../domain/machine.js';
 import { assessmentOf, decisionOf, decisionGlobTitle, extractedKey, inboxKey, replacementOf } from '../domain/decision-glob.js';
@@ -78,9 +79,11 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
   const board = await tx.getBoard(input.boardId);
   if (board === null) return notFound(`No board ${String(input.boardId)}`);
   const { scope } = input.attributes;
+  let scopedGroup: string | null = null;
   if (scope.kind === 'glob') {
     const governed = await tx.getGlob(scope.ref);
     if (governed?.boardId !== input.boardId || governed.category === 'decision') return invalidInput(`No work glob ${scope.ref} on board ${String(input.boardId)}`);
+    scopedGroup = governed.group;
   }
   const clock: Clock = input.at === undefined ? deps.clock : { now: () => input.at ?? '' };
   if (input.id !== undefined) {
@@ -96,7 +99,7 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
       type: 'same',
       category: 'decision',
       attributes: input.attributes,
-      group: input.group ?? null,
+      group: input.group ?? decisionGroup(input.attributes, scopedGroup),
       environment: null,
       autoTrigger: false,
     },
