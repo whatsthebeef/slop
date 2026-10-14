@@ -40,6 +40,11 @@ export class LlmHealth {
     return worst;
   }
 
+  /** How many models are being throttled now (many busy answers in a row, no success since). */
+  throttledCount(): number {
+    return this.throttled.size;
+  }
+
   /** True while any of `models` (all tracked models when omitted) is down; the KB pipeline pauses on its own models. */
   isDown(models?: readonly string[]): boolean {
     const keys = models ?? [...this.models.keys()];

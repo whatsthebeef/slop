@@ -28,6 +28,7 @@ export * from './domain/core-docs.js';
 export * from './domain/readiness.js';
 export * from './domain/human-steps.js';
 export * from './domain/capabilities.js';
+export * from './domain/ops-state.js';
 export * from './domain/rollout.js';
 export * from './domain/machine-steps.js';
 export * from './domain/whose-move.js';

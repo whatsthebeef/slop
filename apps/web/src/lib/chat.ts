@@ -167,6 +167,7 @@ export const sourceTone = (source: ChatCitation['source']): string => {
       return 'border-violet-600/60 bg-violet-500/10';
     case 'slop_help':
     case 'board_state':
+    case 'ops_state':
       return 'border-foreground/40 bg-muted';
     case 'code':
       return 'border-teal-600/60 bg-teal-500/10';
