@@ -7,7 +7,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export interface HotspotSettings {
   /** Conflicts older than this many days don't count. */
   readonly windowDays: number;
-  /** Distinct globs that conflicted on the file inside the window. */
+  /** Distinct globs (or workstreams of a glob) that conflicted on the file inside the window. */
   readonly minGlobs: number;
   /** Real (not purely additive) conflicts on the file inside the window. */
   readonly minReal: number;
@@ -29,6 +29,8 @@ export interface Hotspot {
   /** Conflicts resolved as a real clash, as against purely additive ones or ones not known. */
   readonly real: number;
   readonly lastConflictAt: string;
+  /** Of `conflicts`, those met when workstreams of one glob were integrated; absent when none. */
+  readonly workstreamConflicts?: number;
   /** Merges that changed the file inside the window; null when the code host couldn't say. */
   readonly merges: number | null;
   /** The file's size on the base branch; null when it couldn't be read. */
@@ -60,13 +62,17 @@ export const detectHotspots = (
     const ordered = [...rows].sort((a, b) => a.flaggedAt.localeCompare(b.flaggedAt));
     const globs = [...new Set(ordered.map((r) => r.globId))];
     const real = ordered.filter((r) => r.kind === 'real').length;
-    if (globs.length < settings.minGlobs && real < settings.minReal) continue;
+    const workstream = ordered.filter((r) => r.workstream !== undefined).length;
+    // A workstream that conflicted on the file counts as one more party, like a glob: parallel work keeps landing in it.
+    const parties = new Set(ordered.map((r) => (r.workstream === undefined ? r.globId : `${r.globId}/${r.workstream}`)));
+    if (parties.size < settings.minGlobs && real < settings.minReal) continue;
     hot.push({
       path,
       conflicts: ordered.length,
       globs,
       real,
       lastConflictAt: ordered[ordered.length - 1]?.flaggedAt ?? from,
+      ...(workstream === 0 ? {} : {workstreamConflicts: workstream}),
       merges: null,
       lines: null,
     });

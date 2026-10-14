@@ -121,6 +121,30 @@ describe('hotspot decisions', () => {
     expect(decision && decisionOf(decision)?.origin).toEqual({ kind: 'hotspot', path: HOT });
   });
 
+  it('says how many conflicts were between workstreams of a glob, in the prompt and the decision, and says nothing otherwise', async () => {
+    const [a, b] = [await work(), await work()];
+    const recorded: DomainEvent = {
+      type: 'WorkstreamsRecorded',
+      globId: a.id,
+      at: day(12),
+      actor: null,
+      data: { workstreams: [{ name: 'W1', conflicts: [HOT] }, { name: 'W2', conflicts: [HOT] }] },
+    };
+    await store.transaction((tx) => tx.appendEvents([recorded, ...flagged(b.id, day(12), [HOT])]));
+    await runJob();
+    const [decision] = await hotDecisions();
+    const plan = (await store.transaction((tx) => tx.listArtifacts(decision?.id ?? '', 'plan')))[0]?.content ?? '';
+    expect(plan).toContain('2 conflicts were between workstreams integrated within a glob.');
+    expect(llm.prompts[0]).toContain('2 of them were integration conflicts between workstreams of the same glob.');
+  });
+
+  it('does not mention workstreams when none of the conflicts were between them', async () => {
+    const [a, b, c] = [await work(), await work(), await work()];
+    await conflicts([a.id, b.id, c.id], day(12));
+    await runJob();
+    expect(llm.prompts[0]).not.toContain('workstream');
+  });
+
   it('falls back to a generic proposal when the model fails', async () => {
     llm.fail = true;
     const ids = [(await work()).id, (await work()).id, (await work()).id];
