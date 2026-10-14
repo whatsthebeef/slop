@@ -30,6 +30,7 @@ describe('Dependency rules in Postgres', () => {
       store,
       notifier,
       clock: { now: () => NOW },
+      ids: { runId: () => crypto.randomUUID() },
       catalog: new FsCatalog(new URL('../../../catalog', import.meta.url).pathname),
     });
     await store.transaction(async (tx) => {

@@ -1,6 +1,9 @@
 import type {
   AttachmentFile,
   HumanStepBlock,
+  RelationGate,
+  RelationSource,
+  RelationUntil,
   HumanStepScript,
   GlobOutcome,
   SizeEstimate,
@@ -33,7 +36,7 @@ import type {
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, RELATION_GATES, RELATION_SOURCES, RELATION_UNTILS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -357,6 +360,37 @@ export const humanSteps = pgTable(
     dismissedReason: text('dismissed_reason'),
   },
   (t) => [index('human_steps_glob_idx').on(t.globId), index('human_steps_board_idx').on(t.boardId, t.state)],
+);
+
+/**
+ * One glob held back by another (`from` can't pass `gate` until `to` reaches `until`). `to_glob` has no foreign key: a deleted
+ * glob leaves the row, so the view can say it was deleted; `from_glob` rows go with their glob.
+ */
+export const relations = pgTable(
+  'relations',
+  {
+    id: text('id').primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    fromGlob: text('from_glob').notNull(),
+    toGlob: text('to_glob').notNull(),
+    gate: text('gate', { enum: RELATION_GATES }).$type<RelationGate>().notNull(),
+    until: text('until', { enum: RELATION_UNTILS }).$type<RelationUntil>().notNull(),
+    reason: text('reason'),
+    evidence: jsonb('evidence').$type<readonly string[]>().notNull().default(sql`'[]'::jsonb`),
+    source: text('source', { enum: RELATION_SOURCES }).$type<RelationSource>().notNull(),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    dismissedPlanHash: text('dismissed_plan_hash'),
+    overriddenAt: timestamp('overridden_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('relations_from_to_gate_idx').on(t.fromGlob, t.toGlob, t.gate),
+    index('relations_board_idx').on(t.boardId),
+    index('relations_from_idx').on(t.fromGlob),
+    index('relations_to_idx').on(t.toGlob),
+  ],
 );
 
 /** The status messages a person has acknowledged on a glob (the card's line, the Now panel); the key names the situation, so a new one shows again. */

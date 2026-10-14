@@ -1,7 +1,7 @@
 import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, isSetupFailure, machine, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -242,18 +242,23 @@ export const codeHostExecutors = (
       const failure = state === 'failed' ? await explainFailure(repo, sha) : null;
       // A conflict says nothing about the head's own checks: read what its check runs report (GitHub usually runs none).
       const real = state === 'conflict' ? await host.commitChecks(repo, sha) : undefined;
-      await globs.applyEvent(glob.id, (g, ctx) =>
-        machine.checksCompleted(
-          g,
-          {
-            sha,
-            passed,
-            ...(conflict !== undefined && { conflict }),
-            ...(real !== undefined && { real }),
-            ...(failure !== null && { failure, base: board?.baseChecks ?? null, baseBranch: repo.base }),
-          },
-          ctx,
-        ),
+      // The relations are read so an armed merge waits while a `merge` relation is unmet.
+      await globs.applyEvent(
+        glob.id,
+        (g, ctx, facts) =>
+          machine.checksCompleted(
+            g,
+            {
+              sha,
+              passed,
+              ...(conflict !== undefined && { conflict }),
+              ...(real !== undefined && { real }),
+              ...(failure !== null && { failure, base: board?.baseChecks ?? null, baseBranch: repo.base }),
+            },
+            ctx,
+            facts.relations,
+          ),
+        { relations: true },
       );
       return 'done';
     },
@@ -480,7 +485,7 @@ export const codeHostExecutors = (
       const ignored = sizeIgnoredPathsOf({ sizeIgnoredPaths: await sizeIgnoredPaths(board.id) });
       const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board, ignored);
       const limit = board.subMaxChangedLines;
-      await globs.applyEvent(glob.id, (g, ctx) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict, limit }, ctx));
+      await globs.applyEvent(glob.id, (g, ctx, facts) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict, limit }, ctx, facts.relations), { relations: true });
       return 'done';
     },
 
@@ -490,10 +495,10 @@ export const codeHostExecutors = (
       if (run?.id !== effect.runId || run.state !== 'queued') return 'dropped';
       // Don't spend a session to find out in Phase 1 that prerequisites haven't merged (unless a person said to go ahead).
       if (effect.checkPrerequisites === true) {
-        const chain = await globs.blockingChainOf(glob.id);
-        if (chain.blockedBy.length > 0) {
+        const awaited = await globs.startHolds(glob.id);
+        if (awaited.length > 0) {
           await globs.applyEvent(glob.id, (g, ctx) =>
-            machine.reportFailure(g, { reason: `Not fired: ${chainRefusal(chain)}`, runId: effect.runId }, ctx),
+            machine.reportFailure(g, { reason: `Not fired: ${refusalText(awaited)}`, runId: effect.runId }, ctx),
           );
           return 'done';
         }

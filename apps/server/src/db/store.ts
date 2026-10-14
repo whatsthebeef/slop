@@ -1,4 +1,4 @@
-import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, ChatMessage, ChatThread, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -281,6 +281,38 @@ const humanStepRow = (h: StoredHumanStep): typeof schema.humanSteps.$inferInsert
   ...h,
   createdAt: new Date(h.createdAt),
   doneAt: h.doneAt === null ? null : new Date(h.doneAt),
+});
+
+const toRelation = (row: typeof schema.relations.$inferSelect): Relation => ({
+  id: row.id,
+  boardId: row.boardId,
+  from: row.fromGlob,
+  to: row.toGlob,
+  gate: row.gate,
+  until: row.until,
+  reason: row.reason,
+  evidence: row.evidence,
+  source: row.source,
+  dismissedAt: row.dismissedAt?.toISOString() ?? null,
+  dismissedPlanHash: row.dismissedPlanHash,
+  overriddenAt: row.overriddenAt?.toISOString() ?? null,
+  createdAt: row.createdAt.toISOString(),
+});
+
+const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
+  id: r.id,
+  boardId: r.boardId,
+  fromGlob: r.from,
+  toGlob: r.to,
+  gate: r.gate,
+  until: r.until,
+  reason: r.reason,
+  evidence: r.evidence,
+  source: r.source,
+  dismissedAt: r.dismissedAt === null ? null : new Date(r.dismissedAt),
+  dismissedPlanHash: r.dismissedPlanHash,
+  overriddenAt: r.overriddenAt === null ? null : new Date(r.overriddenAt),
+  createdAt: new Date(r.createdAt),
 });
 
 const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
@@ -621,6 +653,8 @@ export class PgStore implements Store {
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
         await t.delete(schema.humanSteps).where(eq(schema.humanSteps.globId, id));
+        // Its own relations go; the ones pointing at it stay, so a glob that waited on it can say it was deleted.
+        await t.delete(schema.relations).where(eq(schema.relations.fromGlob, id));
         await t.delete(schema.statusDismissals).where(eq(schema.statusDismissals.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         // Older decisions that this glob's decisions replaced stand again; its own rows go with their items below.
@@ -1344,6 +1378,52 @@ export class PgStore implements Store {
           const row = humanStepRow(step);
           await t.insert(schema.humanSteps).values(row).onConflictDoUpdate({ target: schema.humanSteps.id, set: row });
         }
+      },
+      listRelations: async (boardId) =>
+        (await t.select().from(schema.relations).where(eq(schema.relations.boardId, boardId)).orderBy(schema.relations.createdAt, schema.relations.id)).map(toRelation),
+      listRelationsFrom: async (globIds) => {
+        if (globIds.length === 0) return [];
+        // One JSON parameter, not one per ID: a long list would pass Postgres's parameter limit.
+        const r = schema.relations;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(sql`${r.fromGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb))`)
+          .orderBy(r.createdAt, r.id);
+        return rows.map(toRelation);
+      },
+      listRelationsTo: async (globIds) => {
+        if (globIds.length === 0) return [];
+        const r = schema.relations;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(sql`${r.toGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb))`)
+          .orderBy(r.createdAt, r.id);
+        return rows.map(toRelation);
+      },
+      insertRelation: async (relation) => {
+        const rows = await t.insert(schema.relations).values(relationRow(relation)).onConflictDoNothing().returning({ id: schema.relations.id });
+        return rows.length === 1;
+      },
+      updateRelation: async (id, patch: RelationPatch) => {
+        const set: Partial<typeof schema.relations.$inferInsert> = {};
+        if (patch.until !== undefined) set.until = patch.until;
+        if (patch.reason !== undefined) set.reason = patch.reason;
+        if (patch.evidence !== undefined) set.evidence = patch.evidence;
+        if (patch.dismissedAt !== undefined) set.dismissedAt = patch.dismissedAt === null ? null : new Date(patch.dismissedAt);
+        if (patch.dismissedPlanHash !== undefined) set.dismissedPlanHash = patch.dismissedPlanHash;
+        if (patch.overriddenAt !== undefined) set.overriddenAt = patch.overriddenAt === null ? null : new Date(patch.overriddenAt);
+        if (Object.keys(set).length > 0) await t.update(schema.relations).set(set).where(eq(schema.relations.id, id));
+      },
+      deleteRelation: async (id) => {
+        await t.delete(schema.relations).where(eq(schema.relations.id, id));
+      },
+      deleteRelationsFrom: async (globId) => {
+        await t.delete(schema.relations).where(eq(schema.relations.fromGlob, globId));
+      },
+      lockBoardRelations: async (boardId) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_relations:${boardId}`}))`);
       },
       listStatusDismissals: async (email, boardId) => {
         const d = schema.statusDismissals;

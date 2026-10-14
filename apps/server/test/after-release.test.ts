@@ -160,7 +160,7 @@ describe('start after: a merged webhook releases a waiting sub through the outbo
     const listed = unwrap(await globs.listWithArtifacts(DEV, 1, {}));
     const row = listed.find((r) => r.glob.id === second.id);
     expect(row).toBeDefined();
-    const fromList = globViewFor(second, DEV, 'dev', row?.artifacts ?? [], row?.dependencies).allowedActions;
+    const fromList = globViewFor(second, DEV, 'dev', row?.artifacts ?? [], row?.relations).allowedActions;
     expect(fromList).toContain('start_anyway');
     expect(fromList).not.toContain('start');
     expect(fromList).toEqual(unwrap(await globs.get(DEV, second.id)).allowedActions);

@@ -3,7 +3,8 @@ import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
-import { NOW, board, ctx, dev, glob, other, po, run } from './fixtures.js';
+import { NO_RELATIONS } from '../src/domain/relations.js';
+import { NOW, board, ctx, dev, glob, other, po, relationFacts, run } from './fixtures.js';
 import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
@@ -1158,17 +1159,17 @@ describe('field changes and type changes (row 26)', () => {
     });
 
     it('a same held only by `after` offers Start now, not Start, with the dependencies loaded (the list path)', () => {
-      const held = glob({ type: 'same', status: 'planning', after: ['s1t9'], waiting: null });
-      const actions = m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'open' as const]]) });
+      const held = glob({ type: 'same', status: 'planning', waiting: null });
+      const actions = m.allowedActions(held, dev, { relations: relationFacts(held.id, [['s1t9', 'open']]) });
       expect(actions).toContain('start_anyway');
       expect(actions).not.toContain('start');
-      expect(m.allowedActions(held, dev, { dependencies: new Map([['s1t9', 'merged' as const]]) })).toContain('start');
+      expect(m.allowedActions(held, dev, { relations: relationFacts(held.id, [['s1t9', 'merged']]) })).toContain('start');
     });
 
     it('a glob held only for its oversized flag offers Start now with the dependencies loaded', () => {
       const held = glob({ type: 'sub', status: 'planning', waiting: { since: NOW } });
-      expect(m.allowedActions(held, dev, { dependencies: new Map() })).not.toContain('start_anyway');
-      expect(m.allowedActions(held, dev, { dependencies: new Map(), sizeHeld: true })).toContain('start_anyway');
+      expect(m.allowedActions(held, dev, { relations: NO_RELATIONS })).not.toContain('start_anyway');
+      expect(m.allowedActions(held, dev, { relations: NO_RELATIONS, sizeHeld: true })).toContain('start_anyway');
       const t = value(m.startAnyway(held, ctx()));
       expect(t.glob.status).toBe('implementing');
       expect(t.glob.waiting).toBeNull();

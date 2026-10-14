@@ -935,16 +935,16 @@ const SubLimit = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
 };
 
 const DEPENDENCY_CAUSE_TEXT: Record<DependencyCause, string> = {
-  clean_overlap: 'An overlap merged with no conflict or rework',
-  conflicted_overlap: 'An overlap conflicted or needed a rebase',
+  clean_overlap: 'Globs predicted to share files merged with no conflict or rework',
+  conflicted_overlap: 'Globs predicted to share files conflicted or needed a rebase',
   unmerged_prerequisite: 'A run failed because a prerequisite was not merged',
-  start_anyway_succeeded: 'A need was started anyway and merged without it',
-  edge_dismissed: 'A person dismissed an inferred dependency as wrong',
+  start_anyway_succeeded: 'A relation was started anyway and merged without it',
+  edge_dismissed: 'A person dismissed an inferred relation as wrong',
   reset: 'An admin reset the rule',
 };
 
 /**
- * The path patterns the board predicts overlaps from (overlaps order merges, they never hold a start), each with the
+ * The path patterns the board predicts shared files from (a prediction never holds a start), each with the
  * catalog default and what the board learned from outcomes. Admins reset a rule to its default. Everything is rendered as text.
  */
 const DependencyRules = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
@@ -968,10 +968,10 @@ const DependencyRules = ({ boardId, admin }: { boardId: number; admin: boolean }
   return (
     <div className='grid gap-2' data-testid='dependency-rules'>
       <p className='text-xs text-muted-foreground'>
-        A glob that needs another cannot start until it merges. Globs that only may change the same files overlap: they start
-        at once and the later merge rebases. Slop predicts overlaps from these path patterns. A pattern whose overlaps merged
-        cleanly is weakened and stops being predicted below {predictMin}; one that conflicted is strengthened. A run that failed
-        for unmerged prerequisites teaches the board a need.
+        Slop predicts from these path patterns which globs may change the same files, to warn about conflicts and order merges. A
+        prediction never holds a glob back: a glob waits for another only through a relation (a need, a decision or a split part).
+        A pattern whose predictions merged cleanly is weakened and stops being used below {predictMin}; one that conflicted is
+        strengthened. A run that failed for unmerged prerequisites teaches the board a relation.
       </p>
       {list.length === 0 ? (
         <p className='text-xs text-muted-foreground'>No patterns yet: set exclusive paths in the merge policy.</p>
