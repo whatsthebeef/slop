@@ -21,6 +21,7 @@ import {
   EMPTY_DRAFT,
 } from '../src/lib/human-steps';
 import { copyOrSelect } from '../src/lib/plan-text';
+import { cornerStatus } from '../src/lib/card-rows';
 import { statusLine } from '../src/lib/status-line';
 import { NOW, glob } from '../../../packages/core/test/fixtures';
 
@@ -92,6 +93,11 @@ describe('rollout status line', () => {
   it('is a quiet line when the due step is for somebody else', () => {
     expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'rollout' });
     expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'rollout' });
+  });
+  it('shows the human icon on the card, with the count and first step in the tooltip', () => {
+    const named = [step({ id: 'a', state: 'done' }), step({ id: 'b', title: 'Run the migration' })];
+    expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)).toMatchObject({ kind: 'rollout', icon: 'human', text: 'rollout' });
+    expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)?.tip).toContain('Merged; 1 of 2 rollout steps done: Run the migration');
   });
   it('says nothing before the merge or once the steps are done', () => {
     expect(rolloutLine(glob(), steps, admin)).toBeNull();
