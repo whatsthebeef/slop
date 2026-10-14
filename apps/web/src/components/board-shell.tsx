@@ -38,21 +38,21 @@ const BoardTabs = ({
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
   return (
-    <header className='mx-5 mt-1.5 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
-      <nav className='flex gap-6' aria-label='Board sections'>
+    <header className='mx-5 mt-1.5 flex items-end gap-x-6 sm:flex-wrap border-b border-edge/50 text-sm'>
+      <nav className='flex min-w-0 flex-1 gap-4 sm:flex-none sm:gap-6' aria-label='Board sections'>
         {BOARD_TABS.map(({ tab, label, path }) => (
           <Link
             key={tab}
             to={`/boards/${String(boardId)}${path}`}
             aria-current={current === tab ? 'page' : undefined}
-            className={cn('-mb-px border-b-2 pb-1.5', current === tab ? 'border-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
+            className={cn('-mb-px flex min-w-0 items-center border-b-2 pb-1.5 max-sm:whitespace-nowrap', current === tab ? 'border-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
           >
-            {label}
-            {tab === 'inbox' && waiting > 0 && <span className='ml-1.5 rounded-full bg-muted px-1.5 text-xs text-muted-foreground'>{waiting}</span>}
+            <span className='min-w-0 truncate'>{label}</span>
+            {tab === 'inbox' && waiting > 0 && <span className='ml-1.5 shrink-0 rounded-full bg-muted px-1.5 text-xs text-muted-foreground'>{waiting}</span>}
           </Link>
         ))}
       </nav>
-      <div className='ml-auto flex items-center gap-1 pb-1.5'>
+      <div className='ml-auto flex shrink-0 items-center gap-1 pb-1.5'>
         <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'
