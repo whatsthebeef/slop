@@ -79,3 +79,31 @@ export const cleanNote = (
   const line = note.trim().split(/\r?\n/)[0]?.trim() ?? '';
   return line === '' ? null : line.slice(0, CHAT_FEEDBACK_NOTE_MAX);
 };
+
+/** The window mining reads 👎 answers over, and how many must share a theme before a learning is raised. */
+export const CHAT_FEEDBACK_THEME_DAYS = 30;
+export const CHAT_FEEDBACK_THEME_MIN = 3;
+
+/** The source kinds a 👎 answer can be missing: the board's records, or the code. */
+export const CHAT_MISSING_SOURCES = ['records', 'code'] as const;
+export type ChatMissingSource = (typeof CHAT_MISSING_SOURCES)[number];
+
+/** One rating as mining reads it: the question's key terms and the sources the answer came up empty on. */
+export interface ChatFeedbackActivity {
+  readonly id: number;
+  readonly rating: ChatFeedbackRating;
+  readonly question: string;
+  readonly at: string;
+  /** Key nouns of the question (the same words the chat's second search uses). */
+  readonly terms: readonly string[];
+  readonly missing: readonly ChatMissingSource[];
+}
+
+/** What the answer's tool lines say it found nothing in: a records search with no hits, or code it couldn't read. */
+export const missingSources = (tools: readonly string[] | null): ChatMissingSource[] => {
+  const lines = tools ?? [];
+  const missing: ChatMissingSource[] = [];
+  if (lines.some((l) => l.startsWith("Searched the board's records") && /: 0 found$/.test(l))) missing.push('records');
+  if (lines.some((l) => l.startsWith("Couldn't read the code"))) missing.push('code');
+  return missing;
+};

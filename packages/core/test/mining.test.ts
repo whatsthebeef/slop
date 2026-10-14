@@ -127,6 +127,34 @@ describe('Mining: mined KB items and the re-raise rules', () => {
     });
   });
 
+  describe('chat answers rated 👎 (s15f142)', () => {
+    const rate = async (id: number, question: string, rating: 'up' | 'down', at: string, tools: string[] = []) => {
+      await store.transaction((tx) =>
+        tx.upsertChatFeedback({ boardId: board.id, chatId: 1, messageId: id, email: DEV, rating, note: null, question, answer: 'a', citations: null, tools, page: null, createdAt: at }),
+      );
+    };
+
+    it('raises one learning when 3 👎 in 30 days share a question term, and not at 2', async () => {
+      await rate(1, 'How do rollouts work?', 'down', later(-3 * DAY));
+      await rate(2, 'Why did the rollouts step fail?', 'down', later(-2 * DAY));
+      await rate(3, 'Where are rollouts listed?', 'up', later(-2 * DAY));
+      expect((await mining.mine(board.id, START)).raised).toEqual([]);
+
+      await rate(4, 'What are rollouts for', 'down', later(-1 * DAY));
+      const result = await mining.mine(board.id, later(WEEK));
+      expect(result.raised).toHaveLength(1);
+      const raised = await item(result.raised[0] ?? '');
+      expect(raised).toMatchObject({ type: 'pattern', source: 'mined', signal: { key: 'chat_feedback:term:rollouts' } });
+      expect(raised.statement).toContain('3 chat answers about "rollouts" got 👎');
+      expect(raised.statement).toContain('Asked: "How do rollouts work?"');
+    });
+
+    it('ignores 👎 older than 30 days', async () => {
+      for (const id of [1, 2, 3]) await rate(id, 'How do rollouts work?', 'down', later(-31 * DAY));
+      expect((await mining.mine(board.id, START)).raised).toEqual([]);
+    });
+  });
+
   describe('missing core documents', () => {
     const mergedGlobs = async (count: number, createdAt: string) => {
       for (let i = 0; i < count; i++) {

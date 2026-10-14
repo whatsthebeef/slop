@@ -16,6 +16,8 @@ import {
 } from '../src/domain/signals.js';
 import type { ArtifactMeta, BoardActivity, Measurement } from '../src/domain/signals.js';
 import type { ReviewStats } from '../src/domain/knowledge.js';
+import {missingSources} from '../src/domain/chat-feedback.js';
+import type {ChatFeedbackActivity} from '../src/domain/chat-feedback.js';
 import type { ReviewFeedback } from '../src/domain/review-feedback.js';
 import type { SlopType } from '../src/domain/types.js';
 
@@ -482,6 +484,7 @@ describe('mined signals: a glob\'s agent-set version', () => {
       ['missing_doc', null],
       ['choice_in_use', null],
       ['knowledge_page', null],
+      ['chat_feedback', null],
     ]);
     expect(SIGNALS.every((s) => s.threshold !== '')).toBe(true);
   });
@@ -793,5 +796,49 @@ describe('mined signals: knowledge_page (s15f63)', () => {
     expect(def?.suggestedTarget).toBe('knowledge-page-guide');
     expect(m).toBeDefined();
     expect(def?.statement(m as Measurement)).toContain('3 decisions about testing as key');
+  });
+});
+
+describe('chat_feedback signal (s15f142)', () => {
+  const rated = (id: number, question: string, over: Partial<ChatFeedbackActivity> = {}): ChatFeedbackActivity => ({
+    id,
+    rating: 'down',
+    question,
+    at: `2026-10-${String(10 + id).padStart(2, '0')}T10:00:00.000Z`,
+    terms: question.toLowerCase().match(/[a-z]{4,}/g) ?? [],
+    missing: [],
+    ...over,
+  });
+  const keys = (items: ChatFeedbackActivity[]) => measureSignals(activity({ chatFeedback: items })).map((m) => [m.key, m.figures.affected, m.crosses]);
+
+  it('crosses with three 👎 sharing a term, and counts each answer under its most shared term once', () => {
+    expect(keys([rated(1, 'how do rollouts work'), rated(2, 'rollouts for deploys'), rated(3, 'rollouts and deploys again')])).toEqual([
+      ['chat_feedback:term:rollouts', 3, true],
+    ]);
+  });
+
+  it('stays below the threshold with two, and ignores 👍', () => {
+    expect(keys([rated(1, 'rollouts one'), rated(2, 'rollouts two'), rated(3, 'rollouts three', {rating: 'up'})])).toEqual([['chat_feedback:term:rollouts', 2, false]]);
+  });
+
+  it('raises the missing source theme separately', () => {
+    const found = keys([rated(1, 'alpha', {missing: ['code']}), rated(2, 'bravo', {missing: ['code']}), rated(3, 'charlie', {missing: ['code', 'records']})]);
+    expect(found).toContainEqual(['chat_feedback:source:code', 3, true]);
+    expect(found).toContainEqual(['chat_feedback:source:records', 1, false]);
+  });
+
+  it('measures nothing when the ratings were not read, and words the statement with the questions', () => {
+    expect(measureSignals(activity({}))).toEqual([]);
+    const def = SIGNALS.find((x) => x.kind === 'chat_feedback');
+    const m = measureSignals(activity({ chatFeedback: [rated(1, 'rollouts a'), rated(2, 'rollouts b'), rated(3, 'rollouts c')] }))[0];
+    expect(def?.type).toBe('pattern');
+    expect(def?.statement(m as Measurement)).toContain('3 chat answers about "rollouts" got 👎 in the last 30 days');
+    expect(def?.statement(m as Measurement)).toContain('Asked: "rollouts');
+  });
+
+  it('reads what an answer found nothing in from its tool lines', () => {
+    expect(missingSources(["Searched the board's records (current): 0 found", "Couldn't read the code"])).toEqual(['records', 'code']);
+    expect(missingSources(["Searched the board's records (current): 4 found"])).toEqual([]);
+    expect(missingSources(null)).toEqual([]);
   });
 });

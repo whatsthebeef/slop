@@ -9,6 +9,8 @@ import { REVIEW_GUIDE_AREA } from './code-review.js';
 import { missingCoreAreas, MISSING_DOC_MIN_DAYS, MISSING_DOC_MIN_MERGED_GLOBS, MISSING_DOC_RERAISE_DAYS } from './core-docs.js';
 import { FINDING_CLASS_DESCRIPTIONS } from './findings.js';
 import { globIdInText } from './ids.js';
+import { CHAT_FEEDBACK_THEME_DAYS, CHAT_FEEDBACK_THEME_MIN } from './chat-feedback.js';
+import type { ChatFeedbackActivity } from './chat-feedback.js';
 import { KNOWLEDGE_PAGE_FEEDBACK_DAYS, KNOWLEDGE_PAGE_FEEDBACK_MIN, KNOWLEDGE_PAGE_GUIDE_NAME } from './knowledge-page.js';
 import type { KnowledgePageVerdict } from './knowledge-page.js';
 import type { FindingClass, ReviewFinding } from './findings.js';
@@ -45,6 +47,7 @@ export const SIGNAL_KINDS = [
   'missing_doc',
   'choice_in_use',
   'knowledge_page',
+  'chat_feedback',
 ] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
@@ -142,6 +145,8 @@ export interface BoardActivity {
   readonly settings?: ContextSettings;
   /** The knowledge page's Pin / Not key verdicts from the last `KNOWLEDGE_PAGE_FEEDBACK_DAYS` days; absent: `knowledge_page` isn't measured. */
   readonly knowledgePageFeedback?: readonly KnowledgePageVerdictActivity[];
+  /** Chat answers rated in the last `CHAT_FEEDBACK_THEME_DAYS` days; absent: `chat_feedback` isn't measured. */
+  readonly chatFeedback?: readonly ChatFeedbackActivity[];
 }
 
 /** One verdict on a decision, with what it has in common with others: the model's area for its entry, else the decision's scope. */
@@ -970,6 +975,52 @@ const knowledgePageSignal = define({
   },
 });
 
+/** A rating's unit for the signal's counts: there is no glob behind a chat answer. */
+const chatUnit = (f: ChatFeedbackActivity): string => `chat-feedback:${String(f.id)}`;
+
+const chatFeedbackSignal = define({
+  kind: 'chat_feedback',
+  agent: null,
+  type: 'pattern',
+  suggestedTarget: "slop's help sections and the chat guide (routing decides)",
+  threshold: `${String(CHAT_FEEDBACK_THEME_MIN)} or more 👎 on chat answers in ${String(CHAT_FEEDBACK_THEME_DAYS)} days that share a question term (each answer counted under its most shared term) or the same missing source (records or code)`,
+  eligibleGlobs: (activity) => new Set((activity.chatFeedback ?? []).map(chatUnit)),
+  tallies: (activity) => {
+    const all = activity.chatFeedback ?? [];
+    const down = all.filter((f) => f.rating === 'down').sort((a, b) => b.at.localeCompare(a.at) || a.id - b.id);
+    const tallies = new Tallies();
+    const example = (f: ChatFeedbackActivity): string => `Asked: "${cut(f.question, 160)}" (${f.at.slice(0, 10)})`;
+    // Each 👎 counts under the term most of the still-unplaced ones share, so overlapping words raise one learning.
+    let left = down;
+    for (;;) {
+      const counts = new Map<string, number>();
+      for (const f of left) for (const term of new Set(f.terms)) counts.set(term, (counts.get(term) ?? 0) + 1);
+      const [best] = [...counts.entries()].filter(([, n]) => n >= 2).sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
+      if (best === undefined) break;
+      const [term] = best;
+      for (const f of left.filter((x) => x.terms.includes(term))) tallies.hit(`chat_feedback:term:${term}`, `👎 answers about "${term}"`, chatUnit(f), example(f));
+      left = left.filter((f) => !f.terms.includes(term));
+    }
+    for (const source of ['records', 'code'] as const) {
+      for (const f of down.filter((x) => x.missing.includes(source))) {
+        tallies.hit(`chat_feedback:source:${source}`, `👎 answers where ${source === 'code' ? 'the code' : "the board's records"} had nothing`, chatUnit(f), example(f));
+      }
+    }
+    return tallies.done(all.length);
+  },
+  crosses: (t) => t.affected >= CHAT_FEEDBACK_THEME_MIN,
+  reraiseFactor: 1,
+  statement: (m) => {
+    const [, how = '', what = ''] = m.key.split(':');
+    const asked = m.examples.slice(0, 3).join('; ');
+    const days = String(CHAT_FEEDBACK_THEME_DAYS);
+    const n = String(m.figures.affected);
+    return how === 'source'
+      ? `${n} chat answers got 👎 in the last ${days} days where the chat found nothing in ${what === 'code' ? 'the code' : "the board's records"}. ${asked}. Add or fix the help or docs section these questions need.`
+      : `${n} chat answers about "${what}" got 👎 in the last ${days} days. ${asked}. Add or fix the help or docs section these questions need.`;
+  },
+});
+
 /** Every mined signal, in the order the spec lists them. */
 export const SIGNALS: readonly SignalDefinition[] = [
   finding,
@@ -986,6 +1037,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
   missingDoc,
   choiceInUseSignal,
   knowledgePageSignal,
+  chatFeedbackSignal,
 ];
 
 export const signalKindOf = (key: string): SignalKind | null => {
