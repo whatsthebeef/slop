@@ -23,6 +23,7 @@ import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
 import { RelatedSection } from './related';
 import { SizeSection } from './size';
+import type { OversizedState } from '../oversized-glob';
 import type { NowState } from './status';
 import { TestsPanel } from './tests';
 
@@ -41,6 +42,8 @@ export interface SectionProps {
   /** Suggest's Apply: the decision form opens pre-filled. */
   applied: SuggestionPrefill | null;
   onApply: (prefill: SuggestionPrefill | null) => void;
+  /** The size check's moves (Split as proposed, Keep whole, …), shared by the size panel and the actions menu. */
+  size: OversizedState;
   splitting: boolean;
   onSplitting: (splitting: boolean) => void;
   onClose: () => void;
@@ -78,16 +81,19 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     ) : (
       <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} />
     ),
-  size: ({ ctx, actions, splitting, onSplitting, onClose }) => (
+  size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection
       ctx={ctx}
       decision={actions.decision}
+      size={size}
       splitting={splitting}
       onSplitting={onSplitting}
       onClose={onClose}
     />
   ),
-  actions: ({ ctx, actions }) => <GlobActions ctx={ctx} state={actions} />,
+  actions: ({ ctx, actions, size, onSplitting }) => (
+    <GlobActions ctx={ctx} state={actions} size={size} onSplitting={onSplitting} />
+  ),
   plan: ({ ctx, onSelectArtifact }) => (
     <PlanSection ctx={ctx} onHistory={() => onSelectArtifact({ kind: 'plan', label: '' })} />
   ),

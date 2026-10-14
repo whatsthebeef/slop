@@ -593,7 +593,8 @@ export const GlobCard = ({
   onFilterGroup?: (name: string) => void;
   /** Opens the glob at the section (and artifact or label) a chip or icon points to; `onOpen` opens it at the top. */
   onOpenSection: (target: GlobTarget) => void;
-  onReviewLabel: ReviewLabel;
+  /** Absent on a read-only card (the signed-off list): its label chips then offer no approve or re-open. */
+  onReviewLabel?: ReviewLabel;
   /** Only the moves this glob can make; none means no buttons at all. */
   moves: readonly CardMove[];
   /** The move in flight on this glob, if any: the card shows it working and takes no other move. */
@@ -704,6 +705,11 @@ export const GlobCard = ({
       <div className='leading-snug font-medium break-words' data-testid='card-title'>
         {glob.title}
       </div>
+      {glob.status === 'signed_off' && glob.signedOffAt != null && (
+        <div className='font-mono text-[11px] text-muted-foreground' data-testid='card-signed-off'>
+          Signed off {new Date(glob.signedOffAt).toLocaleDateString()}
+        </div>
+      )}
       <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
           <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
