@@ -187,6 +187,40 @@ describe('a sub whose PR is ready', () => {
     host.conflicting = [];
   });
 
+  it('a merge refused for a modified head takes the real head instead of failing the glob (s15b103)', async () => {
+    const MOVED = '0123456789abcdef';
+    await handle(readyForReview());
+    await run('evaluate_sub_gate');
+    expect((await current()).status).toBe('merging');
+    const { squashMerge, prState } = host;
+    host.squashMerge = () => Promise.resolve({ outcome: 'refused', reason: 'Head branch was modified. Review and try the merge again.' });
+    host.prState = () => Promise.resolve({ state: 'open', draft: false, headSha: MOVED, mergeSha: null });
+    try {
+      await run('squash_merge');
+      const glob = await current();
+      expect(glob.status).not.toBe('failed');
+      expect(glob.pr?.headSha).toBe(MOVED);
+    } finally {
+      host.squashMerge = squashMerge;
+      host.prState = prState;
+    }
+  });
+
+  it('mark_ready on an already-ready PR records the head GitHub reports, not the stored one (s15b103)', async () => {
+    const MOVED = '0123456789abcdef';
+    unwrap(await globs.requestReady(DEV, globId, null));
+    const { markReady } = host;
+    host.markReady = () => Promise.resolve({ wasDraft: false, sha: MOVED });
+    try {
+      await run('mark_pr_ready');
+    } finally {
+      host.markReady = markReady;
+    }
+    const glob = await current();
+    expect(glob.status).toBe('pr_open');
+    expect(glob.pr).toMatchObject({ state: 'ready', headSha: MOVED });
+  });
+
   it('the policy decides with the learned limit as it is now, and records its cause, size and limit (s15f8)', async () => {
     await store.transaction((tx) => tx.setSubLimit(1, 5000, 200));
     try {

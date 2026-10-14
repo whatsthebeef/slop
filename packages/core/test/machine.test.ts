@@ -1606,11 +1606,11 @@ describe('merge failure recovery (row 16a)', () => {
 });
 
 describe('mark ready', () => {
-  it('moves an in-progress glob whose PR is already ready straight to pr_open', () => {
+  it('queues marking an already-ready PR so the executor reads its real head, not the stored one', () => {
     const g = glob({ status: 'in_progress', pr: { number: 7, state: 'ready', headSha: 'aaa' } });
     const t = value(m.readyRequested(g, null, ctx()));
-    expect(t.glob.status).toBe('pr_open');
-    expect(effectKinds(t)).not.toContain('mark_pr_ready');
+    expect(t.glob.status).toBe('in_progress');
+    expect(effectKinds(t)).toEqual(['mark_pr_ready']);
   });
   it('queues marking the draft PR ready for the current run only', () => {
     const g = glob({ status: 'implementing', runs: [run()] });
