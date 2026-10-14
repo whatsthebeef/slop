@@ -16,6 +16,7 @@ import { mainAction, promotedAction } from '@/lib/main-action';
 import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
 import { api } from '@/lib/api';
 import { copyOrSelect } from '@/lib/plan-text';
+import { takeOverConfirmation } from '@/lib/sstor-command';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { findSection } from '@/lib/glob-scroll';
 import { workingLabel } from '@/lib/card-pending';
@@ -97,6 +98,8 @@ export const useGlobActions = ({
   const [confirmingOversized, setConfirmingOversized] = useState<Action | null>(null);
   // Discard throws the PR and branch away, so it says what it will do first.
   const [confirmingAgain, setConfirmingAgain] = useState(false);
+  // Pick up from a live machine run stops it: say what happens and the command to run first.
+  const [confirmingTakeOver, setConfirmingTakeOver] = useState(false);
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
@@ -107,6 +110,7 @@ export const useGlobActions = ({
   const [briefOpen, setBriefOpen] = useState(false);
   useEffect(() => {
     setConfirmingAgain(false);
+    setConfirmingTakeOver(false);
     setTypeFailure(null);
     setConfirmingOversized(null);
     setBriefOpen(false);
@@ -169,6 +173,10 @@ export const useGlobActions = ({
       setConfirmingAgain(true);
       return;
     }
+    if (action === 'take_over') {
+      setConfirmingTakeOver(true);
+      return;
+    }
     if (action === 'retrigger' && blockedParts(glob) !== null) {
       setConfirmingRetrigger(true);
       return;
@@ -178,13 +186,8 @@ export const useGlobActions = ({
       action === 'pick_up' && glob.implementer !== null && glob.implementer === email;
     if (
       !resuming &&
-      ((oversized &&
-        (action === 'start' ||
-          action === 'start_anyway' ||
-          action === 'pick_up' ||
-          action === 'take_over')) ||
-        (brief !== null &&
-          (action === 'start_anyway' || action === 'pick_up' || action === 'take_over')))
+      ((oversized && (action === 'start' || action === 'start_anyway' || action === 'pick_up')) ||
+        (brief !== null && (action === 'start_anyway' || action === 'pick_up')))
     ) {
       setConfirmingOversized(action);
       return;
@@ -226,6 +229,8 @@ export const useGlobActions = ({
     setConfirmDelete,
     confirmingAgain,
     setConfirmingAgain,
+    confirmingTakeOver,
+    setConfirmingTakeOver,
     confirmingRetrigger,
     setConfirmingRetrigger,
     confirmingOversized,
@@ -447,6 +452,77 @@ const StepMainButton = ({
   );
 };
 
+/** Pick up from a live machine run: what happens to the run and the branch, and the command that carries on. */
+const TakeOverConfirmation = ({
+  ctx,
+  state,
+}: {
+  ctx: GlobViewContext;
+  state: GlobActionsState;
+}) => {
+  const says = takeOverConfirmation(ctx.glob);
+  const [copied, setCopied] = useState(false);
+  const copy = async () =>
+    setCopied(
+      await copyOrSelect(
+        says.command,
+        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
+        () => undefined,
+      ),
+    );
+  return (
+    <div
+      role="alertdialog"
+      aria-label={says.title}
+      data-testid="take-over-confirmation"
+      className="grid gap-2 rounded border border-amber/60 bg-amber/10 p-3 text-xs"
+    >
+      <strong>{says.title}</strong>
+      <p data-testid="take-over-happens">{says.happens}</p>
+      {state.oversized && (
+        <p data-testid="take-over-oversized">
+          This glob is flagged oversized: it is probably more than one PR&apos;s worth of work.
+        </p>
+      )}
+      {state.brief !== null && (
+        <p data-testid="handover-confirmation">{handoverConfirmation('take_over', state.brief)}</p>
+      )}
+      <div className="flex items-center gap-2">
+        <code className="flex-1 rounded bg-muted px-2 py-1" data-testid="take-over-command">
+          {says.command}
+        </code>
+        <Button
+          size="sm"
+          variant="outline"
+          data-testid="take-over-copy"
+          onClick={() => void copy()}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      <p>{says.how}</p>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => state.setConfirmingTakeOver(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={state.busy}
+          data-testid="confirm-take-over"
+          onClick={() =>
+            void state.run(async () => {
+              state.setConfirmingTakeOver(false);
+              await ctx.onAction('take_over');
+            })
+          }
+        >
+          Pick up
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
 export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
   const { glob } = ctx;
@@ -594,6 +670,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
               </Button>
             </div>
           )}
+          {state.confirmingTakeOver && <TakeOverConfirmation ctx={ctx} state={state} />}
           {state.confirmingRetrigger && (
             <div
               role="alert"
