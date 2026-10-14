@@ -28,7 +28,7 @@ const typecheck: CheckFailure = {
 
 /** A code host with a scripted base branch and per-commit check results. */
 class FakeHost extends FakeCodeHost {
-  baseHead = { sha: 'm1', subject: 's1f5: Slice 8, part 1' };
+  baseHead: { sha: string; subject: string; parent: string | null } = { sha: 'm1', subject: 's1f5: Slice 8, part 1', parent: 'm0' };
   checks: Record<string, { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> = {};
   mergeStateNow: 'passed' | 'failed' | 'pending' | 'behind' | 'conflict' = 'failed';
   cancelled: { id: number; completedAt: string | null }[] = [];
@@ -149,7 +149,7 @@ describe('a red base branch', () => {
   });
 
   it("explains a glob's failed checks, with the failing step and first error", async () => {
-    host.baseHead = { sha: 'm0', subject: 's1t1: earlier work' };
+    host.baseHead = { sha: 'm0', subject: 's1t1: earlier work', parent: null };
     host.checks = { h1: { state: 'failed', failure: { ...typecheck, lines: ['src/own.ts(1,1): error TS1: its own mistake'] } } };
     const own = await newOpenGlob('Own failure');
     await globs.applyEvent(own, (g, ctx) => machine.checksChanged(g, ctx));
@@ -174,7 +174,7 @@ describe('a red base branch', () => {
   });
 
   it('marks failures that match a red base as inherited, names the glob that merged, and tells the board', async () => {
-    host.baseHead = { sha: 'm1', subject: 's1f5: Slice 8, part 1' };
+    host.baseHead = { sha: 'm1', subject: 's1f5: Slice 8, part 1', parent: 'm0' };
     host.checks = { m1: { state: 'failed', failure: typecheck }, h1: { state: 'failed', failure: typecheck } };
     // This glob failed on the same error before the base's result was known.
     const early = await newOpenGlob('Fails the same way');
@@ -224,7 +224,7 @@ describe('a red base branch', () => {
     expect(inherited).toHaveLength(2);
     expect(own).toHaveLength(2);
 
-    host.baseHead = { sha: 'm2', subject: 's1b5: Fix main' };
+    host.baseHead = { sha: 'm2', subject: 's1b5: Fix main', parent: 'm1' };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
     expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'passed', sha: 'm2' });
@@ -238,14 +238,14 @@ describe('a red base branch', () => {
 
     // The base staying green queues nothing more.
     await handle(checkRunDelivery('main'));
-    host.baseHead = { sha: 'm3', subject: 's1t9: more' };
+    host.baseHead = { sha: 'm3', subject: 's1t9: more', parent: 'm2' };
     host.checks = { ...host.checks, m3: { state: 'passed', failure: null } };
     await run('board-1', 'refresh_base_checks');
     for (const id of inherited) expect(await pending(id, 'update_branch')).toHaveLength(0);
   });
 
   it('drops an update for a head that has moved on, and flags a conflict the update runs into', async () => {
-    host.baseHead = { sha: 'm4', subject: 's1f5: breaks main again' };
+    host.baseHead = { sha: 'm4', subject: 's1f5: breaks main again', parent: 'm3' };
     host.checks = { m4: { state: 'failed', failure: typecheck }, h1: { state: 'failed', failure: typecheck }, m5: { state: 'passed', failure: null } };
     const moved = await newOpenGlob('Pushed to meanwhile');
     const conflicting = await newOpenGlob('Conflicts with the fix');
@@ -255,7 +255,7 @@ describe('a red base branch', () => {
     }
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
-    host.baseHead = { sha: 'm5', subject: 's1b5: fixed' };
+    host.baseHead = { sha: 'm5', subject: 's1b5: fixed', parent: 'm4' };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
     expect(await pending(moved, 'update_branch')).toHaveLength(1);
@@ -277,7 +277,7 @@ describe('a red base branch', () => {
       return Promise.resolve('reverted');
     };
     // The base is green first, so the next red result is blamed on the commit that caused it.
-    host.baseHead = { sha: 'g1', subject: 's1t9: green' };
+    host.baseHead = { sha: 'g1', subject: 's1t9: green', parent: 'm5' };
     host.checks = { g1: { state: 'passed', failure: null } };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
@@ -292,7 +292,7 @@ describe('a red base branch', () => {
       return id;
     };
     const sub = await merged('sub');
-    host.baseHead = { sha: 'r1', subject: `${sub}: Merged sub` };
+    host.baseHead = { sha: 'r1', subject: `${sub}: Merged sub`, parent: 'g1' };
     host.checks = { r1: { state: 'failed', failure: typecheck } };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
@@ -305,17 +305,61 @@ describe('a red base branch', () => {
     expect(reverted).toEqual(['r1']);
 
     // A same that turns the base red is not reverted: a person decides.
-    host.baseHead = { sha: 'g2', subject: 's1t9: green again' };
+    host.baseHead = { sha: 'g2', subject: 's1t9: green again', parent: 'r1' };
     host.checks = { g2: { state: 'passed', failure: null } };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
     const same = await merged('same');
-    host.baseHead = { sha: 'r2', subject: `${same}: Merged same` };
+    host.baseHead = { sha: 'r2', subject: `${same}: Merged same`, parent: 'g2' };
     host.checks = { r2: { state: 'failed', failure: typecheck } };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
     expect((await current(same)).status).toBe('reviewing');
     expect(await pending(same, 'revert_merge')).toHaveLength(0);
+  });
+
+  it('does not revert a sub that merged onto an already red base, and records why on its activity', async () => {
+    const reverted: string[] = [];
+    host.revertCommit = (_repo, sha) => {
+      reverted.push(sha);
+      return Promise.resolve('reverted');
+    };
+    host.baseHead = { sha: 'g4', subject: 's1t9: green 4', parent: 'o1' };
+    host.checks = { g4: { state: 'passed', failure: null } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    // Something not from a glob turns the base red: the cause is unclear.
+    host.baseHead = { sha: 'x1', subject: 'Update the lockfile', parent: 'g4' };
+    host.checks = { x1: { state: 'failed', failure: typecheck } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'failed', sha: 'x1', redSha: 'x1', since: null });
+
+    const id = await newOpenGlob('Merged on a red base');
+    await store.transaction(async (tx) => {
+      const g = await tx.getGlob(id);
+      if (g === null) throw new Error('missing');
+      await tx.updateGlob({ ...g, type: 'sub', status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'h1' }, version: g.version + 1 }, g.version);
+    });
+    host.baseHead = { sha: 'x2', subject: `${id}: Merged on a red base`, parent: 'x1' };
+    host.checks = { x1: { state: 'failed', failure: typecheck }, x2: { state: 'failed', failure: { ...typecheck, lines: ['another error'] } } };
+    await handle(checkRunDelivery('main'));
+    await run('board-1', 'refresh_base_checks');
+    // The base stays blamed on the first red commit, not on this merge.
+    expect((await boardOf(1))?.baseChecks).toMatchObject({ state: 'failed', sha: 'x2', redSha: 'x1', since: null });
+    expect((await current(id)).status).toBe('reviewing');
+    expect(await pending(id, 'revert_merge')).toHaveLength(0);
+    expect(reverted).toEqual([]);
+    const declined = await database.db
+      .select({ data: schema.events.data })
+      .from(schema.events)
+      .where(and(eq(schema.events.globId, id), eq(schema.events.type, 'MergeRevertDeclined')));
+    expect(declined).toMatchObject([{ data: { sha: 'x2', parent: 'x1', parentChecks: 'failed' } }]);
+  });
+
+  it('names the first red commit in the notification, not the latest head', async () => {
+    const raised = unwrap(await notifications.list(DEV, 1));
+    expect(raised[0]?.title).toContain('main is red; the cause is unclear (red since x1)');
   });
 
   it('re-runs a base check that failed in CI setup instead of reverting the sub, and records a second setup failure without reverting', async () => {
@@ -324,7 +368,7 @@ describe('a red base branch', () => {
       reverted.push(sha);
       return Promise.resolve('reverted');
     };
-    host.baseHead = { sha: 'g3', subject: 's1t9: green 3' };
+    host.baseHead = { sha: 'g3', subject: 's1t9: green 3', parent: 'r2' };
     host.checks = { g3: { state: 'passed', failure: null } };
     await handle(checkRunDelivery('main'));
     await run('board-1', 'refresh_base_checks');
@@ -341,7 +385,7 @@ describe('a red base branch', () => {
       lines: ['Error response from daemon: toomanyrequests: You have reached your unauthenticated pull rate limit.'],
       url: 'https://github.com/acme/app/actions/runs/2/job/3',
     };
-    host.baseHead = { sha: 'o1', subject: `${id}: Merged sub with an outage` };
+    host.baseHead = { sha: 'o1', subject: `${id}: Merged sub with an outage`, parent: 'g3' };
     host.checks = { o1: { state: 'failed', failure: pull } };
     host.reruns.length = 0;
     host.rerunResult = 'rerun';

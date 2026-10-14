@@ -333,11 +333,11 @@ export class GitHub implements CodeHost, CommitGraph {
     return latest === undefined ? null : { sha, passed: latest.conclusion === 'success' };
   }
 
-  async headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string } | null> {
+  async headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string; parent: string | null } | null> {
     const gh = await this.octokit(repo);
     try {
       const { data } = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner: repo.owner, repo: repo.name, ref });
-      return { sha: data.sha, subject: data.commit.message.split('\n')[0] ?? '' };
+      return { sha: data.sha, subject: data.commit.message.split('\n')[0] ?? '', parent: data.parents[0]?.sha ?? null };
     } catch (error) {
       if (isStatus(error, 404, 422)) return null;
       throw error;

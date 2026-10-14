@@ -26,6 +26,7 @@ export const DOMAIN_EVENT_TYPES = [
   'MergeDisarmed',
   'MergeReverted',
   'MergeRevertFailed',
+  'MergeRevertDeclined',
   'MergeFailureRecovered',
   'ConflictFlagged',
   'ConflictCleared',

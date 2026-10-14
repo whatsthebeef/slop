@@ -1,4 +1,4 @@
-import type { Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
+import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
 import { isRepoAccessFailure, isSetupFailure, chainRefusal, machine, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGatePolicy } from '@slop/core';
@@ -72,6 +72,21 @@ export const codeHostExecutors = (
       return (await host.commitChecks(repo, sha)).failure;
     } catch {
       return null;
+    }
+  };
+
+  /** The checks on a base commit's parent: read from the stored green result when it is that commit, else from the host. */
+  const parentChecksOf = async (
+    repo: Repo,
+    previous: BaseChecks | null | undefined,
+    head: { parent: string | null },
+  ): Promise<'passed' | 'pending' | 'failed' | 'unknown'> => {
+    if (head.parent === null) return 'unknown';
+    if (previous?.state === 'passed' && previous.sha === head.parent) return 'passed';
+    try {
+      return (await host.commitChecks(repo, head.parent, { pushedOnly: true })).state;
+    } catch {
+      return 'unknown';
     }
   };
 
@@ -259,9 +274,13 @@ export const codeHostExecutors = (
       // until they finish. A second setup failure (or no permission to re-run) is recorded, but never blamed on a sub.
       const setupFailure = !passed && result.failure !== null && isSetupFailure(result.failure);
       if (setupFailure && (await host.rerunFailedJobs(repo, head.sha)) === 'rerun') return 'done';
+      // Blame and revert only a commit whose parent passed its checks: otherwise the base was already red before it.
+      const blameable = !passed && !setupFailure;
+      const parentChecks = blameable ? await parentChecksOf(repo, board.baseChecks, head) : 'unknown';
+      const fromGreen = parentChecks === 'passed';
       const recorded = await boards.recordBaseChecks(
         board.id,
-        { sha: head.sha, passed, failure: result.failure, merged: passed || setupFailure ? null : globOfSubject(head.subject) },
+        { sha: head.sha, passed, failure: result.failure, merged: blameable && fromGreen ? globOfSubject(head.subject) : null, fromGreen },
         now(),
       );
       if (recorded === null) return 'done';
@@ -271,11 +290,22 @@ export const codeHostExecutors = (
       const { checks, change } = recorded;
       // A sub whose merge commit turned the base red is reverted and failed; sames are left to a person.
       const headGlob = globOfSubject(head.subject);
-      const culprit = passed || setupFailure || headGlob === null || checks.since !== headGlob ? null : await globs.peek(headGlob);
-      if (culprit?.type === 'sub') {
-        await globs.applyEvent(culprit.id, (g, ctx) =>
-          machine.mergeTurnedBaseRed(g, { sha: head.sha, failure: result.failure, base: repo.base }, ctx),
-        );
+      if (blameable && headGlob !== null) {
+        const culprit = await globs.peek(headGlob);
+        if (culprit?.type === 'sub') {
+          // Clear evidence only: this commit is the first red one and its parent was green.
+          if (fromGreen && head.parent !== null && checks.since === headGlob && checks.redSha === head.sha) {
+            const parent = head.parent;
+            await globs.applyEvent(culprit.id, (g, ctx) =>
+              machine.mergeTurnedBaseRed(g, { sha: head.sha, failure: result.failure, base: repo.base, parent }, ctx),
+            );
+          } else {
+            const reason = `${repo.base} was already red or its parent's checks are unknown, so this merge is not clearly the cause`;
+            await globs.applyEvent(culprit.id, (g, ctx) =>
+              machine.revertDeclined(g, { sha: head.sha, parent: head.parent, parentChecks, reason }, ctx),
+            );
+          }
+        }
       }
       for (const other of await globs.peekAll(board.id, { status: ['pr_open', 'in_progress'] })) {
         // A red base marks the globs that fail the same way; a base that just turned green brings them up to date.

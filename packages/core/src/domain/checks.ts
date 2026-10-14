@@ -118,24 +118,30 @@ export interface BaseChecksChange {
 }
 
 /**
- * Records the latest completed check result for the base branch head. `merged` is the glob named by the head
- * commit's subject. While the base stays red, `since` and `redAt` keep naming the glob that broke it.
+ * Records the latest completed check result for the base branch head. `merged` is the glob named by the head commit's
+ * subject, and `fromGreen` says the head's parent passed its checks. Only the first red commit of a red run is blamed, and
+ * only when its parent was green: a head that stays red keeps the earlier `redSha`, `since` and `redAt`, and a first red
+ * commit whose parent isn't known to be green names no glob (the cause is unclear).
  */
 export const recordBaseChecks = (
   previous: BaseChecks | null | undefined,
-  result: { sha: string; passed: boolean; failure: CheckFailure | null; merged: string | null },
+  result: { sha: string; passed: boolean; failure: CheckFailure | null; merged: string | null; fromGreen?: boolean },
   now: string,
 ): BaseChecksChange => {
   const wasRed = previous?.state === 'failed';
+  // A new red run: the base was green or unseen, or this head's parent passed (it went green and red again between reads).
+  const sameHead = wasRed && previous.sha === result.sha;
+  const continuing = wasRed && (sameHead || result.fromGreen !== true);
   const next: BaseChecks = result.passed
     ? { sha: result.sha, state: 'passed', since: null, checkedAt: now }
     : {
         sha: result.sha,
         state: 'failed',
         ...(result.failure !== null && { failure: result.failure }),
-        // Still red: the glob that broke it stays named, unless the new head is the first to name one.
-        since: wasRed ? (previous.since ?? result.merged) : result.merged,
-        redAt: wasRed ? (previous.redAt ?? now) : now,
+        redSha: continuing ? (previous.redSha ?? previous.sha) : result.sha,
+        // Reading the same red head again keeps its red run (and `redAt`); its blame is still worked out from its parent.
+        since: sameHead || !continuing ? (result.fromGreen === true ? result.merged : sameHead ? previous.since : null) : previous.since,
+        redAt: continuing ? (previous.redAt ?? now) : now,
         checkedAt: now,
       };
   const changed =
