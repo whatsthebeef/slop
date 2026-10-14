@@ -73,7 +73,7 @@ describe('get_glob with a size-check proposal', () => {
       planHash: 'h',
       estimate: { tasks: 6, doneWhenLines: 1, areas: [], untaskedSections: 0, independentParts: 4, partsSource: 'model', parallelParts: 3, reasoning: 'four' },
       evidence: ['e'],
-      threshold: { maxTasks: 5, maxParts: 3 },
+      threshold: { maxTasks: 5, maxParts: 3, minParallel: 2 },
       flagged: true,
       reasons: ['6 tasks'],
       proposal: {

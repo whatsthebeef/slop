@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { DomainEvent } from '../src/domain/events.js';
 import type { GlobOutcome } from '../src/domain/intake-learning.js';
 import {
+  SIZE_PARALLEL_MAX,
+  SIZE_PARALLEL_MIN,
   DEFAULT_SIZE_THRESHOLD,
   SIZE_PARTS_MAX,
   SIZE_PARTS_MIN,
@@ -25,6 +27,7 @@ import {
   withModelParts,
 } from '../src/domain/size-check.js';
 import type { SizeOutcomeInput } from '../src/domain/size-check.js';
+import type { WorkstreamsBlock } from '../src/domain/workstreams.js';
 
 const PLAN = `# Big thing
 
@@ -117,23 +120,33 @@ describe('flagging against the threshold', () => {
     expect(oversizedReasons({ ...text, tasks: 12, parallelParts: undefined }, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
   });
   it('follows a moved threshold', () => {
-    expect(oversizedReasons({ ...base, tasks: 6 }, { maxTasks: 6, maxParts: 3 })).toEqual([]);
+    expect(oversizedReasons({ ...base, tasks: 6 }, { maxTasks: 6, maxParts: 3, minParallel: 2 })).toEqual([]);
   });
 });
 
 describe('threshold steps and bounds', () => {
   it('raises and lowers both limits by one step', () => {
-    expect(raisedThreshold({ maxTasks: 5, maxParts: 3 })).toEqual({ maxTasks: 6, maxParts: 4 });
-    expect(loweredThreshold({ maxTasks: 5, maxParts: 3 })).toEqual({ maxTasks: 4, maxParts: 2 });
+    expect(raisedThreshold({ maxTasks: 5, maxParts: 3, minParallel: 2 })).toEqual({ maxTasks: 6, maxParts: 4, minParallel: 2 });
+    expect(loweredThreshold({ maxTasks: 5, maxParts: 3, minParallel: 2 })).toEqual({ maxTasks: 4, maxParts: 2, minParallel: 2 });
   });
   it('stops at each limit own bounds', () => {
-    expect(raisedThreshold({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX - 1 })).toEqual({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX });
-    expect(loweredThreshold({ maxTasks: SIZE_TASKS_MIN, maxParts: SIZE_PARTS_MIN + 1 })).toEqual({ maxTasks: SIZE_TASKS_MIN, maxParts: SIZE_PARTS_MIN });
-    expect(raisedThreshold({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX })).toEqual({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX });
+    expect(raisedThreshold({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX - 1, minParallel: 2 })).toEqual({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX, minParallel: 2 });
+    expect(loweredThreshold({ maxTasks: SIZE_TASKS_MIN, maxParts: SIZE_PARTS_MIN + 1, minParallel: 2 })).toEqual({ maxTasks: SIZE_TASKS_MIN, maxParts: SIZE_PARTS_MIN, minParallel: 2 });
+    expect(raisedThreshold({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX, minParallel: 2 })).toEqual({ maxTasks: SIZE_TASKS_MAX, maxParts: SIZE_PARTS_MAX, minParallel: 2 });
   });
   it('never moves a value set outside the bounds the wrong way', () => {
-    expect(raisedThreshold({ maxTasks: 20, maxParts: 3 }).maxTasks).toBe(20);
-    expect(loweredThreshold({ maxTasks: 1, maxParts: 3 }).maxTasks).toBe(1);
+    expect(raisedThreshold({ maxTasks: 20, maxParts: 3, minParallel: 2 }).maxTasks).toBe(20);
+    expect(loweredThreshold({ maxTasks: 1, maxParts: 3, minParallel: 2 }).maxTasks).toBe(1);
+  });
+  it('moves the fan-out floor by fan-out outcome, inside its bounds', () => {
+    const at = (minParallel: number) => ({ ...DEFAULT_SIZE_THRESHOLD, minParallel });
+    expect(nextThreshold('fanout_helped', at(3))).toEqual(at(2));
+    expect(nextThreshold('fanout_helped', at(SIZE_PARALLEL_MIN))).toEqual(at(SIZE_PARALLEL_MIN));
+    expect(nextThreshold('fanout_stalled', at(2))).toEqual(at(3));
+    expect(nextThreshold('fanout_stalled', at(SIZE_PARALLEL_MAX))).toEqual(at(SIZE_PARALLEL_MAX));
+    // The task and part limits stay put, and the other outcomes leave the floor.
+    expect(nextThreshold('fanout_stalled', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(DEFAULT_SIZE_THRESHOLD.maxTasks);
+    expect(nextThreshold('kept_whole_clean', at(3)).minParallel).toBe(3);
   });
   it('moves by outcome: raise, lower, or leave', () => {
     expect(nextThreshold('kept_whole_clean', DEFAULT_SIZE_THRESHOLD).maxTasks).toBe(6);
@@ -168,11 +181,28 @@ const input = (patch: Partial<SizeOutcomeInput> & { rounds?: number | null; maxR
     outcome: outcome({ ...(rounds === undefined ? {} : { rounds }), ...(maxRounds === undefined ? {} : { maxRounds }), ...(fixGlobs === undefined ? {} : { fixGlobs }) }),
     failedRuns: 0,
     prHours: 10,
-    split: false,
+    workstreams: null,
     ...rest,
   };
 };
 const range = prRangeOf([8, 10, 10, 12, 10]);
+const stream = (patch: Partial<WorkstreamsBlock['workstreams'][number]> = {}): WorkstreamsBlock['workstreams'][number] => ({
+  name: 'a',
+  goal: 'g',
+  predictedFiles: [],
+  actualFiles: [],
+  needs: [],
+  state: 'done',
+  attempts: 1,
+  conflicts: [],
+  durationMinutes: 5,
+  ...patch,
+});
+const block = (...streams: WorkstreamsBlock['workstreams'][number][]): WorkstreamsBlock => ({
+  fannedOut: true,
+  maxParallel: 2,
+  workstreams: streams.length === 0 ? [stream({ name: 'a' }), stream({ name: 'b' })] : streams,
+});
 
 describe('raise: a flagged glob merged cleanly', () => {
   it('raises when review rounds, runs, PR time and bugs are all fine', () => {
@@ -189,8 +219,39 @@ describe('raise: a flagged glob merged cleanly', () => {
   it('does not judge PR time before the board has enough merged PRs', () => {
     expect(sizeOutcomeOf(input({ prHours: 500 }), prRangeOf([10, 12]))?.outcome).toBe('kept_whole_clean');
   });
-  it('a flagged glob that was split is a flag confirmed, never a raise', () => {
-    expect(sizeOutcomeOf(input({ split: true }), range)?.outcome).toBe('flag_confirmed');
+  it('a flagged glob that fanned out is judged by its workstreams, never a raise', () => {
+    expect(sizeOutcomeOf(input({ workstreams: block() }), range)?.outcome).toBe('fanout_helped');
+  });
+});
+
+describe('fan-out outcomes', () => {
+  it('fanout_helped when it fanned out and merged cleanly', () => {
+    expect(sizeOutcomeOf(input(), range)?.outcome).toBe('kept_whole_clean');
+    expect(sizeOutcomeOf(input({ workstreams: block() }), range)?.outcome).toBe('fanout_helped');
+    expect(sizeOutcomeOf(input({ flagged: false, workstreams: block() }), range)?.outcome).toBe('fanout_helped');
+  });
+  it.each([
+    ['a workstream failed', block(stream({ name: 'a' }), stream({ name: 'b', state: 'failed' })), 'b failed'],
+    ['a workstream needed a retry', block(stream({ name: 'a', attempts: 2 }), stream({ name: 'b' })), 'a needed a retry'],
+    ['files conflicted on integration', block(stream({ name: 'a', conflicts: ['x.ts'] }), stream({ name: 'b' })), 'conflicted on integration (a)'],
+  ])('fanout_stalled when %s', (_name, workstreams, why) => {
+    const found = sizeOutcomeOf(input({ workstreams }), range);
+    expect(found?.outcome).toBe('fanout_stalled');
+    expect(found?.evidence).toContain(why);
+  });
+  it('fanout_stalled when the glob merged badly after fanning out', () => {
+    expect(sizeOutcomeOf(input({ prHours: 25, workstreams: block() }), range)?.outcome).toBe('fanout_stalled');
+  });
+  it('an unflagged glob that struggled lowers the limits whether or not it fanned out', () => {
+    expect(sizeOutcomeOf(input({ flagged: false, failedRuns: 1, workstreams: block() }), range)?.outcome).toBe('unflagged_struggled');
+  });
+  it('a block that did not fan out reads like a glob with none', () => {
+    expect(sizeOutcomeOf(input({ workstreams: { ...block(), fannedOut: false, maxParallel: 1 } }), range)?.outcome).toBe('kept_whole_clean');
+  });
+  it('flags only work that reaches the fan-out floor', () => {
+    const wide = { ...estimateFromText('## Do\n- [ ] one\n'), tasks: 8, independentParts: 5, parallelParts: 2 };
+    expect(oversizedReasons(wide, DEFAULT_SIZE_THRESHOLD).length).toBeGreaterThan(0);
+    expect(oversizedReasons(wide, { ...DEFAULT_SIZE_THRESHOLD, minParallel: 3 })).toEqual([]);
   });
 });
 

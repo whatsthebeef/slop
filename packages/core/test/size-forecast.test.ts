@@ -373,7 +373,7 @@ describe('size forecast', () => {
       );
       expect(forecastShape(chain)).toEqual({ criticalPath: 3, maxParallel: 1 });
       expect(forecastReasons(chain, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
-      expect(oversizedReasons({ ...estimateFromText(THREE), forecast: chain }, { maxTasks: 2, maxParts: 2 })).toEqual([]);
+      expect(oversizedReasons({ ...estimateFromText(THREE), forecast: chain }, { maxTasks: 2, maxParts: 2, minParallel: 2 })).toEqual([]);
       expect(proposalFromForecast(THREE, chain)).toBeNull();
     });
 
@@ -389,7 +389,7 @@ describe('size forecast', () => {
 
     it('flags two modules only when they are many for the board, never at the learned floor of 2', () => {
       const two = forecastFrom(footprintOf(['apps/server/a.ts', 'apps/web/b.ts']), null, estimateFromText(THREE), DEFAULT_SIZE_CALIBRATION);
-      expect(forecastReasons(two, { maxTasks: 5, maxParts: 2 })).toEqual([]);
+      expect(forecastReasons(two, { maxTasks: 5, maxParts: 2, minParallel: 2 })).toEqual([]);
       expect(forecastReasons(two, DEFAULT_SIZE_THRESHOLD)).toEqual([]);
     });
 
@@ -397,7 +397,7 @@ describe('size forecast', () => {
       const forecast = forecastFrom(footprintOf(['apps/server/a.ts', 'apps/web/b.ts', 'infra/c.ts']), null, estimateFromText(THREE), DEFAULT_SIZE_CALIBRATION);
       const estimate = { ...estimateFromText(THREE), forecast };
       expect(oversizedReasons(estimate, DEFAULT_SIZE_THRESHOLD)).toHaveLength(2);
-      expect(oversizedReasons(estimate, { maxTasks: 6, maxParts: 4 })).toEqual([]);
+      expect(oversizedReasons(estimate, { maxTasks: 6, maxParts: 4, minParallel: 2 })).toEqual([]);
     });
 
     it('hands the forecast to the investigator through get_context', async () => {
@@ -683,7 +683,7 @@ describe('size forecast', () => {
       await merge(glob.id, 500);
       const first = await base.learn(boardId);
       expect(first.changes.map((c) => c.outcome)).toEqual(['kept_whole_clean']);
-      expect(first.threshold).toEqual({ maxTasks: 6, maxParts: 4 });
+      expect(first.threshold).toEqual({ maxTasks: 6, maxParts: 4, minParallel: 2 });
       const history = await store.transaction((tx) => tx.listSizeCalibrationChanges(boardId));
       const [existing] = history;
       if (existing === undefined) throw new Error('expected a calibration change');

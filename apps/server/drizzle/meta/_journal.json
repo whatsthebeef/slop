@@ -512,6 +512,13 @@
       "when": 1792011059231,
       "tag": "0072_relation_group",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1792017072647,
+      "tag": "0073_size_min_parallel",
+      "breakpoints": true
     }
   ]
 }
