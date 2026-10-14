@@ -5,14 +5,16 @@ interface ActorIconProps {
   readonly className?: string;
   /** True where adjacent text already says it: the icon is then hidden from screen readers. */
   readonly decorative?: boolean;
+  /** True while a machine step is running: the icon turns (not for people who prefer reduced motion). */
+  readonly working?: boolean;
 }
 
 const SIZE = 'h-3.5 w-3.5 shrink-0';
 
 /** Slop or its agents do the work. */
-export const MachineIcon = ({ className, decorative = false }: ActorIconProps) => (
+export const MachineIcon = ({ className, decorative = false, working = false }: ActorIconProps) => (
   <Bot
-    className={cn(SIZE, className)}
+    className={cn(SIZE, working && 'animate-spin motion-reduce:animate-none', className)}
     strokeWidth={2}
     {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'machine', role: 'img' })}
   />
