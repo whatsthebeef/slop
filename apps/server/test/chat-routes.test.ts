@@ -28,12 +28,15 @@ describe('chat route and ask_board', () => {
   let saved: unknown[][];
   /** What the stand-in streams before it answers. */
   let pieces: string[];
+  /** The progress lines the stand-in reports for the extra steps. */
+  let lines: string[];
   let app: Hono<Env>;
 
   const chat = {
     ask: (...args: Parameters<Ask>) => {
       asked.push(args);
       for (const piece of pieces) args[2]?.(piece);
+      for (const line of lines) args[3]?.(line);
       return Promise.resolve(next);
     },
     answer: (...args: Parameters<Answer>) => {
@@ -66,6 +69,7 @@ describe('chat route and ask_board', () => {
     removed = [];
     saved = [];
     pieces = [];
+    lines = [];
     next = ok({ chat: thread, question: message(2, 'user', 'q'), reply: message(3, 'assistant', 'a'), answered: true });
     app = new Hono<Env>();
     app.use('/api/*', async (c, nextHandler) => {
@@ -129,6 +133,22 @@ describe('chat route and ask_board', () => {
     expect(events[2]?.data).toMatchObject({ chat: { id: 7 }, answered: true });
     // The service is given a signal to stop on.
     expect(asked[0]?.[1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('POST streams a progress event for each extra step before the stored messages (s15f140)', async () => {
+    lines = ['Searching again…', 'Looking at the code…'];
+    const res = await app.request('/api/boards/1/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify({ question: 'why backoff?' }),
+    });
+    const events = (await res.text())
+      .split('\n\n')
+      .filter((e) => e.trim() !== '')
+      .map((e) => ({ event: /event: (.*)/.exec(e)?.[1], data: JSON.parse(/data: (.*)/.exec(e)?.[1] ?? 'null') as unknown }));
+    expect(events.map((e) => e.event)).toEqual(['progress', 'progress', 'done']);
+    expect(events[0]?.data).toEqual({ line: 'Searching again…' });
+    expect(events[1]?.data).toEqual({ line: 'Looking at the code…' });
   });
 
   it('POST streams an error event with the status and body when the service refuses', async () => {

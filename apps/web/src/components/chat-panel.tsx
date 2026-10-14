@@ -299,7 +299,7 @@ export const ChatPanel = ({
   const [includeHistory, setIncludeHistory] = useState(false);
   const [thinkHarder, setThinkHarder] = useState(false);
   // The question being answered and what has streamed so far; the stored messages replace it once the answer is done.
-  const [pending, setPending] = useState<{ question: string; text: string } | null>(null);
+  const [pending, setPending] = useState<{ question: string; text: string; progress?: string } | null>(null);
   const [error, setError] = useState<unknown>(null);
   const stop = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
@@ -329,7 +329,7 @@ export const ChatPanel = ({
     };
     setQuestion((current) => (current.trim() === q ? '' : current));
     try {
-      const reply = await api.askChat(boardId, body, { onText: (piece) => setPending((p) => (p === null ? p : { ...p, text: p.text + piece })), signal: controller.signal });
+      const reply = await api.askChat(boardId, body, { onText: (piece) => setPending((p) => (p === null ? p : { ...p, text: p.text + piece })), onProgress: (line) => setPending((p) => (p === null ? p : { question: p.question, text: '', progress: line })), signal: controller.signal });
       client.setQueryData<ChatMessage[]>(['chat', boardId, reply.chat.id], (old) => [...(old ?? []), reply.question, reply.reply]);
       onChatChange(reply.chat.id);
       void client.invalidateQueries({ queryKey: chats });
@@ -483,7 +483,7 @@ export const ChatPanel = ({
                 <p className={cn(WRAP_LONG, 'whitespace-pre-wrap text-sm')}>{pending.question}</p>
               </article>
               <article className='py-1' data-testid='chat-streaming'>
-                {pending.text === '' ? <p className={cn(WRAP_LONG, 'text-muted-foreground')}>Reading the board's records…</p> : <Answer text={pending.text} citations={[]} onNavigate={followed} />}
+                {pending.text === '' ? <p className={cn(WRAP_LONG, 'text-muted-foreground')}>{pending.progress ?? "Reading the board's records…"}</p> : <Answer text={pending.text} citations={[]} onNavigate={followed} />}
               </article>
             </>
           )}
