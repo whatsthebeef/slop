@@ -8,7 +8,7 @@ export type ConflictKind = (typeof CONFLICT_KINDS)[number];
 export type ConflictResolvedBy = 'run' | 'human';
 
 /** The event types a conflict record is read from. */
-export const CONFLICT_EVENT_TYPES = ['ConflictFlagged', 'ConflictCleared'] as const;
+export const CONFLICT_EVENT_TYPES = ['ConflictFlagged', 'ConflictCleared', 'WorkstreamsRecorded'] as const;
 
 /**
  * One file of one conflict a glob got. Derived from the events, never stored: `resolvedAt`, `by` and `kind` are null
@@ -25,6 +25,8 @@ export interface FileConflict {
   readonly resolvedAt: string | null;
   readonly by: ConflictResolvedBy | null;
   readonly kind: ConflictKind | null;
+  /** Set for a conflict met when a workstream was integrated onto the glob's branch: the workstream's name. */
+  readonly workstream?: string;
 }
 
 const stringOf = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -40,6 +42,10 @@ const byOf = (v: unknown): ConflictResolvedBy | null => (v === 'run' || v === 'h
  * Rows come back oldest first.
  */
 export const conflictRecords = (events: readonly DomainEvent[]): FileConflict[] => {
+  return [...globConflictRecords(events), ...workstreamConflictRecords(events)].sort((a, b) => a.flaggedAt.localeCompare(b.flaggedAt));
+};
+
+const globConflictRecords = (events: readonly DomainEvent[]): FileConflict[] => {
   const rows: FileConflict[] = [];
   const open = new Map<string, number[]>();
   const ordered = events
@@ -85,4 +91,31 @@ export const conflictRecords = (events: readonly DomainEvent[]): FileConflict[] 
     }
   }
   return rows;
+};
+
+/**
+ * Integration conflicts between workstreams, as rows in the same lane as conflicts between globs. Each glob's latest
+ * `WorkstreamsRecorded` event says which files each workstream conflicted on when it was integrated; one row per workstream
+ * and file, flagged and resolved when the block was recorded (the run resolved it, how is not known). Oldest first.
+ */
+export const workstreamConflictRecords = (events: readonly DomainEvent[]): FileConflict[] => {
+  const latest = new Map<string, DomainEvent>();
+  for (const e of events) {
+    if (e.type !== 'WorkstreamsRecorded') continue;
+    const prev = latest.get(e.globId);
+    if (prev === undefined || e.at >= prev.at) latest.set(e.globId, e);
+  }
+  const rows: FileConflict[] = [];
+  for (const e of latest.values()) {
+    const list = Array.isArray(e.data['workstreams']) ? (e.data['workstreams'] as unknown[]) : [];
+    for (const w of list) {
+      if (typeof w !== 'object' || w === null) continue;
+      const name = stringOf((w as Record<string, unknown>)['name']);
+      if (name === null) continue;
+      for (const path of new Set(stringsOf((w as Record<string, unknown>)['conflicts']))) {
+        rows.push({ path, globId: e.globId, since: null, base: '', flaggedAt: e.at, resolvedAt: e.at, by: 'run', kind: null, workstream: name });
+      }
+    }
+  }
+  return rows.sort((a, b) => a.flaggedAt.localeCompare(b.flaggedAt));
 };

@@ -664,6 +664,24 @@ describe('glob view: split moves in the action ▾', () => {
     expect(editor.textContent).not.toContain('Waits for');
   });
 
+  it('asks a group-less glob for the group its parts join, prefilled from its title', async () => {
+    const user = userEvent.setup();
+    renderGlob(splittableGlob({ group: null, title: 'Board chat 1/2: answers' }));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-split'));
+    expect((await screen.findByTestId('split-group')).getAttribute('value')).toBe('board-chat');
+  });
+
+  it("keeps a grouped glob's group without asking", async () => {
+    const user = userEvent.setup();
+    renderGlob(splittableGlob({ group: 'workstreams' }));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-split'));
+    const editor = await screen.findByTestId('split-editor');
+    expect(screen.queryByTestId('split-group')).toBeNull();
+    expect(editor.textContent).toContain('workstreams');
+  });
+
   it('never holds an oversized glob: Start still leads, and Split… is a scope cut in the ▾', async () => {
     const user = userEvent.setup();
     renderGlob(oversizedGlob(true));

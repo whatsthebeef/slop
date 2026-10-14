@@ -22,6 +22,12 @@ const SYSTEM = [
   'then "Done when" lines a reviewer can check. Do not repeat the numbers you were given. Do not write code.',
 ].join(' ');
 
+/** Said when workstreams of one run conflicted on the file: parallel work inside a glob needs the split too. */
+const workstreamNote = (hotspot: Hotspot): string[] =>
+  hotspot.workstreamConflicts === undefined
+    ? []
+    : [`${String(hotspot.workstreamConflicts)} of them were integration conflicts between workstreams of the same glob.`];
+
 /** What the proposal says when no model could draft one: the split is left to whoever picks the decision up. */
 const fallbackProposal = (path: string): string =>
   [
@@ -72,7 +78,7 @@ export class HotspotDecisions {
           boardId,
           actor,
           title: headline,
-          payload: `${headline}\n\n${proposal}\n\n## Conflicts\n\nGlobs that conflicted on it: ${hotspot.globs.join(', ')}.\n`,
+          payload: `${headline}\n\n${proposal}\n\n## Conflicts\n\nGlobs that conflicted on it: ${hotspot.globs.join(', ')}.${hotspot.workstreamConflicts === undefined ? '' : ` ${String(hotspot.workstreamConflicts)} conflicts were between workstreams integrated within a glob.`}\n`,
           attributes: { scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: hotspot.path }, channel: 'mined', outcome: null },
           creationKey: hotspotKey(hotspot.path, now),
           group: decisionGroup({ scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: hotspot.path }, channel: 'mined', outcome: null }, null),
@@ -110,6 +116,7 @@ export class HotspotDecisions {
           prompt: [
             `File: ${hotspot.path}`,
             `Conflicts: ${String(hotspot.conflicts)} (${String(hotspot.real)} real) across ${hotspot.globs.join(', ')}.`,
+            ...workstreamNote(hotspot),
             '',
             'Its content (cut if long):',
             body,

@@ -625,6 +625,57 @@ describe('size forecast', () => {
       expect(next.weights).toEqual(weights);
     });
 
+    const addRecord = (globId: string, workstreams: object[], fannedOut = true) =>
+      store.transaction((tx) =>
+        tx.insertArtifact({
+          globId,
+          kind: 'implementation_plan',
+          label: '',
+          content: `# Record\n\n## Workstreams\n\n\`\`\`workstreams\n${JSON.stringify({ fannedOut, maxParallel: Math.min(2, workstreams.length), workstreams })}\n\`\`\`\n`,
+          link: null,
+          commitSha: null,
+          provenance: { by: 'sessionator', actor: DEV, runId: null, agentSetVersion: null },
+          createdAt: NOW,
+        }),
+      );
+    const stream = (name: string, actualFiles: string[], state = 'done') => ({
+      name,
+      goal: `Build ${name}`,
+      predictedFiles: actualFiles,
+      actualFiles,
+      needs: [],
+      state,
+      attempts: 1,
+      conflicts: [],
+      durationMinutes: 5,
+    });
+
+    it('records the workstreams the run used against the forecast parts, and cites them in the weight move', async () => {
+      const textHeavy = forecastFrom(footprintOf(['apps/web/src/a.tsx', 'apps/web/src/b.tsx']), null, estimateFromText(checklist(10)), DEFAULT_SIZE_CALIBRATION);
+      const exact = Math.round((textHeavy.lines.min + textHeavy.lines.max) / 2);
+      const glob = await create(checklist(2));
+      await withForecast(glob.id, textHeavy);
+      await addRecord(glob.id, [stream('web', ['apps/web/src/a.tsx', 'apps/web/src/b.tsx']), stream('docs', ['docs/spec.md'])]);
+      await merge(glob.id, exact);
+      expect((await base.learn(boardId)).calibration?.records).toBe(1);
+      const record = await store.transaction((tx) => tx.getSizeRecord(glob.id));
+      const ws = record?.actual.workstreams;
+      expect(ws?.fannedOut).toBe(true);
+      expect(ws?.items.map((w) => [w.name, w.part, w.partHit, w.partMissed])).toEqual([
+        ['web', textHeavy.parts[0]?.name, 2, 0],
+        ['docs', null, 0, 1],
+      ]);
+      const moves = (await store.transaction((tx) => tx.listSizeCalibrationChanges(boardId))).filter((c) => c.kind === 'weights');
+      expect(moves[0]?.cause).toContain('The workstreams of');
+      expect(moves[0]?.cause).toContain('no forecast part covered workstream docs');
+    });
+
+    it('records no workstreams for a glob whose record has no workstreams block', async () => {
+      const glob = await mergeWith(webForecast(), 400);
+      await base.learn(boardId);
+      expect((await store.transaction((tx) => tx.getSizeRecord(glob.id)))?.actual.workstreams).toBeNull();
+    });
+
     it('is idempotent per glob and cause, and leaves the threshold learning working', async () => {
       judged = MANY;
       const glob = await create(checklist(10));

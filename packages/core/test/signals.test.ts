@@ -485,6 +485,7 @@ describe('mined signals: a glob\'s agent-set version', () => {
       ['choice_in_use', null],
       ['knowledge_page', null],
       ['chat_feedback', null],
+      ['workstream_pattern', 'orchestrator'],
     ]);
     expect(SIGNALS.every((s) => s.threshold !== '')).toBe(true);
   });
@@ -840,5 +841,51 @@ describe('chat_feedback signal (s15f142)', () => {
     expect(missingSources(["Searched the board's records (current): 0 found", "Couldn't read the code"])).toEqual(['records', 'code']);
     expect(missingSources(["Searched the board's records (current): 4 found"])).toEqual([]);
     expect(missingSources(null)).toEqual([]);
+  });
+});
+
+describe('mined signals: workstream_pattern (s15f156)', () => {
+  const recorded = (globId: string, workstreams: { name: string; state?: string; conflicts?: string[] }[], fannedOut = true): DomainEvent =>
+    event(globId, 'WorkstreamsRecorded', {
+      fannedOut,
+      maxParallel: 2,
+      workstreams: workstreams.map((w) => ({ name: w.name, state: w.state ?? 'done', conflicts: w.conflicts ?? [] })),
+    });
+  const base = (events: DomainEvent[]): BoardActivity => ({
+    window: { from: '2026-09-03T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' },
+    globs: [],
+    events,
+    artifacts: [],
+    findings: [],
+    reviewFeedback: [],
+    manifestChanges: null,
+    documents: [],
+    learnings: [],
+  });
+  const pattern = (a: BoardActivity) => measureSignals(a).filter((m) => m.kind === 'workstream_pattern');
+
+  it('raises a file that conflicted in two fanned-out globs, and a workstream that failed in two', () => {
+    const a = base([
+      recorded('s1t1', [{ name: 'api', conflicts: ['src/a.ts'] }, { name: 'web', state: 'failed' }]),
+      recorded('s1t2', [{ name: 'api', conflicts: ['src/a.ts'] }, { name: 'Web', state: 'failed' }]),
+      recorded('s1t3', [{ name: 'api' }]),
+    ]);
+    expect(pattern(a).map((m) => [m.key, m.figures.affected, m.figures.eligible, m.crosses])).toEqual([
+      ['workstream_pattern:conflict:src/a.ts', 2, 3, true],
+      ['workstream_pattern:failed:web', 2, 3, true],
+    ]);
+    expect(perGlob(a, 's1t1', 'workstream_pattern:conflict:src/a.ts')).toEqual({ eligible: true, affected: true });
+    expect(perGlob(a, 's1t3', 'workstream_pattern:conflict:src/a.ts')).toEqual({ eligible: true, affected: false });
+  });
+
+  it('does not cross for one glob, reads only the latest record per glob and ignores small globs', () => {
+    const a = base([
+      recorded('s1t1', [{ name: 'api', conflicts: ['src/a.ts'] }]),
+      recorded('s1t2', [{ name: 'api', conflicts: ['src/a.ts'] }]),
+      recorded('s1t2', [{ name: 'api' }]),
+      recorded('s1t4', [{ name: 'api', conflicts: ['src/a.ts'] }], false),
+    ]);
+    expect(pattern(a).map((m) => m.crosses)).toEqual([false]);
+    expect(pattern(base([]))).toEqual([]);
   });
 });
