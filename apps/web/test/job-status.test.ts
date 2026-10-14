@@ -50,3 +50,15 @@ describe('conflict hotspots', () => {
     expect(jobSummary({ kind: 'hotspots', hot: 1, files: [] })).toBe('1 conflict hotspot');
   });
 });
+
+describe('size threshold run', () => {
+  it('summarises the fan-out floor, reading a result stored before it existed as 2', () => {
+    const at = { maxTasks: 5, maxParts: 3 } as unknown as { maxTasks: number; maxParts: number; minParallel: number };
+    expect(jobSummary({ kind: 'size_threshold', threshold: { ...at, minParallel: 3 }, changes: [] })).toBe(
+      'threshold 5 tasks or 3 parts, fan-out from 3 parallel, 0 outcomes recorded (0 moved it)',
+    );
+    expect(jobSummary({ kind: 'size_threshold', threshold: at, changes: [{ globId: 's1f1', outcome: 'kept_whole_clean', from: at, to: at }] })).toBe(
+      'threshold 5 tasks or 3 parts, fan-out from 2 parallel, 1 outcomes recorded (0 moved it)',
+    );
+  });
+});

@@ -14,6 +14,10 @@ const message = (error: unknown) => (error instanceof RequestError ? error.body.
 /** The fallback poll while a job runs; hints normally refresh the list (as the board's deploy poll). */
 const JOB_POLL_MS = 15_000;
 
+/** The fan-out floor of a threshold in a result stored before the floor existed (it had none: 2). */
+const floor = (t: { minParallel?: number }): number => t.minParallel ?? DEFAULT_FLOOR;
+const DEFAULT_FLOOR = 2;
+
 /** Whether a board job's lease is held (it is running on a server now), as the server worked it out. */
 export const isJobRunning = (job: BoardJobStatus | undefined): boolean => job?.running ?? false;
 
@@ -37,8 +41,8 @@ export const jobSummary = (result: BoardJobResult): string => {
       return `limit ${result.limit.toLocaleString('en')} lines, ${result.changes.length} outcomes recorded (${moved} moved it)${result.waiting > 0 ? `, ${result.waiting} waiting` : ''}${(result.gaveUp ?? 0) > 0 ? `, ${result.gaveUp} bug references skipped without a usable answer` : ''}`;
     }
     case 'size_threshold': {
-      const moved = result.changes.filter((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts || c.from.minParallel !== c.to.minParallel).length;
-      return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, fan-out from ${result.threshold.minParallel} parallel, ${result.changes.length} outcomes recorded (${moved} moved it)`;
+      const moved = result.changes.filter((c) => c.from.maxTasks !== c.to.maxTasks || c.from.maxParts !== c.to.maxParts || floor(c.from) !== floor(c.to)).length;
+      return `threshold ${result.threshold.maxTasks} tasks or ${result.threshold.maxParts} parts, fan-out from ${floor(result.threshold)} parallel, ${result.changes.length} outcomes recorded (${moved} moved it)`;
     }
     case 'context_tuning':
       return `${result.moves.length} ${result.moves.length === 1 ? 'setting' : 'settings'} moved, ${result.held} left as they were`;
