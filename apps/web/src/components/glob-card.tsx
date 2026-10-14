@@ -149,7 +149,7 @@ const CornerMarkerView = ({
           className={cn('inline-flex min-w-0 items-center gap-1 text-right font-mono text-[11px]', marker.tone)}
           testId={needsHuman ? 'escalation-chip' : 'position'}
           dataKind={marker.kind}
-          ariaLabel={needsHuman ? 'Needs a person' : undefined}
+          ariaLabel={needsHuman ? 'Needs a person' : marker.label}
         >
           {needsHuman ? (
             // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
@@ -163,7 +163,7 @@ const CornerMarkerView = ({
               ) : position === null ? null : (
                 <PositionIcon position={position} />
               )}
-              <span className='truncate'>{marker.text}</span>
+              {marker.text !== '' && <span className='truncate'>{marker.text}</span>}
             </>
           )}
         </ChipButton>
@@ -236,7 +236,7 @@ export const ChipButton = ({
   children: ReactNode;
 }) =>
   onOpen === undefined ? (
-    <span className={cn('max-w-full truncate whitespace-nowrap', className)} data-testid={testId} data-kind={dataKind} aria-describedby={describedBy}>
+    <span className={cn('max-w-full truncate whitespace-nowrap', className)} data-testid={testId} data-kind={dataKind} aria-describedby={describedBy} {...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel, role: 'img' })}>
       {children}
     </span>
   ) : (
