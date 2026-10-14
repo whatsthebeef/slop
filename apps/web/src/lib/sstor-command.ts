@@ -32,3 +32,15 @@ export const conflictCommand = (globId: string, canTakeOver: boolean): string =>
 /** The by-hand section of the conflict box: the git commands, and `--resolve` marked as the mergetool-only helper. */
 export const conflictByHand = (globId: string, branch: string, base: string): string =>
   `git fetch origin ${base} && git checkout ${branch} && git merge origin/${base}\n# resolve the conflicts, commit\ngit push origin ${branch}\n\n# mergetool only, no Claude:\nsstor --glob ${globId} --resolve`;
+
+/** What the Pick up confirmation says: the title, what happens to the run and the branch, and the command that carries on. */
+export const takeOverConfirmation = (glob: {
+  id: string;
+  branch: string;
+  currentRun?: { state: string } | null;
+}): { title: string; happens: string; command: string; how: string } => ({
+  title: `Pick up ${glob.id} from the machine?`,
+  happens: `${glob.currentRun?.state === 'queued' ? 'The queued run is cancelled' : "The machine's run is stopped"}; its commits so far stay on the branch ${glob.branch}; the glob becomes yours (you are the implementer).`,
+  command: `sstor --glob ${glob.id}`,
+  how: "This opens the glob's Claude session on your machine, on the branch, with the plan and the machine's notes.",
+});
