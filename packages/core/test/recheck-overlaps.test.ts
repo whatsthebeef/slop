@@ -132,13 +132,6 @@ describe('recheck overlaps', () => {
     expect((await current(mine.id)).impliedAfter ?? []).toEqual([]);
   });
 
-  it('keeps explicit overlaps and ones a person overrode', async () => {
-    const open = await openGlob(['apps/web/src/a.tsx']);
-    const mine = unwrap(await globs.create(DEV, input({ plan: 'Fix a typo', overlaps: [open.id] })));
-    await globs.recheckOverlaps(boardId);
-    expect((await current(mine.id)).impliedAfter).toEqual([{ id: open.id, paths: [], kind: 'overlaps', source: 'explicit' }]);
-  });
-
   it('queues one recheck for a burst of pushes and status changes', async () => {
     const open = await openGlob([MIGRATION]);
     expect(rechecks()).toHaveLength(1);

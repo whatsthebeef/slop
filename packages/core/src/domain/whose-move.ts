@@ -4,8 +4,7 @@ import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
 import type { MachineStep, StallThresholds } from './machine-steps.js';
 import type { Glob } from './types.js';
-import { waitingFor } from './waiting.js';
-import type { DependencyState } from './waiting.js';
+import type { AwaitedDependency } from './relations.js';
 
 /**
  * Whose move it is on a glob: exactly one holder, reduced from the human steps, the machine steps and the glob's
@@ -102,7 +101,8 @@ export const whoseMove = (
   glob: Glob,
   humanSteps: readonly HumanStep[],
   machineSteps: readonly MachineStep[],
-  dependencies: ReadonlyMap<string, DependencyState>,
+  /** What the glob still waits for before it starts (its unmet start relations); only a glob in Planning waits. */
+  waitingFor: readonly AwaitedDependency[],
   now: string,
   options: MoveOptions = {},
 ): Move => {
@@ -129,7 +129,7 @@ export const whoseMove = (
 
   // 3. Waiting: checks, a deploy, an unseen upload, an unmerged need, or a rollout the glob's steps wait on.
   const waits = machineSteps.filter((s) => isWaitingStep(s) && isInFlight(s));
-  const awaited = glob.status === 'planning' ? waitingFor(glob, dependencies) : [];
+  const awaited = glob.status === 'planning' ? waitingFor : [];
   const rollouts = humanSteps.filter((s) => s.state === 'pending' && s.blocks.length > 0);
   if (waits.length > 0 || awaited.length > 0) {
     const on = [...awaited.map((a) => a.id), ...waits.map((s) => (s.kind === 'deploy' ? `deploy:${s.detail ?? ''}` : s.kind))];

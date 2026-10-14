@@ -30,16 +30,16 @@ import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
+  awaitedOf,
   chainRefusal,
-  dependencyIds,
-  explicitOverlaps,
   NO_CHAIN,
+  NO_RELATIONS,
+  overrideEdits,
   refusalText,
-  waitingFor,
+  startIds,
   waitSummary,
-} from './waiting.js';
-import type { BlockingChain } from './waiting.js';
-import type { DependencyState } from './waiting.js';
+} from './relations.js';
+import type { BlockingChain, RelationEdit, RelationFacts } from './relations.js';
 import { rolloutPending } from './human-steps.js';
 import type { BlockProgress } from './human-steps.js';
 import type {
@@ -82,6 +82,8 @@ export interface Transition {
   readonly changed: boolean;
   readonly events: readonly DomainEvent[];
   readonly effects: readonly Effect[];
+  /** Changes to the glob's relations (rows beside it) that go with this transition; the service writes them in the same transaction. */
+  readonly relationEdits?: readonly RelationEdit[];
 }
 
 export type Action =
@@ -127,8 +129,8 @@ export type Action =
 export interface ActionFacts {
   /** The commit SHA of the glob's latest implementation record, or null without one (or without a SHA). */
   readonly recordSha?: string | null;
-  /** The state of every glob this one waits for (a missing entry reads as deleted); absent when not loaded. */
-  readonly dependencies?: ReadonlyMap<string, DependencyState>;
+  /** The glob's relations and the state of every glob they point at (a missing entry reads as deleted); absent when not loaded. */
+  readonly relations?: RelationFacts;
   /** Everything unmerged ahead of the glob, where loaded (Start and Retrigger refuse while it isn't empty). */
   readonly chain?: BlockingChain;
   /** The size check flagged the glob oversized and nobody has answered: it is held in Planning, though nothing it waits for is unmerged. */
@@ -136,8 +138,6 @@ export interface ActionFacts {
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
   readonly rollout?: BlockProgress;
 }
-
-const NO_DEPENDENCIES: ReadonlyMap<string, DependencyState> = new Map();
 
 /** The latest implementation record's commit SHA among a glob's artifact summaries (a legacy postplan counts until migrated). */
 export const recordShaOf = (
@@ -226,6 +226,7 @@ class Builder {
   private readonly events: DomainEvent[] = [];
   private readonly effects: Effect[] = [];
   private changed = false;
+  private edits: readonly RelationEdit[] = [];
 
   constructor(
     private glob: Glob,
@@ -376,14 +377,32 @@ class Builder {
     return this.set({ generation: this.glob.generation + 1 });
   }
 
+  /** Relation rows to change with this transition (Start now overrides the inferred and learned start relations). */
+  relationEdits(edits: readonly RelationEdit[]): this {
+    this.edits = edits;
+    return this;
+  }
+
   done(): Result<Transition> {
     const glob = this.changed ? { ...this.glob, updatedAt: this.ctx.now } : this.glob;
-    return ok({ glob, changed: this.changed, events: this.events, effects: this.effects });
+    return ok({
+      glob,
+      changed: this.changed,
+      events: this.events,
+      effects: this.effects,
+      ...(this.edits.length === 0 ? {} : { relationEdits: this.edits }),
+    });
   }
 }
 
 const unchanged = (glob: Glob): Result<Transition> =>
   ok({ glob, changed: false, events: [], effects: [] });
+
+/**
+ * The glob's relations changed (rows beside it, written by the service with their own events): the glob itself is as it was, but
+ * its version and `updatedAt` move, so live updates and stale-form checks see the change.
+ */
+export const relationsChanged = (glob: Glob, ctx: Context): Result<Transition> => new Builder(glob, ctx).set({}).done();
 
 const invalidTransition = (glob: Glob, actor: Actor | null, message: string): Result<never> =>
   err({
@@ -413,9 +432,7 @@ export interface CreateInput {
   readonly environment: string | null;
   /** Same only: start a routine run immediately (explicit instruction or `autoTrigger`). */
   readonly autoTrigger: boolean;
-  /** Globs to start after, already checked and without merged ones (see `checkAfter`). */
-  readonly after?: readonly string[];
-  /** Merge-policy holds found for this glob before it was created. */
+  /** Predicted overlaps found for this glob before it was created (merge-policy holds; they never hold a start). */
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Set when the size check flagged the glob oversized: a sub or auto-triggered same waits in Planning, with this as the reason, until a person splits or keeps it whole. */
   readonly sizeHold?: string;
@@ -429,7 +446,8 @@ export const create = (
   input: CreateInput,
   board: Board,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  /** The relations the new glob starts with (made by the service, already checked) and the state of what they point at. */
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (!isValidCombination(input.type, input.category)) {
@@ -449,9 +467,8 @@ export const create = (
   const envCheck = checkEnvironment(board, environment);
   if (!envCheck.ok) return envCheck;
 
-  const after = input.after ?? [];
   const impliedAfter = input.impliedAfter ?? [];
-  const awaited = waitingFor({ after, impliedAfter }, dependencies);
+  const awaited = awaitedOf(relations);
   const startsBySelf = input.type === 'same' && input.autoStart === true && awaited.length > 0;
   const wantsStart =
     input.type === 'sub' || (input.type === 'same' && input.autoTrigger) || startsBySelf;
@@ -490,7 +507,6 @@ export const create = (
     updatedAt: ctx.now,
     signedOffAt: null,
     doingSince: listOf(status) === 'doing' ? ctx.now : null,
-    ...(after.length > 0 && { after }),
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
     ...(startsBySelf && { autoStart: true }),
@@ -533,8 +549,8 @@ export const checkEnvironment = (board: Board, environment: string | null): Resu
 export const start = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
-  /** Holds the board's merge policy found for this start (another open glob may change the same exclusive paths). */
+  relations: RelationFacts = NO_RELATIONS,
+  /** Overlaps the board's merge policy predicted for this start (another open glob may change the same exclusive paths). */
   newHolds: readonly ImpliedAfter[] = [],
   chain: BlockingChain = NO_CHAIN,
 ): Result<Transition> => {
@@ -543,17 +559,9 @@ export const start = (
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
   if (chain.blockedBy.length > 0) return invalidTransition(glob, actor, chainRefusal(chain));
-  const awaited = waitingFor(glob, dependencies);
+  const awaited = awaitedOf(relations);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
-  // A merge-policy hold keeps the request: the same waits in Planning and starts when the other glob merges.
-  const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
-  if (holding.length > 0) {
-    return new Builder(glob, ctx)
-      .set({ impliedAfter: mergeImplied(glob.impliedAfter, newHolds), waiting: { since: ctx.now } })
-      .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
-      .done();
-  }
-  // Overlaps the policy predicted never hold the start; they stay on the glob as a note and order the merges.
+  // Overlaps the policy predicted never hold the start; they stay on the glob as internal data for conflicts and learning.
   const overlaps =
     newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
   return new Builder(glob, ctx)
@@ -641,7 +649,7 @@ export const investigationPushed = (
 export const startAnyway = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.type !== 'super' && glob.status === 'in_progress' && glob.implementer !== null) {
@@ -660,10 +668,12 @@ export const startAnyway = (
       'Only a sub or same in planning, or one picked up with no routine run, can be started anyway',
     );
   }
-  const awaited = waitingFor(glob, dependencies);
+  const awaited = awaitedOf(relations);
   if (awaited.length === 0 && glob.waiting == null) {
     return invalidTransition(glob, actor, 'Nothing holds this glob; use Start');
   }
+  // The inferred and learned start relations are marked overridden (a person's and a split's keep holding on paper, but the
+  // glob starts); the predicted overlaps on the glob are kept as they are, so a recheck doesn't replace them.
   return new Builder(glob, ctx)
     .set({
       waiting: null,
@@ -671,29 +681,10 @@ export const startAnyway = (
         ? {}
         : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
     })
+    .relationEdits(overrideEdits(relations.relations, ctx.now))
     .event('HoldOverridden', { for: awaited.map((a) => a.id) })
     .status('implementing')
     .queueRun(actor.email)
-    .done();
-};
-
-/**
- * A person says a recorded edge (implied, learned or inferred) is not a dependency: it stops holding and `planHash` is
- * kept so a changed plan may infer it again. Explicit edges (`after`, explicit overlaps) are never dismissed. A repeat
- * on an edge already dismissed is a no-op.
- */
-export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: Context): Result<Transition> => {
-  requireActor(ctx);
-  if ((glob.after ?? []).includes(edgeId)) return invalidInput(`${edgeId} was set as a dependency by a person and cannot be dismissed`);
-  const edge = (glob.impliedAfter ?? []).find((i) => i.id === edgeId);
-  if (edge === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
-  if (edge.source === 'explicit') return invalidInput(`The edge to ${edgeId} was set by a person and cannot be dismissed`);
-  if (edge.overridden === true && edge.dismissedPlanHash !== undefined) return unchanged(glob);
-  return new Builder(glob, ctx)
-    .set({
-      impliedAfter: (glob.impliedAfter ?? []).map((i) => (i.id === edgeId ? { ...i, overridden: true as const, dismissedPlanHash: planHash } : i)),
-    })
-    .event('EdgeDismissed', { edgeId, kind: edge.kind ?? 'overlaps', source: edge.source ?? 'implied', planHash })
     .done();
 };
 
@@ -705,26 +696,19 @@ export const dismissEdge = (glob: Glob, edgeId: string, planHash: string, ctx: C
 export const released = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
-  /** Holds found when checking again just before starting: another glob may have taken the exclusive paths meanwhile. */
+  relations: RelationFacts = NO_RELATIONS,
+  /** Overlaps found when checking again just before starting: another glob may have taken the exclusive paths meanwhile. */
   newHolds: readonly ImpliedAfter[] = [],
 ): Result<Transition> => {
   if (glob.waiting == null || glob.status !== 'planning' || glob.type === 'super')
     return unchanged(glob);
-  if (waitingFor(glob, dependencies).length > 0) return unchanged(glob);
-  const holding = waitingFor({ impliedAfter: newHolds }, dependencies);
-  if (holding.length > 0) {
-    return new Builder(glob, ctx)
-      .set({ impliedAfter: mergeImplied(glob.impliedAfter, newHolds) })
-      .event('Waiting', { for: holding.map((a) => a.id), note: waitSummary(holding) })
-      .done();
-  }
+  if (awaitedOf(relations).length > 0) return unchanged(glob);
   return new Builder(glob, ctx)
     .set({
       waiting: null,
       ...(newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) }),
     })
-    .event('Released', { after: dependencyIds(glob) })
+    .event('Released', { after: startIds(relations.relations) })
     .status('implementing')
     .queueRun(glob.creator)
     .done();
@@ -738,8 +722,8 @@ export interface PickUpOptions {
   readonly takeOver: boolean;
   /** Chosen at pick-up: must exist on the board and allow branch deploys. */
   readonly environment?: string | null;
-  /** The state of the globs the glob waits for: picking up a held glob works, and notes what hadn't merged. */
-  readonly dependencies?: ReadonlyMap<string, DependencyState>;
+  /** The glob's relations: picking up a held glob works, and notes what hadn't merged. */
+  readonly relations?: RelationFacts;
 }
 
 /** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
@@ -826,7 +810,7 @@ export const pickUp = (
   }
   // A person may go ahead on a glob that still waits; the event records what hadn't merged.
   const unmerged =
-    glob.status === 'planning' ? waitingFor(glob, options.dependencies ?? NO_DEPENDENCIES) : [];
+    glob.status === 'planning' ? awaitedOf(options.relations ?? NO_RELATIONS) : [];
   b.event('PickedUp', {
     takeOver: false,
     ...(unmerged.length > 0 && { waitingFor: unmerged.map((a) => a.id) }),
@@ -1115,7 +1099,7 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
 export const startAgain = (
   glob: Glob,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
@@ -1137,7 +1121,7 @@ export const startAgain = (
     .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
     .effect({ kind: 'delete_branch', globId: glob.id, generation });
   // A sub that waits for an unmerged glob goes back to Planning, held, instead of starting again.
-  const awaited = glob.type === 'sub' ? waitingFor(glob, dependencies) : [];
+  const awaited = glob.type === 'sub' ? awaitedOf(relations) : [];
   if (awaited.length > 0) {
     b.set({ waiting: { since: ctx.now } })
       .status('planning')
@@ -1420,12 +1404,13 @@ export interface FieldChanges {
   readonly category?: Category;
   readonly group?: string | null;
   readonly environment?: string | null;
-  /** Globs to start after, already checked (`checkAfter`): editable while the glob has no branch. */
-  readonly after?: readonly string[];
-  /** Merge-policy holds found for a same becoming a sub (set by the service, not by clients). */
+  /**
+   * The globs this one starts after, from and to, when a person changed them: set by the service, which writes the relations
+   * (already checked) and passes their facts. Editable while the glob has no branch.
+   */
+  readonly after?: { readonly from: readonly string[]; readonly to: readonly string[] };
+  /** Overlaps predicted for a same becoming a sub (set by the service, not by clients). */
   readonly impliedAfter?: readonly ImpliedAfter[];
-  /** Globs this one overlaps, already checked (`checkOverlaps`): replaces the overlaps a person set, at any time (they never block). */
-  readonly overlaps?: readonly string[];
   /** A decision's scope (the only attribute a client edits); checked by `changeFields`. */
   readonly attributes?: unknown;
   /** Turn a same's start-when-unblocked off (or back on): off ends its wait and keeps what it needs. */
@@ -1438,7 +1423,8 @@ export const changeFields = (
   changes: FieldChanges,
   board: Board,
   ctx: Context,
-  dependencies: ReadonlyMap<string, DependencyState> = NO_DEPENDENCIES,
+  /** The glob's relations as they will be once the change is written (the service has checked and planned them). */
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (
@@ -1465,8 +1451,7 @@ export const changeFields = (
     changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
   if (!scope.ok) return scope;
 
-  const afterChanged =
-    changes.after !== undefined && changes.after.join('\n') !== (glob.after ?? []).join('\n');
+  const afterChanged = changes.after !== undefined && changes.after.to.join('\n') !== changes.after.from.join('\n');
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
     return invalidTransition(
       glob,
@@ -1475,7 +1460,7 @@ export const changeFields = (
     );
   }
 
-  const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes'>]: FieldChanges[K] } = {};
+  const patch: { -readonly [K in keyof Omit<FieldChanges, 'attributes' | 'after'>]: FieldChanges[K] } = {};
   const diff: { [key: string]: JsonValue } = {};
   for (const key of ['title', 'type', 'category', 'group', 'environment'] as const) {
     const value = key === 'title' ? changes.title?.trim() : changes[key];
@@ -1484,24 +1469,8 @@ export const changeFields = (
       diff[key] = { from: glob[key], to: value };
     }
   }
-  if (afterChanged) {
-    Object.assign(patch, { after: changes.after });
-    diff['after'] = { from: [...(glob.after ?? [])], to: [...changes.after] };
-  }
-  if (changes.overlaps !== undefined) {
-    const before = (glob.impliedAfter ?? [])
-      .filter((i) => i.source === 'explicit' && i.kind === 'overlaps')
-      .map((i) => i.id);
-    if (before.join('\n') !== changes.overlaps.join('\n')) {
-      const kept = (glob.impliedAfter ?? []).filter(
-        (i) => !(i.source === 'explicit' && i.kind === 'overlaps'),
-      );
-      const added = explicitOverlaps(changes.overlaps).filter(
-        (o) => !kept.some((k) => k.id === o.id),
-      );
-      Object.assign(patch, { impliedAfter: [...kept, ...added] });
-      diff['overlaps'] = { from: before, to: [...changes.overlaps] };
-    }
+  if (changes.after !== undefined && afterChanged) {
+    diff['after'] = { from: [...changes.after.from], to: [...changes.after.to] };
   }
   let attributes: Partial<Glob> = {};
   if (scope.value !== null) {
@@ -1540,7 +1509,7 @@ export const changeFields = (
     const impliedAfter = becomesSub
       ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? [])
       : glob.impliedAfter;
-    const awaited = waitingFor({ after: changes.after ?? glob.after, impliedAfter }, dependencies);
+    const awaited = awaitedOf(relations);
     if (awaited.length > 0) {
       if (!wasHeld) {
         b.set({
@@ -1835,13 +1804,15 @@ export const overlapsRechecked = (
     readonly dropReasons: ReadonlyMap<string, string>;
   },
   ctx: Context,
+  /** The globs this one starts after (their start relations): an overlap with one of them isn't recorded. */
+  needs: readonly string[] = [],
 ): Result<Transition> => {
   if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
   const existing = glob.impliedAfter ?? [];
   const before = existing.filter(isReplaceableOverlap);
   const kept = existing.filter((e) => !isReplaceableOverlap(e));
   const edges = result.edges.filter(
-    (e) => !kept.some((k) => k.id === e.id) && !(glob.after ?? []).includes(e.id),
+    (e) => !kept.some((k) => k.id === e.id) && !needs.includes(e.id),
   );
   const same = (a: ImpliedAfter, b: ImpliedAfter) =>
     a.id === b.id && a.paths.join('\n') === b.paths.join('\n');
@@ -1871,13 +1842,15 @@ export const edgesInferred = (
   glob: Glob,
   result: { readonly edges: readonly ImpliedAfter[]; readonly notes: readonly string[]; readonly planHash: string },
   ctx: Context,
+  /** The globs this one starts after (their start relations): an inferred edge to one of them is dropped. */
+  needs: readonly string[] = [],
 ): Result<Transition> => {
   if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return unchanged(glob);
   if (glob.type === 'super') return unchanged(glob);
   const existing = glob.impliedAfter ?? [];
   const started = glob.status !== 'planning';
   const fresh = result.edges.map((e) => (started && e.kind === 'needs' ? { ...e, kind: 'overlaps' as const } : e));
-  const next = mergeInferred(existing, fresh, glob.after ?? [], result.planHash);
+  const next = mergeInferred(existing, fresh, needs, result.planHash);
   const before = existing.filter((e) => isReplaceableInferred(e, result.planHash));
   const after = next.filter((e) => isReplaceableInferred(e, result.planHash));
   // The reason is the model's wording and changes between answers: the edge is the same while its glob and kind are.
@@ -2799,14 +2772,12 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (isAgentSetGlob(glob)) return agentSetActions(glob, actor);
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
-  // Held: waiting for another glob to merge. Without the dependencies loaded, the glob's own mark says it.
+  // Held: waiting for another glob to merge. Without the relations loaded, the glob's own mark says it.
   const held =
     glob.status === 'planning' &&
     glob.type !== 'super' &&
     (facts.sizeHeld === true ||
-      (facts.dependencies === undefined
-        ? glob.waiting != null
-        : waitingFor(glob, facts.dependencies).length > 0));
+      (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0));
   if (glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (canReviewNow(glob)) actions.push('review_now');

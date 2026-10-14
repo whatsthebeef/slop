@@ -108,7 +108,7 @@ const boards = new BoardService({ store, notifier: hub });
 const branchFiles = new HostBranchFiles(() => github, logError);
 const catalog = new FsCatalog(config.CATALOG_DIR);
 // Which dependency edges are real on each board: predicts overlaps from learned weights, learns needs from failed runs.
-const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, catalog });
+const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, catalog });
 // File attachments live in a private bucket; without one configured the feature (routes and job) is off.
 const attachmentObjects = config.ATTACHMENTS_BUCKET === undefined ? null : new S3ObjectStore(new S3Client({ region: config.ATTACHMENTS_REGION }), config.ATTACHMENTS_BUCKET);
 const globs = new GlobService({

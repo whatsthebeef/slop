@@ -6,10 +6,10 @@ import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { isDismissedFor, mergeImplied } from '../src/domain/exclusive-paths.js';
-import { blockingChain, chainRefusal, checkAfter, dependencyState, edgesOf, overlapIds, waitingFor } from '../src/domain/waiting.js';
-import type { DependencyState } from '../src/domain/waiting.js';
+import { blockingChain, chainRefusal } from '../src/domain/relations.js';
+import type { ToState } from '../src/domain/relations.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { ctx, dev, glob as fixture } from './fixtures.js';
+import { NOW, ctx, dev, glob as fixture, relation, relationFacts } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -19,7 +19,7 @@ const unwrap = <T>(result: Result<T>): T => {
 const ADMIN = 'admin@example.com';
 const DEV = 'dev@example.com';
 
-describe('start after', () => {
+describe('start relations', () => {
   let store: MemoryStore;
   let boards: BoardService;
   let globs: GlobService;
@@ -41,6 +41,8 @@ describe('start after', () => {
   const merge = async (id: string): Promise<Glob> =>
     unwrap(await globs.applyEvent(id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)));
   const kinds = (): string[] => store.state.outbox.map((e) => e.kind);
+  /** The globs a glob starts after, from its relation rows. */
+  const needsOf = (id: string): string[] => [...store.state.relations.values()].filter((r) => r.from === id && r.gate === 'start').map((r) => r.to);
   const current = async (id: string): Promise<Glob> => {
     const found = await globs.peek(id);
     if (found === null) throw new Error(`No glob ${id}`);
@@ -72,12 +74,13 @@ describe('start after', () => {
     const first = await create();
     const second = await create({ type: 'sub', after: [first.id] });
     expect(second.status).toBe('planning');
-    expect(second.after).toEqual([first.id]);
+    expect(needsOf(second.id)).toEqual([first.id]);
+    expect(second.after).toBeUndefined();
     expect(second.waiting).not.toBeNull();
     expect(second.provisioning).toBe('none');
     expect(second.runs).toEqual([]);
     expect(kinds()).toEqual([]);
-    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting', 'ArtifactAdded']);
+    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toEqual(['GlobCreated', 'Waiting', 'RelationAdded', 'ArtifactAdded']);
     const view = unwrap(await globs.get(DEV, second.id));
     expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${first.id} to merge (it is in Planning)`]);
     expect(view.allowedActions).toContain('start_anyway');
@@ -89,7 +92,7 @@ describe('start after', () => {
     await merge(first.id);
     const second = await create({ type: 'sub', after: [first.id] });
     expect(second.status).toBe('implementing');
-    expect(second.after).toBeUndefined();
+    expect(needsOf(second.id)).toEqual([]);
     expect(second.runs).toHaveLength(1);
   });
 
@@ -142,7 +145,7 @@ describe('start after', () => {
     const second = await create({ after: [first.id] });
     const listed = unwrap(await globs.listWithArtifacts(DEV, second.boardId, {}));
     const row = listed.find((r) => r.glob.id === second.id);
-    const fromList = machine.allowedActions(second, { email: DEV, role: 'dev' }, { dependencies: row?.dependencies });
+    const fromList = machine.allowedActions(second, { email: DEV, role: 'dev' }, { relations: row?.relations });
     expect(fromList).toContain('start_anyway');
     expect(fromList).not.toContain('start');
     expect(fromList).toEqual(unwrap(await globs.get(DEV, second.id)).allowedActions);
@@ -263,17 +266,27 @@ describe('start after', () => {
     expect(unwrap(await globs.start(DEV, second.id, second.version)).status).toBe('implementing');
   });
 
-  it('keeps a glob put when what it waits for is deleted, and says so', async () => {
+  it('releases a glob when what it waits for is deleted, with a note, and keeps the row', async () => {
     const first = await create();
     const second = await create({ type: 'sub', after: [first.id] });
+    const other = await create();
+    const third = await create({ type: 'sub', after: [first.id, other.id] });
     unwrap(await globs.delete(DEV, first.id, first.version));
-    expect(await globs.releaseDependents(first.id, boardId)).toEqual([]);
-    const view = unwrap(await globs.get(DEV, second.id));
+    // The one held only by the deleted glob starts; the one that also waits for another stays put.
+    expect((await current(second.id)).status).toBe('implementing');
+    expect((await current(second.id)).waiting).toBeNull();
+    const view = unwrap(await globs.get(DEV, third.id));
     expect(view.glob.status).toBe('planning');
-    expect(view.waitingFor.map((w) => w.why)).toEqual([`Waits for ${first.id}, which was deleted`]);
-    // A person edits the list to let it go.
-    const freed = unwrap(await globs.update(DEV, second.id, view.glob.version, { after: [] }));
-    expect(freed.status).toBe('implementing');
+    expect(view.waitingFor.map((w) => w.id)).toEqual([other.id]);
+    const released = store.state.events.filter((e) => e.globId === second.id && e.type === 'RelationReleased');
+    expect(released.map((e) => e.data)).toEqual([{ to: first.id, gate: 'start', reason: `${first.id} was deleted` }]);
+    expect(store.state.events.filter((e) => e.globId === second.id).map((e) => e.type)).toContain('Released');
+    // Its version moved with the change, and the row stays so a view can say the other glob was deleted.
+    expect(needsOf(second.id)).toEqual([first.id]);
+    expect(second.version).toBeLessThan((await current(second.id)).version);
+    // A glob's own rows go with it.
+    unwrap(await globs.delete(DEV, third.id, view.glob.version));
+    expect(needsOf(third.id)).toEqual([]);
   });
 
   it('keeps a glob put when what it waits for goes back to Planning', async () => {
@@ -311,130 +324,55 @@ describe('start after', () => {
   });
 
   describe('dismissing an edge', () => {
-    const seed = (glob: Glob, edges: NonNullable<Glob['impliedAfter']>, after?: string[]): Glob => {
-      const withEdges = { ...glob, impliedAfter: edges, ...(after === undefined ? {} : { after }) };
-      store.state.globs.set(glob.id, { glob: withEdges, creationKey: null });
-      return withEdges;
+    /** Records an inferred need of `glob` on `to`, as inference would have written it. */
+    const infer = (glob: Glob, to: string) => {
+      const row = relation(glob.id, to, { source: 'inferred', reason: 'it adds the endpoint this uses' });
+      store.state.relations.set(row.id, row);
+      return row;
     };
-    const inferredNeed = (id: string) => ({ id, paths: [], kind: 'needs' as const, source: 'inferred' as const, evidence: 'it adds the endpoint this uses' });
 
-    it('marks a recorded edge overridden with the plan hash, logs EdgeDismissed and unblocks a sub that waited only for it', async () => {
+    it('dismisses a recorded relation with the plan hash, logs RelationDismissed and unblocks a sub that waited only for it', async () => {
       const first = await create();
-      const sub = await create({ type: 'sub', after: [first.id] });
-      const waiting = seed(sub, [inferredNeed(first.id)], []);
-      expect(waiting.status).toBe('planning');
+      const sub = await create({ type: 'sub' });
+      // A sub waiting only for an inferred relation: held in Planning.
+      const waiting = { ...(await current(sub.id)), status: 'planning' as const, provisioning: 'none' as const, runs: [], waiting: { since: 'x' } };
+      store.state.globs.set(sub.id, { glob: waiting, creationKey: null });
+      const row = infer(waiting, first.id);
       expect(unwrap(await globs.get(DEV, waiting.id)).waitingFor.map((w) => w.id)).toEqual([first.id]);
 
       const dismissed = unwrap(await globs.dismissEdge(DEV, waiting.id, waiting.version, first.id));
-      expect(dismissed.impliedAfter?.[0]).toMatchObject({ id: first.id, overridden: true });
-      expect(dismissed.impliedAfter?.[0]?.dismissedPlanHash).toMatch(/^[0-9a-f]+$/);
       expect(dismissed.status).toBe('implementing');
       expect(dismissed.runs).toHaveLength(1);
-      const event = store.state.events.find((e) => e.globId === waiting.id && e.type === 'EdgeDismissed');
-      expect(event?.data).toMatchObject({ edgeId: first.id, kind: 'needs', source: 'inferred', planHash: dismissed.impliedAfter?.[0]?.dismissedPlanHash });
+      const stored = store.state.relations.get(row.id);
+      expect(stored?.dismissedAt).not.toBeNull();
+      expect(stored?.dismissedPlanHash).toMatch(/^[0-9a-f]+$/);
+      expect(stored?.overriddenAt).toBeNull();
+      const event = store.state.events.find((e) => e.globId === waiting.id && e.type === 'RelationDismissed');
+      expect(event?.data).toMatchObject({ to: first.id, edgeId: first.id, gate: 'start', source: 'inferred', planHash: stored?.dismissedPlanHash });
       expect(store.state.events.some((e) => e.globId === waiting.id && e.type === 'HoldOverridden')).toBe(false);
     });
 
-    it('refuses a stale version and an explicit edge, and a repeat changes nothing', async () => {
+    it('refuses a stale version and a person-set need, and a repeat changes nothing', async () => {
       const first = await create();
       const other = await create();
       const second = await create({ after: [first.id] });
-      const seeded = seed(second, [...(second.impliedAfter ?? []), inferredNeed(other.id)]);
-      const stale = await globs.dismissEdge(DEV, seeded.id, seeded.version + 1, other.id);
+      infer(second, other.id);
+      const stale = await globs.dismissEdge(DEV, second.id, second.version + 1, other.id);
       expect(!stale.ok && stale.error.code).toBe('version_conflict');
-      const explicit = await globs.dismissEdge(DEV, seeded.id, seeded.version, first.id);
+      const explicit = await globs.dismissEdge(DEV, second.id, second.version, first.id);
       expect(!explicit.ok && explicit.error.code).toBe('invalid_input');
-      const unknown = await globs.dismissEdge(DEV, seeded.id, seeded.version, 's1t999');
+      const unknown = await globs.dismissEdge(DEV, second.id, second.version, 's1t999');
       expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
-      const once = unwrap(await globs.dismissEdge(DEV, seeded.id, seeded.version, other.id));
-      const twice = unwrap(await globs.dismissEdge(DEV, seeded.id, once.version, other.id));
+      const once = unwrap(await globs.dismissEdge(DEV, second.id, second.version, other.id));
+      expect(once.version).toBe(second.version + 1);
+      const twice = unwrap(await globs.dismissEdge(DEV, second.id, once.version, other.id));
       expect(twice.version).toBe(once.version);
-      expect(store.state.events.filter((e) => e.type === 'EdgeDismissed')).toHaveLength(1);
-    });
-
-    it('refuses an explicit overlap in the machine', () => {
-      const g = fixture({ id: 's1t5', impliedAfter: [{ id: 's1t2', paths: [], kind: 'overlaps', source: 'explicit' }] });
-      const refused = machine.dismissEdge(g, 's1t2', 'h', ctx(dev));
-      expect(!refused.ok && refused.error.code).toBe('invalid_input');
-      const implied = fixture({ id: 's1t5', impliedAfter: [{ id: 's1t2', paths: ['a'] }] });
-      const done = machine.dismissEdge(implied, 's1t2', 'h', ctx(dev));
-      expect(done.ok && done.value.glob.impliedAfter).toEqual([{ id: 's1t2', paths: ['a'], overridden: true, dismissedPlanHash: 'h' }]);
+      expect(store.state.events.filter((e) => e.type === 'RelationDismissed')).toHaveLength(1);
     });
   });
 });
 
-describe('waiting (pure)', () => {
-  it('reads each dependency state from the glob', () => {
-    expect(dependencyState(null)).toBe('missing');
-    expect(dependencyState(fixture({ status: 'reviewing' }))).toBe('merged');
-    expect(dependencyState(fixture({ status: 'signed_off' }))).toBe('merged');
-    expect(dependencyState(fixture({ status: 'planning' }))).toBe('planning');
-    expect(dependencyState(fixture({ status: 'pr_open' }))).toBe('open');
-    // A super that merged and continues is still open.
-    expect(dependencyState(fixture({ status: 'in_progress', type: 'super', prs: [{ number: 1, mergeSha: 'a', mergedAt: '' }] }))).toBe('open');
-  });
-
-  it('lists only what has not merged; an unknown id reads as deleted', () => {
-    const states = new Map<string, DependencyState>([
-      ['s1t1', 'merged'],
-      ['s1t2', 'open'],
-    ]);
-    const awaited = waitingFor({ after: ['s1t1', 's1t2', 's1t3'] }, states);
-    expect(awaited.map((a) => [a.id, a.state])).toEqual([
-      ['s1t2', 'open'],
-      ['s1t3', 'missing'],
-    ]);
-  });
-
-  it('an implied overlap never waits; a learned need does, worded with its evidence', () => {
-    const states = new Map<string, DependencyState>([['s1t2', 'open']]);
-    const overlap = { id: 's1t2', paths: ['apps/server/drizzle/0001.sql'] };
-    expect(waitingFor({ impliedAfter: [overlap] }, states)).toEqual([]);
-    expect(waitingFor({ impliedAfter: [{ ...overlap, kind: 'overlaps' }] }, states)).toEqual([]);
-    const learned = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'learned' as const, evidence: 'run r1 failed: s1t2 not merged' };
-    expect(waitingFor({ impliedAfter: [learned] }, states).map((a) => a.why)).toEqual(['Waits for s1t2: run r1 failed: s1t2 not merged']);
-    expect(waitingFor({ impliedAfter: [{ ...learned, overridden: true }] }, states)).toEqual([]);
-  });
-
-  it('lists every edge with its kind and source; an explicit need wins over a recorded edge', () => {
-    const edges = edgesOf({
-      after: ['s1t1'],
-      impliedAfter: [
-        { id: 's1t1', paths: ['a'] },
-        { id: 's1t2', paths: ['b'] },
-        { id: 's1t3', paths: [], kind: 'needs', source: 'learned', evidence: 'run r1' },
-      ],
-    });
-    expect(edges.map((e) => [e.id, e.kind, e.source])).toEqual([
-      ['s1t1', 'needs', 'explicit'],
-      ['s1t2', 'overlaps', 'implied'],
-      ['s1t3', 'needs', 'learned'],
-    ]);
-    expect(overlapIds({ after: ['s1t1'], impliedAfter: [{ id: 's1t2', paths: ['b'] }] })).toEqual(['s1t2']);
-  });
-
-  it('checkAfter drops merged ids, de-duplicates and caps the list', () => {
-    const globs = new Map([
-      ['s1t1', fixture({ id: 's1t1', status: 'reviewing' })],
-      ['s1t2', fixture({ id: 's1t2', status: 'implementing' })],
-    ]);
-    const checked = checkAfter('s1t9', ['s1t1', 's1t2', 's1t2', ' '], 1, (id) => globs.get(id));
-    expect(checked.ok && checked.value).toEqual(['s1t2']);
-    const many = Array.from({ length: 21 }, (_, i) => `s1t${String(i + 100)}`);
-    expect(checkAfter(null, many, 1, () => undefined).ok).toBe(false);
-  });
-
-  it('words an inferred need by its reason, and a dismissed one no longer waits', () => {
-    const states = new Map<string, DependencyState>([['s1t2', 'open']]);
-    const inferred = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'inferred' as const, evidence: 'the plan builds on s1t2\'s new endpoint' };
-    expect(waitingFor({ impliedAfter: [inferred] }, states).map((a) => a.why)).toEqual(["Waits for s1t2: the plan builds on s1t2's new endpoint"]);
-    const dismissed = { ...inferred, overridden: true as const, dismissedPlanHash: 'h1' };
-    expect(waitingFor({ impliedAfter: [dismissed] }, states)).toEqual([]);
-    expect(edgesOf({ impliedAfter: [dismissed] })).toEqual([
-      expect.objectContaining({ id: 's1t2', source: 'inferred', evidence: inferred.evidence, overridden: true, dismissedPlanHash: 'h1' }),
-    ]);
-  });
-
+describe('dismissals (pure)', () => {
   it('a dismissal suppresses re-inference only while the plan hash is unchanged', () => {
     const edge = { id: 's1t2', paths: [], kind: 'needs' as const, source: 'inferred' as const, overridden: true as const, dismissedPlanHash: 'h1' };
     expect(isDismissedFor(edge, 'h1')).toBe(true);
@@ -446,7 +384,8 @@ describe('waiting (pure)', () => {
 });
 
 describe('waiting transitions', () => {
-  const states = (entries: [string, DependencyState][]) => new Map(entries);
+  /** The held glob's start relations to the given globs, with the state of each. */
+  const states = (entries: [string, ToState][]) => relationFacts('s1t1', entries);
 
   it('only the final merge queues release_waiting, not Merge and continue', () => {
     const plain = machine.merged(fixture({ status: 'pr_open', type: 'same' }), { sha: 'abc1234' }, ctx(null));
@@ -465,7 +404,7 @@ describe('waiting transitions', () => {
     const open = states([['s1t2', 'open']]);
     const free = machine.released(fixture({ type: 'sub', status: 'planning' }), ctx(null), open);
     expect(free.ok && free.value.changed).toBe(false);
-    const held = fixture({ type: 'sub', status: 'planning', provisioning: 'none', after: ['s1t2'], waiting: { since: 'x' } });
+    const held = fixture({ type: 'sub', status: 'planning', provisioning: 'none', waiting: { since: 'x' } });
     const still = machine.released(held, ctx(null), open);
     expect(still.ok && still.value.changed).toBe(false);
     const go = machine.released(held, ctx(null), states([['s1t2', 'merged']]));
@@ -474,13 +413,13 @@ describe('waiting transitions', () => {
   });
 
   it('allowedActions hides Start and offers Start now for a held same', () => {
-    const held = fixture({ type: 'same', status: 'planning', after: ['s1t2'] });
+    const held = fixture({ type: 'same', status: 'planning' });
     const open = states([['s1t2', 'open']]);
-    const actions = machine.allowedActions(held, dev, { dependencies: open });
+    const actions = machine.allowedActions(held, dev, { relations: open });
     expect(actions).toContain('start_anyway');
     expect(actions).not.toContain('start');
     expect(actions).toContain('pick_up');
-    const merged = machine.allowedActions(held, dev, { dependencies: states([['s1t2', 'merged']]) });
+    const merged = machine.allowedActions(held, dev, { relations: states([['s1t2', 'merged']]) });
     expect(merged).toContain('start');
     expect(merged).not.toContain('start_anyway');
   });
@@ -488,15 +427,17 @@ describe('waiting transitions', () => {
 
 describe('blocking chain', () => {
   const world = (...globs: Glob[]) => new Map(globs.map((g) => [g.id, g]));
-  const chainOf = (root: Glob, all: Map<string, Glob>) => blockingChain(root.id, root, (id) => all.get(id));
+  /** Each glob starts after the globs listed in `after`. */
+  const waits = (after: Record<string, string[]>) => (id: string) => (after[id] ?? []).map((to) => relation(id, to));
+  const chainOf = (root: Glob, all: Map<string, Glob>, after: Record<string, string[]>) => blockingChain(root.id, waits(after), (id) => all.get(id));
   const g = (id: string, patch: Partial<Glob> = {}) => fixture({ id, status: 'planning', ...patch });
 
   it('walks the whole chain, nearest first, and names the deepest startable glob', () => {
     const a = g('s1t1');
-    const b = g('s1t2', { after: ['s1t1'] });
-    const c = g('s1t3', { after: ['s1t2'] });
-    const root = g('s1t4', { after: ['s1t3'] });
-    const chain = chainOf(root, world(a, b, c));
+    const b = g('s1t2');
+    const c = g('s1t3');
+    const root = g('s1t4');
+    const chain = chainOf(root, world(a, b, c), { s1t4: ['s1t3'], s1t3: ['s1t2'], s1t2: ['s1t1'] });
     expect(chain.blockedBy.map((x) => [x.id, x.depth, x.status])).toEqual([
       ['s1t3', 1, 'planning'],
       ['s1t2', 2, 'planning'],
@@ -508,32 +449,37 @@ describe('blocking chain', () => {
 
   it('skips merged links and does not walk past them', () => {
     const oldest = g('s1t1');
-    const merged = g('s1t2', { status: 'reviewing', after: ['s1t1'] });
-    const root = g('s1t3', { after: ['s1t2'] });
-    expect(chainOf(root, world(oldest, merged)).blockedBy).toEqual([]);
+    const merged = g('s1t2', { status: 'reviewing' });
+    const root = g('s1t3');
+    expect(chainOf(root, world(oldest, merged), { s1t3: ['s1t2'], s1t2: ['s1t1'] }).blockedBy).toEqual([]);
   });
 
   it('walks a cycle once', () => {
-    const a = g('s1t1', { after: ['s1t2'] });
-    const b = g('s1t2', { after: ['s1t1'] });
-    const chain = chainOf(a, world(a, b));
+    const a = g('s1t1');
+    const b = g('s1t2');
+    const chain = chainOf(a, world(a, b), { s1t1: ['s1t2'], s1t2: ['s1t1'] });
     expect(chain.blockedBy.map((x) => x.id)).toEqual(['s1t2']);
   });
 
-  it('has no next glob when what is ahead is already in progress, and counts a deleted one', () => {
+  it('has no next glob when what is ahead is already in progress, and a deleted one holds nothing', () => {
     const doing = g('s1t1', { status: 'implementing' });
-    const root = g('s1t2', { after: ['s1t1', 's1t9'] });
-    const chain = chainOf(root, world(doing));
-    expect(chain.blockedBy.map((x) => [x.id, x.state])).toEqual([
-      ['s1t1', 'open'],
-      ['s1t9', 'missing'],
-    ]);
+    const root = g('s1t2');
+    const chain = chainOf(root, world(doing), { s1t2: ['s1t1', 's1t9'] });
+    expect(chain.blockedBy.map((x) => [x.id, x.state])).toEqual([['s1t1', 'open']]);
     expect(chain.nextStartable).toBeNull();
+  });
+
+  it('skips a dismissed relation and one Start now overrode', () => {
+    const a = g('s1t1');
+    const b = g('s1t2');
+    const root = g('s1t3');
+    const lifted = (id: string) => [relation(id, 's1t1', { dismissedAt: NOW }), relation(id, 's1t2', { overriddenAt: NOW })];
+    expect(blockingChain(root.id, lifted, (id) => world(a, b).get(id)).blockedBy).toEqual([]);
   });
 });
 
 describe('Retrigger and the routine fire with prerequisites unmerged', () => {
-  const failed = fixture({ status: 'failed', after: ['s1t1'] });
+  const failed = fixture({ status: 'failed' });
   const chain = { blockedBy: [{ id: 's1t1', state: 'planning' as const, status: 'planning' as const, depth: 1 }], nextStartable: 's1t1' };
 
   it('refuses Retrigger with the chain as the reason, and goes ahead anyway without a check on the fire', () => {
@@ -548,7 +494,7 @@ describe('Retrigger and the routine fire with prerequisites unmerged', () => {
     expect(retriggered.ok && retriggered.value.effects.find((e) => e.kind === 'fire_routine')).toHaveProperty('checkPrerequisites', true);
     const start = machine.start(fixture({ status: 'planning', type: 'same' }), ctx(dev));
     expect(start.ok && start.value.effects.find((e) => e.kind === 'fire_routine')).toHaveProperty('checkPrerequisites', true);
-    const anyway = machine.startAnyway(fixture({ status: 'planning', type: 'same', after: ['s1t1'] }), ctx(dev), new Map([['s1t1', 'planning' as const]]));
+    const anyway = machine.startAnyway(fixture({ status: 'planning', type: 'same' }), ctx(dev), relationFacts('s1t1', [['s1t1', 'planning']]));
     expect(anyway.ok && anyway.value.effects.find((e) => e.kind === 'fire_routine')).not.toHaveProperty('checkPrerequisites');
   });
 });

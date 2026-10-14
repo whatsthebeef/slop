@@ -1,7 +1,7 @@
 import { listOf } from '../domain/matrix.js';
 import { parseInvestigation } from '../domain/investigation.js';
 import type { InvestigationDependency } from '../domain/investigation.js';
-import { MAX_AFTER, dependencyState } from '../domain/waiting.js';
+import { MAX_AFTER, hasMerged } from '../domain/relations.js';
 import type { Glob, ImpliedAfter } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import type { Llm } from './intake-service.js';
@@ -154,7 +154,7 @@ export class DependencyInferenceService {
   private async candidates(boardId: number, selfId: string | null): Promise<Candidate[]> {
     return this.deps.store.transaction(async (tx) => {
       const globs = (await tx.listGlobs(boardId, {}))
-        .filter((g) => g.id !== selfId && g.category !== 'decision' && dependencyState(g) !== 'merged' && g.status !== 'failed')
+        .filter((g) => g.id !== selfId && g.category !== 'decision' && !hasMerged(g) && g.status !== 'failed')
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
         .slice(0, MAX_CANDIDATES);
       const out: Candidate[] = [];
@@ -235,10 +235,14 @@ export class DependencyInferenceService {
       if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return null;
       const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
       const { files, findings } = readInvestigation((await tx.artifactVersions(globId, 'investigation', '')).at(-1)?.content);
-      return { glob, plan, files, findings };
+      // What is already recorded: slop's inferred needs (start relations) and the overlaps it predicted.
+      const needs = (await tx.listRelationsFrom([globId]))
+        .filter((r) => r.gate === 'start' && r.source === 'inferred' && r.dismissedAt === null && r.overriddenAt === null)
+        .map((r): ImpliedAfter => ({ id: r.to, paths: r.evidence, kind: 'needs', source: 'inferred', ...(r.reason === null ? {} : { evidence: r.reason }) }));
+      return { glob, plan, files, findings, recorded: [...needs, ...(glob.impliedAfter ?? [])] };
     });
     if (read === null) return;
-    const edges = await this.ask({ boardId: read.glob.boardId, plan: read.plan, selfId: globId, files: read.files, title: read.glob.title, recorded: read.glob.impliedAfter ?? [], ...(read.findings === undefined ? {} : { findings: read.findings }) });
+    const edges = await this.ask({ boardId: read.glob.boardId, plan: read.plan, selfId: globId, files: read.files, title: read.glob.title, recorded: read.recorded, ...(read.findings === undefined ? {} : { findings: read.findings }) });
     // No usable answer leaves the edges as they were; only a well-formed (even empty) list replaces them.
     if (edges === null) return;
     await this.deps.apply(globId, edges, hash(read.plan));

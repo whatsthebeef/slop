@@ -59,6 +59,12 @@ export const DOMAIN_EVENT_TYPES = [
   'EdgeDismissed',
   /** Slop inferred a glob's needs and overlaps from its plan, the open globs and any investigation (data: added, dropped, notes, the plan hash). */
   'EdgesInferred',
+  /** A relation was added to a glob (data: the other glob, gate, until, source and reason). */
+  'RelationAdded',
+  /** A person dismissed a relation as not a dependency (data: the other glob, gate and the plan hash). */
+  'RelationDismissed',
+  /** A relation was removed, or its gate opened because the other glob was deleted (data: the other glob, gate, why). */
+  'RelationReleased',
   /** Another open glob started or stopped changing the same exclusive paths as this one. */
   'ClashChanged',
   /** An overlap edge was predicted for a glob (data: the other glob, its paths and why) by a recheck. */

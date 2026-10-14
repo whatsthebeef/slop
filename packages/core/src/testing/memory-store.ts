@@ -40,7 +40,7 @@ import type { LlmSpend } from '../domain/spend.js';
 import type { TypeCorrection } from '../domain/type-learning.js';
 import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
-import type { Board, Glob, Member, User } from '../domain/types.js';
+import type { Board, Glob, Member, Relation, User } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 import type { SearchQuery } from '../domain/search.js';
 
@@ -70,6 +70,8 @@ interface State {
   artifacts: Artifact[];
   deploys: Map<string, Deploy>;
   humanSteps: Map<string, StoredHumanStep>;
+  /** Relations by ID, in the order they were made. */
+  relations: Map<string, Relation>;
   /** Status dismissals by user, glob and message key. */
   statusDismissals: Map<string, { email: string; globId: string; key: string; at: string }>;
   reviewSources: ReviewSource[];
@@ -170,6 +172,7 @@ const clone = (state: State): State => ({
   artifacts: [...state.artifacts],
   deploys: new Map(state.deploys),
   humanSteps: new Map(state.humanSteps),
+  relations: new Map(state.relations),
   statusDismissals: new Map(state.statusDismissals),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
@@ -243,6 +246,7 @@ export class MemoryStore implements Store {
     artifacts: [],
     deploys: new Map(),
     humanSteps: new Map(),
+    relations: new Map(),
     statusDismissals: new Map(),
     reviewSources: [],
     findings: [],
@@ -327,6 +331,7 @@ export class MemoryStore implements Store {
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, step] of s.humanSteps) if (step.globId === id) s.humanSteps.delete(key);
+        for (const [key, r] of s.relations) if (r.from === id) s.relations.delete(key);
         for (const [key, d] of s.statusDismissals) if (d.globId === id) s.statusDismissals.delete(key);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         s.testRuns = s.testRuns.filter((r) => r.globId !== id);
@@ -681,6 +686,29 @@ export class MemoryStore implements Store {
         for (const h of steps) s.humanSteps.set(h.id, h);
         return Promise.resolve();
       },
+      listRelations: (boardId) => Promise.resolve([...s.relations.values()].filter((r) => r.boardId === boardId)),
+      listRelationsFrom: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from))),
+      listRelationsTo: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to))),
+      insertRelation: (relation) => {
+        if ([...s.relations.values()].some((r) => r.from === relation.from && r.to === relation.to && r.gate === relation.gate)) return Promise.resolve(false);
+        s.relations.set(relation.id, relation);
+        return Promise.resolve(true);
+      },
+      updateRelation: (id, patch) => {
+        const found = s.relations.get(id);
+        if (found !== undefined) s.relations.set(id, { ...found, ...patch });
+        return Promise.resolve();
+      },
+      deleteRelation: (id) => {
+        s.relations.delete(id);
+        return Promise.resolve();
+      },
+      deleteRelationsFrom: (globId) => {
+        for (const [key, r] of s.relations) if (r.from === globId) s.relations.delete(key);
+        return Promise.resolve();
+      },
+      // Memory transactions run one at a time, so there is nothing to serialise.
+      lockBoardRelations: () => Promise.resolve(),
       listStatusDismissals: (email, boardId) =>
         Promise.resolve(
           [...s.statusDismissals.values()]

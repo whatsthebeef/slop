@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, IntakeService, Result, SizeCheckService, SpendService, SplitInfo } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
+import { AGENT_KB_APPROVALS, awaitedOf, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -140,8 +140,6 @@ export const createGlobSchema = z.object({
   needs: z.array(z.string().min(1)).max(20).optional(),
   /** Alias of `needs`. */
   after: z.array(z.string().min(1)).max(20).optional(),
-  /** IDs of globs on the board this one overlaps: the same files may change, so only the merge order matters. Never blocks a start. */
-  overlaps: z.array(z.string().min(1)).max(20).optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
   /** What the intake proposal behind the form said, passed back so the glob's snapshot records it (the request is the text intake read). */
@@ -168,7 +166,6 @@ export const splitGlobSchema = z.object({
         category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
-        overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         attachments: z.array(z.string().min(1)).optional(),
       }),
     )
@@ -185,7 +182,6 @@ const updateGlobSchema = z.object({
   environment: z.string().min(1).nullable().optional(),
   needs: z.array(z.string().min(1)).max(20).optional(),
   after: z.array(z.string().min(1)).max(20).optional(),
-  overlaps: z.array(z.string().min(1)).max(20).optional(),
   /** A decision's scope, the only attribute a client edits; core validates it (kind, ref, glob on the board). */
   attributes: z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict().optional(),
   autoStart: z.boolean().optional(),
@@ -325,7 +321,7 @@ export const createApp = (deps: AppDeps) => {
         const now = new Date().toISOString();
         const thresholds = stallThresholds(m.board);
         const stalled = list.filter(
-          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), new Map(), now, { viewer, thresholds, complete: false }).holder === 'stalled',
+          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), [], now, { viewer, thresholds, complete: false }).holder === 'stalled',
         ).length;
         const yourTurn = (everyone.ok ? everyone.value : []).reduce(
           (n, { glob, artifacts }) =>
@@ -461,13 +457,13 @@ export const createApp = (deps: AppDeps) => {
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts, dependencies, chain }) => {
-        const view = globViewFor(glob, email, membership.value.role, artifacts, dependencies, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
+      list.map(({ glob, artifacts, relations, chain }) => {
+        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, chain, glob.waiting != null && oversized.has(glob.id), steps.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
         const facts = machineSteps(glob);
         const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, steps.get(glob.id) ?? []);
-        const move = whoseMove(glob, human, facts, dependencies, now, { viewer, thresholds, complete: false });
+        const move = whoseMove(glob, human, facts, awaitedOf(relations), now, { viewer, thresholds, complete: false });
         return {
           ...view,
           // A stalled glob also hands a step to its implementer (or planner).
@@ -552,18 +548,18 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
-      parts: body.parts.map(({ category, type, after, overlaps, attachments, ...rest }) => ({
+      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),
         ...(type === undefined ? {} : { type }),
         ...(after === undefined ? {} : { after }),
-        ...(overlaps === undefined ? {} : { overlaps }),
         ...(attachments === undefined ? {} : { attachments }),
       })),
     });
     if (!split.ok) return send(c, split);
     for (const glob of split.value) await deps.outbox.drain(glob.id);
-    return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob)) }));
+    const relations = await globs.peekRelations(split.value.map((g) => g.id));
+    return send(c, split, (list) => ({ parts: list.map((glob) => globView(glob, null, null, null, null, null, relations.get(glob.id) ?? [])) }));
   });
 
   // Keep whole: a person decides a flagged glob stays one glob; a glob held for the flag then starts.

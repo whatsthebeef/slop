@@ -17,15 +17,15 @@ import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
-import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, SlopType } from '../domain/types.js';
+import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, Relation, SlopType } from '../domain/types.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import { toImplied } from './dependency-inference-service.js';
 import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
-import { MAX_AFTER, NO_CHAIN, blockingChain, checkAfter, checkOverlaps, explicitOverlaps, dependencyIds, reaches, dependencyState, pickUpWarning, waitingFor, waitsFor } from '../domain/waiting.js';
-import type { AwaitedDependency, BlockingChain, DependencyState } from '../domain/waiting.js';
+import { MAX_AFTER, NO_CHAIN, NO_WRITE, applyWrite, draftOf, awaitedOf, blockingChain, checkRelation, hasMerged, isActive, isEmptyWrite, isExplicit, pickUpWarning, startIds, toState } from '../domain/relations.js';
+import type { AwaitedDependency, BlockingChain, NewRelation, RelationFacts, RelationWrite, ToState } from '../domain/relations.js';
 import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
@@ -88,10 +88,8 @@ export interface CreateGlobInput {
   readonly plan?: string | null;
   /** Who is creating it, for the plan's provenance (default: a person). */
   readonly planBy?: Provenance['by'];
-  /** Globs on the board to start after (a sub waits in Planning until they merge); merged ones are ignored. */
+  /** Globs on the board to start after (a sub waits in Planning until they merge); merged ones are ignored. Shorthand for start relations until merged. */
   readonly after?: readonly string[];
-  /** IDs of globs on the board this one overlaps: the same files may change, so only the merge order matters. Never blocks a start. */
-  readonly overlaps?: readonly string[];
   /** Files intake guessed the work changes (advisory: with the plan, they decide whether exclusive paths hold it). */
   readonly files?: readonly string[];
   /** What intake saw and decided, for the glob's snapshot; absent when intake didn't run. */
@@ -113,8 +111,6 @@ export interface SplitPart {
   readonly type?: SlopType;
   /** Indexes of earlier parts this one starts after; none means it runs in parallel. Part 0 has none. */
   readonly after?: readonly number[];
-  /** Indexes of earlier parts that may change the same files: recorded as overlaps, which order merges but never block a start. */
-  readonly overlaps?: readonly number[];
   /** Labels of the original's text attachments to copy to this part (link attachments always are). New parts only. */
   readonly attachments?: readonly string[];
 }
@@ -169,6 +165,46 @@ export const splitEscalations = (
   });
 };
 
+/** The event on `from` for a relation that was added. */
+const relationAdded = (r: Relation, actor: string | null, at: string): DomainEvent => ({
+  type: 'RelationAdded',
+  globId: r.from,
+  actor,
+  at,
+  data: { to: r.to, gate: r.gate, until: r.until, source: r.source, reason: r.reason },
+});
+
+/**
+ * The events a relation write logs on `from`: one per relation added (see `relationAdded`), dismissed (with its source, so
+ * learning can tell an inferred one) or removed, and the notes of an inference.
+ */
+const relationEvents = (
+  from: string,
+  actor: string | null,
+  at: string,
+  before: readonly Relation[],
+  write: RelationWrite,
+  inserted: readonly Relation[],
+): DomainEvent[] => {
+  const known = (id: string): Relation | undefined => before.find((r) => r.id === id);
+  const events: DomainEvent[] = [];
+  for (const r of write.remove) {
+    const gone = known(r);
+    if (gone !== undefined) events.push({ type: 'RelationReleased', globId: from, actor, at, data: { to: gone.to, gate: gone.gate, reason: 'removed' } });
+  }
+  for (const r of inserted) events.push(relationAdded(r, actor, at));
+  for (const u of write.update) {
+    const was = known(u.id);
+    if (was !== undefined && u.patch.dismissedAt != null) {
+      events.push({ type: 'RelationDismissed', globId: from, actor, at, data: { to: was.to, edgeId: was.to, gate: was.gate, source: was.source, planHash: u.patch.dismissedPlanHash ?? null } });
+    }
+  }
+  if (write.notes !== undefined && write.notes.lines.length > 0) {
+    events.push({ type: 'EdgesInferred', globId: from, actor, at, data: { added: [], dropped: [], notes: [...write.notes.lines], planHash: write.notes.planHash } });
+  }
+  return events;
+};
+
 const escalationEvent = (globId: string, actor: string, at: string, change: NonNullable<PartEscalation['change']>) =>
   ({ type: change.kind, globId, actor, at, data: change.data }) as const;
 
@@ -178,6 +214,9 @@ export interface SplitInfo {
   readonly part: number;
   readonly parts: readonly string[];
 }
+
+/** What a client may change on a glob: the fields, and the globs it starts after (a list that replaces the person-set ones). */
+export type GlobChanges = Omit<FieldChanges, 'after' | 'impliedAfter'> & { readonly after?: readonly string[] };
 
 export interface SplitInput {
   readonly parts: readonly SplitPart[];
@@ -195,7 +234,9 @@ export interface GlobView {
   readonly allowedActions: readonly machine.Action[];
   /** The latest version of each artifact, without content. */
   readonly artifacts: readonly ArtifactSummary[];
-  /** What the glob still waits for (unmerged globs named in `after`), with the reason for each. */
+  /** The glob's own relations, every gate and state (the views show them as edges until the relation views replace them). */
+  readonly relations: readonly Relation[];
+  /** What the glob still waits for before it starts (its unmet start relations), with the reason for each. */
   readonly waitingFor: readonly AwaitedDependency[];
   /** Globs in Planning that wait for this one. */
   readonly waitedOnBy: readonly string[];
@@ -238,14 +279,20 @@ export interface NewHumanStep {
 interface CommandOptions {
   /** Read the facts some actions depend on (the latest implementation record); other steps get none. */
   readonly facts?: boolean;
-  /** Read the state of the globs this one waits for into `facts.dependencies`. */
-  readonly dependencies?: boolean;
+  /** Read the glob's relations and the state of what they point at into `facts.relations`. */
+  readonly relations?: boolean;
+  /**
+   * Plans changes to the glob's relations. Runs under the board's relation lock with the board's relations (so a cycle check
+   * can't race), before the step; the step sees the relations as they will be. The rows and their events are written only
+   * when the step succeeds, in the same transaction, and the glob's version moves even when the step changed nothing else.
+   */
+  readonly relationPlan?: (tx: Tx, glob: Glob, board: readonly Relation[], now: string) => Promise<Result<RelationWrite>>;
   /** Read the glob's whole blocking chain into `facts.chain`. */
   readonly chain?: boolean;
   /** Read the work steps holding back sign-off into `facts.rollout`. */
   readonly rollout?: boolean;
-  /** Runs before the step: checks input against the store, and returns more glob IDs whose state the step needs. */
-  readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<readonly string[]>>;
+  /** Runs before the step: checks input against the store. */
+  readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<null>>;
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
   readonly triggeredByCreator?: boolean;
   /** Which globs the step applies to: work globs (the default), decision globs only, or either (pick-up, field edits). */
@@ -277,18 +324,18 @@ export class GlobService {
       const actor = await this.actorFor(tx, email, glob.boardId);
       if (!actor.ok) return actor;
       const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
-      const dependencies = await this.dependencyStates(tx, dependencyIds(glob));
+      const relations = await this.relationFacts(tx, await tx.listRelationsFrom([glob.id]));
       const sizeCheck = await tx.getSizeCheck(glob.id);
       const sizeHeld = glob.status === 'planning' && glob.waiting != null && unresolved(sizeCheck);
-      const facts = { recordSha: machine.recordShaOf(artifacts), dependencies, sizeHeld };
+      const facts = { recordSha: machine.recordShaOf(artifacts), relations, sizeHeld };
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
-      const waiting = await tx.listGlobs(glob.boardId, { status: ['planning'] });
       return ok({
         glob,
         allowedActions: machine.allowedActions(glob, actor.value, facts),
         artifacts,
-        waitingFor: waitingFor(glob, dependencies),
-        waitedOnBy: waiting.filter((g) => waitsFor(g, glob.id)).map((g) => g.id),
+        relations: relations.relations,
+        waitingFor: awaitedOf(relations),
+        waitedOnBy: await this.waitedOnBy(tx, glob.id),
         chain: await this.chainOf(tx, glob),
         sizeCheck,
         humanSteps: humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored),
@@ -751,6 +798,14 @@ export class GlobService {
     return this.deps.store.transaction((tx) => tx.getGlob(id));
   }
 
+  /** The relations that start at these globs (any gate), by glob, for a reply that shows them after a write. */
+  async peekRelations(ids: readonly string[]): Promise<Map<string, Relation[]>> {
+    const rows = await this.deps.store.transaction((tx) => tx.listRelationsFrom(ids));
+    const byGlob = new Map<string, Relation[]>();
+    for (const r of rows) byGlob.set(r.from, [...(byGlob.get(r.from) ?? []), r]);
+    return byGlob;
+  }
+
   /** Integrations' read of a glob's plan.md (its latest version), with no signed-in person; empty when it has none. */
   async peekPlan(id: string): Promise<string> {
     return this.deps.store.transaction(async (tx) => (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '');
@@ -778,7 +833,7 @@ export class GlobService {
     boardId: number,
     filter: GlobFilter,
     shown: (glob: Glob) => boolean = () => true,
-  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; dependencies: ReadonlyMap<string, DependencyState>; chain: BlockingChain }[]>> {
+  ): Promise<Result<{ glob: Glob; artifacts: ArtifactSummary[]; relations: RelationFacts; chain: BlockingChain }[]>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await this.actorFor(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -790,20 +845,22 @@ export class GlobService {
       );
       const byGlob = new Map<string, ArtifactSummary[]>();
       for (const summary of summaries) byGlob.set(summary.globId, [...(byGlob.get(summary.globId) ?? []), summary]);
-      // One read of every dependency of the globs in Planning, so the list's allowed actions agree with a single read.
-      const dependencies = await this.dependencyStates(tx, [
-        ...new Set(globs.filter((g) => g.status === 'planning').flatMap((g) => dependencyIds(g))),
-      ]);
+      // One read of the board's relations and of what the listed globs' relations point at, so the list's allowed actions
+      // agree with a single read. Nothing is walked on the web side: the list carries only the latest signed-off globs.
+      const all = await tx.listRelations(boardId);
+      const ownBy = new Map<string, Relation[]>();
+      for (const r of all) ownBy.set(r.from, [...(ownBy.get(r.from) ?? []), r]);
+      const states = await this.statesOf(tx, [...new Set(globs.flatMap((g) => (ownBy.get(g.id) ?? []).map((r) => r.to)))]);
       // The chain only matters where a run could be started (Planning) or started again (failed).
-      const blocked = globs.filter((g) => (g.status === 'planning' || g.status === 'failed') && g.type !== 'super' && dependencyIds(g).length > 0);
-      const reach = blocked.length === 0 ? new Map<string, Glob>() : await this.closure(tx, blocked.flatMap((g) => dependencyIds(g)));
+      const blocked = globs.filter((g) => (g.status === 'planning' || g.status === 'failed') && g.type !== 'super' && startIds(ownBy.get(g.id) ?? []).length > 0);
+      const reach = blocked.length === 0 ? null : await this.closure(tx, blocked.map((g) => g.id), (id) => ownBy.get(id) ?? []);
       const held = blocked.length === 0 ? undefined : await this.heldDependants(tx, boardId);
-      const chains = new Map(blocked.map((g) => [g.id, blockingChain(g.id, g, (gid) => reach.get(gid), held)]));
+      const chains = new Map(blocked.map((g) => [g.id, blockingChain(g.id, (id) => ownBy.get(id) ?? [], (gid) => reach?.globs.get(gid), held)]));
       return ok(
         globs.map((glob) => ({
           glob,
           artifacts: (byGlob.get(glob.id) ?? []).sort(byKind),
-          dependencies,
+          relations: { relations: ownBy.get(glob.id) ?? [], states },
           chain: chains.get(glob.id) ?? NO_CHAIN,
         })),
       );
@@ -840,7 +897,7 @@ export class GlobService {
     // The size check asks a model too, so it is made here as well; a failing model leaves the text estimate.
     const planText = planOf(input);
     const size = this.deps.sizeCheck === undefined ? null : await this.deps.sizeCheck.assess(input.boardId, planText);
-    // Slop builds the dependency tree: needs and overlaps against the open globs, with a reason each (a person's edges win).
+    // Slop builds the dependency tree: needs (start relations) and overlaps against the open globs, with a reason each (a person's win).
     const inferred =
       this.deps.inference === undefined || input.type === 'super'
         ? []
@@ -863,37 +920,39 @@ export class GlobService {
       }
       const letter = letterOf(input.category);
       const n = await tx.nextNumber(board.id, letter);
-      let after: readonly string[] = [];
-      if (input.after !== undefined && input.after.length > 0) {
-        const wanted = input.after;
-        const found = await this.closure(tx, wanted);
-        const checked = checkAfter(null, wanted, board.id, (id) => found.get(id));
-        if (!checked.ok) return checked;
-        after = checked.value;
+      const id = formatId(board.id, letter, n);
+      // The person's needs come first, then slop's inferred needs (a person's win): a glob that went away since is dropped,
+      // and so is one that already merged. The new glob has nothing pointing at it yet, so it can't close a cycle.
+      const wanted = [...new Set((input.after ?? []).map((a) => a.trim()).filter((a) => a !== ''))];
+      const inferredNeeds = inferred.filter((i) => i.kind === 'needs' && !wanted.includes(i.id));
+      const known = new Map((await tx.getGlobs([...wanted, ...inferredNeeds.map((i) => i.id)])).map((g) => [g.id, g]));
+      for (const a of wanted) {
+        if (a === id) return invalidInput('A glob cannot wait for itself');
+        if (known.get(a)?.boardId !== board.id) return invalidInput(`No glob ${a} on this board`);
       }
-      let overlaps: readonly ImpliedAfter[] = [];
-      if (input.overlaps !== undefined && input.overlaps.length > 0) {
-        const wanted = input.overlaps;
-        const found = await this.closure(tx, wanted);
-        const checked = checkOverlaps(null, wanted, board.id, (id) => found.get(id));
-        if (!checked.ok) return checked;
-        overlaps = explicitOverlaps(checked.value.filter((id) => !after.includes(id)));
-      }
+      if (wanted.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
+      const needs: NewRelation[] = [
+        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: 'person' })),
+        ...inferredNeeds.map((i): NewRelation => ({ to: i.id, gate: 'start', until: 'merged', reason: i.evidence ?? null, evidence: i.paths, source: 'inferred' })),
+      ].filter((r) => {
+        const target = known.get(r.to);
+        return target !== undefined && target.boardId === board.id && !hasMerged(target);
+      });
+      const created = applyWrite([], { add: needs.slice(0, MAX_AFTER), update: [], remove: [] }, { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() });
+      const relations: RelationFacts = { relations: created.relations, states: await this.statesOf(tx, created.relations.map((r) => r.to)) };
       const sizeHold = size !== null && size.flagged ? `Oversized: ${size.reasons.join('; ')}. Split it or keep it whole to start it` : undefined;
-      // Inferred edges come last: an explicit, predicted or learned edge to the same glob wins. A glob that went away since is dropped.
-      const known = inferred.length === 0 ? new Map<string, Glob>() : new Map((await tx.getGlobs(inferred.map((i) => i.id))).map((g) => [g.id, g]));
-      const inferredHere = inferred.filter((i) => known.get(i.id)?.boardId === board.id && dependencyState(known.get(i.id)) !== 'merged' && !after.includes(i.id));
-      const implied = mergeImplied(mergeImplied(overlaps, holds), inferredHere);
-      const createInput: CreateInput = { ...input, id: formatId(board.id, letter, n), after, impliedAfter: implied, ...(sizeHold === undefined ? {} : { sizeHold }) };
+      // Predicted overlaps stay on the glob as internal data: merge-policy holds first, then the model's overlaps.
+      const implied = mergeImplied(holds, inferred.filter((i) => i.kind !== 'needs' && !wanted.includes(i.id)));
+      const createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(sizeHold === undefined ? {} : { sizeHold }) };
       const ctx = await this.context(actor.value, board);
-      const awaitedIds = [...after, ...implied.filter((h) => h.kind === 'needs').map((h) => h.id), ...holds.map((h) => h.id)];
-      const transition = machine.create(createInput, board, ctx, await this.dependencyStates(tx, awaitedIds));
+      const transition = machine.create(createInput, board, ctx, relations);
       if (!transition.ok) return transition;
       const glob = { ...transition.value.glob, version: 1 };
       if (!(await tx.insertGlob(glob, input.idempotencyKey))) {
         throw new Error(`Glob ID collision for ${glob.id}`);
       }
       await tx.appendEvents(transition.value.events);
+      await this.writeNew(tx, glob, created.inserted, ctx.actor?.email ?? null, ctx.now);
       await tx.enqueueEffects(transition.value.effects);
       // The frozen record of what intake saw and decided (spec, Intake): written with the glob, never edited.
       await tx.insertIntakeSnapshot(snapshotOf(glob, planText, input.intake ?? null, input.source ?? 'api'), embedding);
@@ -989,9 +1048,6 @@ export class GlobService {
       for (const n of part.after ?? []) {
         if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only start after earlier parts, not ${n}`);
       }
-      for (const n of part.overlaps ?? []) {
-        if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only overlap earlier parts, not ${n}`);
-      }
       if (index === 0 && (part.after ?? []).length > 0) return invalidInput('Part 0 is the original glob and starts after nothing new');
     }
     const result = await this.deps.store.transaction(async (tx): Promise<Result<{ globs: Glob[]; added: readonly string[]; fresh: boolean }>> => {
@@ -1030,6 +1086,10 @@ export class GlobService {
       const board = await tx.getBoard(original.boardId);
       if (board === null) return notFound(`No board ${original.boardId}`);
       const ctx = await this.context(actor.value, board);
+      // The parts' relations are written below, under the board's lock, with the cycle check over everything the board has.
+      await tx.lockBoardRelations(board.id);
+      const boardRelations = await tx.listRelations(board.id);
+      const ownRelations = boardRelations.filter((r) => r.from === id);
 
       // IDs first, so every plan can name the others.
       const ids: string[] = [original.id];
@@ -1075,12 +1135,13 @@ export class GlobService {
         ...(first.category === undefined ? {} : { category: first.category }),
         ...(firstType === undefined || (first.type === undefined && firstType === original.type) ? {} : { type: firstType }),
       };
-      const changed = machine.changeFields(original, changes, board, ctx, new Map());
+      const changed = machine.changeFields(original, changes, board, ctx, await this.relationFacts(tx, ownRelations));
       if (!changed.ok) return changed;
       const escalationChanged = firstEscalation?.change != null;
       const moved = escalationChanged ? { ...changed.value.glob, escalation: firstEscalation.escalation } : changed.value.glob;
-      const updated = changed.value.changed || escalationChanged ? { ...moved, version: original.version + 1 } : original;
-      if (updated !== original && !(await tx.updateGlob(updated, original.version))) {
+      // The sign-off relations written below are a change to the original: its version always moves.
+      const updated = { ...moved, updatedAt: ctx.now, version: original.version + 1 };
+      if (!(await tx.updateGlob(updated, original.version))) {
         const current = await tx.getGlob(id);
         return current === null ? notFound(`No glob ${id}`) : err({ code: 'version_conflict', message: 'The glob has changed', current });
       }
@@ -1089,23 +1150,35 @@ export class GlobService {
       if (firstEscalation?.change != null) await tx.appendEvents([escalationEvent(id, email, ctx.now, firstEscalation.change)]);
 
       const attachments = await tx.listArtifacts(original.id, 'attachment');
-      const inherited = [...(original.after ?? [])];
+      // What the original waits for before it starts (a person's) goes to every part; one that merged since holds nothing.
+      const inheritedAll = ownRelations.filter((r) => r.gate === 'start' && r.source === 'person' && isActive(r)).map((r) => r.to);
+      const inheritedFound = new Map((await tx.getGlobs(inheritedAll)).map((g) => [g.id, g]));
+      const inherited = inheritedAll.filter((to) => {
+        const target = inheritedFound.get(to);
+        return target !== undefined && !hasMerged(target);
+      });
       const globs: Glob[] = [updated];
+      const growing: Relation[] = [...boardRelations];
+      const signOffs: Relation[] = [];
       const withArtifacts = [original.id];
       for (const [index, part] of wanted.entries()) {
         if (index === 0) continue;
         const partId = ids[index];
         if (partId === undefined) throw new Error(`No ID for part ${index}`);
-        const awaitedIds = [...new Set([...inherited, ...(part.after ?? []).map((n) => ids[n] ?? '')])];
-        const found = await this.closure(tx, awaitedIds);
-        const checked = checkAfter(null, awaitedIds, board.id, (gid) => found.get(gid));
-        if (!checked.ok) return checked;
-        if (checked.value.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
-        // Overlaps are never needs: a part that also needs the glob keeps only the need.
-        const overlapIds = [...new Set((part.overlaps ?? []).map((n) => ids[n] ?? ''))].filter((o) => !checked.value.includes(o));
-        const foundOverlaps = await this.closure(tx, overlapIds);
-        const checkedOverlaps = checkOverlaps(null, overlapIds, board.id, (gid) => foundOverlaps.get(gid));
-        if (!checkedOverlaps.ok) return checkedOverlaps;
+        const earlier = [...new Set((part.after ?? []).map((n) => ids[n] ?? ''))];
+        const awaitedIds = [...new Set([...inherited, ...earlier])];
+        if (awaitedIds.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
+        // The chain between parts is a split's own relation; what the original waited for stays a person's.
+        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: earlier.includes(to) ? 'earlier part of the split' : null, evidence: [], source: earlier.includes(to) ? 'split' : 'person' }));
+        const startRelations = applyWrite([], { add: startWrite, update: [], remove: [] }, { boardId: board.id, from: partId, now: ctx.now, newId: () => this.relationId() });
+        // The source can't be signed off before this part has merged.
+        const signOff = applyWrite([], { add: [{ to: partId, gate: 'sign_off', until: 'merged', reason: 'split part', evidence: [], source: 'split' }], update: [], remove: [] }, { boardId: board.id, from: id, now: ctx.now, newId: () => this.relationId() }).inserted;
+        for (const draft of signOff) {
+          const checked = checkRelation(draft, board.id, growing, (gid) => (gid === partId ? { boardId: board.id } : undefined));
+          if (!checked.ok) return checked;
+          growing.push(draft);
+          signOffs.push(draft);
+        }
         const created = machine.create(
           {
             id: partId,
@@ -1116,14 +1189,12 @@ export class GlobService {
             group,
             environment: original.environment,
             autoTrigger: false,
-            after: checked.value,
-            ...(checkedOverlaps.value.length === 0 ? {} : { impliedAfter: explicitOverlaps(checkedOverlaps.value) }),
             // A same part that waits for others starts by itself when they merge (a person can turn that off).
             autoStart: true,
           },
           board,
           ctx,
-          await this.dependencyStates(tx, checked.value),
+          { relations: startRelations.relations, states: await this.statesOf(tx, awaitedIds) },
         );
         if (!created.ok) return created;
         const partEscalation = escalations[index];
@@ -1132,6 +1203,7 @@ export class GlobService {
         await tx.appendEvents(created.value.events);
         if (partEscalation?.change != null) await tx.appendEvents([escalationEvent(partId, email, ctx.now, partEscalation.change)]);
         await tx.enqueueEffects(created.value.effects);
+        await this.writeNew(tx, glob, startRelations.inserted, email, ctx.now);
         globs.push(glob);
         withArtifacts.push(glob.id);
       }
@@ -1150,6 +1222,7 @@ export class GlobService {
           },
         ]);
       };
+      await this.writeNew(tx, updated, signOffs, email, ctx.now);
       const sized = await tx.getSizeCheck(original.id);
       if (sized !== null && sized.decision === null) {
         await tx.upsertSizeCheck({ ...sized, decision: 'split', decidedBy: email, decidedAt: at, updatedAt: at });
@@ -1187,8 +1260,12 @@ export class GlobService {
     return ok(result.value.globs);
   }
 
-  /** `changes.after` is checked here (IDs exist on the board, no cycle, merged ones dropped) before the machine sees it. */
-  async update(email: string, id: string, version: number, changes: FieldChanges) {
+  /**
+   * `changes.after` (the globs to start after) is checked here, under the board's relation lock: IDs exist on the board, no
+   * cycle, merged ones dropped. It replaces the relations a person (or split) set and leaves inferred and learned ones; the
+   * relation rows change with the glob, in the same transaction.
+   */
+  async update(email: string, id: string, version: number, changes: GlobChanges) {
     // A scope on one glob must name a work glob of the board (the pure step cannot look it up; it reports other faults itself).
     if (changes.attributes !== undefined) {
       const checked = await this.deps.store.transaction(async (tx): Promise<Result<null>> => {
@@ -1202,12 +1279,10 @@ export class GlobService {
       });
       if (!checked.ok) return checked;
     }
-    const wanted = changes.after;
-    const wantedOverlaps = changes.overlaps;
+    const { after: wanted, ...fields } = changes;
     // A same becoming a sub is about to start: the merge policy may hold it.
     const holds = changes.type === 'sub' ? await this.holdsFor(id) : [];
-    let checkedAfter: readonly string[] | undefined;
-    let checkedOverlaps: readonly string[] | undefined;
+    const edit: { value: { readonly from: string[]; readonly to: string[] } | undefined } = { value: undefined };
     const before: { type: SlopType | null } = { type: null };
     const result = await this.command(
       email,
@@ -1217,36 +1292,69 @@ export class GlobService {
         before.type = glob.type;
         return machine.changeFields(
           glob,
-          { ...changes, ...(checkedAfter === undefined ? {} : { after: checkedAfter }), ...(checkedOverlaps === undefined ? {} : { overlaps: checkedOverlaps }), ...(holds.length === 0 ? {} : { impliedAfter: holds }) },
+          { ...fields, ...(edit.value === undefined ? {} : { after: edit.value }), ...(holds.length === 0 ? {} : { impliedAfter: holds }) },
           board,
           ctx,
-          facts.dependencies,
+          facts.relations,
         );
       },
       {
         applies: 'any',
-        dependencies: true,
-        ...((wanted !== undefined || wantedOverlaps !== undefined || holds.length > 0) && {
-          prepare: async (tx: Tx, glob: Glob): Promise<Result<readonly string[]>> => {
-            if (wantedOverlaps !== undefined) {
-              const found = await this.closure(tx, wantedOverlaps);
-              const checked = checkOverlaps(glob.id, wantedOverlaps, glob.boardId, (gid) => found.get(gid));
-              if (!checked.ok) return checked;
-              checkedOverlaps = checked.value;
-            }
-            if (wanted !== undefined) {
-              const found = await this.closure(tx, wanted);
-              const checked = checkAfter(glob.id, wanted, glob.boardId, (gid) => found.get(gid));
-              if (!checked.ok) return checked;
-              checkedAfter = checked.value;
-            }
-            return ok([...(checkedAfter ?? []), ...holds.map((h) => h.id)]);
+        relations: true,
+        ...(wanted !== undefined && {
+          relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[]): Promise<Result<RelationWrite>> => {
+            const planned = await this.planNeeds(tx, glob, board, wanted);
+            if (planned.ok) edit.value = planned.value.edit;
+            return planned.ok ? ok(planned.value.write) : planned;
           },
         }),
       },
     );
     if (result.ok && before.type !== null && before.type !== result.value.type) await this.recordRetype(result.value, before.type, email);
     return result;
+  }
+
+  /**
+   * What replacing a glob's start list (`needs`/`after`) with `wanted` does to its relations: the ones a person or a split set
+   * (not inferred or learned) are replaced, a recorded inferred or learned one to the same glob gives way to the person's, merged
+   * globs are dropped, and every new relation is checked (on the board, not itself, no cycle, within the limit).
+   */
+  private async planNeeds(
+    tx: Tx,
+    glob: Glob,
+    board: readonly Relation[],
+    wanted: readonly string[],
+  ): Promise<Result<{ readonly write: RelationWrite; readonly edit: { readonly from: string[]; readonly to: string[] } }>> {
+    const list = [...new Set(wanted.map((a) => a.trim()).filter((a) => a !== ''))];
+    if (list.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
+    const found = new Map((await tx.getGlobs(list)).map((g) => [g.id, g]));
+    for (const to of list) {
+      if (to === glob.id) return invalidInput('A glob cannot wait for itself');
+      if (found.get(to)?.boardId !== glob.boardId) return invalidInput(`No glob ${to} on this board`);
+    }
+    const kept = list.filter((to) => {
+      const target = found.get(to);
+      return target !== undefined && !hasMerged(target);
+    });
+    const mine = board.filter((r) => r.from === glob.id && r.gate === 'start');
+    const explicit = mine.filter((r) => isExplicit(r) && isActive(r));
+    const fromIds = explicit.map((r) => r.to);
+    const add = kept.filter((to) => !fromIds.includes(to));
+    const remove = [
+      ...explicit.filter((r) => !kept.includes(r.to)).map((r) => r.id),
+      // An inferred or learned relation to a glob the person now names gives way to theirs.
+      ...mine.filter((r) => !isExplicit(r) && add.includes(r.to)).map((r) => r.id),
+    ];
+    const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
+    const adds: NewRelation[] = [];
+    for (const to of add) {
+      const draft: NewRelation = { to, gate: 'start', until: 'merged', reason: null, evidence: [], source: 'person' };
+      const checked = checkRelation(draftOf(glob.boardId, glob.id, draft), glob.boardId, growing, (gid) => found.get(gid));
+      if (!checked.ok) return checked;
+      growing.push(draftOf(glob.boardId, glob.id, draft));
+      adds.push(draft);
+    }
+    return ok({ write: { add: adds, update: [], remove }, edit: { from: fromIds, to: kept } });
   }
 
   /** A person's retype teaches the board's intake (spec, Intake); recording never fails the change. */
@@ -1256,18 +1364,17 @@ export class GlobService {
 
   async start(email: string, id: string, version: number) {
     const holds = await this.holdsFor(id);
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.start(glob, ctx, facts.dependencies, holds, facts.chain), {
-      dependencies: true,
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.start(glob, ctx, facts.relations, holds, facts.chain), {
+      relations: true,
       chain: true,
-      ...(holds.length > 0 && { prepare: () => Promise.resolve(ok(holds.map((h) => h.id))) }),
     });
   }
 
   /** Start a glob that waits for others to merge, before they have. */
   async startAnyway(email: string, id: string, version: number) {
     const wrote = { value: false };
-    const result = await this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAnyway(glob, ctx, facts.dependencies), {
-      dependencies: true,
+    const result = await this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAnyway(glob, ctx, facts.relations), {
+      relations: true,
       record: this.handoverRecorder(wrote),
     });
     if (result.ok) this.publishHandover(wrote, result.value);
@@ -1275,16 +1382,20 @@ export class GlobService {
   }
 
   /**
-   * A person says a recorded edge is not a dependency (the ✕ on a Dependencies row). The plan's hash is kept with it so a
-   * changed plan may infer it again. A held glob that waited only for that edge starts, as when its last dependency merges.
+   * A person says a recorded relation is not a dependency (the ✕ on a Dependencies row). The plan's hash is kept with it so a
+   * changed plan may infer it again. A held glob that waited only for that relation starts, as when its last dependency merges.
    */
   async dismissEdge(email: string, id: string, version: number, edgeId: string) {
     const planHash = { value: '' };
-    const result = await this.command(email, id, version, (glob, ctx) => machine.dismissEdge(glob, edgeId, planHash.value, ctx), {
+    const result = await this.command(email, id, version, (glob) => ok({ glob, changed: false, events: [], effects: [] }), {
       applies: 'any',
-      prepare: async (tx: Tx, glob: Glob): Promise<Result<readonly string[]>> => {
+      relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[], now: string): Promise<Result<RelationWrite>> => {
+        const found = board.find((r) => r.from === glob.id && r.to === edgeId && r.gate === 'start');
+        if (found === undefined) return invalidInput(`${glob.id} has no recorded edge to ${edgeId}`);
+        if (isExplicit(found)) return invalidInput(`${edgeId} was set as a dependency by a person and cannot be dismissed`);
+        if (found.dismissedAt !== null) return ok(NO_WRITE);
         planHash.value = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '');
-        return ok([]);
+        return ok({ add: [], update: [{ id: found.id, patch: { dismissedAt: now, dismissedPlanHash: planHash.value } }], remove: [] });
       },
     });
     if (!result.ok || result.value.status !== 'planning' || result.value.waiting == null) return result;
@@ -1312,11 +1423,11 @@ export class GlobService {
       id,
       version,
       (glob, ctx, board, facts) => {
-        const dependencies = facts.dependencies;
-        warning = glob.status === 'planning' && dependencies !== undefined ? pickUpWarning(waitingFor(glob, dependencies)) : null;
-        return machine.pickUp(glob, ctx, board, { takeOver, ...(environment === undefined ? {} : { environment }), ...(dependencies === undefined ? {} : { dependencies }) });
+        const relations = facts.relations;
+        warning = glob.status === 'planning' && relations !== undefined ? pickUpWarning(awaitedOf(relations)) : null;
+        return machine.pickUp(glob, ctx, board, { takeOver, ...(environment === undefined ? {} : { environment }), ...(relations === undefined ? {} : { relations }) });
       },
-      { dependencies: true, applies: 'any', record: this.handoverRecorder(wrote) },
+      { relations: true, applies: 'any', record: this.handoverRecorder(wrote) },
     );
     if (result.ok) this.publishHandover(wrote, result.value);
     return result.ok ? ok({ glob: result.value, warning }) : result;
@@ -1348,8 +1459,8 @@ export class GlobService {
   }
 
   startAgain(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAgain(glob, ctx, facts.dependencies), {
-      dependencies: true,
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAgain(glob, ctx, facts.relations), {
+      relations: true,
     });
   }
 
@@ -1450,7 +1561,9 @@ export class GlobService {
   }
 
   async delete(email: string, id: string, version: number): Promise<Result<null>> {
+    const released: Glob[] = [];
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Glob>> => {
+      released.length = 0;
       const glob = await tx.getGlob(id);
       if (glob === null) return notFound(`No glob ${id}`);
       const actor = await this.actorFor(tx, email, glob.boardId);
@@ -1466,6 +1579,9 @@ export class GlobService {
       // suppresses repeats), so it is rejected instead. Decisions people made (inbox, extracted, manual) can go.
       if (isLearning(glob)) return invalidInput('This decision is a knowledge item an agent submitted or slop mined; reject it instead of deleting it');
       const fileKeys = await fileKeysOf(tx, glob.id);
+      // What waited on it is released (the rows stay, so the glob can say it was deleted): each gets a note and a new version.
+      const dependants = await this.releasedBy(tx, glob, this.deps.clock.now());
+      released.push(...dependants);
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
       // The deletion itself is logged without a glob, so reports lose the glob's time.
@@ -1480,7 +1596,34 @@ export class GlobService {
       globId: result.value.id,
       version: result.value.version + 1,
     });
+    // A glob held only by the deleted one starts now, as when it merges.
+    for (const dependant of released) {
+      this.publish(dependant);
+      if (dependant.status === 'planning' && dependant.waiting != null) await this.release(dependant.id);
+    }
     return ok(null);
+  }
+
+  /**
+   * The globs that waited for `gone` (an active start relation to it) before it is deleted: each logs that the gate was
+   * released because it was deleted and moves to a new version. Returns them as written.
+   */
+  private async releasedBy(tx: Tx, gone: Glob, at: string): Promise<Glob[]> {
+    const rows = (await tx.listRelationsTo([gone.id])).filter((r) => isActive(r));
+    const out: Glob[] = [];
+    for (const from of [...new Set(rows.map((r) => r.from))]) {
+      const glob = await tx.getGlob(from);
+      if (glob === null) continue;
+      const touched = machine.relationsChanged(glob, { actor: null, now: at, newRunId: () => this.deps.ids.runId(), routineOwnerFor: () => '' });
+      if (!touched.ok) continue;
+      const next = { ...touched.value.glob, version: glob.version + 1 };
+      if (!(await tx.updateGlob(next, glob.version))) throw new Error(`${glob.id} changed while ${gone.id} was deleted`);
+      await tx.appendEvents(
+        rows.filter((r) => r.from === from).map((r): DomainEvent => ({ type: 'RelationReleased', globId: from, actor: null, at, data: { to: r.to, gate: r.gate, reason: `${gone.id} was deleted` } })),
+      );
+      out.push(next);
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------
@@ -1498,12 +1641,15 @@ export class GlobService {
   async releaseDependents(mergedId: string, boardId: number): Promise<string[]> {
     // The merge is also an outcome for the board's dependency rules (its overlaps went cleanly or not); it never blocks the release.
     await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
-    const planning = await this.deps.store.transaction((tx) => tx.listGlobs(boardId, { status: ['planning'] }));
+    const waiting = await this.deps.store.transaction(async (tx) => {
+      const from = [...new Set((await tx.listRelationsTo([mergedId])).filter((r) => r.gate === 'start' && isActive(r) && r.boardId === boardId).map((r) => r.from))];
+      return from.length === 0 ? [] : (await tx.getGlobs(from)).filter((g) => g.status === 'planning');
+    });
     const released: string[] = [];
-    for (const waiting of planning) {
-      if (waiting.waiting == null || !waitsFor(waiting, mergedId)) continue;
-      const result = await this.release(waiting.id);
-      if (result.ok && result.value.status !== 'planning') released.push(waiting.id);
+    for (const glob of waiting) {
+      if (glob.waiting == null) continue;
+      const result = await this.release(glob.id);
+      if (result.ok && result.value.status !== 'planning') released.push(glob.id);
     }
     return released;
   }
@@ -1563,7 +1709,7 @@ export class GlobService {
       const globs = await tx.listGlobs(boardId, {});
       const plans = new Map<string, string>();
       for (const glob of globs) plans.set(glob.id, (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? '');
-      return { board, globs, plans };
+      return { board, globs, plans, relations: await tx.listRelations(boardId) };
     });
     if (read === null) return [];
     // One read of each branch per recheck, whoever asks: keyed by glob and head.
@@ -1584,7 +1730,8 @@ export class GlobService {
       if (!open || glob.type === 'super') continue;
       const mine = glob.impliedAfter ?? [];
       // Edges nobody may replace are not looked for again.
-      const skip = new Set([...(glob.after ?? []), ...mine.filter((i) => !machine.isReplaceableOverlap(i)).map((i) => i.id)]);
+      const needs = startIds(read.relations.filter((r) => r.from === glob.id));
+      const skip = new Set([...needs, ...mine.filter((i) => !machine.isReplaceableOverlap(i)).map((i) => i.id)]);
       // An overlap is recorded on the later glob (it is the one that rebases), as at start: a newer glob adds none here.
       for (const other of read.globs) {
         if (other.id !== glob.id && !mine.some((i) => i.id === other.id) && (other.createdAt > glob.createdAt || (other.createdAt === glob.createdAt && other.id > glob.id))) skip.add(other.id);
@@ -1601,65 +1748,92 @@ export class GlobService {
       const dropReasons = new Map<string, string>();
       for (const edge of mine.filter(machine.isReplaceableOverlap)) {
         const other = byId.get(edge.id);
-        const state = other === undefined ? 'missing' : dependencyState(other);
         dropReasons.set(
           edge.id,
           other === undefined
             ? `${edge.id} was deleted`
-            : state === 'merged'
+            : hasMerged(other)
               ? `${edge.id} merged`
-              : state === 'planning'
+              : other.status === 'planning'
                 ? `${edge.id} is back in Planning`
                 : other.status === 'failed'
                   ? `${edge.id} failed`
                   : `${edge.id} no longer changes ${edge.paths.slice(0, 3).join(', ')}`,
         );
       }
-      const result = await this.command(null, glob.id, null, (g, ctx) => machine.overlapsRechecked(g, { edges: found, dropReasons }, ctx));
+      const result = await this.command(null, glob.id, null, (g, ctx) => machine.overlapsRechecked(g, { edges: found, dropReasons }, ctx, needs));
       if (result.ok && result.value.version !== glob.version) changed.push(glob.id);
     }
     return changed;
   }
 
   /**
-   * Writes the edges slop inferred for a glob (from its plan and investigation, `refresh` of the inference service): the
-   * ones that would make a cycle are dropped and said so in the event's notes, the rest replace the glob's earlier inferred
-   * edges (see `mergeInferred`). A held glob that waited only for an edge now gone starts. A no-op when nothing changed.
+   * Writes the edges slop inferred for a glob (from its plan and investigation, `refresh` of the inference service). A need
+   * of a glob in Planning becomes a start relation (source `inferred`): the ones that would make a cycle are dropped and said so
+   * in the log, the rest replace the glob's earlier inferred relations (a person's, a learned one, one Start now overrode and
+   * one dismissed for this plan stay as they are). Overlaps (and the needs of a glob that already started) stay on the glob as
+   * internal data (see `edgesInferred`). A held glob that waited only for a relation now gone starts. A no-op when nothing changed.
    */
   async applyInferred(id: string, edges: readonly InferredEdge[], planHash: string): Promise<void> {
     const before = await this.peek(id);
     if (before === null) return;
-    const usable: ImpliedAfter[] = [];
-    const notes: string[] = [];
+    const overlaps: ImpliedAfter[] = [];
+    const needs: string[] = [];
     let stale = false;
     // Read inside the command's transaction: a plan saved or an edge dismissed while the model answered must not be overwritten,
-    // and two globs inferring needs on each other must see each other's edges.
+    // and two globs inferring needs on each other must see each other's relations (the board's lock).
     const result = await this.command(
       null,
       id,
       null,
-      (g, ctx) => (stale ? ok({ glob: g, changed: false, events: [], effects: [] }) : machine.edgesInferred(g, { edges: usable, notes, planHash }, ctx)),
+      (g, ctx) => (stale ? ok({ glob: g, changed: false, events: [], effects: [] }) : machine.edgesInferred(g, { edges: overlaps, notes: [], planHash }, ctx, needs)),
       {
-        prepare: async (tx: Tx, glob: Glob): Promise<Result<readonly string[]>> => {
-          usable.length = 0;
-          notes.length = 0;
+        relations: true,
+        relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[]): Promise<Result<RelationWrite>> => {
+          overlaps.length = 0;
+          needs.length = 0;
           stale = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '') !== planHash;
-          if (stale) return ok([]);
-          const reach = await this.closure(tx, edges.filter((e) => e.kind === 'needs').map((e) => e.id));
-          for (const edge of edges) {
-            if (edge.id === id) continue;
-            if (edge.kind === 'needs' && reaches(edge.id, id, (other) => reach.get(other))) {
-              notes.push(`Dropped the need on ${edge.id}: it already waits for ${id}, so that would be a cycle`);
+          if (stale) return ok(NO_WRITE);
+          const started = glob.status !== 'planning';
+          const mine = board.filter((r) => r.from === glob.id && r.gate === 'start');
+          // An inferred relation is replaced by the next inference unless Start now overrode it or it was dismissed for this plan.
+          const replaceable = (r: Relation): boolean => r.source === 'inferred' && r.overriddenAt === null && !(r.dismissedAt !== null && r.dismissedPlanHash === planHash);
+          // What stands (a person's, a learned one, one that was overridden or dismissed) wins over an inferred edge to the same glob.
+          needs.push(...mine.filter((r) => !replaceable(r)).map((r) => r.to));
+          const fresh = edges.filter((e) => e.id !== id);
+          // Overlaps, and a need of a glob that has started (it holds nothing now), are internal data.
+          for (const edge of fresh) if (edge.kind === 'overlaps' || started) overlaps.push(toImplied({ ...edge, kind: 'overlaps' }));
+          if (started || glob.type === 'super') return ok(NO_WRITE);
+          const known = new Map((await tx.getGlobs(fresh.map((e) => e.id))).map((g) => [g.id, g]));
+          const remove = mine.filter(replaceable).map((r) => r.id);
+          const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
+          const add: NewRelation[] = [];
+          const lines: string[] = [];
+          for (const edge of fresh.filter((e) => e.kind === 'needs')) {
+            // A person's, a learned or an overridden one to the same glob wins; a deleted or merged glob needs nothing.
+            const target = known.get(edge.id);
+            if (target === undefined || target.boardId !== glob.boardId || hasMerged(target)) continue;
+            if (growing.some((r) => r.from === glob.id && r.to === edge.id && r.gate === 'start')) continue;
+            const draft: NewRelation = { to: edge.id, gate: 'start', until: 'merged', reason: edge.reason, evidence: edge.files, source: 'inferred' };
+            const checked = checkRelation(draftOf(glob.boardId, glob.id, draft), glob.boardId, growing, (gid) => known.get(gid));
+            if (!checked.ok) {
+              lines.push(`Dropped the need on ${edge.id}: ${checked.error.message}`);
               continue;
             }
-            usable.push(toImplied(edge));
+            growing.push(draftOf(glob.boardId, glob.id, draft));
+            add.push(draft);
           }
-          return ok([]);
+          // The reason is the model's wording and changes between answers: a need to the same glob stays as it is.
+          const kept = add.filter((a) => mine.some((r) => replaceable(r) && r.to === a.to));
+          const reAdded = new Set(kept.map((a) => a.to));
+          const finalRemove = remove.filter((rid) => !reAdded.has(mine.find((r) => r.id === rid)?.to ?? ''));
+          const finalAdd = add.filter((a) => !reAdded.has(a.to));
+          return ok({ add: finalAdd, update: [], remove: finalRemove, ...(lines.length === 0 ? {} : { notes: { lines, planHash } }) });
         },
       },
     );
     if (!result.ok || result.value.version === before.version) return;
-    // A needs edge that went away may have been all a held glob waited for.
+    // A relation that went away may have been all a held glob waited for.
     if (result.value.status === 'planning' && result.value.waiting != null) await this.release(id);
   }
 
@@ -1669,10 +1843,9 @@ export class GlobService {
     const held = await this.deps.store.transaction(async (tx) => (unresolved(await tx.getSizeCheck(id)) ? await tx.getGlob(id) : null));
     if (held !== null) return ok(held);
     const holds = await this.holdsFor(id, true);
-    return this.command(null, id, null, (glob, ctx, _board, facts) => machine.released(glob, ctx, facts.dependencies, holds), {
-      dependencies: true,
+    return this.command(null, id, null, (glob, ctx, _board, facts) => machine.released(glob, ctx, facts.relations, holds), {
+      relations: true,
       triggeredByCreator: true,
-      ...(holds.length > 0 && { prepare: () => Promise.resolve(ok(holds.map((h) => h.id))) }),
     });
   }
 
@@ -1691,24 +1864,35 @@ export class GlobService {
       if (glob === null || glob.status !== 'planning' || glob.type === 'super' || (heldOnly && glob.waiting == null)) return null;
       const board = await tx.getBoard(glob.boardId);
       if (board === null) return null;
-      const states = await this.dependencyStates(tx, dependencyIds(glob));
-      if (waitingFor(glob, states).length > 0) return null;
+      const relations = await this.relationFacts(tx, await tx.listRelationsFrom([id]));
+      if (awaitedOf(relations).length > 0) return null;
       const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '';
-      return { glob, board, plan };
+      return { glob, board, plan, needs: startIds(relations.relations) };
     });
     if (read === null) return [];
-    // Holds a person overrode, and globs already waited for, are not held for again.
-    const skip = new Set([...(read.glob.after ?? []), ...(read.glob.impliedAfter ?? []).map((i) => i.id)]);
+    // Overlaps already recorded, and globs already waited for, are not predicted again.
+    const skip = new Set([...read.needs, ...(read.glob.impliedAfter ?? []).map((i) => i.id)]);
     return findHolds(this.deps.store, branchFiles, read.board, { id, plan: read.plan }, skip, await this.deps.dependencyLearning?.prediction(read.board.id));
   }
 
   /** The state of each glob in `ids` (a glob that no longer exists is `missing`). */
-  private async dependencyStates(tx: Tx, ids: readonly string[]): Promise<Map<string, DependencyState>> {
+  private async statesOf(tx: Tx, ids: readonly string[]): Promise<Map<string, ToState>> {
     const found = ids.length === 0 ? [] : await tx.getGlobs(ids);
     const byId = new Map(found.map((g) => [g.id, g]));
     const held = new Set<string>();
     for (const boardId of new Set(found.map((g) => g.boardId))) for (const id of await this.heldDependants(tx, boardId)) held.add(id);
-    return new Map(ids.map((id) => [id, dependencyState(byId.get(id), held)]));
+    return new Map(ids.map((id) => [id, toState(byId.get(id), held)]));
+  }
+
+  /** A glob's relations with the state of each glob they point at. */
+  private async relationFacts(tx: Tx, relations: readonly Relation[]): Promise<RelationFacts> {
+    return { relations, states: await this.statesOf(tx, [...new Set(relations.map((r) => r.to))]) };
+  }
+
+  /** The globs in Planning that wait for `id` before they start. */
+  private async waitedOnBy(tx: Tx, id: string): Promise<string[]> {
+    const from = [...new Set((await tx.listRelationsTo([id])).filter((r) => r.gate === 'start' && isActive(r)).map((r) => r.from))];
+    return from.length === 0 ? [] : (await tx.getGlobs(from)).filter((g) => g.status === 'planning').map((g) => g.id);
   }
 
   /** The globs on a board whose open work steps hold back their dependants (a rollout): merged, but still awaited. */
@@ -1720,8 +1904,8 @@ export class GlobService {
   /** What the glob is blocked by: its unmerged prerequisites and theirs in turn. */
   private async chainOf(tx: Tx, glob: Glob): Promise<BlockingChain> {
     if (glob.type === 'super') return NO_CHAIN;
-    const reach = await this.closure(tx, dependencyIds(glob));
-    return blockingChain(glob.id, glob, (id) => reach.get(id), await this.heldDependants(tx, glob.boardId));
+    const reach = await this.closure(tx, [glob.id]);
+    return blockingChain(glob.id, (id) => reach.relations.get(id) ?? [], (id) => reach.globs.get(id), await this.heldDependants(tx, glob.boardId));
   }
 
   /** The chain of a glob by ID, for the routine executor's last check before a session is spent. */
@@ -1732,16 +1916,31 @@ export class GlobService {
     });
   }
 
-  /** The globs with these IDs and everything they wait for in turn (bounded), for the cycle check. */
-  private async closure(tx: Tx, ids: readonly string[]): Promise<Map<string, Glob>> {
-    const found = new Map<string, Glob>();
-    let next = [...new Set(ids)];
-    while (next.length > 0 && found.size < CLOSURE_LIMIT) {
-      const globs = await tx.getGlobs(next);
-      for (const glob of globs) found.set(glob.id, glob);
-      next = [...new Set(globs.flatMap((g) => dependencyIds(g)))].filter((id) => !found.has(id));
+  /**
+   * The globs the roots start after, and what those start after in turn (bounded), with each glob's relations. `known` reads
+   * relations from memory (the board list has them all); without it they are read as the walk goes.
+   */
+  private async closure(
+    tx: Tx,
+    roots: readonly string[],
+    known?: (id: string) => readonly Relation[],
+  ): Promise<{ readonly globs: Map<string, Glob>; readonly relations: Map<string, readonly Relation[]> }> {
+    const globs = new Map<string, Glob>();
+    const relations = new Map<string, readonly Relation[]>();
+    let frontier = [...new Set(roots)];
+    while (frontier.length > 0 && globs.size < CLOSURE_LIMIT) {
+      if (known === undefined) {
+        const rows = await tx.listRelationsFrom(frontier);
+        for (const id of frontier) relations.set(id, rows.filter((r) => r.from === id));
+      } else {
+        for (const id of frontier) relations.set(id, known(id));
+      }
+      const wanted = [...new Set(frontier.flatMap((id) => startIds(relations.get(id) ?? [])))].filter((id) => !globs.has(id));
+      const found = wanted.length === 0 ? [] : await tx.getGlobs(wanted);
+      for (const glob of found) globs.set(glob.id, glob);
+      frontier = found.map((g) => g.id);
     }
-    return found;
+    return { globs, relations };
   }
 
   private async command(
@@ -1776,27 +1975,59 @@ export class GlobService {
             allowedActions: actor === null ? [] : machine.allowedActions(glob, actor),
           });
         }
-        let extraIds: readonly string[] = [];
         if (options.prepare !== undefined) {
           const prepared = await options.prepare(tx, glob);
           if (!prepared.ok) return prepared;
-          extraIds = prepared.value;
+        }
+        // Relation changes are planned under the board's lock, with every relation of the board in view, before the step runs.
+        let write: RelationWrite = NO_WRITE;
+        let rows: readonly Relation[] | null = null;
+        let inserted: readonly Relation[] = [];
+        if (options.relationPlan !== undefined) {
+          await tx.lockBoardRelations(glob.boardId);
+          const board = await tx.listRelations(glob.boardId);
+          const planned = await options.relationPlan(tx, glob, board, this.deps.clock.now());
+          if (!planned.ok) return planned;
+          write = planned.value;
+          const applied = applyWrite(board.filter((r) => r.from === glob.id), write, { boardId: glob.boardId, from: glob.id, now: this.deps.clock.now(), newId: () => this.relationId() });
+          rows = applied.relations;
+          inserted = applied.inserted;
         }
         const record = options.facts === true
           ? { recordSha: machine.recordShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
           : {};
-        const dependencies =
-          options.dependencies === true
-            ? { dependencies: await this.dependencyStates(tx, [...new Set([...dependencyIds(glob), ...extraIds])]) }
+        const relations =
+          options.relations === true
+            ? { relations: await this.relationFacts(tx, rows ?? (await tx.listRelationsFrom([glob.id]))) }
             : {};
         const chain = options.chain === true ? { chain: await this.chainOf(tx, glob) } : {};
         const rollout =
           options.rollout === true
             ? { rollout: storedBlockProgress(await tx.listHumanSteps(glob.boardId, [glob.id]), 'sign_off') }
             : {};
-        const facts: ActionFacts = { ...record, ...dependencies, ...chain, ...rollout };
+        const facts: ActionFacts = { ...record, ...relations, ...chain, ...rollout };
         const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
-        const transition = step(glob, ctx, board, facts);
+        const stepped = step(glob, ctx, board, facts);
+        if (!stepped.ok) return stepped;
+        // The relation rows are written only now that the step accepted: an error Result commits what was written before it.
+        const edits = stepped.value.relationEdits ?? [];
+        const written = !isEmptyWrite(write) || edits.length > 0;
+        let transition: Result<Transition> = stepped;
+        if (written) {
+          const before = await tx.listRelationsFrom([glob.id]);
+          // Removals first: a person's relation replacing an inferred one to the same glob would otherwise find the row taken.
+          for (const rid of write.remove) await tx.deleteRelation(rid);
+          for (const u of write.update) await tx.updateRelation(u.id, u.patch);
+          for (const r of inserted) {
+            if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
+          }
+          for (const e of edits) await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
+          const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted);
+          // A change to the relations alone still moves the glob's version, so live updates and stale forms see it.
+          const touched = machine.relationsChanged(stepped.value.glob, ctx);
+          transition = stepped.value.changed || !touched.ok ? stepped : ok({ ...stepped.value, glob: touched.value.glob, changed: true });
+          if (transition.ok) transition = ok({ ...transition.value, events: [...transition.value.events, ...logged] });
+        }
         if (!transition.ok) return transition;
         const { changed, events } = transition.value;
         // A status change, a push or a merge may change which open globs overlap: queue the board's recheck (coalesced).
@@ -1832,6 +2063,18 @@ export class GlobService {
       if (result.ok) this.publish(result.value);
       return result;
     }
+  }
+
+  private relationId(): string {
+    return `rel_${this.deps.ids.runId()}`;
+  }
+
+  /** Inserts the relations of a glob created in this transaction, with an event each. */
+  private async writeNew(tx: Tx, glob: Glob, inserted: readonly Relation[], actor: string | null, at: string): Promise<void> {
+    for (const r of inserted) {
+      if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
+    }
+    if (inserted.length > 0) await tx.appendEvents(inserted.map((r) => relationAdded(r, actor, at)));
   }
 
   private publish(glob: Glob): void {

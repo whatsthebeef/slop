@@ -6,7 +6,8 @@ import { listOf } from '../domain/matrix.js';
 import { MAX_QUERY_LENGTH, SOURCE_LABELS } from '../domain/search.js';
 import type { SearchHit } from '../domain/search.js';
 import type { BoardNotification } from '../domain/notifications.js';
-import type { Glob } from '../domain/types.js';
+import { startIds } from '../domain/relations.js';
+import type { Glob, Relation } from '../domain/types.js';
 import type { Clock, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import type { CodeViewService } from './code-view.js';
@@ -117,7 +118,7 @@ const oneLine = (s: string, max = 160): string => {
   return first.length > max ? `${first.slice(0, max)}...` : first;
 };
 
-const globLine = (g: Glob): string => {
+const globLine = (g: Glob, relations: readonly Relation[]): string => {
   const run = g.runs[g.runs.length - 1];
   const parts = [
     `${g.id} "${oneLine(g.title, 100)}"`,
@@ -125,7 +126,8 @@ const globLine = (g: Glob): string => {
     `status ${g.status} (${listOf(g.status)})`,
   ];
   if (g.group !== null) parts.push(`group ${g.group}`);
-  if (g.after !== undefined && g.after.length > 0) parts.push(`waiting for ${g.after.join(', ')}`);
+  const waits = startIds(relations.filter((r) => r.from === g.id));
+  if (waits.length > 0) parts.push(`waiting for ${waits.join(', ')}`);
   if (run !== undefined && run.state !== 'ended') parts.push(`run ${run.state}`);
   if (g.failure !== null) parts.push(`failed: ${oneLine(g.failure.reason)}`);
   else if (run?.failureReason != null && run.failureReason !== '') parts.push(`run failed: ${oneLine(run.failureReason)}`);
@@ -137,7 +139,7 @@ const globLine = (g: Glob): string => {
 };
 
 /** The board's live state as one source: open globs (latest first) and active notifications, cut at the cap. */
-const boardStateText = (globs: readonly Glob[], notifications: readonly BoardNotification[]): string => {
+const boardStateText = (globs: readonly Glob[], notifications: readonly BoardNotification[], relations: readonly Relation[]): string => {
   const open = globs
     .filter((g) => g.status !== 'signed_off' && g.pr?.state !== 'merged')
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -151,7 +153,7 @@ const boardStateText = (globs: readonly Glob[], notifications: readonly BoardNot
   let text = lines.join('\n');
   let shown = 0;
   for (const g of open) {
-    const line = globLine(g);
+    const line = globLine(g, relations);
     if (text.length + line.length + 1 > BOARD_STATE_MAX_CHARS - 60) break;
     text += `\n${line}`;
     shown += 1;
@@ -586,7 +588,7 @@ export class ChatService {
   private async boardState(boardId: number): Promise<string> {
     try {
       return await this.deps.store.transaction(async (tx) =>
-        boardStateText(await tx.listGlobs(boardId, {}), await tx.listNotifications(boardId)),
+        boardStateText(await tx.listGlobs(boardId, {}), await tx.listNotifications(boardId), await tx.listRelations(boardId)),
       );
     } catch {
       return '';

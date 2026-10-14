@@ -10,7 +10,7 @@ import type { BlockProgress } from '../src/domain/human-steps.js';
 import * as machine from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { ctx, glob as fixture, po } from './fixtures.js';
+import { ctx, glob as fixture, po, relation } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -98,6 +98,11 @@ describe('work steps through the service', () => {
       await tx.updateGlob(next, current.version);
       return next;
     });
+  /** `from` starts after `to` (a start relation row, as a person's `after` writes it). */
+  const startsAfter = (from: string, to: string): void => {
+    const row = relation(from, to);
+    store.state.relations.set(row.id, row);
+  };
   /** A merged glob in Reviewing, with the labels given. */
   const merged = async (labels: Glob['labels'] = { CR: 'approved' }): Promise<Glob> => {
     const created = unwrap(await globs.create(DEV, input()));
@@ -206,7 +211,7 @@ describe('work steps through the service', () => {
   it('a dependant waits for the rollout, not just the merge', async () => {
     const needed = await merged();
     const later = unwrap(await globs.create(DEV, input({ title: 'Waits' })));
-    await update(later.id, { after: [needed.id] });
+    startsAfter(later.id, needed.id);
     expect(await waitsFor(later.id)).toEqual([]);
 
     const step = unwrap(await globs.addHumanStep(DEV, needed.id, null, { title: 'Roll out' }));
@@ -222,7 +227,7 @@ describe('work steps through the service', () => {
     const needed = await merged();
     unwrap(await globs.addHumanStep(DEV, needed.id, null, { title: 'Tell the team', blocks: ['sign_off'] }));
     const later = unwrap(await globs.create(DEV, input({ title: 'Free' })));
-    await update(later.id, { after: [needed.id] });
+    startsAfter(later.id, needed.id);
     expect(await waitsFor(later.id)).toEqual([]);
   });
 

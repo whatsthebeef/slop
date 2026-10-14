@@ -239,6 +239,45 @@ export interface ImpliedAfter {
   readonly dismissedPlanHash?: string;
 }
 
+/** What `from` cannot do yet while a relation is unmet: start, merge, or be signed off. */
+export const RELATION_GATES = ['start', 'merge', 'sign_off'] as const;
+export type RelationGate = (typeof RELATION_GATES)[number];
+/** What `to` must reach for the gate to open: merged, decided (a decision glob's outcome) or signed off. */
+export const RELATION_UNTILS = ['merged', 'decided', 'signed_off'] as const;
+export type RelationUntil = (typeof RELATION_UNTILS)[number];
+/** Who set a relation: a person, slop's inference, slop's learning from outcomes, a split, or an agent. */
+export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent'] as const;
+export type RelationSource = (typeof RELATION_SOURCES)[number];
+
+/**
+ * One glob held back by another: `from` can't pass `gate` until `to` reaches `until`. Stored in the `relations` table, not on
+ * the glob. A relation no longer holds once it is dismissed, overridden (Start now) or its `to` was deleted.
+ */
+export interface Relation {
+  readonly id: string;
+  readonly boardId: number;
+  /** The glob held back. */
+  readonly from: string;
+  /** The glob (or decision glob) it waits on. It has no foreign key: a deleted `to` leaves the row, so the view can say so. */
+  readonly to: string;
+  readonly gate: RelationGate;
+  readonly until: RelationUntil;
+  /** One line: why it waits. */
+  readonly reason: string | null;
+  /** Files or symbols that show it. */
+  readonly evidence: readonly string[];
+  readonly source: RelationSource;
+  /** Set when a person dismissed it as not a dependency, with the plan hash then (a changed plan may infer it again). */
+  readonly dismissedAt: string | null;
+  readonly dismissedPlanHash: string | null;
+  /** Set when a person chose Start now over it (inferred and learned start relations only). */
+  readonly overriddenAt: string | null;
+  readonly createdAt: string;
+}
+
+/** The fields of a relation that change after it is made. */
+export type RelationPatch = Partial<Pick<Relation, 'until' | 'reason' | 'evidence' | 'dismissedAt' | 'dismissedPlanHash' | 'overriddenAt'>>;
+
 /**
  * How two decisions relate, as the KB pipeline (or an admin) found: closed into another learning (`duplicate_of`,
  * `suppressed_by`, `covered_by`), a hint that another may already say it (`possibly_covered_by`), a contradiction, or a

@@ -8,15 +8,15 @@ import { unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js
 import type { UnstickOptions } from '../src/domain/whose-move.js';
 import type { Move } from '../src/domain/whose-move.js';
 import type { Glob } from '../src/domain/types.js';
-import type { DependencyState } from '../src/domain/waiting.js';
+import type { AwaitedDependency } from '../src/domain/relations.js';
 import { NOW, dev, glob, other, run } from './fixtures.js';
 
 const minutesAgo = (n: number) => new Date(Date.parse(NOW) - n * 60_000).toISOString();
 const head = 'a2a88c8aaaa';
 const viewer = { email: dev.email, role: dev.role };
 
-const move = (g: Glob, facts: MachineFacts = {}, opts: { viewer?: typeof viewer; deps?: Map<string, DependencyState>; stored?: StoredHumanStep[] } = {}): Move =>
-  whoseMove(g, humanSteps(g, {}, opts.stored ?? []), machineSteps(g, facts), opts.deps ?? new Map(), NOW, { ...('viewer' in opts ? (opts.viewer === undefined ? {} : { viewer: opts.viewer }) : { viewer }) });
+const move = (g: Glob, facts: MachineFacts = {}, opts: { viewer?: typeof viewer; waiting?: AwaitedDependency[]; stored?: StoredHumanStep[] } = {}): Move =>
+  whoseMove(g, humanSteps(g, {}, opts.stored ?? []), machineSteps(g, facts), opts.waiting ?? [], NOW, { ...('viewer' in opts ? (opts.viewer === undefined ? {} : { viewer: opts.viewer }) : { viewer }) });
 
 const ready = (patch: Partial<Glob> = {}) =>
   glob({ status: 'pr_open', pr: { number: 49, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, implementer: dev.email, ...patch });
@@ -67,9 +67,9 @@ describe('whoseMove: priority', () => {
   });
 
   it('waiting: a Planning glob whose needs have not merged, and an upload slop has not seen', () => {
-    const held = glob({ status: 'planning', after: ['s1t9'], waiting: { since: NOW } });
-    expect(move(held, {}, { deps: new Map([['s1t9', 'open']]) })).toMatchObject({ holder: 'waiting', reason: 'waiting on s1t9', waitingOn: ['s1t9'] });
-    expect(move(held, {}, { deps: new Map([['s1t9', 'merged']]) }).holder).toBe('idle');
+    const held = glob({ status: 'planning', waiting: { since: NOW } });
+    expect(move(held, {}, { waiting: [{ id: 's1t9', state: 'open', why: 'Waits for s1t9 to merge' }] })).toMatchObject({ holder: 'waiting', reason: 'waiting on s1t9', waitingOn: ['s1t9'] });
+    expect(move(held, {}, { waiting: [] }).holder).toBe('idle');
     expect(move(glob({ status: 'in_progress', implementer: dev.email }), { pendingUploads: [{ key: 'k', fileName: 'a.png', since: NOW }] })).toMatchObject({ holder: 'waiting' });
   });
 
@@ -171,7 +171,7 @@ describe('whoseMove: stalled', () => {
   });
 
   it('with incomplete facts, a glob nobody is on is idle, while failures and quiet runs still stall', () => {
-    const partial = (g: Glob): Move => whoseMove(g, humanSteps(g, {}, []), machineSteps(g, {}), new Map(), NOW, { viewer, complete: false });
+    const partial = (g: Glob): Move => whoseMove(g, humanSteps(g, {}, []), machineSteps(g, {}), [], NOW, { viewer, complete: false });
     expect(partial(glob({ status: 'in_progress', type: 'sub', updatedAt: minutesAgo(3) }))).toMatchObject({ holder: 'idle', reason: 'Not enough facts to say' });
     expect(partial(glob({ status: 'implementing', implementer: dev.email, updatedAt: minutesAgo(90) })).holder).toBe('idle');
     expect(partial(glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW } }))).toMatchObject({ holder: 'stalled', cause: 'failed' });
@@ -237,7 +237,7 @@ describe('stall hand-off', () => {
   it('an unstick step passed in is not a due step: the glob stays stalled, not you', () => {
     const g = stalledGlob();
     const first = move(g);
-    const again = whoseMove(g, withUnstick(humanSteps(g, {}), first), machineSteps(g), new Map(), NOW, { viewer });
+    const again = whoseMove(g, withUnstick(humanSteps(g, {}), first), machineSteps(g), [], NOW, { viewer });
     expect(again.holder).toBe('stalled');
   });
 });
@@ -287,6 +287,6 @@ describe('whoseMove: a conflict or failed checks on an open PR is never "nobody"
   it('a standby run with a draft PR whose record is at the head is Done', () => {
     const g = glob({ status: 'in_progress', implementer: null, pr: { number: 49, state: 'draft', headSha: head }, runs: [run({ state: 'watching' })] });
     const steps = humanSteps(g, { recordAtHead: true }, []);
-    expect(whoseMove(g, steps, machineSteps(g, {}), new Map(), NOW, { viewer })).toMatchObject({ reason: 'Mark ready' });
+    expect(whoseMove(g, steps, machineSteps(g, {}), [], NOW, { viewer })).toMatchObject({ reason: 'Mark ready' });
   });
 });

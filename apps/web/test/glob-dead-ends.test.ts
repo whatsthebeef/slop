@@ -166,7 +166,7 @@ describe('no dead ends', () => {
         (a) => a !== 'delete' && actionPresentation(a, g, false, email).placement !== 'none',
       );
       const main = mainAction(shown, g, false, false, email);
-      const move = whoseMove(g, humanSteps(g, {}, []), machineSteps(g), new Map(), NOW, {
+      const move = whoseMove(g, humanSteps(g, {}, []), machineSteps(g), [], NOW, {
         viewer: { email, role: actor.role },
       });
       const status = move.holder === 'machine' || move.holder === 'waiting';

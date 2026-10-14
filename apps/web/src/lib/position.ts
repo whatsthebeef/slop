@@ -64,7 +64,7 @@ const liveSession = (glob: GlobView): string | null => {
 /** The move for a glob: the server's, else derived here from the glob alone. */
 export const moveOf = (glob: GlobView, now: string, viewer?: HumanStepViewer): Move =>
   glob.move ??
-  whoseMove(glob, deriveHumanSteps(glob, {}, []), glob.machineSteps ?? deriveMachineSteps(glob), new Map(), now, {
+  whoseMove(glob, deriveHumanSteps(glob, {}, []), glob.machineSteps ?? deriveMachineSteps(glob), glob.waitingFor ?? [], now, {
     ...(viewer === undefined ? {} : { viewer }),
   });
 

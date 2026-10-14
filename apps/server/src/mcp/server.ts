@@ -1,5 +1,5 @@
-import type { ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
-import { cleanFileName, invalidInput, machine, notFound, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
+import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SizeCheckService, SuggestService, NewHumanStep, StoredHumanStep } from '@slop/core';
+import { cleanFileName, invalidInput, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
 import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -161,13 +161,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is an overlap.',
+            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is not a need.',
           ),
-        overlaps: z
-          .array(z.string().min(1))
-          .max(20)
-          .optional()
-          .describe('IDs of globs on this board that may change the same files. Never blocks a start; it only orders the merges (the later one rebases on main as usual).'),
         after: z
           .array(z.string().min(1))
           .max(20)
@@ -251,7 +246,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         idempotencyKey: input.idempotencyKey,
         ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
         ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
-        ...(input.overlaps === undefined ? {} : { overlaps: input.overlaps }),
         ...(files.length === 0 ? {} : { files }),
       });
       if (!created.ok) return reply(created);
@@ -265,7 +259,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         else uploadProblems.push(`${f.fileName}: ${made.error.message}`);
       }
       await deps.outbox.drain(created.value.id);
-      return reply(await globs.get(email, created.value.id), ({ glob }) => ({
+      return reply(await globs.get(email, created.value.id), ({ glob, relations }) => ({
         ...(uploads.length === 0 ? {} : { uploads, next: UPLOAD_NEXT }),
         ...(uploadProblems.length === 0 ? {} : { uploadProblems }),
         id: glob.id,
@@ -277,13 +271,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: glob.category,
         group: glob.group,
         environment: glob.environment,
-        ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
+        ...(startIds(relations).length === 0 ? {} : { after: startIds(relations) }),
         ...(glob.waiting == null ? {} : { waiting: true }),
-        ...(glob.impliedAfter === undefined || glob.impliedAfter.length === 0 ? {} : { impliedAfter: glob.impliedAfter }),
         // Not applied: pass `after` to wait for them.
-        ...(suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)).length === 0
+        ...(suggestedAfter.filter((id) => !startIds(relations).includes(id)).length === 0
           ? {}
-          : { suggestedAfter: suggestedAfter.filter((id) => !(glob.after ?? []).includes(id)) }),
+          : { suggestedAfter: suggestedAfter.filter((id) => !startIds(relations).includes(id)) }),
       }));
     },
   );
@@ -292,7 +285,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0); parts that touch the same files go in `overlaps`, which orders merges and never blocks a start. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
+        "Cut a glob in Planning (not started: no run, no branch) into parts in one step. Part 0 is this glob: it keeps its ID, history and decisions and gets the new title and plan. The other parts are created in its group with their own plan, copies of its link attachments (and the text attachments you list) and the `after` (needs) between them. Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Parts default to the glob's type and category; a part with no `after` runs in parallel. Name only direct prerequisites in `after` (a shared schema or contract as part 0, each consumer needing just part 0). Each `after` is a start relation between the parts, and the glob you cut cannot be signed off until every other part has merged. A same part that needs another starts its routine by itself when its last need merges (`autoStart`; turn it off with update_glob).",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -305,7 +298,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               category: z.enum(WORK_CATEGORIES).optional(),
               type: z.enum(SLOP_TYPES).optional(),
               after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part needs merged before it starts'),
-              overlaps: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts that may change the same files; never blocks a start'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
             }),
           )
@@ -317,16 +309,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const split = await globs.split(email, id, version, {
         idempotencyKey,
         planBy: 'sessionator',
-        parts: parts.map(({ attachments, after, overlaps, category, type, ...rest }) => ({
+        parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
           ...rest,
           ...(attachments === undefined ? {} : { attachments }),
           ...(after === undefined ? {} : { after }),
-          ...(overlaps === undefined ? {} : { overlaps }),
           ...(category === undefined ? {} : { category }),
           ...(type === undefined ? {} : { type }),
         })),
       });
       if (split.ok) for (const glob of split.value) await deps.outbox.drain(glob.id);
+      const relations = split.ok ? await globs.peekRelations(split.value.map((g) => g.id)) : new Map<string, Relation[]>();
       return reply(split, (list) => ({
         parts: list.map((glob, index) => ({
           part: index,
@@ -336,7 +328,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           type: glob.type,
           category: glob.category,
           status: glob.status,
-          ...(glob.after === undefined || glob.after.length === 0 ? {} : { after: glob.after }),
+          ...(startIds(relations.get(glob.id) ?? []).length === 0 ? {} : { after: startIds(relations.get(glob.id) ?? []) }),
           ...(glob.waiting == null ? {} : { waiting: true }),
           ...(glob.autoStart === true ? { autoStart: true } : {}),
         })),
@@ -416,7 +408,6 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         environment: z.string().nullable().optional(),
         needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
         after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
-        overlaps: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs that may change the same files; never blocks a start'),
         autoStart: z.boolean().optional().describe("false: a same from a split stops waiting to start by itself when its needs merge (it keeps them); start it with start_glob"),
       },
     },

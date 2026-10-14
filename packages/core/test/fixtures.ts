@@ -1,5 +1,6 @@
 import type { Context } from '../src/domain/machine.js';
-import type { Actor, Board, Glob, Run } from '../src/domain/types.js';
+import type { RelationFacts, ToState } from '../src/domain/relations.js';
+import type { Actor, Board, Glob, Relation, Run } from '../src/domain/types.js';
 
 export const NOW = '2026-10-05T12:00:00.000Z';
 
@@ -92,4 +93,28 @@ export const run = (patch: Partial<Run> = {}): Run => ({
   sessionId: null,
   sessionUrl: null,
   ...patch,
+});
+
+/** A relation of board 1: `from` can't start until `to` is merged, unless the patch says otherwise. */
+export const relation = (from: string, to: string, patch: Partial<Relation> = {}): Relation => ({
+  id: `rel-${from}-${to}-${patch.gate ?? 'start'}`,
+  boardId: 1,
+  from,
+  to,
+  gate: 'start',
+  until: 'merged',
+  reason: null,
+  evidence: [],
+  source: 'person',
+  dismissedAt: null,
+  dismissedPlanHash: null,
+  overriddenAt: null,
+  createdAt: NOW,
+  ...patch,
+});
+
+/** Relation facts for a glob's start relations to the given globs and the state of each. */
+export const relationFacts = (from: string, states: readonly (readonly [string, ToState])[], patch: Partial<Relation> = {}): RelationFacts => ({
+  relations: states.map(([to]) => relation(from, to, patch)),
+  states: new Map(states),
 });
