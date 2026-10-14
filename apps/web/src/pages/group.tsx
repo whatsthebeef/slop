@@ -340,6 +340,8 @@ export const GroupPage = () => {
         }}
       />
       <CreateGlobDialog
+        // Remount on a rename or merge: the form takes initialGroup only when it is created.
+        key={shown.name}
         board={board.data}
         groups={groupNames(globs)}
         initialGroup={shown.name}
