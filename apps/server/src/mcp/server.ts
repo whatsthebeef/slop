@@ -1218,6 +1218,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
       if (stored.ok && !('ignored' in stored.value) && kind === 'investigation' && runId !== undefined && stored.value.provenance.validation === undefined) {
         await globs.applyEvent(id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+        // A Start that waited for this investigation fires its run now.
+        await deps.outbox.drain(id);
       }
       return reply(
         stored,

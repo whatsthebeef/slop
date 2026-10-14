@@ -208,6 +208,8 @@ export interface SizeProposal {
   readonly criticalPath?: number;
   /** The most workstreams that can run at the same time once their needs are done. */
   readonly maxParallel?: number;
+  /** What the ownership pass merged or moved ("merged A and B: both change x.ts"); shown as evidence. */
+  readonly notes?: readonly string[];
 }
 
 /** A proposal as older checks stored it: parts in split_glob's shape (`title`, `plan`, `after`). Read only. */
@@ -266,6 +268,141 @@ export const splitShape = (parts: readonly { readonly needs: readonly number[] }
   const width = new Map<number, number>();
   for (const d of depth) width.set(d, (width.get(d) ?? 0) + 1);
   return { criticalPath: Math.max(0, ...depth), maxParallel: Math.max(0, ...width.values()) };
+};
+
+/** A plan without the bullet that lists `entry` as a file (the file list the workstream was built with). */
+const withoutFileLine = (plan: string, entry: string): string =>
+  plan
+    .split('\n')
+    .filter((line) => line.trim() !== `- ${entry}`)
+    .join('\n');
+
+/** The plan, once its workstream has given `entry` to `owner`: its bullet goes and a line says who owns it. */
+const gaveAway = (plan: string, entry: string, owner: string): string =>
+  `${withoutFileLine(plan, entry).trimEnd()}\n\nNote: ${entry} belongs to "${owner}", not to this workstream; leave it to that one.`;
+
+const isDirectory = (entry: string): boolean => entry.endsWith('/');
+
+/** `outer` is `inner` itself, or a directory entry that holds it. */
+const covers = (outer: string, inner: string): boolean => outer === inner || (isDirectory(outer) && inner.startsWith(outer));
+
+interface OwnNode {
+  name: string;
+  goal: string;
+  files: string[];
+  plan: string;
+  needs: Set<OwnNode>;
+}
+
+/** Everything a node needs, directly or through others. */
+const reachOf = (node: OwnNode): Set<OwnNode> => {
+  const out = new Set<OwnNode>();
+  const visit = (n: OwnNode): void => {
+    for (const need of n.needs) {
+      if (!out.has(need)) {
+        out.add(need);
+        visit(need);
+      }
+    }
+  };
+  visit(node);
+  return out;
+};
+
+/** The first two nodes (in order) with overlapping entries, and the narrower entry of the pair (the file under a directory). */
+const firstShared = (nodes: readonly OwnNode[]): { a: OwnNode; b: OwnNode; ea: string; eb: string; narrow: string } | null => {
+  for (const [i, a] of nodes.entries()) {
+    for (const b of nodes.slice(i + 1)) {
+      for (const ea of a.files) {
+        const eb = b.files.find((f) => covers(ea, f) || covers(f, ea));
+        if (eb !== undefined) return { a, b, ea, eb, narrow: covers(ea, eb) ? eb : ea };
+      }
+    }
+  }
+  return null;
+};
+
+/** Nodes in an order that puts what others need first, keeping the given order otherwise. */
+const topological = (nodes: readonly OwnNode[]): OwnNode[] => {
+  const left = [...nodes];
+  const out: OwnNode[] = [];
+  while (left.length > 0) {
+    const next = left.findIndex((n) => [...n.needs].every((need) => out.includes(need)));
+    out.push(...left.splice(next === -1 ? 0 : next, 1));
+  }
+  return out;
+};
+
+/**
+ * The ownership rule (a file belongs to exactly one workstream) applied to a proposal's workstreams, before it is shown. A
+ * directory entry owns the files under it. For a file two workstreams share: when the earliest workstream they both need (one
+ * of the two, or one both build on: the contract) can own it, it moves there; otherwise the two merge into one, together with
+ * any workstream between them, keeping both plan shares and the union of needs. Repeats until no file is shared; needs and
+ * the shape are recomputed. Null when fewer than 2 workstreams are left. `notes` says what was merged or moved.
+ */
+export const applyOwnership = (workstreams: readonly Workstream[]): SizeProposal | null => {
+  let nodes: OwnNode[] = [];
+  for (const w of workstreams) {
+    const needs = new Set(w.needs.map((n) => nodes[n]).filter((n): n is OwnNode => n !== undefined));
+    nodes.push({ name: w.name, goal: w.goal, files: [...w.files], plan: w.plan, needs });
+  }
+  const notes: string[] = [];
+  // Each pass moves a file or merges two workstreams, so it ends; the bound only guards a mistake.
+  for (let pass = 0; pass < 1000; pass++) {
+    const shared = firstShared(nodes);
+    if (shared === null) break;
+    const { a, b, ea, eb, narrow } = shared;
+    const [reachA, reachB] = [reachOf(a), reachOf(b)];
+    // The earliest workstream that can own it: `a` when `b` builds on it and `a` already holds it, or one both build on when
+    // each holds exactly that entry. Anything else (a directory entry that would still overlap) is a merge.
+    const owner =
+      reachB.has(a) && covers(ea, narrow) && eb === narrow
+        ? a
+        : nodes.find((n) => n !== a && n !== b && reachA.has(n) && reachB.has(n) && ea === narrow && eb === narrow);
+    if (owner !== undefined) {
+      b.files = b.files.filter((f) => f !== eb);
+      b.plan = gaveAway(b.plan, eb, owner.name);
+      if (owner !== a) {
+        a.files = a.files.filter((f) => f !== ea);
+        a.plan = gaveAway(a.plan, ea, owner.name);
+        owner.files.push(narrow);
+        owner.plan = `${owner.plan.trimEnd()}\n\n- ${narrow}`;
+      }
+      notes.push(`moved ${narrow} to ${owner.name}: both ${a.name} and ${b.name} change it`);
+      continue;
+    }
+    // Merge a and b with every workstream on a path between them (or the merged one would wait on itself).
+    notes.push(`merged ${a.name} and ${b.name}: both change ${narrow}`);
+    const group = nodes.filter((n) => n === a || n === b || (reachB.has(n) && reachOf(n).has(a)));
+    const first = group[0] as OwnNode;
+    const rest = group.slice(1);
+    const needs = new Set(group.flatMap((n) => [...n.needs]).filter((n) => !group.includes(n)));
+    first.name = group.map((n) => n.name).join(' and ').slice(0, 120);
+    first.files = [...new Set(group.flatMap((n) => n.files))];
+    const seen = new Set<string>();
+    // A file bullet both plans carry is listed once.
+    first.plan = group
+      .map((n) => n.plan)
+      .join('\n\n')
+      .split('\n')
+      .filter((line) => !/^- \S/.test(line.trim()) || !first.files.concat(...group.map((g) => g.files)).includes(line.trim().slice(2)) || (!seen.has(line.trim()) && seen.add(line.trim())))
+      .join('\n');
+    first.needs = needs;
+    nodes = nodes.filter((n) => !rest.includes(n));
+    for (const n of nodes) {
+      if ([...n.needs].some((need) => rest.includes(need))) n.needs = new Set([...n.needs].map((need) => (rest.includes(need) ? first : need)));
+      n.needs.delete(n);
+    }
+    nodes = topological(nodes);
+  }
+  if (nodes.length < 2) return null;
+  const index = new Map(nodes.map((n, i) => [n, i]));
+  const built: Workstream[] = nodes.map((n) => {
+    const wanted = [...n.needs];
+    const direct = wanted.filter((need) => !wanted.some((other) => other !== need && reachOf(other).has(need)));
+    return { name: n.name, goal: n.goal, files: n.files, plan: n.plan, needs: direct.map((d) => index.get(d) as number).sort((x, y) => x - y) };
+  });
+  return { workstreams: built, ...splitShape(built), ...(notes.length > 0 ? { notes } : {}) };
 };
 
 /** A proposal whose workstreams wait on each other in one line: parallel work that gains nothing, so it is not offered. */
@@ -341,7 +478,7 @@ export const buildProposal = (plan: string, modelParts: readonly ModelPart[]): S
     reach[index] = new Set(direct.flatMap((n) => [n, ...(reach[n] ?? [])]));
     return { name: p.name, goal: p.goal, files: p.files, plan: p.plan, needs: direct.sort((a, b) => a - b) };
   });
-  return { workstreams: built, ...splitShape(built) };
+  return applyOwnership(built);
 };
 
 // ---------------------------------------------------------------------------
