@@ -1,28 +1,6 @@
-import {
-  decisionOf,
-  dueText,
-  findingsLabel,
-  reviewOutdated,
-  scopeLabel,
-  upcomingSteps,
-} from '@slop/core';
-import type {
-  Action,
-  Category,
-  DeployIndicator,
-  EnvironmentIndicator,
-  HumanStepViewer,
-} from '@slop/core';
-import {
-  AlertTriangle,
-  Bug,
-  GitBranch,
-  Hourglass,
-  ListChecks,
-  Loader2,
-  Scale,
-  Sparkles,
-} from 'lucide-react';
+import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomingSteps } from '@slop/core';
+import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
+import { AlertTriangle, Bug, GitBranch, Hourglass, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -61,7 +39,7 @@ const CategoryIcon = ({ category }: { category: Category }) => {
   const { icon: Icon, className } = CATEGORY_ICON[category];
   return (
     <Tip text={`Category: ${category}`}>
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={category} role="img" />
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={category} role='img' />
     </Tip>
   );
 };
@@ -86,24 +64,20 @@ const AGING_STYLE = { neutral: 'bg-card', amber: 'bg-amber/15', red: 'bg-red/10'
 const initials = (email: string): string => {
   const parts = (email.split('@')[0] ?? '').split(/[._-]+/).filter(Boolean);
   const [first = '', second = ''] = parts;
-  return (
-    second === '' ? first.slice(0, 2) : `${first.slice(0, 1)}${second.slice(0, 1)}`
-  ).toUpperCase();
+  return (second === '' ? first.slice(0, 2) : `${first.slice(0, 1)}${second.slice(0, 1)}`).toUpperCase();
 };
 
 /** The implementer, or the planner (dashed) while no person implements (unassigned, or the machine implementing). */
 const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
   <Tip text={`${planner ? 'Planner' : 'Implementer'}: ${email}`}>
-    <span
-      className={cn(
-        'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border font-mono text-[9px] font-semibold',
-        planner
-          ? 'border-dashed border-muted-foreground text-muted-foreground'
-          : 'bg-muted text-foreground',
-      )}
-    >
-      {initials(email)}
-    </span>
+  <span
+    className={cn(
+      'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border font-mono text-[9px] font-semibold',
+      planner ? 'border-dashed border-muted-foreground text-muted-foreground' : 'bg-muted text-foreground',
+    )}
+  >
+    {initials(email)}
+  </span>
   </Tip>
 );
 
@@ -111,36 +85,23 @@ const Avatar = ({ email, planner }: { email: string; planner: boolean }) => (
  * A group's label: a curated sticker colour, the only shiny thing on the board. With `onFilter` (on the board's cards) it is a
  * button that filters the board to the group without opening the card; with `to` (the glob view) it links to that filtered board.
  */
-export const GroupChip = ({
-  name,
-  onFilter,
-  to,
-}: {
-  name: string;
-  onFilter?: (name: string) => void;
-  to?: string;
-}) => {
+export const GroupChip = ({ name, onFilter, to }: { name: string; onFilter?: (name: string) => void; to?: string }) => {
   const { hi, base, lo } = groupSticker(name);
   const colours: CSSProperties & Record<'--st-hi' | '--st-base' | '--st-lo', string> = {
     '--st-hi': hi,
     '--st-base': base,
     '--st-lo': lo,
   };
-  const className =
-    'sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold';
+  const className = 'sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold';
   return (
-    <Tip
-      text={
-        onFilter !== undefined || to !== undefined ? `Show only group: ${name}` : `Group: ${name}`
-      }
-    >
+    <Tip text={onFilter !== undefined || to !== undefined ? `Show only group: ${name}` : `Group: ${name}`}>
       {onFilter !== undefined ? (
         <button
-          type="button"
+          type='button'
           className={cn(className, 'cursor-pointer')}
           style={colours}
           aria-label={`Show only group ${name}`}
-          data-testid="group-chip"
+          data-testid='group-chip'
           onClick={(e) => {
             e.stopPropagation();
             onFilter(name);
@@ -150,7 +111,7 @@ export const GroupChip = ({
           {name}
         </button>
       ) : to !== undefined ? (
-        <Link to={to} className={className} style={colours} data-testid="group-chip">
+        <Link to={to} className={className} style={colours} data-testid='group-chip'>
           {name}
         </Link>
       ) : (
@@ -178,45 +139,31 @@ const CornerMarkerView = ({
   onOpenSection: (target: GlobTarget) => void;
 }) => {
   const click = marker.click;
-  const open =
-    click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
+  const open = click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
   const needsHuman = marker.kind === 'needs-human';
   return (
-    <span
-      className="inline-flex min-w-0 max-w-[45%] justify-end"
-      data-testid="corner-marker"
-      data-kind={marker.kind}
-    >
-      <Tip
-        text={
-          open === undefined || click === null || needsHuman
-            ? marker.tip
-            : `${marker.tip}\n${clickTip(click)}`
-        }
-      >
+    <span className='inline-flex min-w-0 max-w-[45%] justify-end' data-testid='corner-marker' data-kind={marker.kind}>
+      <Tip text={open === undefined || click === null || needsHuman ? marker.tip : `${marker.tip}\n${clickTip(click)}`}>
         <ChipButton
           onOpen={open}
-          className={cn(
-            'inline-flex min-w-0 items-center gap-1 text-right font-mono text-[11px]',
-            marker.tone,
-          )}
+          className={cn('inline-flex min-w-0 items-center gap-1 text-right font-mono text-[11px]', marker.tone)}
           testId={needsHuman ? 'escalation-chip' : 'position'}
           dataKind={marker.kind}
           ariaLabel={needsHuman ? 'Needs a person' : marker.label}
         >
           {needsHuman ? (
             // The visible words are hidden: the button's label names it and the Tip's description gives the reason.
-            <span aria-hidden className="inline-flex items-center gap-1">
-              needs a <HumanIcon className="h-3 w-3" decorative />
+            <span aria-hidden className='inline-flex items-center gap-1'>
+              needs a <HumanIcon className='h-3 w-3' decorative />
             </span>
           ) : (
             <>
               {marker.kind === 'standby' ? (
-                <ActorIcon actor="machine" className="h-3 w-3 shrink-0" decorative />
+                <ActorIcon actor='machine' className='h-3 w-3 shrink-0' decorative />
               ) : position === null ? null : (
                 <PositionIcon position={position} />
               )}
-              {marker.text !== '' && <span className="truncate">{marker.text}</span>}
+              {marker.text !== '' && <span className='truncate'>{marker.text}</span>}
             </>
           )}
         </ChipButton>
@@ -226,19 +173,11 @@ const CornerMarkerView = ({
 };
 
 const PositionIcon = ({ position }: { position: Position }) => {
-  if (position.spinning && position.holder === 'machine')
-    return <MachineIcon working className="h-3 w-3 shrink-0" decorative />;
-  if (position.spinning) return <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />;
-  if (position.holder === 'waiting') return <Hourglass className="h-3 w-3 shrink-0" aria-hidden />;
-  if (position.holder === 'stalled')
-    return <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />;
-  return (
-    <ActorIcon
-      actor={position.holder === 'human' ? 'human' : 'machine'}
-      className="h-3 w-3 shrink-0"
-      decorative
-    />
-  );
+  if (position.spinning && position.holder === 'machine') return <MachineIcon working className='h-3 w-3 shrink-0' decorative />;
+  if (position.spinning) return <Loader2 className='h-3 w-3 shrink-0 animate-spin' aria-hidden />;
+  if (position.holder === 'waiting') return <Hourglass className='h-3 w-3 shrink-0' aria-hidden />;
+  if (position.holder === 'stalled') return <AlertTriangle className='h-3 w-3 shrink-0' aria-hidden />;
+  return <ActorIcon actor={position.holder === 'human' ? 'human' : 'machine'} className='h-3 w-3 shrink-0' decorative />;
 };
 
 /** A button on the card that stops its click and key from reaching the card, which opens the glob at the top. */
@@ -261,7 +200,7 @@ const CardButton = ({
   children: ReactNode;
 }) => (
   <button
-    type="button"
+    type='button'
     className={className}
     aria-label={ariaLabel}
     aria-describedby={describedBy}
@@ -297,23 +236,13 @@ export const ChipButton = ({
   children: ReactNode;
 }) =>
   onOpen === undefined ? (
-    <span
-      className={cn('max-w-full truncate whitespace-nowrap', className)}
-      data-testid={testId}
-      data-kind={dataKind}
-      aria-describedby={describedBy}
-      {...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel, role: 'img' })}
-    >
+    <span className={cn('max-w-full truncate whitespace-nowrap', className)} data-testid={testId} data-kind={dataKind} aria-describedby={describedBy} {...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel, role: 'img' })}>
       {children}
     </span>
   ) : (
     <CardButton
       onOpen={onOpen}
-      className={cn(
-        'max-w-full truncate whitespace-nowrap',
-        className,
-        'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring',
-      )}
+      className={cn('max-w-full truncate whitespace-nowrap', className, 'cursor-pointer rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')}
       testId={testId}
       dataKind={dataKind}
       ariaLabel={ariaLabel}
@@ -327,13 +256,7 @@ export const ChipButton = ({
  * Small icons for the artifacts the glob has; each opens the glob view on that artifact. An independent review's finding
  * count is its own button beside the icon and opens the findings.
  */
-const ArtifactIcons = ({
-  glob,
-  onOpen,
-}: {
-  glob: GlobView;
-  onOpen: (target: GlobTarget) => void;
-}) => {
+const ArtifactIcons = ({ glob, onOpen }: { glob: GlobView; onOpen: (target: GlobTarget) => void }) => {
   const present = CARD_ARTIFACT_KINDS.flatMap((kind) => {
     const artifact = glob.artifacts?.find((a) => a.kind === kind);
     // An independent review with no findings has nothing to show on the card; the glob view still lists it.
@@ -341,34 +264,29 @@ const ArtifactIcons = ({
   });
   if (present.length === 0) return null;
   return (
-    <span className="inline-flex items-center gap-0.5">
+    <span className='inline-flex items-center gap-0.5'>
       {present.map((a) => {
         const { title, icon: Icon } = ARTIFACT_META[a.kind];
         // An independent review shows its finding count, and says so when a later push left it behind.
-        const status =
-          a.review === undefined
-            ? null
-            : `${findingsLabel(a.review.findings)}${reviewOutdated(a.review, glob.pr?.headSha ?? null) ? ' (outdated)' : ''}`;
+        const status = a.review === undefined ? null : `${findingsLabel(a.review.findings)}${reviewOutdated(a.review, glob.pr?.headSha ?? null) ? ' (outdated)' : ''}`;
         return (
-          <span key={a.kind} className="inline-flex items-center">
-            <Tip
-              text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}: opens it in the artifacts`}
-            >
+          <span key={a.kind} className='inline-flex items-center'>
+            <Tip text={`${title} v${a.version}${a.commitSha === null ? '' : ` at ${a.commitSha.slice(0, 7)}`}: opens it in the artifacts`}>
               <CardButton
                 onOpen={() => onOpen(cardTargets.artifact(a.kind))}
-                className="inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                className='inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
                 ariaLabel={title}
                 testId={`artifact-icon-${a.kind}`}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className='h-3.5 w-3.5' />
               </CardButton>
             </Tip>
             {status !== null && (
               <Tip text={`${title}: ${status}. Opens the findings`}>
                 <CardButton
                   onOpen={() => onOpen(cardTargets.findings())}
-                  className="rounded-sm px-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
-                  testId="review-status"
+                  className='rounded-sm px-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground'
+                  testId='review-status'
                 >
                   {status}
                 </CardButton>
@@ -400,44 +318,34 @@ const MoveButton = ({
   onMove: (move: CardMove) => void;
 }) => (
   <Tip text={move.description}>
-    <button
-      type="button"
-      className={cn(
-        'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
-        hot
-          ? 'border-foreground bg-lcd text-lcd-foreground'
-          : primary
-            ? 'border-primary bg-primary text-primary-foreground hover:opacity-90'
-            : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
-        'disabled:pointer-events-none disabled:opacity-50',
-      )}
-      aria-label={move.description}
-      disabled={disabled}
-      data-testid={`move-${move.action}`}
-      onMouseEnter={() => onPreview(move)}
-      onMouseLeave={() => onPreview(null)}
-      onFocus={() => onPreview(move)}
-      onBlur={() => onPreview(null)}
-      onClick={(e) => {
-        e.stopPropagation();
-        onMove(move);
-      }}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
-      <ActorIcon actor={move.icon} className="h-3 w-3" decorative />
-      {move.label}
-    </button>
+  <button
+    type='button'
+    className={cn(
+      'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
+      hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
+      'disabled:pointer-events-none disabled:opacity-50',
+    )}
+    aria-label={move.description}
+    disabled={disabled}
+    data-testid={`move-${move.action}`}
+    onMouseEnter={() => onPreview(move)}
+    onMouseLeave={() => onPreview(null)}
+    onFocus={() => onPreview(move)}
+    onBlur={() => onPreview(null)}
+    onClick={(e) => {
+      e.stopPropagation();
+      onMove(move);
+    }}
+    onKeyDown={(e) => e.stopPropagation()}
+  >
+    <ActorIcon actor={move.icon} className='h-3 w-3' decorative />
+    {move.label}
+  </button>
   </Tip>
 );
 
 /** The glob's deploy state on its card: deploying, live, failed, or replaced by another glob. */
-export const DeployChip = ({
-  deploy,
-  onOpen,
-}: {
-  deploy: DeployIndicator;
-  onOpen?: () => void;
-}) => {
+export const DeployChip = ({ deploy, onOpen }: { deploy: DeployIndicator; onOpen?: () => void }) => {
   const env = deploy.environment;
   const [text, tip, tone] =
     deploy.state === 'deploying'
@@ -449,44 +357,25 @@ export const DeployChip = ({
       : deploy.state === 'live'
         ? [`${env}: live`, `Live in ${env} at ${deploy.sha.slice(0, 7)}`, 'text-signal-strong']
         : deploy.state === 'failed'
-          ? [
-              `${env}: deploy failed`,
-              `Deploy to ${env} failed: ${deploy.error ?? 'no reason given'}`,
-              'text-red',
-            ]
-          : [
-              `${env}: replaced`,
-              `${deploy.by} has been deployed to ${env} since`,
-              'text-muted-foreground',
-            ];
+          ? [`${env}: deploy failed`, `Deploy to ${env} failed: ${deploy.error ?? 'no reason given'}`, 'text-red']
+          : [`${env}: replaced`, `${deploy.by} has been deployed to ${env} since`, 'text-muted-foreground'];
   return (
     <Tip text={onOpen === undefined ? tip : `${tip}. Opens the deploys`}>
-      <ChipButton
-        onOpen={onOpen}
-        className={cn('inline-flex items-center gap-1 font-mono text-[11px]', tone)}
-        testId="deploy-chip"
-      >
-        {deploy.state === 'deploying' && !deploy.waiting && (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        )}
+      <ChipButton onOpen={onOpen} className={cn('inline-flex items-center gap-1 font-mono text-[11px]', tone)} testId='deploy-chip'>
+        {deploy.state === 'deploying' && !deploy.waiting && <Loader2 className='h-3 w-3 animate-spin' />}
         {text}
       </ChipButton>
     </Tip>
   );
 };
 
-const since = (iso: string | null) =>
-  iso === null ? '' : ` since ${new Date(iso).toLocaleString()}`;
+const since = (iso: string | null) => (iso === null ? '' : ` since ${new Date(iso).toLocaleString()}`);
 
 /**
  * The release and integration environments the glob is in (their deployed commit contains its merge), one chip each.
  * Production before sign-off is allowed but flagged.
  */
-export const EnvironmentChips = ({
-  environments,
-}: {
-  environments: readonly EnvironmentIndicator[];
-}) => (
+export const EnvironmentChips = ({ environments }: { environments: readonly EnvironmentIndicator[] }) => (
   <>
     {environments.map((env) => {
       const warned = env.warning === 'before_sign_off';
@@ -494,11 +383,8 @@ export const EnvironmentChips = ({
       return (
         <Tip key={env.environment} text={tip}>
           <span
-            className={cn(
-              'whitespace-nowrap font-mono text-[11px]',
-              warned ? 'text-required' : 'text-signal-strong',
-            )}
-            data-testid="environment-chip"
+            className={cn('whitespace-nowrap font-mono text-[11px]', warned ? 'text-required' : 'text-signal-strong')}
+            data-testid='environment-chip'
             data-warning={env.warning}
           >
             {env.environment} ✓
@@ -511,10 +397,7 @@ export const EnvironmentChips = ({
 
 /** One ATF run in words, for tooltips and the glob view. */
 export const atfLine = (run: AtfRun): string => {
-  const where =
-    run.scope === 'branch'
-      ? `Branch${run.environment === null ? '' : ` (${run.environment})`}`
-      : (run.environment ?? '');
+  const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
   const counts = `${run.passed} passed, ${run.failed} failed${run.skipped > 0 ? `, ${run.skipped} skipped` : ''}`;
   return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}`;
 };
@@ -530,18 +413,10 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
   const failing = current.some((r) => r.failing);
   // The text always says what the run found; a stale run is only muted, never shown as passing.
   const text = shown.failing ? `ATF ${shown.failed} failed` : `ATF ${shown.passed}✓`;
-  const tone = failing
-    ? 'text-red'
-    : current.length > 0
-      ? 'text-signal-strong'
-      : 'text-muted-foreground';
+  const tone = failing ? 'text-red' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
   const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
   const chip = (
-    <span
-      className={cn('whitespace-nowrap font-mono text-[11px]', tone)}
-      data-testid="atf-chip"
-      data-failing={failing}
-    >
+    <span className={cn('whitespace-nowrap font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>
       {text}
     </span>
   );
@@ -552,9 +427,9 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
       ) : (
         <a
           href={shown.url}
-          target="_blank"
-          rel="noreferrer"
-          className="hover:underline"
+          target='_blank'
+          rel='noreferrer'
+          className='hover:underline'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -573,7 +448,7 @@ const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }
         {i > 0 && ', '}
         <Link
           to={`/boards/${boardId}?glob=${encodeURIComponent(id)}`}
-          className="underline-offset-2 hover:underline"
+          className='underline-offset-2 hover:underline'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -589,27 +464,19 @@ const GlobLinks = ({ boardId, ids }: { boardId: number; ids: readonly string[] }
  * that the later merge rebases, never a hold. Each ID opens that glob on the board.
  */
 export const OverlapChip = ({ glob }: { glob: GlobView }) => {
-  const overlaps = (glob.impliedAfter ?? []).filter(
-    (i) => (i.kind ?? 'overlaps') === 'overlaps' && i.overridden !== true,
-  );
-  if (overlaps.length === 0 || glob.status === 'reviewing' || glob.status === 'signed_off')
-    return null;
-  const reason = overlaps
-    .map((i) => (i.paths.length === 0 ? i.id : `${i.id}: both may change ${i.paths.join(', ')}`))
-    .join('; ');
+  const overlaps = (glob.impliedAfter ?? []).filter((i) => (i.kind ?? 'overlaps') === 'overlaps' && i.overridden !== true);
+  if (overlaps.length === 0 || glob.status === 'reviewing' || glob.status === 'signed_off') return null;
+  const reason = overlaps.map((i) => (i.paths.length === 0 ? i.id : `${i.id}: both may change ${i.paths.join(', ')}`)).join('; ');
   return (
     <Tip text={`Overlaps ${reason}. Only the merge order matters: the later one rebases on main`}>
-      <span
-        className="max-w-full truncate whitespace-nowrap font-mono text-[11px] text-muted-foreground"
-        data-testid="overlap-chip"
-      >
+      <span className='max-w-full truncate whitespace-nowrap font-mono text-[11px] text-muted-foreground' data-testid='overlap-chip'>
         overlaps{' '}
         {overlaps.map((o, i) => (
           <span key={o.id}>
             {i > 0 && ', '}
             <Link
               to={`/boards/${glob.boardId}?glob=${encodeURIComponent(o.id)}`}
-              className="underline-offset-2 hover:underline"
+              className='underline-offset-2 hover:underline'
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             >
@@ -625,12 +492,8 @@ export const OverlapChip = ({ glob }: { glob: GlobView }) => {
 /** The size check's flag: the glob looks like more than one PR's worth of work and nobody has answered it yet. */
 export const OversizedChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) =>
   glob.oversized === true ? (
-    <Tip text="Intake judged this more than one PR of work. Open it to split it as proposed, edit the split, or keep it whole">
-      <ChipButton
-        onOpen={onOpen}
-        className="font-mono text-[11px] font-semibold text-required"
-        testId="oversized-chip"
-      >
+    <Tip text='Intake judged this more than one PR of work. Open it to split it as proposed, edit the split, or keep it whole'>
+      <ChipButton onOpen={onOpen} className='font-mono text-[11px] font-semibold text-required' testId='oversized-chip'>
         Oversized
       </ChipButton>
     </Tip>
@@ -647,15 +510,15 @@ export const SplitChip = ({ glob }: { glob: GlobView }) => {
   return (
     <Tip text={`${chip.tip}. ${chip.source} opens that glob`}>
       <span
-        className="inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground"
-        data-testid="split-chip"
+        className='inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground'
+        data-testid='split-chip'
       >
-        <GitBranch className="h-3 w-3 shrink-0" aria-hidden />
+        <GitBranch className='h-3 w-3 shrink-0' aria-hidden />
         <Link
           to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
-          className="truncate underline-offset-2 hover:underline"
+          className='truncate underline-offset-2 hover:underline'
           aria-label={`Split from ${chip.source}`}
-          data-testid="split-chip-open"
+          data-testid='split-chip-open'
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -679,38 +542,20 @@ export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
   return (
     <>
       <Tip text={`Applies to ${scopeLabel(attributes.scope)}${opens}`}>
-        <ChipButton
-          onOpen={onOpen}
-          className="rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground"
-          testId="scope-chip"
-        >
-          {attributes.scope.kind === 'glob'
-            ? attributes.scope.ref
-            : attributes.scope.kind.replace('_', ' ')}
+        <ChipButton onOpen={onOpen} className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' testId='scope-chip'>
+          {attributes.scope.kind === 'glob' ? attributes.scope.ref : attributes.scope.kind.replace('_', ' ')}
         </ChipButton>
       </Tip>
       {outcome !== null && (
-        <Tip
-          text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}${opens}`}
-        >
-          <ChipButton
-            onOpen={onOpen}
-            className="font-mono text-[11px] text-signal-strong"
-            testId="outcome-chip"
-          >
+        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}${opens}`}>
+          <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-signal-strong' testId='outcome-chip'>
             {OUTCOME_TEXT[outcome.kind].toLowerCase()}
           </ChipButton>
         </Tip>
       )}
       {conflicts.length > 0 && (
-        <Tip
-          text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree${opens}`}
-        >
-          <ChipButton
-            onOpen={onOpen}
-            className="font-mono text-[11px] text-required"
-            testId="conflict-chip"
-          >
+        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree${opens}`}>
+          <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-required' testId='conflict-chip'>
             conflicts with {conflicts.join(', ')}
           </ChipButton>
         </Tip>
@@ -731,12 +576,8 @@ const UpcomingStepsChip = ({ glob, onOpen }: { glob: GlobView; onOpen: () => voi
     .join('\n');
   return (
     <Tip text={tip}>
-      <ChipButton
-        onOpen={onOpen}
-        className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground"
-        testId="upcoming-steps-chip"
-      >
-        <HumanIcon className="h-3 w-3" decorative />
+      <ChipButton onOpen={onOpen} className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' testId='upcoming-steps-chip'>
+        <HumanIcon className='h-3 w-3' decorative />
         {first?.replace(/_/g, ' ')}
         {more.length > 0 && ` +${String(more.length)}`}
       </ChipButton>
@@ -749,11 +590,7 @@ const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', str
 });
 
 /** Runs a chip's click: an action, the glob view at a section, or a page in a new tab. */
-const runChip = (
-  click: ChipClick,
-  onAct: (action: Action) => void,
-  onOpenSection: (target: GlobTarget) => void,
-) => {
+const runChip = (click: ChipClick, onAct: (action: Action) => void, onOpenSection: (target: GlobTarget) => void) => {
   if (click.kind === 'act') onAct(click.action);
   else if (click.kind === 'section') onOpenSection(click.target);
   else window.open(click.url, '_blank', 'noopener,noreferrer');
@@ -788,14 +625,14 @@ const TurnButton = ({
   return (
     <Tip text={`${status.tip}\n${clickTip(click, confirming)}`}>
       <button
-        type="button"
+        type='button'
         className={cn(
           'inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-sm bg-foreground px-1.5 py-0.5 font-mono text-[11px] font-medium text-background hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
           confirming && 'bg-required',
         )}
         disabled={busy}
         aria-label={`Your turn: ${verb} PR${pr}`}
-        data-testid="your-turn-chip"
+        data-testid='your-turn-chip'
         data-kind={status.kind}
         data-confirming={confirming ? 'true' : undefined}
         onClick={(e) => {
@@ -814,11 +651,7 @@ const TurnButton = ({
         }}
         onBlur={() => setConfirming(false)}
       >
-        {busy ? (
-          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-        ) : (
-          <HumanIcon className="h-3 w-3" decorative />
-        )}
+        {busy ? <Loader2 className='h-3 w-3 animate-spin' aria-hidden /> : <HumanIcon className='h-3 w-3' decorative />}
         {busy ? workingLabel(pending) : confirming ? `Confirm merge${pr}` : verb}
       </button>
     </Tip>
@@ -900,7 +733,7 @@ export const GlobCard = ({
 
   return (
     <div
-      role="button"
+      role='button'
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
@@ -933,66 +766,41 @@ export const GlobCard = ({
       data-glob-id={glob.id}
       data-testid={`card-${glob.id}`}
     >
-      <div
-        className="flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground"
-        data-testid="card-header"
-      >
+      <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
         {/* The ID gives way last: the marker's text truncates first (it shrinks faster), the category icon never moves. */}
-        <span className="min-w-0 shrink-[0.2] truncate whitespace-nowrap" data-testid="card-id">
+        <span className='min-w-0 shrink-[0.2] truncate whitespace-nowrap' data-testid='card-id'>
           {glob.id} · {decision ? 'decision' : glob.type}
           {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
         </span>
-        <span
-          className="inline-flex min-w-0 items-center justify-end gap-1.5"
-          data-testid="card-corner"
-        >
-          {marker !== null && (
-            <CornerMarkerView
-              marker={marker}
-              position={position}
-              onAct={onAct}
-              onOpenSection={onOpenSection}
-            />
-          )}
+        <span className='inline-flex min-w-0 items-center justify-end gap-1.5' data-testid='card-corner'>
+          {marker !== null && <CornerMarkerView marker={marker} position={position} onAct={onAct} onOpenSection={onOpenSection} />}
           <CategoryIcon category={glob.category} />
         </span>
       </div>
-      <div className="leading-snug font-medium break-words" data-testid="card-title">
+      <div className='leading-snug font-medium break-words' data-testid='card-title'>
         {glob.title}
       </div>
       {line !== null && (
-        <Tip text={line.tip} className="w-full">
+        <Tip text={line.tip} className='w-full'>
           <div
-            className="w-full min-w-0 truncate whitespace-nowrap text-left font-mono text-[11px]"
-            data-testid="status-line"
+            className='w-full min-w-0 truncate whitespace-nowrap text-left font-mono text-[11px]'
+            data-testid='status-line'
             data-kind={line.kind}
           >
             {line.head !== null && (
               <ChipButton
-                onOpen={() =>
-                  runChip(
-                    line.head?.click ?? { kind: 'section', target: cardTargets.actions() },
-                    () => undefined,
-                    onOpenSection,
-                  )
-                }
+                onOpen={() => runChip(line.head?.click ?? { kind: 'section', target: cardTargets.actions() }, () => undefined, onOpenSection)}
                 className={cn('inline text-left', line.head.tone)}
-                testId="status-line-open"
+                testId='status-line-open'
                 dataKind={line.head.kind}
               >
                 {line.head.text}
               </ChipButton>
             )}
-            {line.head !== null && line.waiting !== null && (
-              <span className="text-muted-foreground"> · </span>
-            )}
+            {line.head !== null && line.waiting !== null && <span className='text-muted-foreground'> · </span>}
             {line.waiting !== null && (
-              <span className="text-muted-foreground" data-testid="waiting-on">
-                <ChipButton
-                  onOpen={() => onOpenSection(cardTargets.prerequisites())}
-                  className="inline"
-                  testId="waiting-on-open"
-                >
+              <span className='text-muted-foreground' data-testid='waiting-on'>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.prerequisites())} className='inline' testId='waiting-on-open'>
                   waiting on
                 </ChipButton>{' '}
                 <GlobLinks boardId={glob.boardId} ids={line.waiting.ids} />
@@ -1008,21 +816,14 @@ export const GlobCard = ({
           </div>
         </Tip>
       )}
-      <div className="flex min-w-0 items-end justify-between gap-2" data-testid="card-bottom">
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden">
-          <div
-            className="flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden"
-            data-testid="card-chips"
-          >
+      <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
+        <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
             {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} />}
             {decision ? (
               <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
             ) : (
-              <LabelPopover
-                glob={glob}
-                onReview={onReviewLabel}
-                onOpenReview={(label) => onOpenSection(cardTargets.label(label))}
-              />
+              <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
             <ArtifactIcons glob={glob} onOpen={onOpenSection} />
             <OverlapChip glob={glob} />
@@ -1030,83 +831,50 @@ export const GlobCard = ({
             <OversizedChip glob={glob} onOpen={() => onOpenSection(cardTargets.size())} />
             <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
             {glob.clash != null && (
-              <Tip
-                text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}
-              >
-                <ChipButton
-                  onOpen={() => onOpenSection(cardTargets.conflict())}
-                  className="font-mono text-[11px] text-required"
-                  testId="clash-chip"
-                >
+              <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
                   clashes with {glob.clash.with}
                 </ChipButton>
               </Tip>
             )}
-            {deploy !== undefined && (
-              <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />
-            )}
+            {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
             {environments !== undefined && <EnvironmentChips environments={environments} />}
             {atf !== undefined && <AtfChip runs={atf} />}
             {age !== 'neutral' && glob.pr?.state === 'draft' && (
-              <Tip text="Two or more days in Doing and the PR is still a draft">
+              <Tip text='Two or more days in Doing and the PR is still a draft'>
                 <ChipButton
-                  onOpen={
-                    prUrl(repo, glob) === null
-                      ? undefined
-                      : () => window.open(prUrl(repo, glob) ?? '', '_blank', 'noopener,noreferrer')
-                  }
-                  className="font-mono text-[11px] text-muted-foreground"
-                  testId="draft-chip"
+                  onOpen={prUrl(repo, glob) === null ? undefined : () => window.open(prUrl(repo, glob) ?? '', '_blank', 'noopener,noreferrer')}
+                  className='font-mono text-[11px] text-muted-foreground'
+                  testId='draft-chip'
                 >
                   PR still draft
                 </ChipButton>
               </Tip>
             )}
             {glob.provisioning === 'failed' && (
-              <Tip text="slop could not create the branch and draft PR; it retries in the background">
-                <ChipButton
-                  onOpen={() => onOpenSection(cardTargets.actions())}
-                  className="font-mono text-[11px] text-red"
-                  testId="provisioning-chip"
-                >
+              <Tip text='slop could not create the branch and draft PR; it retries in the background'>
+                <ChipButton onOpen={() => onOpenSection(cardTargets.actions())} className='font-mono text-[11px] text-red' testId='provisioning-chip'>
                   provisioning failed
                 </ChipButton>
               </Tip>
             )}
           </div>
           {(pending !== undefined || turn !== null || shown.length > 0) && (
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="card-actions">
+            <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-actions'>
               {pending !== undefined && (
-                <span
-                  className="inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground"
-                  role="status"
-                  data-testid="card-pending"
-                >
-                  <Loader2 className="size-3 animate-spin" aria-hidden />
+                <span className='inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
+                  <Loader2 className='size-3 animate-spin' aria-hidden />
                   {workingLabel(pending)}
                 </span>
               )}
-              {turn !== null && (
-                <TurnButton
-                  glob={glob}
-                  turn={turn}
-                  pending={pending}
-                  onAct={(action) => onAct?.(action)}
-                />
-              )}
+              {turn !== null && <TurnButton glob={glob} turn={turn} pending={pending} onAct={(action) => onAct?.(action)} />}
               {shown.map((move, _i, all) => (
                 <MoveButton
                   key={move.action}
                   move={move}
                   hot={move.action === previewing}
                   disabled={pending !== undefined}
-                  primary={
-                    mainAction(
-                      all.map((m) => m.action),
-                      glob,
-                      decision,
-                    ) === move.action
-                  }
+                  primary={mainAction(all.map((m) => m.action), glob, decision) === move.action}
                   onPreview={onPreview}
                   onMove={onMove}
                 />
@@ -1118,11 +886,7 @@ export const GlobCard = ({
       </div>
       {tag !== undefined && (
         // Keyed by the move, so a second move's tag restarts its fade.
-        <div
-          key={tag.n}
-          className="move-tag font-mono text-[10px] text-muted-foreground"
-          role="status"
-        >
+        <div key={tag.n} className='move-tag font-mono text-[10px] text-muted-foreground' role='status'>
           ▸ {tag.text}
         </div>
       )}
