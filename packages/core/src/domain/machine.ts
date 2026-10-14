@@ -213,6 +213,23 @@ export const hasConflictFixRun = (glob: Glob): boolean => {
   return run !== null && run.purpose === 'resolve_conflict' && run.state !== 'ended';
 };
 
+/** The investigate-only run that has not ended (queued or active), if it is the glob's current run. */
+export const liveInvestigation = (glob: Glob): Run | null => {
+  const run = currentRun(glob);
+  return run !== null && run.purpose === 'investigate' && run.state !== 'ended' ? run : null;
+};
+
+/** The running investigation, as the context bundle and the pick-up reply tell it: its run, since when, its session. */
+export const investigationRunning = (
+  glob: Glob,
+): { readonly runId: string; readonly since: string; readonly sessionUrl: string | null } | null => {
+  const run = liveInvestigation(glob);
+  return run === null ? null : { runId: run.id, since: run.startedAt ?? run.queuedAt, sessionUrl: run.sessionUrl };
+};
+
+/** Start was pressed while the glob was being investigated: it starts when that run ends. */
+export const startQueued = (glob: Glob): boolean => glob.waiting?.investigation !== undefined;
+
 /** Any run that has not ended, including one still queued. */
 export const hasLiveRun = (glob: Glob): boolean => {
   const run = currentRun(glob);
@@ -307,6 +324,20 @@ class Builder {
     return outcome === 'failed'
       ? this.event('RunFailed', { ...detail, ...purpose, runId: run.id, reason: failureReason })
       : this.event('RunEnded', { ...detail, ...purpose, runId: run.id, outcome });
+  }
+
+  /**
+   * A Start pressed during an investigation takes effect when that run ends (stored, or failed, which includes a timeout):
+   * the glob starts as Start would have, and its run reuses the investigation if one was stored. Call it right after the
+   * investigate run's `endRun`.
+   */
+  startAfterInvestigation(ended: Run): this {
+    const queued = this.glob.waiting?.investigation;
+    if (queued === undefined || queued.runId !== ended.id || this.glob.status !== 'planning') return this;
+    return this.set({ waiting: null })
+      .event('Released', { investigation: ended.id })
+      .status('implementing')
+      .queueRun(queued.by, undefined, true);
   }
 
   /**
@@ -555,17 +586,36 @@ export const start = (
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
+  // A second Start while the first waits for the investigation changes nothing.
+  if (startQueued(glob)) return unchanged(glob);
   const awaited = awaitedOf(relations);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
   // Overlaps the policy predicted never hold the start; they stay on the glob as internal data for conflicts and learning.
   const overlaps =
     newHolds.length === 0 ? {} : { impliedAfter: mergeImplied(glob.impliedAfter, newHolds) };
+  const investigating = liveInvestigation(glob);
+  if (investigating !== null) return queueStart(new Builder(glob, ctx), ctx, investigating, actor, overlaps).done();
   return new Builder(glob, ctx)
     .set({ waiting: null, ...overlaps })
     .status('implementing')
     .queueRun(actor.email, undefined, true)
     .done();
 };
+
+/** Start during an investigation (row 5): the glob stays in Planning, waiting for that run; no second investigation starts. */
+const queueStart = (
+  b: Builder,
+  ctx: Context,
+  investigating: Run,
+  actor: Actor,
+  extra: Partial<Glob> = {},
+): Builder =>
+  b
+    .set({
+      ...extra,
+      waiting: { since: b.current.waiting?.since ?? ctx.now, investigation: { runId: investigating.id, by: actor.email } },
+    })
+    .event('StartQueued', { runId: investigating.id });
 
 /** Whether an investigate-only run can be started on the glob now: in Planning, not a super, nothing live. */
 export const canInvestigate = (glob: Glob): boolean =>
@@ -664,7 +714,7 @@ export const investigationPushed = (
   const run = currentRun(glob);
   if (run === null || run.id !== runId || run.state === 'ended' || run.purpose !== 'investigate')
     return unchanged(glob);
-  return new Builder(glob, ctx).endRun('completed').done();
+  return new Builder(glob, ctx).endRun('completed').startAfterInvestigation(run).done();
 };
 
 /**
@@ -695,24 +745,25 @@ export const startAnyway = (
       'Only a sub or same in planning, or one picked up with no routine run, can be started anyway',
     );
   }
+  if (startQueued(glob)) return unchanged(glob);
   const awaited = awaitedOf(relations);
   if (awaited.length === 0 && glob.waiting == null) {
     return invalidTransition(glob, actor, 'Nothing holds this glob; use Start');
   }
   // The inferred and learned start relations are marked overridden (a person's and a split's keep holding on paper, but the
   // glob starts); the predicted overlaps on the glob are kept as they are, so a recheck doesn't replace them.
-  return new Builder(glob, ctx)
-    .set({
-      waiting: null,
-      ...(glob.impliedAfter === undefined
-        ? {}
-        : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
-    })
+  const overridden = {
+    ...(glob.impliedAfter === undefined
+      ? {}
+      : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
+  };
+  const b = new Builder(glob, ctx)
     .relationEdits(overrideEdits(relations.relations, ctx.now))
-    .event('HoldOverridden', { for: awaited.map((a) => a.id) })
-    .status('implementing')
-    .queueRun(actor.email)
-    .done();
+    .event('HoldOverridden', { for: awaited.map((a) => a.id) });
+  // An investigation is still running: the start waits for it, with the hold already overridden.
+  const investigating = liveInvestigation(glob);
+  if (investigating !== null) return queueStart(b, ctx, investigating, actor, overridden).done();
+  return b.set({ waiting: null, ...overridden }).status('implementing').queueRun(actor.email).done();
 };
 
 /**
@@ -729,6 +780,8 @@ export const released = (
 ): Result<Transition> => {
   if (glob.waiting == null || glob.status !== 'planning' || glob.type === 'super')
     return unchanged(glob);
+  // A Start waiting for an investigation is released when that run ends, not by what the glob starts after.
+  if (startQueued(glob)) return unchanged(glob);
   if (awaitedOf(relations).length > 0) return unchanged(glob);
   return new Builder(glob, ctx)
     .set({
@@ -776,7 +829,7 @@ export const pickUp = (
   if (
     (glob.status === 'in_progress' || glob.status === 'pr_open') &&
     glob.implementer === actor.email &&
-    !hasLiveRun(glob)
+    (!hasLiveRun(glob) || liveInvestigation(glob) !== null)
   ) {
     if (!environmentChanged) return unchanged(glob);
     return setEnvironment(new Builder(glob, ctx), environment).done();
@@ -818,19 +871,19 @@ export const pickUp = (
   switch (glob.status) {
     case 'planning':
     case 'failed':
-      // Row 6.
-      b.endRun('superseded', null, { cause: 'pick_up' })
-        .set({
-          implementer: actor.email,
-          failure: null,
-          ...(glob.waiting == null ? {} : { waiting: null }),
-        })
-        .status('in_progress');
+      // Row 6. A live investigation keeps going: its result shapes the work, and the local session waits for it.
+      if (liveInvestigation(glob) === null) b.endRun('superseded', null, { cause: 'pick_up' });
+      b.set({
+        implementer: actor.email,
+        failure: null,
+        ...(glob.waiting == null ? {} : { waiting: null }),
+      }).status('in_progress');
       break;
     case 'pr_open':
     case 'in_progress':
       // Rows 7 and 9.
-      b.endRun('superseded', null, { cause: 'pick_up' }).set({ implementer: actor.email });
+      if (liveInvestigation(glob) === null) b.endRun('superseded', null, { cause: 'pick_up' });
+      b.set({ implementer: actor.email });
       break;
     default:
       return invalidTransition(glob, actor, `A glob in ${glob.status} cannot be picked up`);
@@ -2887,9 +2940,12 @@ export const reportFailure = (
       })
       .done();
   }
-  if (glob.status === 'planning' && run.purpose === 'investigate') {
+  if ((glob.status === 'planning' || glob.status === 'in_progress') && run.purpose === 'investigate') {
     // An investigate-only run failed: the glob stays in Planning (nothing was started) and the run's history says why.
-    return new Builder(glob, ctx).endRun('failed', report.reason, { agentSetVersion }).done();
+    return new Builder(glob, ctx)
+      .endRun('failed', report.reason, { agentSetVersion })
+      .startAfterInvestigation(run)
+      .done();
   }
   if (glob.status === 'implementing') {
     // Row 17.
@@ -2963,8 +3019,9 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   const held =
     glob.status === 'planning' &&
     glob.type !== 'super' &&
+    !startQueued(glob) &&
     (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0);
-  if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held) actions.push('start');
+  if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held && !startQueued(glob)) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (reviewOffer(glob, facts.reviews) !== null) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');

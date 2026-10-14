@@ -198,6 +198,7 @@ export class SizeCheckService implements SizeAssessor {
     // Say why a flagged plan has no proposal, so the card isn't silent about it.
     if (proposed !== null && proposal === null && proposed.why !== null) evidence.push(`No workstreams were proposed: ${proposed.why}`);
     // Workstreams that would wait on each other in one line gain nothing: the glob is not flagged, and the evidence says why.
+    if (proposal?.notes !== undefined) evidence.push(...proposal.notes);
     if (proposal !== null && isChain(proposal)) {
       evidence.push(`Not oversized: the workstreams would be a chain of ${proposal.workstreams.length} (critical path ${proposal.criticalPath ?? proposal.workstreams.length}), with nothing to build in parallel`);
       proposal = null;
@@ -310,7 +311,7 @@ export class SizeCheckService implements SizeAssessor {
         await tx.updateSizeAssessment({
           ...current,
           estimate,
-          evidence: evidenceOf(estimate),
+          evidence: [...evidenceOf(estimate), ...(proposed?.notes ?? [])],
           threshold,
           flagged: reasons.length > 0,
           reasons,

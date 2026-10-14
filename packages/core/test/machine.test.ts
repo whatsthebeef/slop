@@ -182,19 +182,76 @@ describe('investigate (row 5a)', () => {
     expect(m.currentRun(t.glob)).toMatchObject({ state: 'ended', outcome: 'failed', failureReason: 'no routine' });
   });
 
-  it('starting the glob supersedes an investigation still running', () => {
-    const t = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx()));
+  it('Start during an investigation queues behind it: no second run, the glob stays in planning', () => {
+    const investigating = glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] });
+    const t = value(m.start(investigating, ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.waiting).toEqual({ since: NOW, investigation: { runId: 'run-9', by: dev.email } });
+    expect(t.glob.runs.map((r) => [r.id, r.state])).toEqual([['run-9', 'active']]);
+    expect(t.effects).toEqual([]);
+    expect(t.events.map((e) => e.type)).toEqual(['StartQueued']);
+    expect(m.allowedActions(t.glob, dev)).not.toContain('start');
+    expect(m.allowedActions(t.glob, dev)).not.toContain('start_anyway');
+  });
+
+  it('a second Start while queued is a no-op', () => {
+    const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
+    expect(value(m.start(queued, ctx())).changed).toBe(false);
+    expect(value(m.startAnyway(queued, ctx())).changed).toBe(false);
+  });
+
+  it('Start anyway during an investigation queues behind it, with the hold overridden', () => {
+    const held = glob({ waiting: { since: NOW }, runs: [run({ id: 'run-9', purpose: 'investigate' })] });
+    const t = value(m.startAnyway(held, ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.waiting).toMatchObject({ investigation: { runId: 'run-9' } });
+    expect(t.events.map((e) => e.type)).toEqual(['HoldOverridden', 'StartQueued']);
+  });
+
+  it('the queued start is released when the investigation is stored, and its run starts for whoever pressed Start', () => {
+    const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
+    const t = value(m.investigationPushed(queued, 'run-9', ctx(null)));
     expect(t.glob.status).toBe('implementing');
-    expect(t.glob.runs.map((r) => [r.id, r.state, r.outcome, r.purpose])).toEqual([
-      ['run-9', 'ended', 'superseded', 'investigate'],
-      ['run-1', 'queued', null, undefined],
+    expect(t.glob.waiting).toBeNull();
+    expect(t.glob.runs.map((r) => [r.id, r.state, r.outcome, r.purpose, r.triggeredBy])).toEqual([
+      ['run-9', 'ended', 'completed', 'investigate', dev.email],
+      ['run-1', 'queued', null, undefined, dev.email],
+    ]);
+    expect(t.effects).toEqual([expect.objectContaining({ kind: 'fire_routine', runId: 'run-1', checkPrerequisites: true })]);
+  });
+
+  it('the queued start is released when the investigation fails, which then investigates as usual', () => {
+    const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
+    const t = value(m.reportFailure(queued, { reason: 'no routine', runId: 'run-9' }, ctx(null)));
+    expect(t.glob.status).toBe('implementing');
+    expect(t.glob.failure).toBeNull();
+    expect(t.glob.runs.map((r) => [r.id, r.state, r.outcome])).toEqual([
+      ['run-9', 'ended', 'failed'],
+      ['run-1', 'queued', null],
     ]);
   });
 
-  it('picking the glob up supersedes an active investigation instead of being refused', () => {
-    const t = value(m.pickUp(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx(), board, { takeOver: false }));
+  it('a glob waiting for its start relations is not released by an investigation-waiting start', () => {
+    const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
+    expect(value(m.released(queued, ctx(null))).changed).toBe(false);
+  });
+
+  it('picking the glob up leaves an investigation running, and cancels a queued Start', () => {
+    const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
+    const t = value(m.pickUp(queued, ctx(), board, { takeOver: false }));
     expect(t.glob.status).toBe('in_progress');
-    expect(m.currentRun(t.glob)).toMatchObject({ id: 'run-9', state: 'ended', outcome: 'superseded' });
+    expect(t.glob.waiting).toBeNull();
+    expect(m.currentRun(t.glob)).toMatchObject({ id: 'run-9', state: 'active', purpose: 'investigate' });
+    expect(m.investigationRunning(t.glob)).toMatchObject({ runId: 'run-9' });
+    // The investigation still ends with its result, or its failure, on the picked-up glob.
+    expect(m.currentRun(value(m.investigationPushed(t.glob, 'run-9', ctx(null))).glob)).toMatchObject({ outcome: 'completed' });
+    const failed = value(m.reportFailure(t.glob, { reason: 'x', runId: 'run-9' }, ctx(null)));
+    expect(failed.glob.status).toBe('in_progress');
+    expect(m.currentRun(failed.glob)).toMatchObject({ outcome: 'failed' });
+    // A second pick-up does not end it either.
+    const again = value(m.pickUp(t.glob, ctx(), board, { takeOver: false }));
+    expect(again.changed).toBe(false);
+    expect(m.currentRun(again.glob)).toMatchObject({ state: 'active' });
   });
 
   it('times out on no progress but never for an unmarked PR', () => {

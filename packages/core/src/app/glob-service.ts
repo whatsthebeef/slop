@@ -1624,7 +1624,13 @@ export class GlobService {
       version,
       (glob, ctx, board, facts) => {
         const relations = facts.relations;
-        warning = glob.status === 'planning' && relations !== undefined ? pickUpWarning(awaitedOf(relations)) : null;
+        const held = glob.status === 'planning' && relations !== undefined ? pickUpWarning(awaitedOf(relations)) : null;
+        const investigating = machine.investigationRunning(glob);
+        const note =
+          investigating === null
+            ? null
+            : `An investigation has been running since ${investigating.since}${investigating.sessionUrl === null ? '' : ` (${investigating.sessionUrl})`}; the local session waits for it and reuses its result`;
+        warning = [held, note].filter((w) => w !== null).join('. ') || null;
         return machine.pickUp(glob, ctx, board, { takeOver, ...(environment === undefined ? {} : { environment }), ...(relations === undefined ? {} : { relations }) });
       },
       { relations: true, applies: 'any', record: this.handoverRecorder(wrote) },
