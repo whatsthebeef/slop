@@ -91,9 +91,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   actions: ({ ctx, actions, size, onSplitting }) => (
     <GlobActions ctx={ctx} state={actions} size={size} onSplitting={onSplitting} />
   ),
-  plan: ({ ctx, onSelectArtifact }) => (
-    <PlanSection ctx={ctx} onHistory={() => onSelectArtifact({ kind: 'plan', label: '' })} />
-  ),
+  plan: ({ ctx }) => <PlanSection ctx={ctx} />,
   decision: ({ ctx, onDecide, applied }) => (
     <DecisionPanel ctx={ctx} onDecide={onDecide} applied={applied} />
   ),

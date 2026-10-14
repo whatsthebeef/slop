@@ -10,11 +10,12 @@ import { useToast } from '@/toast';
 /** plan.md for a glob: what the implementer works from. Every save is a new version. */
 export const PlanEditor = ({
   globId,
-  onHistory,
+  history = true,
   startExpanded = false,
 }: {
   globId: string;
-  onHistory?: () => void;
+  /** Offers the plan's earlier versions inline; false when another section already lists them. */
+  history?: boolean;
   /** A deep link to the plan section opens the preview expanded. */
   startExpanded?: boolean;
 }) => {
@@ -22,6 +23,15 @@ export const PlanEditor = ({
   const toast = useToast();
   const plan = useQuery({ queryKey: ['plan', globId], queryFn: () => api.plan(globId) });
   const current = plan.data?.current ?? null;
+  const versionCount = plan.data?.versions.length ?? 0;
+  const [showHistory, setShowHistory] = useState(false);
+  const [viewed, setViewed] = useState<number | null>(null);
+  const past = useQuery({
+    queryKey: ['plan-versions', globId, current?.version ?? 0],
+    queryFn: () => api.artifactVersions(globId, 'plan', ''),
+    enabled: history && showHistory && versionCount > 1,
+  });
+  const viewedVersion = past.data?.find((v) => v.version === viewed) ?? null;
   const saved = current?.content ?? null;
   const [draft, setDraft] = useState<string | null>(null);
   // The saved content the draft started from: live updates refetch the plan, and a change
@@ -32,6 +42,8 @@ export const PlanEditor = ({
   useEffect(() => {
     setDraft(null);
     setEditing(false);
+    setShowHistory(false);
+    setViewed(null);
   }, [globId]);
   const changedUnderneath = draft !== null && saved !== base;
 
@@ -74,9 +86,15 @@ export const PlanEditor = ({
         <span className='font-semibold'>plan.md</span>
         <span className='flex items-center gap-2'>
           <span data-testid='plan-version'>{planVersionLine(current, dirty)}</span>
-          {onHistory !== undefined && current !== null && (
-            <Button variant='ghost' size='sm' onClick={onHistory} data-testid='plan-history'>
-              v{current.version} · history
+          {history && versionCount > 1 && (
+            <Button
+              variant='ghost'
+              size='sm'
+              aria-expanded={showHistory}
+              onClick={() => setShowHistory((open) => !open)}
+              data-testid='plan-history'
+            >
+              History
             </Button>
           )}
           <Button variant='ghost' size='sm' onClick={() => (editing ? discard() : setEditing(true))}>
@@ -99,6 +117,24 @@ export const PlanEditor = ({
           placeholder='What to build, and "Done when:" lines…'
           onChange={(e) => edit(e.target.value)}
         />
+      )}
+      {history && showHistory && versionCount > 1 && (
+        <div className='grid gap-2 rounded border p-2 text-xs' data-testid='plan-versions'>
+          <div className='flex flex-wrap gap-1'>
+            {[...(past.data ?? [])].reverse().map((v) => (
+              <Button
+                key={v.version}
+                variant={v.version === viewed ? 'outline' : 'ghost'}
+                size='sm'
+                onClick={() => setViewed(v.version === viewed ? null : v.version)}
+              >
+                v{v.version} · {v.createdAt.slice(0, 16).replace('T', ' ')}
+              </Button>
+            ))}
+            {past.isError && <span className='text-red'>Could not load the versions.</span>}
+          </div>
+          {viewedVersion !== null && <CollapsibleMarkdown content={viewedVersion.content} startExpanded />}
+        </div>
       )}
       {changedUnderneath && (
         <div className='flex items-center justify-between gap-2 rounded border border-amber/50 bg-amber/10 px-2 py-1 text-xs'>
