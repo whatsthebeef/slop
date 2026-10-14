@@ -1464,7 +1464,9 @@ export const changeFields = (
     changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
   if (!scope.ok) return scope;
 
-  const afterChanged = changes.after !== undefined && changes.after.to.join('\n') !== changes.after.from.join('\n');
+  // A set, not a list: stores return the start relations in different orders, so an echoed `after` must not read as an edit.
+  const asSet = (ids: readonly string[]): string => [...new Set(ids)].sort().join('\n');
+  const afterChanged = changes.after !== undefined && asSet(changes.after.to) !== asSet(changes.after.from);
   if (afterChanged && (glob.status !== 'planning' || glob.provisioning !== 'none')) {
     return invalidTransition(
       glob,

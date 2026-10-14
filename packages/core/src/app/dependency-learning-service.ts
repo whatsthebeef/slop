@@ -19,7 +19,7 @@ import type {
   DependencyRuleView,
 } from '../domain/dependency-rules.js';
 import type { ImpliedAfter, Glob, Relation } from '../domain/types.js';
-import { hasMerged, wouldCycle } from '../domain/relations.js';
+import { MAX_RELATIONS, hasMerged, isActive, wouldCycle } from '../domain/relations.js';
 import type { Catalog, IdGenerator, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import { readMergePolicy } from './knowledge-service.js';
@@ -214,6 +214,8 @@ export class DependencyLearningService {
           await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: now, pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'unmerged_prerequisite', globId: glob.id, evidence });
           continue;
         }
+        // The limit every relation writer keeps: a glob with this many start relations learns no more.
+        if (board.filter((r) => r.from === glob.id && r.gate === 'start' && isActive(r)).length >= MAX_RELATIONS) continue;
         added.push(id);
         // A predicted overlap on the same glob is upgraded: its paths become the need's evidence and the overlap entry goes.
         const overlap = (glob.impliedAfter ?? []).find((i) => i.id === id && (i.kind ?? 'overlaps') === 'overlaps');

@@ -93,10 +93,6 @@ export const unmet = (facts: RelationFacts, gate: RelationGate): Unmet[] =>
       return isMet(relation, state) ? [] : [{ relation, state }];
     });
 
-/** The relations of one gate that are held back by a deleted `to`: released, with the note kept. */
-export const releasedByDeletion = (facts: RelationFacts, gate: RelationGate): Relation[] =>
-  facts.relations.filter((r) => r.gate === gate && !lifted(r) && (facts.states.get(r.to) ?? 'missing') === 'missing');
-
 /** Every active start relation of a glob, whether or not it is met: what the glob starts after. */
 export const startIds = (relations: readonly Relation[]): string[] => [
   ...new Set(relations.filter((r) => r.gate === 'start' && !lifted(r)).map((r) => r.to)),

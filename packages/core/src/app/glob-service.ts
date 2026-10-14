@@ -335,6 +335,12 @@ interface CommandOptions {
 /** Integration events retry a few times on concurrent writes; they carry no client version. */
 const EVENT_RETRIES = 5;
 
+/** `command` lost its version race after writing relation rows: thrown so the transaction rolls them back. */
+class RelationWriteLost extends Error {}
+
+/** A glob that waited for the one being deleted was written meanwhile: thrown so the delete rolls back and runs again. */
+class DependantMoved extends Error {}
+
 /**
  * Application service for globs. Every entry point (REST, MCP, webhooks, jobs) calls these
  * methods, so every change goes through the same authorisation, state machine and outbox.
@@ -446,6 +452,18 @@ export class GlobService {
     const byGlob = new Map<string, StoredHumanStep[]>();
     for (const step of steps) byGlob.set(step.globId, [...(byGlob.get(step.globId) ?? []), step]);
     return byGlob;
+  }
+
+  /** What holds each of these globs back (its unmet relations), by glob ID: one read of the board's relations, for callers without a viewer. */
+  async holdingsOf(boardId: number, globs: readonly Glob[]): Promise<Map<string, Holding[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      const own = new Set(globs.map((g) => g.id));
+      const ownBy = new Map<string, Relation[]>();
+      for (const r of await tx.listRelations(boardId)) if (own.has(r.from)) ownBy.set(r.from, [...(ownBy.get(r.from) ?? []), r]);
+      const reach = await this.reachOf(tx, [...new Set([...ownBy.values()].flatMap((rs) => rs.map((r) => r.to)))]);
+      const titles = titlesOf(reach.globs);
+      return new Map(globs.map((g) => [g.id, holdingOf({ relations: ownBy.get(g.id) ?? [], states: reach.states }, titles)]));
+    });
   }
 
   /**
@@ -1702,6 +1720,17 @@ export class GlobService {
 
   async delete(email: string, id: string, version: number): Promise<Result<null>> {
     const released: Glob[] = [];
+    // A dependant written by someone else meanwhile rolls the delete back: try again against what is there now.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.deleteOnce(email, id, version, released);
+      } catch (e) {
+        if (!(e instanceof DependantMoved) || attempt >= EVENT_RETRIES) throw e;
+      }
+    }
+  }
+
+  private async deleteOnce(email: string, id: string, version: number, released: Glob[]): Promise<Result<null>> {
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Glob>> => {
       released.length = 0;
       const glob = await tx.getGlob(id);
@@ -1759,7 +1788,7 @@ export class GlobService {
       const touched = machine.relationsChanged(glob, { actor: null, now: at, newRunId: () => this.deps.ids.runId(), routineOwnerFor: () => '' });
       if (!touched.ok) continue;
       const next = { ...touched.value.glob, version: glob.version + 1 };
-      if (!(await tx.updateGlob(next, glob.version))) throw new Error(`${glob.id} changed while ${gone.id} was deleted`);
+      if (!(await tx.updateGlob(next, glob.version))) throw new DependantMoved(`${glob.id} changed while ${gone.id} was deleted`);
       await tx.appendEvents(
         rows.filter((r) => r.from === from).map((r): DomainEvent => ({ type: 'RelationReleased', globId: from, actor: null, at, data: { to: r.to, gate: r.gate, reason: `${gone.id} was deleted` } })),
       );
@@ -2105,110 +2134,18 @@ export class GlobService {
     options: CommandOptions = {},
   ): Promise<Result<Glob>> {
     for (let attempt = 0; ; attempt++) {
-      const result = await this.deps.store.transaction(async (tx): Promise<Result<Glob> | 'retry'> => {
-        const glob = await tx.getGlob(id);
-        if (glob === null) return notFound(`No glob ${id}`);
-        let actor: Actor | null = null;
-        if (email !== null) {
-          const found = await this.actorFor(tx, email, glob.boardId);
-          if (!found.ok) return found;
-          actor = found.value;
+      let result: Result<Glob> | 'retry';
+      try {
+        result = await this.commandOnce(email, id, expectedVersion, step, options);
+      } catch (e) {
+        if (!(e instanceof RelationWriteLost)) throw e;
+        // The relation rows written before the lost race were rolled back with the transaction.
+        if (expectedVersion === null) result = 'retry';
+        else {
+          const current = await this.deps.store.transaction((tx) => tx.getGlob(id));
+          result = current === null ? notFound(`No glob ${id}`) : err({ code: 'version_conflict', message: 'The glob has changed', current });
         }
-        if (expectedVersion !== null && glob.version !== expectedVersion) {
-          return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
-        }
-        const board = await tx.getBoard(glob.boardId);
-        if (board === null) return notFound(`No board ${glob.boardId}`);
-        // No work command (start, merge, labels, retrigger...) may run on a decision, and no decision step on work.
-        const applies = options.applies ?? 'work';
-        if (applies !== 'any' && (glob.category === 'decision') !== (applies === 'decision')) {
-          return err({
-            code: 'invalid_transition',
-            message: glob.category === 'decision' ? 'A decision glob has no such action' : 'Only a decision glob can do this',
-            status: glob.status,
-            allowedActions: actor === null ? [] : machine.allowedActions(glob, actor),
-          });
-        }
-        if (options.prepare !== undefined) {
-          const prepared = await options.prepare(tx, glob);
-          if (!prepared.ok) return prepared;
-        }
-        // Relation changes are planned under the board's lock, with every relation of the board in view, before the step runs.
-        let write: RelationWrite = NO_WRITE;
-        let rows: readonly Relation[] | null = null;
-        let inserted: readonly Relation[] = [];
-        if (options.relationPlan !== undefined) {
-          await tx.lockBoardRelations(glob.boardId);
-          const board = await tx.listRelations(glob.boardId);
-          const planned = await options.relationPlan(tx, glob, board, this.deps.clock.now());
-          if (!planned.ok) return planned;
-          write = planned.value;
-          const applied = applyWrite(board.filter((r) => r.from === glob.id), write, { boardId: glob.boardId, from: glob.id, now: this.deps.clock.now(), newId: () => this.relationId() });
-          rows = applied.relations;
-          inserted = applied.inserted;
-        }
-        const record = options.facts === true
-          ? { recordSha: machine.recordShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
-          : {};
-        const relations =
-          options.relations === true
-            ? { relations: await this.relationFacts(tx, rows ?? (await tx.listRelationsFrom([glob.id]))) }
-            : {};
-        const rollout =
-          options.rollout === true
-            ? { rollout: storedBlockProgress(await tx.listHumanSteps(glob.boardId, [glob.id]), 'sign_off') }
-            : {};
-        const facts: ActionFacts = { ...record, ...relations, ...rollout };
-        const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
-        const stepped = step(glob, ctx, board, facts);
-        if (!stepped.ok) return stepped;
-        // The relation rows are written only now that the step accepted: an error Result commits what was written before it.
-        const edits = stepped.value.relationEdits ?? [];
-        const written = !isEmptyWrite(write) || edits.length > 0;
-        let transition: Result<Transition> = stepped;
-        if (written) {
-          const before = await tx.listRelationsFrom([glob.id]);
-          // Removals first: a person's relation replacing an inferred one to the same glob would otherwise find the row taken.
-          for (const rid of write.remove) await tx.deleteRelation(rid);
-          for (const u of write.update) await tx.updateRelation(u.id, u.patch);
-          for (const r of inserted) {
-            if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
-          }
-          for (const e of edits) await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
-          const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted);
-          // A change to the relations alone still moves the glob's version, so live updates and stale forms see it.
-          const touched = machine.relationsChanged(stepped.value.glob, ctx);
-          transition = stepped.value.changed || !touched.ok ? stepped : ok({ ...stepped.value, glob: touched.value.glob, changed: true });
-          if (transition.ok) transition = ok({ ...transition.value, events: [...transition.value.events, ...logged] });
-        }
-        if (!transition.ok) return transition;
-        const { changed, events } = transition.value;
-        // A status change, a push or a merge may change which open globs overlap: queue the board's recheck (coalesced).
-        const moved =
-          changed && (transition.value.glob.status !== glob.status || events.some((e) => e.type === 'CommitPushed' || e.type === 'Merged'));
-        // A work glob signed off is a recent change on the board's knowledge page (decisions queue their own).
-        const signedOff = changed && glob.category !== 'decision' && glob.status !== 'signed_off' && transition.value.glob.status === 'signed_off';
-        const effects = [...transition.value.effects, ...(moved ? [recheckOverlapsEffect(glob.boardId)] : []), ...(signedOff ? [knowledgePageEffect(glob.boardId)] : [])];
-        if (!changed) {
-          await tx.appendEvents(events);
-          await tx.enqueueEffects(effects);
-          return ok(glob);
-        }
-        const next = { ...transition.value.glob, version: glob.version + 1 };
-        if (!(await tx.updateGlob(next, glob.version))) {
-          if (expectedVersion !== null) {
-            const current = await tx.getGlob(id);
-            return current === null
-              ? notFound(`No glob ${id}`)
-              : err({ code: 'version_conflict', message: 'The glob has changed', current });
-          }
-          return 'retry';
-        }
-        await tx.appendEvents(events);
-        await tx.enqueueEffects(effects);
-        if (options.record !== undefined) await options.record(tx, glob, next, actor);
-        return ok(next);
-      });
+      }
       if (result === 'retry') {
         if (attempt < EVENT_RETRIES) continue;
         throw new Error(`Could not apply event to ${id} after ${EVENT_RETRIES} retries`);
@@ -2216,6 +2153,121 @@ export class GlobService {
       if (result.ok) this.publish(result.value);
       return result;
     }
+  }
+
+  private async commandOnce(
+    email: string | null,
+    id: string,
+    expectedVersion: number | null,
+    step: Step,
+    options: CommandOptions,
+  ): Promise<Result<Glob> | 'retry'> {
+    return this.deps.store.transaction(async (tx): Promise<Result<Glob> | 'retry'> => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return notFound(`No glob ${id}`);
+      let actor: Actor | null = null;
+      if (email !== null) {
+        const found = await this.actorFor(tx, email, glob.boardId);
+        if (!found.ok) return found;
+        actor = found.value;
+      }
+      if (expectedVersion !== null && glob.version !== expectedVersion) {
+        return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
+      }
+      const board = await tx.getBoard(glob.boardId);
+      if (board === null) return notFound(`No board ${glob.boardId}`);
+      // No work command (start, merge, labels, retrigger...) may run on a decision, and no decision step on work.
+      const applies = options.applies ?? 'work';
+      if (applies !== 'any' && (glob.category === 'decision') !== (applies === 'decision')) {
+        return err({
+          code: 'invalid_transition',
+          message: glob.category === 'decision' ? 'A decision glob has no such action' : 'Only a decision glob can do this',
+          status: glob.status,
+          allowedActions: actor === null ? [] : machine.allowedActions(glob, actor),
+        });
+      }
+      if (options.prepare !== undefined) {
+        const prepared = await options.prepare(tx, glob);
+        if (!prepared.ok) return prepared;
+      }
+      // Relation changes are planned under the board's lock, with every relation of the board in view, before the step runs.
+      let write: RelationWrite = NO_WRITE;
+      let rows: readonly Relation[] | null = null;
+      let inserted: readonly Relation[] = [];
+      if (options.relationPlan !== undefined) {
+        await tx.lockBoardRelations(glob.boardId);
+        const board = await tx.listRelations(glob.boardId);
+        const planned = await options.relationPlan(tx, glob, board, this.deps.clock.now());
+        if (!planned.ok) return planned;
+        write = planned.value;
+        const applied = applyWrite(board.filter((r) => r.from === glob.id), write, { boardId: glob.boardId, from: glob.id, now: this.deps.clock.now(), newId: () => this.relationId() });
+        rows = applied.relations;
+        inserted = applied.inserted;
+      }
+      const record = options.facts === true
+        ? { recordSha: machine.recordShaOf(await tx.listArtifactSummaries(glob.boardId, [glob.id])) }
+        : {};
+      const relations =
+        options.relations === true
+          ? { relations: await this.relationFacts(tx, rows ?? (await tx.listRelationsFrom([glob.id]))) }
+          : {};
+      const rollout =
+        options.rollout === true
+          ? { rollout: storedBlockProgress(await tx.listHumanSteps(glob.boardId, [glob.id]), 'sign_off') }
+          : {};
+      const facts: ActionFacts = { ...record, ...relations, ...rollout };
+      const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
+      const stepped = step(glob, ctx, board, facts);
+      if (!stepped.ok) return stepped;
+      // The relation rows are written only now that the step accepted: an error Result commits what was written before it.
+      const edits = stepped.value.relationEdits ?? [];
+      const written = !isEmptyWrite(write) || edits.length > 0;
+      let transition: Result<Transition> = stepped;
+      if (written) {
+        const before = await tx.listRelationsFrom([glob.id]);
+        // Removals first: a person's relation replacing an inferred one to the same glob would otherwise find the row taken.
+        for (const rid of write.remove) await tx.deleteRelation(rid);
+        for (const u of write.update) await tx.updateRelation(u.id, u.patch);
+        for (const r of inserted) {
+          if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
+        }
+        for (const e of edits) await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
+        const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted);
+        // A change to the relations alone still moves the glob's version, so live updates and stale forms see it.
+        const touched = machine.relationsChanged(stepped.value.glob, ctx);
+        transition = stepped.value.changed || !touched.ok ? stepped : ok({ ...stepped.value, glob: touched.value.glob, changed: true });
+        if (transition.ok) transition = ok({ ...transition.value, events: [...transition.value.events, ...logged] });
+      }
+      if (!transition.ok) return transition;
+      const { changed, events } = transition.value;
+      // A status change, a push or a merge may change which open globs overlap: queue the board's recheck (coalesced).
+      const moved =
+        changed && (transition.value.glob.status !== glob.status || events.some((e) => e.type === 'CommitPushed' || e.type === 'Merged'));
+      // A work glob signed off is a recent change on the board's knowledge page (decisions queue their own).
+      const signedOff = changed && glob.category !== 'decision' && glob.status !== 'signed_off' && transition.value.glob.status === 'signed_off';
+      const effects = [...transition.value.effects, ...(moved ? [recheckOverlapsEffect(glob.boardId)] : []), ...(signedOff ? [knowledgePageEffect(glob.boardId)] : [])];
+      if (!changed) {
+        await tx.appendEvents(events);
+        await tx.enqueueEffects(effects);
+        return ok(glob);
+      }
+      const next = { ...transition.value.glob, version: glob.version + 1 };
+      if (!(await tx.updateGlob(next, glob.version))) {
+        // Relation rows already written would commit with an error Result: throw to roll them back.
+        if (written) throw new RelationWriteLost();
+        if (expectedVersion !== null) {
+          const current = await tx.getGlob(id);
+          return current === null
+            ? notFound(`No glob ${id}`)
+            : err({ code: 'version_conflict', message: 'The glob has changed', current });
+        }
+        return 'retry';
+      }
+      await tx.appendEvents(events);
+      await tx.enqueueEffects(effects);
+      if (options.record !== undefined) await options.record(tx, glob, next, actor);
+      return ok(next);
+    });
   }
 
   private relationId(): string {

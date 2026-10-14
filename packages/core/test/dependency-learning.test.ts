@@ -221,6 +221,15 @@ describe('dependency learning', () => {
     expect(history.map((h) => h.cause)).toEqual(['unmerged_prerequisite']);
   });
 
+  it('a glob that already has the most start relations learns no more from a failure', async () => {
+    const others: Glob[] = [];
+    for (let i = 0; i < 21; i++) others.push(await create({ type: 'same' }));
+    const stuck = await create({ type: 'same', after: others.slice(0, 20).map((g) => g.id) });
+    expect(relationsOf(stuck.id)).toHaveLength(20);
+    expect(await learning.onFailed(stuck.id, `Blocked on unmerged ${others[20]?.id ?? ''}`)).toEqual([]);
+    expect(relationsOf(stuck.id)).toHaveLength(20);
+  });
+
   it('upgrades an overlap to a need when the run failed for it, and strengthens its pattern', async () => {
     const open = await openGlob();
     const g = await overlapping();

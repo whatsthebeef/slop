@@ -377,4 +377,20 @@ describe('dependency inference', () => {
     await inference.refresh(made.id);
     expect(edgesOf(await current(made.id)).map((e) => e.id)).toEqual([other.id]);
   });
+
+  it('keeps a recorded relation to a decision outside the newest 20 shown, so the held glob stays held', async () => {
+    const old = await decision('s1k1', 'Which store holds the widgets: Postgres or DynamoDB?', { createdAt: '2026-01-01T00:00:00.000Z' });
+    answer = edges({ id: old.id, kind: 'decision', reason: 'the store is open' });
+    const made = await create();
+    expect(edgesOf(made).map((e) => e.id)).toEqual([old.id]);
+    // 21 newer open decisions push it past the cap; the model answers only about what it is shown.
+    for (let i = 0; i < 21; i++) await decision(`s1k${i + 2}`, `Unrelated question ${i}`, { createdAt: `2026-02-${String(i + 1).padStart(2, '0')}T00:00:00.000Z` });
+    answer = () => ((prompts.at(-1)?.prompt ?? '').includes(`decision ${old.id} `) ? edges({ id: old.id, kind: 'decision', reason: 'the store is open' })() : '{"edges": []}');
+    await savePlan(made.id, `${PLAN} Saved again.`);
+    await inference.refresh(made.id);
+    expect(prompts.at(-1)?.prompt).toContain(`decision ${old.id} `);
+    expect(edgesOf(await current(made.id)).map((e) => e.id)).toEqual([old.id]);
+    expect((await current(made.id)).status).toBe('planning');
+    expect(unwrap(await globs.get(DEV, made.id)).waitingFor.map((w) => w.id)).toEqual([old.id]);
+  });
 });

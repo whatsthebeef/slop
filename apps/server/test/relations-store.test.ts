@@ -1,7 +1,8 @@
-import { BoardService, GlobService } from '@slop/core';
+import { BoardService, GlobService, LABEL_NAMES } from '@slop/core';
 import type { Relation, Result } from '@slop/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgStore } from '../src/db/store.js';
+import { StallWatch } from '../src/jobs/stall-watch.js';
 import { createTestDatabase } from './support/database.js';
 
 const DEV = 'dev@example.com';
@@ -139,5 +140,104 @@ describe('relations in Postgres', () => {
     expect(results.filter((r) => r.ok)).toHaveLength(1);
     expect(results.flatMap((r) => (r.ok ? [] : [r.error.message]))).toEqual([expect.stringContaining('cycle')]);
     expect(await rows()).toHaveLength(1);
+  });
+  it('two cycle-closing addRelation calls across gates at once (start and merge, and a decision-direction add): exactly one wins', async () => {
+    const a = await create();
+    const b = await create();
+    const mixed = await Promise.all([
+      globs.addRelation(DEV, a.id, a.version, { to: b.id, gate: 'start' }),
+      globs.addRelation(DEV, b.id, b.version, { to: a.id, gate: 'merge' }),
+    ]);
+    expect(mixed.filter((r) => r.ok)).toHaveLength(1);
+    expect(mixed.flatMap((r) => (r.ok ? [] : [r.error.message]))).toEqual([expect.stringContaining('cycle')]);
+
+    const c = await create();
+    const d = await create();
+    const reverse = await Promise.all([
+      globs.addRelation(DEV, c.id, c.version, { to: d.id }),
+      globs.addRelation(DEV, c.id, null, { to: d.id }, 'holds_back'),
+    ]);
+    expect(reverse.filter((r) => r.ok)).toHaveLength(1);
+    expect((await rows()).filter((r) => [c.id, d.id].includes(r.from) && [c.id, d.id].includes(r.to))).toHaveLength(1);
+  });
+
+  /** A service whose store bumps glob `target`'s version right before its first conditional write, as a webhook would between read and write. */
+  const racingOn = (target: string): GlobService => {
+    let bumped = false;
+    return new GlobService({
+      store: {
+        transaction: (work) =>
+          store.transaction((tx) =>
+            work(
+              new Proxy(tx, {
+                get: (inner, prop) => {
+                  if (prop !== 'updateGlob') {
+                    const member: unknown = Reflect.get(inner, prop);
+                    return typeof member === 'function' ? (...args: unknown[]): unknown => Reflect.apply(member, inner, args) : member;
+                  }
+                  return async (next: Parameters<typeof tx.updateGlob>[0], version: number) => {
+                    if (!bumped && next.id === target) {
+                      bumped = true;
+                      await store.transaction(async (other) => {
+                        const current = await other.getGlob(target);
+                        if (current !== null) await other.updateGlob({ ...current, version: current.version + 1 }, current.version);
+                      });
+                    }
+                    return inner.updateGlob(next, version);
+                  };
+                },
+              }),
+            ),
+          ),
+      },
+      notifier: { publish: () => undefined },
+      clock: { now: () => new Date().toISOString() },
+      ids: { runId: () => crypto.randomUUID() },
+      routines: { hasRoutine: () => Promise.resolve(true) },
+    });
+  };
+
+  it('a lost version race rolls the relation rows back with it (no row, no event, a version_conflict)', async () => {
+    const a = await create();
+    const b = await create();
+    const racing = racingOn(a.id);
+    const lost = await racing.addRelation(DEV, a.id, a.version, { to: b.id, gate: 'merge' });
+    expect(lost.ok ? null : lost.error.code).toBe('version_conflict');
+    expect((await rows()).filter((r) => r.from === a.id)).toEqual([]);
+    const events = await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['RelationAdded'], [a.id]));
+    expect(events.some((e) => e.type === 'RelationAdded')).toBe(false);
+  });
+
+  it('the stall watch does not raise a Reviewing glob that waits only for an unmet sign-off relation', async () => {
+    const part = await create();
+    const source = await create({ relations: [{ to: part.id, gate: 'sign_off' }] });
+    // Reviewing with every label approved and nothing else to do: only the relation holds the sign-off.
+    await store.transaction((tx) =>
+      tx.updateGlob(
+        {
+          ...source,
+          status: 'reviewing',
+          provisioning: 'ok',
+          version: source.version + 1,
+          labels: Object.fromEntries(LABEL_NAMES.map((name) => [name, 'approved'])),
+          updatedAt: '2020-01-01T00:00:00.000Z',
+        },
+        source.version,
+      ),
+    );
+    const raised: string[] = [];
+    const watch = new StallWatch(store, globs, { raise: (n) => Promise.resolve(void raised.push(n.source)), clear: () => Promise.resolve() }, () => undefined);
+    await watch.check();
+    expect(raised.filter((r) => r.includes(source.id))).toEqual([]);
+  });
+
+  it('deleting a glob retries when a glob waiting for it changes meanwhile, and still releases it once', async () => {
+    const gone = await create();
+    const waiting = await create({ after: [gone.id] });
+    const deleted = await racingOn(waiting.id).delete(DEV, gone.id, gone.version);
+    expect(deleted.ok).toBe(true);
+    expect(await store.transaction((tx) => tx.getGlob(gone.id))).toBeNull();
+    const events = await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['RelationReleased'], [waiting.id]));
+    expect(events).toHaveLength(1);
   });
 });

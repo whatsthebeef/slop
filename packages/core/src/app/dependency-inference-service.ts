@@ -174,13 +174,17 @@ export class DependencyInferenceService {
 
   /**
    * The open globs on the board other than `selfId`, with their plans and the files their investigations name, and the open
-   * decisions that could govern it (a decision scoped to another glob is left out): its statement is the plan.
+   * decisions that could govern it (a decision scoped to another glob is left out): its statement is the plan. Only the newest
+   * are shown, except the targets already recorded for the glob: one the model never saw would read as "answered: not needed",
+   * and its relation would be dropped, releasing a held glob.
    */
-  private async candidates(boardId: number, selfId: string | null): Promise<Candidate[]> {
+  private async candidates(boardId: number, selfId: string | null, recorded: ReadonlySet<string> = new Set()): Promise<Candidate[]> {
     return this.deps.store.transaction(async (tx) => {
       const all = (await tx.listGlobs(boardId, { include: 'all' })).filter((g) => g.id !== selfId).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-      const work = all.filter((g) => g.category !== 'decision' && !hasMerged(g) && g.status !== 'failed').slice(0, MAX_CANDIDATES);
-      const decisions = all.filter((g) => isOpenDecision(g) && governs(g, selfId)).slice(0, MAX_DECISION_CANDIDATES);
+      const openWork = all.filter((g) => g.category !== 'decision' && !hasMerged(g) && g.status !== 'failed');
+      const openDecisions = all.filter((g) => isOpenDecision(g) && governs(g, selfId));
+      const work = [...openWork.slice(0, MAX_CANDIDATES), ...openWork.slice(MAX_CANDIDATES).filter((g) => recorded.has(g.id))];
+      const decisions = [...openDecisions.slice(0, MAX_DECISION_CANDIDATES), ...openDecisions.slice(MAX_DECISION_CANDIDATES).filter((g) => recorded.has(g.id))];
       const out: Candidate[] = [];
       for (const glob of [...work, ...decisions]) {
         const plan = (await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? '';
@@ -205,7 +209,7 @@ export class DependencyInferenceService {
   private async ask(input: InferenceInput): Promise<InferredEdge[] | null> {
     const findings = input.findings;
     if ((this.deps.llm === undefined && findings === undefined) || input.plan.trim().length < MIN_PLAN_CHARS) return null;
-    const candidates = await this.candidates(input.boardId, input.selfId);
+    const candidates = await this.candidates(input.boardId, input.selfId, new Set((input.recorded ?? []).map((e) => e.id)));
     if (candidates.length === 0) return [];
     const ids = new Set(candidates.map((c) => c.glob.id));
     const decisions = new Set(candidates.filter((c) => c.glob.category === 'decision').map((c) => c.glob.id));

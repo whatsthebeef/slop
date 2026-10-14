@@ -8,7 +8,7 @@ import { holdingOf, isMergeHeld } from '../src/domain/relations.js';
 import { LABEL_NAMES } from '../src/domain/types.js';
 import type { Glob, Relation } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { NOW, ctx, dev, glob as fixture, po, relation, relationFacts } from './fixtures.js';
+import { NOW, board, ctx, dev, glob as fixture, po, relation, relationFacts } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -111,6 +111,15 @@ describe('the merge gate (machine)', () => {
     const started = unwrap(machine.startAnyway(held, ctx(dev), all));
     expect(started.relationEdits?.map((e) => e.id)).toEqual(['a']);
     expect(started.glob.status).toBe('implementing');
+  });
+});
+
+describe('editing what a glob waits for (machine)', () => {
+  it('an `after` that lists the same globs in another order is no edit, even on a started glob', () => {
+    const started = fixture({ id: 's1t3', status: 'in_progress' });
+    const echoed = machine.changeFields(started, { after: { from: ['s1t2', 's1t1'], to: ['s1t1', 's1t2'] } }, board, ctx(dev));
+    expect(unwrap(echoed).changed).toBe(false);
+    expect(code(machine.changeFields(started, { after: { from: ['s1t1'], to: ['s1t1', 's1t2'] } }, board, ctx(dev)))).toBe('invalid_transition');
   });
 });
 
@@ -321,6 +330,33 @@ describe('the relation service: gates, resumes and the relations API', () => {
     await merge(three?.id ?? '');
     await globs.releaseDependents(three?.id ?? '', boardId);
     expect((await current(latest.id)).status).toBe('signed_off');
+  });
+
+  it('deleting the last unmet part releases the split source sign-off, once; a second gateReleased changes nothing', async () => {
+    const original = await create({ title: 'Big', plan: 'Big plan' });
+    const [one, two] = unwrap(await globs.split(DEV, original.id, original.version, { idempotencyKey: null, parts: [{ title: 'One', plan: 'one' }, { title: 'Two', plan: 'two' }] }));
+    const merged = await merge(one?.id ?? '');
+    let latest = merged;
+    for (const label of LABEL_NAMES.filter((n) => n in merged.labels)) latest = unwrap(await globs.reviewLabel(DEV, latest.id, latest.version, label, { kind: 'approve' }));
+    expect(latest.status).toBe('reviewing');
+    unwrap(await globs.delete(DEV, two?.id ?? '', (await current(two?.id ?? '')).version));
+    const done = await current(latest.id);
+    expect(done.status).toBe('signed_off');
+    const before = done.version;
+    unwrap(await globs.gateReleased(latest.id));
+    unwrap(await globs.gateReleased(latest.id));
+    expect((await current(latest.id)).version).toBe(before);
+  });
+
+  it('refuses a relation that closes a cycle through another gate: part waits for source to merge while source signs off after the part', async () => {
+    const original = await create({ title: 'Big', plan: 'Big plan' });
+    const [one, two] = unwrap(await globs.split(DEV, original.id, original.version, { idempotencyKey: null, parts: [{ title: 'One', plan: 'one' }, { title: 'Two', plan: 'two' }] }));
+    // The source signs off after part two merges; making part two wait for the source to be signed off is a deadlock.
+    const refused = await globs.addRelation(DEV, two?.id ?? '', null, { to: one?.id ?? '', gate: 'start', until: 'signed_off' });
+    expect(code(refused)).toBe('invalid_input');
+    expect(message(refused)).toContain('cycle');
+    // Waiting for the source to merge is what a split already does: no cycle, nothing new.
+    expect(code(await globs.addRelation(DEV, two?.id ?? '', null, { to: one?.id ?? '', gate: 'merge' }))).toBeNull();
   });
 
   it('a decision relation (until decided) holds a sub until the decision is accepted or rejected, not on needs work', async () => {

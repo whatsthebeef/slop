@@ -325,8 +325,9 @@ export const createApp = (deps: AppDeps) => {
         // the board's list adds effects, deploys and uploads for the full picture.
         const now = new Date().toISOString();
         const thresholds = stallThresholds(m.board);
+        const holdings = new Map((everyone.ok ? everyone.value : []).map((r) => [r.glob.id, r.holding]));
         const stalled = list.filter(
-          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), [], now, { viewer, thresholds, complete: false }).holder === 'stalled',
+          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), holdings.get(g.id) ?? [], now, { viewer, thresholds, complete: false }).holder === 'stalled',
         ).length;
         const yourTurn = (everyone.ok ? everyone.value : []).reduce(
           (n, { glob, artifacts }) =>

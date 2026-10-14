@@ -51,10 +51,12 @@ export class StallWatch {
   private async checkBoard(board: Board, now: string): Promise<number> {
     const list = await this.store.transaction((tx) => tx.listGlobs(board.id, {}));
     const stored = await this.globs.humanStepsOf(board.id);
+    // A Reviewing glob held only by an unmet sign-off relation is waiting, not stalled: whoseMove needs its holdings to see that.
+    const holdings = await this.globs.holdingsOf(board.id, list);
     const thresholds = stallThresholds(board);
     const wanted = new Set<string>();
     for (const glob of list) {
-      const move = whoseMove(glob, humanSteps(glob, {}, stored.get(glob.id) ?? []), machineSteps(glob), [], now, { thresholds });
+      const move = whoseMove(glob, humanSteps(glob, {}, stored.get(glob.id) ?? []), machineSteps(glob), holdings.get(glob.id) ?? [], now, { thresholds });
       const raised = stalledNotification(glob, move);
       if (raised === null) continue;
       wanted.add(raised.source);
