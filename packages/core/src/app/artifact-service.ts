@@ -8,7 +8,7 @@ import type { Result } from '../domain/errors.js';
 import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import { ARTIFACT_ROLE } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind, IndependentReviewMeta, Provenance, ReviewStats } from '../domain/knowledge.js';
-import { applicableDecisions, scopedDecision } from '../domain/decision-glob.js';
+import { applicableDecisions, isArchivedDecision, scopedDecision } from '../domain/decision-glob.js';
 import type { ScopedDecision } from '../domain/decision-glob.js';
 import { payloadOf } from '../domain/payload.js';
 import type { Payload } from '../domain/payload.js';
@@ -16,6 +16,8 @@ import type { GlobAttributes } from '../domain/attributes.js';
 import { recheckOverlapsEffect } from '../domain/events.js';
 import { handoverBrief, openFindings, resumePhase } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
+import { GROUP_CONTEXT_MAX_GLOBS, contextNeighbours, groupContext, inGroup } from '../domain/group-view.js';
+import type { GroupContext } from '../domain/group-view.js';
 import { humanSteps } from '../domain/human-steps.js';
 import type { HumanStep } from '../domain/human-steps.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
@@ -150,6 +152,11 @@ export interface GlobContext {
    * hottest first, with their counts. Empty when none; absent when hotspots are not configured.
    */
   readonly hotspots?: readonly GlobHotspot[];
+  /**
+   * Present when the glob's group has other open or recently merged globs, or open decisions: what the neighbours do (ID, title,
+   * status, one line of plan) and the decisions still open, so a run needn't read their plans. Absent otherwise.
+   */
+  readonly group?: GroupContext;
   /** Present when intake judged the glob: the oversized flag (advice only), its reasons and the proposed workstreams. */
   readonly size?: SizeContext;
   readonly fetch: string;
@@ -573,6 +580,7 @@ export class ArtifactService {
         text: i.text.slice(0, INBOX_CONTEXT_CHARS),
         truncated: i.text.length > INBOX_CONTEXT_CHARS,
       }));
+      const group = await this.groupSection(tx, glob);
       const hotspotView = this.deps.hotspots === undefined ? null : await this.deps.hotspots(glob.boardId, this.deps.clock.now());
       return ok({
         glob: {
@@ -637,10 +645,25 @@ export class ArtifactService {
               ),
             }),
         ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck) }),
+        ...(group === null ? {} : { group }),
         fetch:
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
       });
     });
+  }
+
+  /** The group section of a glob's context: its neighbours and open decisions; null when it has none. */
+  private async groupSection(tx: Tx, glob: Glob): Promise<GroupContext | null> {
+    if (glob.group === null) return null;
+    const all = await tx.listGlobs(glob.boardId, { include: 'all' });
+    const members = all.filter((g) => inGroup(g, glob.group ?? '') && !isArchivedDecision(g));
+    const relations = await tx.listRelationsFrom(members.filter((g) => g.category !== 'decision').map((g) => g.id));
+    const memberIds = new Set(members.map((g) => g.id));
+    const others = await tx.getGlobs([...new Set(relations.map((r) => r.to))].filter((id) => !memberIds.has(id)));
+    // Plans only for the neighbours the context shows, in one read.
+    const shown = contextNeighbours(glob, members, this.deps.clock.now()).slice(0, GROUP_CONTEXT_MAX_GLOBS);
+    const plans = new Map((await tx.latestArtifacts(shown.map((g) => g.id), ['plan'])).map((a) => [a.globId, a.content]));
+    return groupContext(glob, members, relations, plans, others.filter((g) => g.category === 'decision' && !isArchivedDecision(g)), this.deps.clock.now());
   }
 
   /** The latest version of one artifact (kind and, for attachments, label) in full. */
