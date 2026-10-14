@@ -251,7 +251,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
   });
   const related = (patch: Partial<RelationsView>): RelationsView => ({ holding: [], holdsBack: [], done: [], ...patch });
 
-  it('groups the relations: holding, decisions, parts, holds back and a collapsed Done, each row with its gate in words, reason and source', () => {
+  it('groups the relations: holding, decisions, holds back and a collapsed Done, each row with its gate in words, reason and source', () => {
     renderGlob(
       view({
         status: 'planning',
@@ -267,11 +267,12 @@ describe('glob view: escalation, dependencies and edit fields', () => {
         }),
       }),
     );
-    expect(within(screen.getByTestId('related-holding')).getByText("· can't start until merged")).toBeTruthy();
+    expect(within(screen.getByTestId('related-holding')).getAllByText("· can't start until merged")).toHaveLength(2);
     expect(screen.getByTestId('related-holding').textContent).toContain('uses the endpoint it adds');
     expect(screen.getByTestId('related-holding').textContent).toContain('inferred by slop');
     expect(screen.getByTestId('related-decisions').textContent).toContain("can't start until decided");
-    expect(screen.getByTestId('related-parts').textContent).toContain("can't start until merged");
+    expect(screen.queryByTestId('related-parts')).toBeNull();
+    expect(screen.getByTestId('related-holding').textContent).toContain('s1t5');
     expect(screen.getByTestId('related-holds-back').textContent).toContain("can't merge until this is merged");
     const done = screen.getByTestId('related-done');
     expect(done.tagName).toBe('DETAILS');
