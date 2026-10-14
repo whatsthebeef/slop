@@ -107,7 +107,7 @@ const boards = new BoardService({ store, notifier: hub });
 // The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
 const branchFiles = new HostBranchFiles(() => github, logError);
 const catalog = new FsCatalog(config.CATALOG_DIR);
-// Which dependency edges are real on each board: predicts overlaps from learned weights, learns needs from failed runs.
+// Which dependency edges are real on each board: predicts shared files (internal) from learned weights, learns relations from failed runs.
 const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, catalog });
 // File attachments live in a private bucket; without one configured the feature (routes and job) is off.
 const attachmentObjects = config.ATTACHMENTS_BUCKET === undefined ? null : new S3ObjectStore(new S3Client({ region: config.ATTACHMENTS_REGION }), config.ATTACHMENTS_BUCKET);
@@ -124,7 +124,7 @@ const globs = new GlobService({
   embedder: { model: config.EMBED_MODEL, dimensions: 1024, embed: (texts, signal) => embedder.embed(texts, signal) },
   // Judges a new glob's size; `sizeCheck` exists by the time the first glob is created.
   sizeCheck: { assess: (boardId, plan): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan), refresh: (globId) => sizeCheck.refresh(globId) },
-  // Infers a new glob's needs and overlaps from its plan; `dependencyInference` exists by the time the first glob is created.
+  // Infers a new glob's relations (needs and decisions) from its plan; `dependencyInference` exists by the time the first glob is created.
   inference: { infer: (input) => dependencyInference.infer(input) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.

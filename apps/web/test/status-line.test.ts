@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
 import {
-  blockedLine,
   chainTip,
   blockedParts,
-  dependencySummary,
   mergeWarning,
   statusLine,
   viewStatusLine,
@@ -377,17 +375,17 @@ const hold = (to: string, patch: Partial<NonNullable<GlobView['holding']>[number
   ...patch,
 });
 
-describe('blocked line', () => {
+describe('blocked parts', () => {
   const ahead = (ids: string[]) => view({ status: 'planning', holding: ids.map((id) => hold(id)) });
 
   it('names one or two blockers', () => {
-    expect(blockedLine(ahead(['s1t1']))).toBe('blocked by s1t1');
-    expect(blockedLine(ahead(['s1t1', 's1t2']))).toBe('blocked by s1t1, s1t2');
+    expect(blockedParts(ahead(['s1t1']))).toEqual({ ids: ['s1t1'], more: 0 });
+    expect(blockedParts(ahead(['s1t1', 's1t2']))).toEqual({ ids: ['s1t1', 's1t2'], more: 0 });
   });
 
   it('folds three or more into two names and a count', () => {
-    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3']))).toBe('blocked by s1t1, s1t2, s1t3');
-    expect(blockedLine(ahead(['s1t1', 's1t2', 's1t3', 's1t4']))).toBe('blocked by s1t1, s1t2 +2');
+    expect(blockedParts(ahead(['s1t1', 's1t2', 's1t3']))).toEqual({ ids: ['s1t1', 's1t2', 's1t3'], more: 0 });
+    expect(blockedParts(ahead(['s1t1', 's1t2', 's1t3', 's1t4']))).toEqual({ ids: ['s1t1', 's1t2'], more: 2 });
   });
 
   it('names a decision as such, and counts only start relations', () => {
@@ -399,52 +397,19 @@ describe('blocked line', () => {
   });
 
   it('holds only a glob in Planning (or a failed one Retrigger would refuse)', () => {
-    expect(blockedLine({ ...ahead(['s1t1']), status: 'failed' })).toBe('blocked by s1t1');
-    expect(blockedLine({ ...ahead(['s1t1']), status: 'in_progress' })).toBeNull();
-    expect(blockedLine({ ...ahead(['s1t1']), status: 'pr_open' })).toBeNull();
+    expect(blockedParts({ ...ahead(['s1t1']), status: 'failed' })?.ids).toEqual(['s1t1']);
+    expect(blockedParts({ ...ahead(['s1t1']), status: 'in_progress' })).toBeNull();
+    expect(blockedParts({ ...ahead(['s1t1']), status: 'pr_open' })).toBeNull();
   });
 
   it('is null with nothing ahead', () => {
-    expect(blockedLine(view())).toBeNull();
-    expect(blockedLine(view({ status: 'planning', holding: [] }))).toBeNull();
+    expect(blockedParts(view())).toBeNull();
+    expect(blockedParts(view({ status: 'planning', holding: [] }))).toBeNull();
   });
 
   it('the tip says where each one stands and why', () => {
     const g = view({ status: 'planning', holding: [hold('s1t1', { state: 'planning', reason: 'uses humanSteps()' }), hold('s1k4', { toIsDecision: true, until: 'decided', state: 'planning' })] });
     expect(chainTip(g)).toBe('s1t1 (Planning): uses humanSteps(), decision s1k4 (Planning)');
-  });
-});
-
-describe('dependency summary', () => {
-  it('is null with nothing to list', () => {
-    expect(dependencySummary(view())).toBeNull();
-  });
-
-  it('shows a need with where it stands and why, and who waits on this glob', () => {
-    const summary = dependencySummary(view({ status: 'planning', holding: [hold('s1t1', { reason: 'uses humanSteps()' })], waitedOnBy: ['s1t9'] }));
-    expect(summary?.needs).toEqual([{ id: 's1t1', relationId: 'rel_s1t1', status: 'Doing', why: 'uses humanSteps()', dismissible: false }]);
-    expect(summary?.waitedOnBy).toEqual(['s1t9']);
-  });
-
-  it('makes slop\'s inferred and learned rows dismissible, never a person\'s or a split\'s', () => {
-    const summary = dependencySummary(
-      view({
-        status: 'planning',
-        holding: [hold('s1t1', { source: 'inferred' }), hold('s1t2', { source: 'person' }), hold('s1t3', { source: 'learned' }), hold('s1t4', { source: 'split' })],
-      }),
-    );
-    expect(summary?.needs.map((n) => [n.id, n.dismissible])).toEqual([
-      ['s1t1', true],
-      ['s1t2', false],
-      ['s1t3', true],
-      ['s1t4', false],
-    ]);
-  });
-
-  it('lists only waited-on-by globs when nothing holds this one', () => {
-    const summary = dependencySummary(view({ waitedOnBy: ['s1t9'] }));
-    expect(summary?.needs).toEqual([]);
-    expect(summary?.waitedOnBy).toEqual(['s1t9']);
   });
 });
 

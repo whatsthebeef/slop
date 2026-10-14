@@ -3,7 +3,6 @@ import type {
   MachineStep,
   Move,
   AttachmentFile,
-  AwaitedDependency,
   AgentSetEntry,
   AgentSetFileView,
   ArtifactKind,
@@ -83,9 +82,6 @@ export interface GlobView extends Glob {
   readonly allowedActions?: readonly Action[];
   /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
   readonly artifacts?: readonly ArtifactSummaryView[];
-  /** What the glob still waits for, and the globs in Planning that wait for it (single-glob reads only). */
-  readonly waitingFor?: readonly AwaitedDependency[];
-  readonly waitedOnBy?: readonly string[];
   /** Every relation of the glob that still holds something back (any gate), with the title of what it points at; computed on the server for the board list and the glob read (read with `?.`: absent on an older API). */
   readonly holding?: readonly Holding[];
   /** The glob's relations in groups: holding it back, held back by it, and no longer holding (single-glob reads only). */

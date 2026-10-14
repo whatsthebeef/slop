@@ -401,7 +401,7 @@ export class ArtifactService {
       hotspots?: (boardId: number, now: string) => Promise<{ readonly windowDays: number; readonly hotspots: readonly Hotspot[] }>;
       /** Re-judges a glob's size when its plan.md is saved in Planning. */
       sizeCheck?: SizeAssessor;
-      /** Re-infers a glob's needs and overlaps after its plan or investigation changed; never throws. */
+      /** Re-infers a glob's relations after its plan or investigation changed; never throws. */
       dependencyInference?: { refresh(globId: string): Promise<void> };
       /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
       investigation?: InvestigationReactor;

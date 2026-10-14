@@ -411,14 +411,6 @@ export const blockedParts = (glob: GlobView): BlockedParts | null => {
   return { ids, more: ahead.length - ids.length };
 };
 
-/** "blocked by s15f82, s15f84 +2" for a glob whose start is held back; null when nothing is. */
-export const blockedLine = (glob: GlobView): string | null => {
-  const parts = blockedParts(glob);
-  if (parts === null) return null;
-  const more = parts.more > 0 ? ` +${String(parts.more)}` : '';
-  return `blocked by ${parts.ids.join(', ')}${more}`;
-};
-
 /** Where what a glob waits for stands, in the board's words. */
 const holdState = (state: Holding['state']): string => {
   switch (state) {
@@ -444,39 +436,6 @@ export const chainTip = (glob: GlobView): string =>
   startHolds(glob)
     .map((h) => `${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
     .join(', ');
-
-/** One need of a glob, with its state and why it waits. */
-export interface NeedRow {
-  readonly id: string;
-  /** The relation, for the ✕. */
-  readonly relationId: string;
-  /** Where it stands ("Planning", "Doing", ...); the board's own words. */
-  readonly status: string | null;
-  readonly why: string;
-  /** A recorded relation a person may dismiss with the ✕ (one slop inferred or learned, not already dismissed). */
-  readonly dismissible: boolean;
-}
-
-/** What the glob view's Dependencies section shows. */
-export interface DependencySummary {
-  /** What holds the glob's start back, each with where it stands and why. */
-  readonly needs: readonly NeedRow[];
-  readonly waitedOnBy: readonly string[];
-}
-
-/** The Dependencies section's content, or null when there is nothing to list. */
-export const dependencySummary = (glob: GlobView): DependencySummary | null => {
-  const needs = startHolds(glob).map((h) => ({
-    id: h.to,
-    relationId: h.relationId,
-    status: holdState(h.state),
-    why: h.reason ?? (h.toIsDecision ? 'waits for the decision' : 'waits to merge'),
-    dismissible: h.source === 'inferred' || h.source === 'learned',
-  }));
-  const waitedOnBy = glob.waitedOnBy ?? [];
-  if (needs.length + waitedOnBy.length === 0) return null;
-  return { needs, waitedOnBy };
-};
 
 /**
  * The Merge control's warning: the base has moved on since the branch last caught up and no conflict is recorded yet,

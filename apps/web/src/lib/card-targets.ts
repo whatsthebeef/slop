@@ -8,7 +8,7 @@ export const cardTargets = {
   /** The independent review's status ("1 finding", "(outdated)"). */
   findings: (): GlobTarget => ({ section: 'findings' }),
   /** The blocked-by / waits-for chip. */
-  prerequisites: (): GlobTarget => ({ section: 'prerequisites' }),
+  related: (): GlobTarget => ({ section: 'related' }),
   /** The "needs a human" chip. */
   escalation: (): GlobTarget => ({ section: 'escalation' }),
   /** The clash chip. */

@@ -160,6 +160,31 @@ describe('card rows', () => {
     });
   });
 
+  it('shows only a relation that holds the glob back now, as the one status, and no overlaps chip', () => {
+    const hold = (to: string, patch: Partial<NonNullable<GlobView['holding']>[number]> = {}) => ({
+      relationId: `rel_${to}`,
+      to,
+      toTitle: null,
+      toIsDecision: false,
+      gate: 'start' as const,
+      until: 'merged' as const,
+      state: 'open' as const,
+      reason: null,
+      source: 'person' as const,
+      ...patch,
+    });
+    const decisionHeld = dom(markup(view({ status: 'planning', holding: [hold('s1k9', { toIsDecision: true, until: 'decided', state: 'planning' })] })));
+    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('waiting on decision s1k9');
+    // A start relation holds nothing once the glob has started, and nothing relation-shaped is left on the card.
+    const started = dom(markup(view({ status: 'in_progress', holding: [hold('s1t1')] })));
+    expect(started.textContent).not.toContain('waiting on');
+    // Predicted overlaps are internal: even when a view still carries them, no chip.
+    const legacy = view({ status: 'planning', impliedAfter: [{ id: 's1t5', paths: ['a.ts'] }] });
+    const html = markup(legacy);
+    expect(html).not.toContain('overlap');
+    expect(dom(html).querySelector('[data-testid="overlap-chip"]')).toBeNull();
+  });
+
   it('puts the category icon last in the header, the status just before it, and the ID on the left', () => {
     const root = dom(markup(stalledByConflict()));
     const header = root.querySelector('[data-testid="card-header"]');

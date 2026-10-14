@@ -14,7 +14,7 @@ describe('cardTargets', () => {
   });
 
   it('opens the chips at their sections', () => {
-    expect(path(cardTargets.prerequisites())).toBe('/boards/15/globs/s15f1?section=prerequisites');
+    expect(path(cardTargets.related())).toBe('/boards/15/globs/s15f1?section=related');
     expect(path(cardTargets.escalation())).toBe('/boards/15/globs/s15f1?section=escalation');
     expect(path(cardTargets.conflict())).toBe('/boards/15/globs/s15f1?section=conflict');
     expect(path(cardTargets.size())).toBe('/boards/15/globs/s15f1?section=size');
