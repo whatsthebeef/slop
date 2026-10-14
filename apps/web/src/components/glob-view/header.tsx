@@ -39,7 +39,7 @@ export const GlobHeader = ({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
-  // The bar grows with a wrapping title: its measured height is published for the sections' scroll margin.
+  // The bar's measured height is published for the sections' scroll margin (it stays fixed, but the font size can change it).
   const barRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const bar = barRef.current;

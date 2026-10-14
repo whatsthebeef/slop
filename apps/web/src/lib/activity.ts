@@ -97,7 +97,7 @@ export const activityOf = (glob: GlobView, repo: string | null): ActivityEntry[]
         'warn',
         `Conflict with ${conflict.base}${conflict.since === null ? '' : ` after ${conflict.since}`}`,
         conflict.at,
-        conflict.since === null ? null : `?glob=${conflict.since}`,
+        conflict.since === null ? null : `/boards/${String(glob.boardId)}?glob=${encodeURIComponent(conflict.since)}`,
         conflict.files,
       ),
     );

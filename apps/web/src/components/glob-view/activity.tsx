@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link as RouterLink } from 'react-router';
 import { GitPullRequest, TriangleAlert } from 'lucide-react';
 import { HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { ACTIVITY_SHOWN, activityOf } from '@/lib/activity';
@@ -43,11 +44,16 @@ const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
           {entry.text}
           {entry.count > 1 && ` ×${String(entry.count)}`}
         </span>
-        {entry.link !== null && (
-          <a className="shrink-0 underline" href={entry.link} {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}>
-            open
-          </a>
-        )}
+        {entry.link !== null &&
+          (external ? (
+            <a className="shrink-0 underline" href={entry.link} target="_blank" rel="noreferrer">
+              open
+            </a>
+          ) : (
+            <RouterLink className="shrink-0 underline" to={entry.link}>
+              open
+            </RouterLink>
+          ))}
         {entry.more.length > 0 && (
           <LinkButton testId="activity-expand" disabled={false} onClick={() => setOpen(!open)}>
             {open ? 'less' : 'more'}
