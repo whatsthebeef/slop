@@ -201,6 +201,19 @@ describe('SearchIndexer', () => {
     expect(JSON.stringify([items(), store.state.searchChunks])).toBe(before);
   });
 
+  it('indexes slop help on every board as slop_help, idempotently, and sweeps a section that is gone', async () => {
+    const help = [
+      { ref: 'docs/guide.md#a', title: 'Guide: A', text: 'About a.', url: 'https://example.com/guide.md' },
+      { ref: 'docs/guide.md#b', title: 'Guide: B', text: 'About b.', url: null },
+    ];
+    const withHelp = (docs: typeof help) => new SearchIndexer({ store, clock: { now: () => now }, embedder, changes, llm, help: docs });
+    expect(await withHelp(help).syncBoard(boardId)).toMatchObject({ written: 2, removed: 0 });
+    expect(byRef('help:docs/guide.md#a')).toMatchObject({ sourceType: 'slop_help', externalUrl: 'https://example.com/guide.md', globIds: [], authority: 'discussion' });
+    expect(await withHelp(help).syncBoard(boardId)).toMatchObject({ written: 0, removed: 0 });
+    expect(await withHelp(help.slice(0, 1)).syncBoard(boardId)).toMatchObject({ written: 0, removed: 1 });
+    expect(items().some((i) => i.externalRef === 'help:docs/guide.md#b')).toBe(false);
+  });
+
   it('re-chunks only the item that was edited, dropping its old vectors', async () => {
     const { task } = await populate();
     await indexer.syncBoard(boardId);

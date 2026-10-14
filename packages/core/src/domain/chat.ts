@@ -2,7 +2,7 @@ import { field, isObject, parseJson, text } from '../app/llm-json.js';
 import { safeGrepPattern, safeRepoPath } from './review-tools.js';
 import type { ItemStatus, SourceType } from './search.js';
 
-/** What the assistant says when the board's records don't answer (also when the model says so). */
+/** What the model replies when nothing it was given answers the question (the stored reply names what was searched instead: `chatMissText`). */
 export const CHAT_DONT_KNOW = "I couldn't find anything about that in the board's records.";
 /** What the assistant says when the question needs the code and the code could not be read. */
 export const CHAT_NO_CODE = "I couldn't read the board's code to answer that.";
@@ -13,13 +13,39 @@ export const CHAT_HISTORY_LIMIT = 50;
 
 /** What the answering model can ask to be offered under its answer; opening a glob and attaching are derived from the sources. */
 export const CHAT_ACTIONS = ['create_glob', 'save'] as const;
-export type ChatAction = (typeof CHAT_ACTIONS)[number];
+export type ChatModelAction = (typeof CHAT_ACTIONS)[number];
+/** Every button a reply can carry: the model's, and the two only a miss offers (the service decides those, never the model). */
+export type ChatAction = ChatModelAction | 'think_harder' | 'look_at_code';
+
+/** What a miss reply says: what was searched, so the person knows what was and wasn't covered. */
+export interface ChatMissFacts {
+  /** The question as searched (the rewrite, when there was one). */
+  readonly query: string;
+  readonly records: number;
+  readonly help: number;
+  readonly state: boolean;
+  /** Whether the model looked at the code while answering. */
+  readonly codeLooked: boolean;
+  /** Whether the board has a code view the model could have used. */
+  readonly codeAvailable: boolean;
+}
+
+/** The reply for a true miss: names what was searched instead of a bare "couldn't find". */
+export const chatMissText = (f: ChatMissFacts): string => {
+  const searched = [
+    `the board's records for "${f.query}" (${String(f.records)} found)`,
+    `slop's help (${String(f.help)} found)`,
+    ...(f.state ? ["the board's live state"] : []),
+  ];
+  const code = f.codeLooked ? 'I also looked at the code.' : f.codeAvailable ? "I didn't look at the code." : "This board has no code I can read.";
+  return `I couldn't find an answer to that. I searched ${searched.join(', ')}. ${code}`;
+};
 
 const ACTIONS_OPEN = '<actions>';
 const ACTIONS_CLOSE = '</actions>';
 
 /** The answer without its trailing `<actions>create_glob, save</actions>` line, and the actions it named (unknown names are dropped). */
-export const parseActions = (raw: string): { text: string; actions: ChatAction[] } => {
+export const parseActions = (raw: string): { text: string; actions: ChatModelAction[] } => {
   const start = raw.lastIndexOf(ACTIONS_OPEN);
   if (start < 0) return { text: raw.trim(), actions: [] };
   const end = raw.indexOf(ACTIONS_CLOSE, start);
@@ -130,6 +156,10 @@ export interface NewChatMessage {
   readonly tools?: readonly string[] | null;
   /** Assistant messages only: the buttons the answering model asked for (null on answers stored before it did, and on replies that call for none). */
   readonly actions?: readonly ChatAction[] | null;
+  /** Assistant messages only: the model's text did not use the records (no valid citation); the person sees it labelled as not from the board's records. */
+  readonly uncited?: boolean;
+  /** Assistant messages only: nothing answered; the text names what was searched. Never saved to knowledge. */
+  readonly miss?: boolean;
   readonly createdAt: string;
 }
 

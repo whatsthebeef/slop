@@ -115,6 +115,18 @@ describe('answers', () => {
   const reply = (citations: ChatCitation[], actions: ('create_glob' | 'save')[] = [], content = 'x') => ({ content, citations, actions });
   const withGlob = cite({ globId: 's1t1' });
 
+  it('shows a miss the buttons the server offered, in a fixed order, and an uncited reply none', () => {
+    const miss = { content: 'I couldn\'t find an answer to that.', citations: [], miss: true, actions: ['create_glob', 'look_at_code', 'think_harder'] as ('create_glob' | 'look_at_code' | 'think_harder')[] };
+    expect(actionsFor(miss, { type: 'board' })).toEqual(['think_harder', 'look_at_code', 'create_glob']);
+    expect(actionsFor({ ...miss, actions: ['create_glob'] }, { type: 'board' })).toEqual(['create_glob']);
+    expect(actionsFor({ content: 'a guess', citations: [], actions: [] }, { type: 'board' })).toEqual([]);
+  });
+
+  it('tones a slop help chip like board state and links it out', () => {
+    expect(sourceTone('slop_help')).toBe(sourceTone('board_state'));
+    expect(citationHref({ link: 'https://github.com/whatsthebeef/slop/blob/main/docs/guide.md', source: 'slop_help' })).toBe('https://github.com/whatsthebeef/slop/blob/main/docs/guide.md');
+  });
+
   it('offers actions only where they fit', () => {
     // Nothing under small talk or "couldn't find" (no sources), whatever the model asked for.
     expect(actionsFor(reply([], ['create_glob', 'save']), { type: 'glob', id: 's1t9' })).toEqual([]);

@@ -20,6 +20,8 @@ const askBody = z.object({
   page: z.object({ type: z.enum(PAGE_TYPES), id: z.string().trim().min(1).max(100).optional() }).optional(),
   /** One answer from the stronger model. */
   think: z.boolean().optional(),
+  /** Tell the model to use the code view ("Look at the code" under a miss). */
+  lookAtCode: z.boolean().optional(),
 });
 
 const saveBody = z.object({ glob: z.string().trim().min(1).optional() });
@@ -76,11 +78,11 @@ export const mountChat = (app: Hono<Env>, deps: ChatRoutesDeps): void => {
     const body = askBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
-        { code: 'invalid_input', message: `Give a question of 1 to ${MAX_QUERY_LENGTH} characters, and optionally chat, history, glob, group, page and think` },
+        { code: 'invalid_input', message: `Give a question of 1 to ${MAX_QUERY_LENGTH} characters, and optionally chat, history, glob, group, page, think and lookAtCode` },
         422,
       );
     }
-    const { question, chat, history, glob, group, page, think } = body.data;
+    const { question, chat, history, glob, group, page, think, lookAtCode } = body.data;
     const request = {
       boardId: board,
       question,
@@ -90,6 +92,7 @@ export const mountChat = (app: Hono<Env>, deps: ChatRoutesDeps): void => {
       ...(group === undefined ? {} : { group }),
       ...(page === undefined ? {} : { page: { type: page.type, ...(page.id === undefined ? {} : { id: page.id }) } }),
       ...(think === true ? { thinkHarder: true } : {}),
+      ...(lookAtCode === true ? { lookAtCode: true } : {}),
     };
     const email = c.get('email');
     if (!(c.req.header('accept') ?? '').includes('text/event-stream')) {

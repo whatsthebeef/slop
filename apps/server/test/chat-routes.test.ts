@@ -104,6 +104,12 @@ describe('chat route and ask_board', () => {
     ]);
   });
 
+  it('POST passes lookAtCode on to the service', async () => {
+    const res = await send('POST', '1/chat', { question: 'where?', lookAtCode: true });
+    expect(res.status).toBe(200);
+    expect(asked[0]?.[1]).toMatchObject({ boardId: 1, question: 'where?', lookAtCode: true });
+  });
+
   it('POST streams text pieces then the stored messages when the client accepts an event stream', async () => {
     pieces = ['Expo', 'nential [1]'];
     const res = await app.request('/api/boards/1/chat', {

@@ -495,6 +495,8 @@ const toChatMessage = (row: typeof schema.boardChatMessages.$inferSelect): ChatM
   citations: row.citations,
   tools: row.tools,
   actions: row.actions,
+  ...(row.uncited ? { uncited: true } : {}),
+  ...(row.miss ? { miss: true } : {}),
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -2221,6 +2223,8 @@ export class PgStore implements Store {
             citations: message.citations === null ? null : [...message.citations],
             tools: message.tools == null ? null : [...message.tools],
             actions: message.actions == null ? null : [...message.actions],
+            uncited: message.uncited === true,
+            miss: message.miss === true,
             createdAt: new Date(message.createdAt),
           })
           .returning();
