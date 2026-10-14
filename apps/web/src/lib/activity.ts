@@ -169,7 +169,7 @@ export const activityOf = (glob: GlobView, repo: string | null, steps: readonly 
   }
 
   if (glob.signedOffAt !== null) out.push(entry('signed-off', 'human', 'Signed off', glob.signedOffAt));
-  out.push(entry('created', 'human', `Created by ${glob.creator}`, glob.createdAt));
+  out.push(entry('created', 'human', `Planned by ${glob.planner} · ${new Date(glob.createdAt).toLocaleString()}`, glob.createdAt));
 
   const time = (e: ActivityEntry): number => Date.parse(e.at ?? glob.updatedAt);
   out.sort((a, b) => time(b) - time(a));
