@@ -33,7 +33,6 @@ import type {
   AtfIndicator,
   EnvironmentIndicator,
   GlobEnvironment,
-  MonthSpend,
   ReadinessItem,
   Environment,
   Glob,
@@ -219,11 +218,6 @@ export type SubLimitResponse = Omit<SubLimitView, 'bounds' | 'history'> & {
 
 /** What intake learned about types; every field is optional so an older server's answer still renders. */
 export type TypeLearningResponse = Partial<TypeLearningView>;
-/** This month's spend; `unpricedBySource` is optional because an older server doesn't send it. */
-export type MonthSpendView = Omit<MonthSpend, 'unpricedBySource'> & {
-  readonly unpricedBySource?: MonthSpend['unpricedBySource'];
-};
-
 export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number };
 
 export interface BoardDeploys {
@@ -612,8 +606,6 @@ export const api = {
   board: (id: number) => request<BoardView>('GET', `/api/boards/${id}`),
   updateSettings: (id: number, version: number, settings: Partial<Board>) =>
     request<Board>('PATCH', `/api/boards/${id}/settings`, { ...settings, version }),
-  /** This month's LLM spend (every board model call, by source) in the board's time zone. */
-  spend: (id: number) => request<MonthSpendView>('GET', `/api/boards/${id}/spend`),
   members: (id: number) => request<Member[]>('GET', `/api/boards/${id}/members`),
   setMember: (id: number, email: string, role: Role) =>
     request<Member>('POST', `/api/boards/${id}/members`, { email, role }),

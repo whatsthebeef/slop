@@ -24,6 +24,9 @@ export const stateLabel = (c: ChatCitation): string | null => {
 /** Widths from this up are "wide": the chat docks beside the board and the board's columns narrow for it. */
 export const WIDE_QUERY = '(min-width: 1024px)';
 
+/** Widths below this (Tailwind's `sm`) are "narrow": the chat covers the whole view and the board shows one list at a time. */
+export const NARROW_QUERY = '(max-width: 639.98px)';
+
 type KeyLike = { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: unknown };
 
 /** A bare `/` that isn't someone typing: left alone in an input, textarea, select or contenteditable. */
