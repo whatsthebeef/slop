@@ -16,13 +16,14 @@ describe('GET /api/boards/:b/events', () => {
   let database: Database;
   let drop: () => Promise<void>;
   let app: Hono<Env>;
+  let hub: HintHub;
   let boardId = 0;
 
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('board_events_ping'));
     const { db } = database;
     const store = new PgStore(db);
-    const hub = new HintHub();
+    hub = new HintHub();
     const globs = new GlobService({
       store,
       notifier: hub,
@@ -67,5 +68,34 @@ describe('GET /api/boards/:b/events', () => {
     expect(text).toMatch(/event: ready/);
     expect(text).toMatch(/event: ping\ndata: \{\}/);
     expect(text).not.toContain('keep-alive');
+  });
+
+  it("an aborted stream doesn't stop the board's other streams from getting hints", async () => {
+    const open = async (signal?: AbortSignal) => {
+      const response = await app.request(`/api/boards/${boardId}/events`, {
+        headers: { authorization: 'Bearer dev:member@example.com' },
+        signal,
+      });
+      if (response.body === null) throw new Error('no body');
+      return response.body.getReader();
+    };
+    const abortA = new AbortController();
+    const readerA = await open(abortA.signal);
+    abortA.abort();
+    await readerA.cancel().catch(() => undefined);
+    // B subscribes after A, the board's only listener, has gone: A's loop must not unsubscribe a second time over B.
+    const readerB = await open();
+    // Let A's loop end, and then some pings pass, so a second unsubscribe from A would have run.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    hub.publish({ kind: 'board.health', boardId });
+    const decoder = new TextDecoder();
+    let text = '';
+    while (!text.includes('event: hint')) {
+      const { value, done } = await readerB.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+    await readerB.cancel();
+    expect(text).toContain('event: hint');
   });
 });
