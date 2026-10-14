@@ -167,13 +167,33 @@ describe('glob view: main button', () => {
     expectMachineIcon(main);
   });
 
-  it('shows the ▾ alone, icon only, when no allowed action qualifies', () => {
-    renderGlob(view({ allowedActions: ['investigate', 'delete'] }));
+  it('promotes Review code to main, with no ▾, when it is the only action left', () => {
+    renderGlob(view({ allowedActions: ['review_now', 'delete'] }));
+    expect(mainButton()?.textContent).toBe('Review code');
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+  });
+
+  it('renders no actions when only Reset actions are allowed', () => {
+    renderGlob(view({ allowedActions: ['delete'] }));
     expect(mainButton()).toBeNull();
-    const trigger = screen.getByTestId('more-actions');
-    expect(trigger.textContent).toBe('');
-    expect(trigger.getAttribute('aria-label')).toBe('More actions');
-    expect(screen.queryByText('More')).toBeNull();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+    expect(screen.queryByTestId('glob-actions')).toBeNull();
+  });
+
+  it('while merging, Cancel merge leads and the ▾ holds Review code and Pick up', async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'pr_open',
+        list: 'doing',
+        allowedActions: ['cancel_merge', 'review_now', 'take_over', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toBe('Cancel merge');
+    await user.click(screen.getByTestId('more-actions'));
+    expect(await screen.findByTestId('more-review_now')).toBeTruthy();
+    expect(screen.getByTestId('more-take_over')).toBeTruthy();
+    expect(screen.queryByTestId('more-cancel_merge')).toBeNull();
   });
 
   it('is a split button: the main action with an icon-only ▾ joined to it', () => {
@@ -192,7 +212,7 @@ describe('glob view: main button', () => {
     expect(screen.queryByTestId('more-actions')).toBeNull();
   });
 
-  it('keeps Pick up reachable while the machine works: no main, the ▾ alone', async () => {
+  it('keeps Pick up reachable while the machine works: Review code leads, Pick up is in the ▾', async () => {
     const user = userEvent.setup();
     renderGlob(
       view({
@@ -203,7 +223,7 @@ describe('glob view: main button', () => {
         allowedActions: ['review_now', 'take_over', 'delete'],
       }),
     );
-    expect(mainButton()).toBeNull();
+    expect(mainButton()?.textContent).toBe('Review code');
     await user.click(screen.getByTestId('more-actions'));
     expect((await screen.findByTestId('more-take_over')).textContent).toContain('Pick up');
   });

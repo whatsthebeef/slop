@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation, presentedActions } from '@/lib/action-presentation';
-import { mainAction } from '@/lib/main-action';
+import { mainAction, promotedAction } from '@/lib/main-action';
 import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
 import { api } from '@/lib/api';
 import { copyOrSelect } from '@/lib/plan-text';
@@ -132,7 +132,9 @@ export const useGlobActions = ({
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
   const leading =
     stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
-  const main = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  // With no natural main (and no due step) a menu item is promoted, so the ▾ never stands alone.
+  const natural = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  const main = natural ?? (stepTurn === null ? promotedAction(allActions) : null);
   const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
@@ -454,15 +456,15 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   const moreRunning =
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
-  // The ▾ joins the main button; with none it stands alone (icon only, never a "More" label) so Pick up stays reachable.
+  // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || stepTurn !== null;
-  const hasMenu = moreActions.length + disabled.length > 0;
+  const hasMenu = hasMain && moreActions.length + disabled.length > 0;
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          className={hasMain ? 'rounded-l-none border-l-primary-foreground/40 px-1.5' : 'px-1.5'}
+          className="rounded-l-none border-l-primary-foreground/40 px-1.5"
           disabled={busy}
           aria-label="More actions"
           data-testid="more-actions"
@@ -507,7 +509,7 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   ) : undefined;
   return (
     <>
-      {(hasMain || hasMenu) && (
+      {hasMain && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {main === null && stepTurn !== null && (
@@ -535,7 +537,6 @@ export const GlobActions = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
                 {menu}
               </div>
             )}
-            {!hasMain && menu}
           </div>
           {state.confirmingReady && (
             <div

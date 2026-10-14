@@ -1,6 +1,6 @@
 import type { Action, PullRequest } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { failedRepeatedly, mainAction } from '../src/lib/main-action';
+import { failedRepeatedly, mainAction, promotedAction } from '../src/lib/main-action';
 
 const glob = (over: Partial<Parameters<typeof mainAction>[1]> = {}) => ({
   type: 'same' as const,
@@ -103,5 +103,23 @@ describe('mainAction after repeated failures', () => {
 
   it('does not count while a run is in progress', () => {
     expect(failedRepeatedly({ runs: [run('failed'), run('failed'), run(null, undefined, 'active')] })).toBe(false);
+  });
+});
+
+describe('promotedAction', () => {
+  it('leads with Cancel merge, then Review code, then Pick up', () => {
+    expect(promotedAction(['review_now', 'take_over', 'cancel_merge'])).toBe('cancel_merge');
+    expect(promotedAction(['take_over', 'investigate', 'review_now'])).toBe('review_now');
+    expect(promotedAction(['investigate', 'pick_up'])).toBe('pick_up');
+  });
+
+  it('falls back to the first remaining item', () => {
+    expect(promotedAction(['investigate', 'merge_continue'])).toBe('investigate');
+  });
+
+  it('never promotes a Reset action, and is null when nothing is left', () => {
+    expect(promotedAction(['start_again', 'delete', 'start_anyway'])).toBeNull();
+    expect(promotedAction([])).toBeNull();
+    expect(promotedAction(['review_now', 'delete'])).toBe('review_now');
   });
 });

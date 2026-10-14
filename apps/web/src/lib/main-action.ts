@@ -70,3 +70,16 @@ export const mainAction = (
   };
   return (stepFirst ? FIXES : [...FIXES, ...NEXT_STEPS]).find(candidate) ?? null;
 };
+
+/** Promoted in this order when nothing is the natural main: undo what the person just started, review, then step in. */
+const PROMOTION: readonly Action[] = ['cancel_merge', 'review_now', 'take_over', 'pick_up'];
+
+/**
+ * The menu item to lead with when `mainAction` finds no natural main, so the split button never shows a lone ▾:
+ * Cancel merge, Review code, Pick up, else the first remaining item. Never a destructive action (those stay in the
+ * Reset area). Null when nothing is left, and the row then shows no actions.
+ */
+export const promotedAction = (available: readonly Action[]): Action | null => {
+  const rest = available.filter((a) => !NEVER_MAIN.includes(a));
+  return PROMOTION.find((a) => rest.includes(a)) ?? rest[0] ?? null;
+};
