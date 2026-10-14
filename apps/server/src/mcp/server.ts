@@ -464,6 +464,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         version: z.number().int().optional().describe('The version you read: required with `to`'),
         to: z.string().min(1).optional().describe('The glob or decision this glob waits for'),
         holdsBack: z.string().min(1).optional().describe('A glob that waits for this one (this glob is a decision or any glob it must reach `until` first)'),
+        holdsBackGroup: z.string().min(1).optional().describe('A group whose globs all wait for this one: one relation per work glob in it (those already past the gate are left out), and a glob that joins the group later gets it too while it is open; no version'),
         gate: relationInputSchema.shape.gate,
         until: relationInputSchema.shape.until,
         reason: relationInputSchema.shape.reason,
@@ -472,7 +473,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     async ({ id, ...rest }) => {
       const parsed = addRelationSchema.safeParse(Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)));
       if (!parsed.success) return { ...json({ code: 'invalid_input', message: parsed.error.issues.map((i) => i.message).join('; ') }), isError: true };
-      const { to, holdsBack, version, ...fields } = parsed.data;
+      const { to, holdsBack, holdsBackGroup, version, ...fields } = parsed.data;
+      if (holdsBackGroup !== undefined) {
+        const held = await globs.holdGroup(email, id, holdsBackGroup, relationInput({ ...fields, to: id }), 'agent');
+        if (held.ok) await deps.outbox.drain(id);
+        return held.ok ? reply(await globs.get(email, id), (v) => ({ ...globViewOf(v), groupHold: held.value })) : reply(held);
+      }
       const added = await globs.addRelation(email, id, version ?? null, relationInput({ ...fields, to: to ?? holdsBack ?? '' }), to === undefined ? 'holds_back' : 'held_by', 'agent');
       if (added.ok) await deps.outbox.drain(added.value.id);
       return added.ok ? reply(await globs.get(email, id), (v) => globViewOf(v)) : reply(added);

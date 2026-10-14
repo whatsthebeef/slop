@@ -253,4 +253,95 @@ describe('GroupService', () => {
       expect((await groups.rename(OUTSIDER, boardId, 'chat', 'x')).ok).toBe(false);
     });
   });
+  describe('group-wide decisions', () => {
+    const holders = async (id: string) => (await store.transaction((tx) => tx.listRelationsTo([id]))).filter((r) => r.group !== null).map((r) => r.from).sort();
+
+    it('holds every planning work glob of the group, leaves out started ones, and lists them in the decision\'s holdsBack', async () => {
+      const a = await create({ title: 'A' });
+      const b = await create({ title: 'B' });
+      const started = await create({ title: 'Started' });
+      await store.transaction((tx) => tx.updateGlob({ ...started, status: 'in_progress' }, started.version));
+      await create({ title: 'Elsewhere', group: 'other' });
+      const decision = await decide('d1', 'chat');
+
+      const result = unwrap(await globs.holdGroup(DEV, decision, 'Chat', {}));
+      expect([...result.held].sort()).toEqual([a.id, b.id].sort());
+      expect(result.failed).toEqual([]);
+      expect(await holders(decision)).toEqual([a.id, b.id].sort());
+      const [row] = await store.transaction((tx) => tx.listRelationsFrom([a.id]));
+      expect(row).toMatchObject({ to: decision, gate: 'start', until: 'decided', source: 'person', group: 'chat' });
+      expect(row?.reason).toContain('chat');
+      // Again: nothing doubles.
+      unwrap(await globs.holdGroup(DEV, decision, 'chat', {}));
+      expect(await holders(decision)).toHaveLength(2);
+    });
+
+    it('refuses a group that does not exist', async () => {
+      const decision = await decide('d2', null);
+      const missing = await globs.holdGroup(DEV, decision, 'nope', {});
+      expect(!missing.ok && missing.error.code).toBe('not_found');
+    });
+
+    it('gives the relation to a glob created in or moved into the group while the decision is open', async () => {
+      await create({ title: 'First' });
+      const decision = await decide('d3', 'chat');
+      unwrap(await globs.holdGroup(DEV, decision, 'chat', {}));
+
+      const created = await create({ title: 'Late', type: 'sub' });
+      const outside = await create({ title: 'Outside', group: 'other' });
+      const moved = unwrap(await globs.update(ADMIN, outside.id, outside.version, { group: 'Chat' }));
+      expect(await holders(decision)).toContain(created.id);
+      expect(await holders(decision)).toContain(moved.id);
+      expect((await globs.peek(created.id))?.status).toBe('planning');
+    });
+
+    it('does not give it to a decision moved in, to the decision itself, or over a glob\'s own dismissed relation', async () => {
+      const a = await create({ title: 'A' });
+      const decision = await decide('d6', 'chat');
+      unwrap(await globs.holdGroup(DEV, decision, 'chat', {}));
+      // Another decision joins the group: no relation, and the move succeeds.
+      const other = await decide('d7', 'elsewhere');
+      const otherNow = await globs.peek(other);
+      unwrap(await globs.update(ADMIN, other, otherNow?.version ?? 0, { group: 'chat' }));
+      expect(await holders(decision)).not.toContain(other);
+      // A glob that dismissed its relation, moved out and back in, stays released.
+      const [row] = await store.transaction((tx) => tx.listRelationsFrom([a.id]));
+      const dismissed = unwrap(await globs.dismissRelation(ADMIN, a.id, null, row?.id ?? ''));
+      const out = unwrap(await globs.update(ADMIN, a.id, dismissed.version, { group: 'other' }));
+      unwrap(await globs.update(ADMIN, a.id, out.version, { group: 'chat' }));
+      const rows = await store.transaction((tx) => tx.listRelationsFrom([a.id]));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.dismissedAt).not.toBeNull();
+    });
+
+    it('refuses a non-member', async () => {
+      await create({ title: 'A' });
+      const decision = await decide('d8', 'chat');
+      expect((await globs.holdGroup(OUTSIDER, decision, 'chat', {})).ok).toBe(false);
+    });
+
+    it('stops giving it once the decision is decided', async () => {
+      const decision = await decide('d4', 'chat');
+      await create({ title: 'First' });
+      unwrap(await globs.holdGroup(DEV, decision, 'chat', {}));
+      await store.transaction(async (tx) => {
+        const d = await tx.getGlob(decision);
+        if (d === null) throw new Error('no decision');
+        await tx.updateGlob({ ...d, attributes: { ...(d.attributes as object), outcome: { kind: 'accept' } } } as Glob, d.version);
+      });
+      const late = await create({ title: 'After decided' });
+      expect(await holders(decision)).not.toContain(late.id);
+    });
+
+    it('carries the group name on a rename, so late joiners still get it', async () => {
+      const a = await create({ title: 'A' });
+      const decision = await decide('d5', 'chat');
+      unwrap(await globs.holdGroup(DEV, decision, 'chat', {}));
+      unwrap(await groups.rename(DEV, boardId, 'chat', 'renamed'));
+      const [row] = await store.transaction((tx) => tx.listRelationsFrom([a.id]));
+      expect(row?.group).toBe('renamed');
+      const late = await create({ title: 'Late', group: 'renamed' });
+      expect(await holders(decision)).toContain(late.id);
+    });
+  });
 });
