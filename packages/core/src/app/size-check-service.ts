@@ -66,7 +66,7 @@ export type SizeAssessment = Pick<SizeCheck, 'planHash' | 'estimate' | 'evidence
 
 /** What `GlobService` and `ArtifactService` need: assess a plan before creating a glob, and refresh a glob's check after a plan save. */
 export interface SizeAssessor {
-  assess(boardId: number, plan: string): Promise<SizeAssessment>;
+  assess(boardId: number, plan: string, title?: string): Promise<SizeAssessment>;
   /** Re-assesses a glob in Planning after its plan.md changed. Never throws. */
   refresh(globId: string): Promise<void>;
 }
@@ -92,6 +92,9 @@ const PROPOSE_SYSTEM = `You split a plan that is too big for one pull request in
 Answer with JSON only: {"parts": [{"title": "...", "plan": "...", "after": [0]}]}.
 - 2 to 6 parts, in the order they should be built. Part 0 stays the original task. When the parts share something (a schema, an interface, a type), make part 0 that shared contract alone and let each other part need only part 0, so they can be built at the same time.
 - "plan" is the part's share of the original plan, copied verbatim (keep the goal and any context it needs): every task goes to exactly one part. A section with no task (Evidence, Why, Background, Notes, an investigation list) is context: never make it a part, leave it with the parts that use it.
+- "title" names the feature and says what the part delivers, so it is recognisable on a board on its own. It starts with the feature's short name taken from the original title (a few words, the same for every part), then a colon, then the outcome a reviewer can check, with the concrete thing it changes. Name the user-visible surface or the module when that is what the part is. Part 0 as a contract says what it is for. At most 100 characters; never "Part N", "and more" or a bare noun.
+  Good: "Board chat: answers get 👍/👎 buttons, stored per board"; "Board chat: tries a second search, the code and the stronger model before saying it can't help"; "Board chat feedback: the stored feedback record the buttons and learning use".
+  Bad: "Feedback UI and submission"; "Multi-step search with step budget"; "Schema and types".
 - "after" lists the earlier parts (their index) whose code this one needs on main before it can start: direct prerequisites only. Touching the same files is not a need (leave it out); otherwise leave it empty so parts run in parallel.`;
 
 const FOOTPRINT_SYSTEM = `You predict which files of a repository a plan will change, by looking at the repository.
@@ -113,10 +116,19 @@ const LEARN_EVENT_TYPES = [...SIZE_EVENT_TYPES, 'Escalated'] as const;
 
 const intOf = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
+const MAX_PART_TITLE_CHARS = 100;
+
+/** A proposed part's title on one line, trimmed and cut at the length cap; null when nothing is left. */
+export const cleanTitle = (title: string | null): string | null => {
+  const oneLine = title?.replace(/\s+/g, ' ').trim() ?? '';
+  if (oneLine === '') return null;
+  return oneLine.length <= MAX_PART_TITLE_CHARS ? oneLine : `${oneLine.slice(0, MAX_PART_TITLE_CHARS - 1).trimEnd()}…`;
+};
+
 /** The model's proposed parts from its answer; empty when it gave no usable ones. */
 export const parseParts = (answer: string): ModelPart[] =>
   list(field(parseJson(answer), 'parts')).flatMap((p) => {
-    const title = text(field(p, 'title'));
+    const title = cleanTitle(text(field(p, 'title')));
     const plan = text(field(p, 'plan'));
     if (title === null || plan === null) return [];
     return [
@@ -158,7 +170,7 @@ export class SizeCheckService implements SizeAssessor {
   private readonly forecasting = new Set<string>();
   private readonly forecastAgain = new Set<string>();
 
-  async assess(boardId: number, plan: string): Promise<SizeAssessment> {
+  async assess(boardId: number, plan: string, title?: string): Promise<SizeAssessment> {
     const threshold = await this.deps.store.transaction((tx) => tx.getSizeThreshold(boardId));
     let estimate = estimateFromText(plan);
     if (this.deps.llm !== undefined && plan.trim().length >= MIN_JUDGED_CHARS) {
@@ -183,7 +195,7 @@ export class SizeCheckService implements SizeAssessor {
     }
     let reasons = oversizedReasons(estimate, threshold);
     const evidence = evidenceOf(estimate);
-    const proposed = reasons.length > 0 ? await this.propose(boardId, plan) : null;
+    const proposed = reasons.length > 0 ? await this.propose(boardId, plan, title) : null;
     let proposal = proposed?.proposal ?? null;
     // Say why a flagged plan has no proposal, so the card isn't silent about it.
     if (proposed !== null && proposal === null && proposed.why !== null) evidence.push(`No split was proposed: ${proposed.why}`);
@@ -197,14 +209,14 @@ export class SizeCheckService implements SizeAssessor {
   }
 
   /** The model's split of a flagged plan; no proposal, with the reason, when it is unavailable, slow or gives fewer than 2 usable parts. */
-  private async propose(boardId: number, plan: string): Promise<{ proposal: SizeProposal | null; why: string | null }> {
+  private async propose(boardId: number, plan: string, title?: string): Promise<{ proposal: SizeProposal | null; why: string | null }> {
     if (this.deps.llm === undefined) return { proposal: null, why: 'the model is unavailable' };
     try {
       const answer = await completeWithDeadline(
         this.deps.llm,
         {
           system: PROPOSE_SYSTEM,
-          prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`,
+          prompt: `${title === undefined || title.trim() === '' ? '' : `Original title: ${title.trim()}\n\n`}Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`,
           maxTokens: 4000,
           spend: { boardId, source: 'size_check' },
         },
@@ -252,10 +264,10 @@ export class SizeCheckService implements SizeAssessor {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return null;
         const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
-        return { boardId: glob.boardId, plan };
+        return { boardId: glob.boardId, plan, title: glob.title };
       });
       if (read === null) return;
-      const assessment = await this.assess(read.boardId, read.plan);
+      const assessment = await this.assess(read.boardId, read.plan, read.title);
       const written = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         const previous = await tx.getSizeCheck(globId);
@@ -282,7 +294,7 @@ export class SizeCheckService implements SizeAssessor {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return null;
         const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
-        return { boardId: glob.boardId, plan, previous: await tx.getSizeCheck(globId) };
+        return { boardId: glob.boardId, plan, title: glob.title, previous: await tx.getSizeCheck(globId) };
       });
       if (read === null) return;
       // Same plan as the stored check: nothing to judge again, unless its forecast is still to be made.
@@ -290,7 +302,7 @@ export class SizeCheckService implements SizeAssessor {
         if (read.previous.estimate.forecast === undefined) await this.forecast(globId);
         return;
       }
-      const assessment = await this.assess(read.boardId, read.plan);
+      const assessment = await this.assess(read.boardId, read.plan, read.title);
       const written = await this.deps.store.transaction(async (tx) => {
         const glob = await tx.getGlob(globId);
         if (glob === null || glob.status !== 'planning') return false;

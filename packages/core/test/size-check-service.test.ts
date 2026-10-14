@@ -4,7 +4,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { LlmUnavailable } from '../src/app/intake-service.js';
 import type { Llm, LlmRequest } from '../src/app/intake-service.js';
-import { SizeCheckService } from '../src/app/size-check-service.js';
+import { cleanTitle, parseParts, SizeCheckService } from '../src/app/size-check-service.js';
 import type { Result } from '../src/domain/errors.js';
 import type { GlobOutcome } from '../src/domain/intake-learning.js';
 import * as machine from '../src/domain/machine.js';
@@ -45,6 +45,7 @@ describe('learned size check', () => {
   let llmMode: 'ok' | 'unavailable' | 'junk';
   let calls: string[];
   let spends: LlmRequest['spend'][];
+  let requests: LlmRequest[];
   let service: SizeCheckService;
   let clockNow: string;
   /** What the judge answers; the default says five parts, three of them buildable at the same time. */
@@ -56,6 +57,7 @@ describe('learned size check', () => {
     complete: (request: LlmRequest) => {
       calls.push(request.system.startsWith('You judge') ? 'judge' : 'propose');
       spends.push(request.spend);
+      requests.push(request);
       if (llmMode === 'unavailable') return Promise.reject(new LlmUnavailable('down', 'wait'));
       if (llmMode === 'junk') return Promise.resolve('no json here');
       return Promise.resolve(
@@ -97,6 +99,7 @@ describe('learned size check', () => {
     ];
     calls = [];
     spends = [];
+    requests = [];
     clockNow = NOW;
     const notifier = new RecordingNotifier();
     const clock = { now: () => clockNow };
@@ -129,6 +132,28 @@ describe('learned size check', () => {
     // The judge and the split proposal both go to the board's ledger as the size check.
     expect(calls).toEqual(['judge', 'propose']);
     expect(spends).toEqual([{ boardId, source: 'size_check' }, { boardId, source: 'size_check' }]);
+  });
+
+  it('gives the proposer the original title and the rules for naming parts', async () => {
+    unwrap(
+      await globs.create(ADMIN, { boardId, title: 'Board chat feedback', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG }),
+    );
+    const request = requests.find((r) => !r.system.startsWith('You judge'));
+    expect(request?.prompt).toContain('Original title: Board chat feedback');
+    expect(request?.system).toContain("feature's short name");
+    expect(request?.system).toContain('Board chat: answers get 👍/👎 buttons, stored per board');
+    expect(request?.system).toContain('Feedback UI and submission');
+    expect(request?.system).toContain('100 characters');
+  });
+
+  it('keeps a proposed part title to one trimmed line of at most 100 characters', () => {
+    expect(cleanTitle('  Board chat:\n answers   get buttons ')).toBe('Board chat: answers get buttons');
+    expect(cleanTitle('   ')).toBeNull();
+    expect(cleanTitle(null)).toBeNull();
+    const long = cleanTitle(`Board chat: ${'x'.repeat(200)}`);
+    expect(long?.length).toBe(100);
+    expect(long?.endsWith('…')).toBe(true);
+    expect(parseParts(JSON.stringify({ parts: [{ title: ' A:  b ', plan: 'p' }, { title: ' ', plan: 'p' }] })).map((p) => p.title)).toEqual(['A: b']);
   });
 
   it('does not flag a small plan, and makes no model call for a trivial one', async () => {
