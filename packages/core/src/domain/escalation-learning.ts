@@ -181,6 +181,8 @@ export const recordKey = (globId: string, outcome: EscalationOutcome): string =>
 const DAY_MS = 24 * 60 * 60 * 1000;
 const isSubToSame = (change: unknown): boolean =>
   typeof change === 'object' && change !== null && (change as { from?: unknown }).from === 'sub' && (change as { to?: unknown }).to === 'same';
+const isSameToSub = (change: unknown): boolean =>
+  typeof change === 'object' && change !== null && (change as { from?: unknown }).from === 'same' && (change as { to?: unknown }).to === 'sub';
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
 /**
@@ -209,6 +211,8 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
       const criterion = criterionOf(escalated.data.criterion, text(escalated.data.reason), text(escalated.data.evidence));
       // Size escalations are slop's own, made by the size check (it has its own learning): agents never raise them.
       if (criterion === 'size') continue;
+      // Slop's own risk-area cleanup made it a sub again (no actor, no `Deescalated`): that is no outcome of the escalation.
+      if (events.some((e) => e.type === 'FieldsChanged' && e.actor === null && isSameToSub(e.data.type) && e.at >= escalated.at)) continue;
       const deescalated = events.find((e) => e.type === 'Deescalated' && e.at >= escalated.at);
       if (deescalated !== undefined) {
         add({

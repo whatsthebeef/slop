@@ -1044,7 +1044,8 @@ const RISK_CAUSE_TEXT: Record<RiskAreaCause, string> = {
   clean: 'Subs that changed it were clean',
   type_to_same: 'A person changed intake\'s sub to same',
   type_to_sub: 'A person changed intake\'s same to sub',
-  reset: 'An admin reset the areas',
+  reset: 'An admin reset or removed areas',
+  cleanup: 'Slop dropped it: too wide, or fewer than two globs of evidence',
 };
 
 /**
@@ -1056,6 +1057,10 @@ const RiskAreas = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
   const areas = useQuery({ queryKey: ['risk-areas', boardId], queryFn: () => api.riskAreas(boardId) });
   const reset = useMutation({
     mutationFn: () => api.resetRiskAreas(boardId),
+    onSuccess: (view) => client.setQueryData(['risk-areas', boardId], view),
+  });
+  const remove = useMutation({
+    mutationFn: (name: string) => api.removeRiskArea(boardId, name),
     onSuccess: (view) => client.setQueryData(['risk-areas', boardId], view),
   });
   if (areas.isError)
@@ -1074,7 +1079,7 @@ const RiskAreas = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
       <p className='text-xs text-muted-foreground'>
         Intake chooses sub unless the work matches one of these areas (or is beyond the sub size). Slop adds an area when a
         sub that changed those paths was reverted, blamed by a bug, failed a deploy or needed fixes while small, or when a
-        person changes intake's type. Repeated clean subs remove a learned area.
+        person changes intake's type, but only for a narrow module or file and only after two separate globs show it. Repeated clean subs remove a learned area.
       </p>
       <ul className='grid gap-1 text-xs'>
         {list.map((area) => (
@@ -1086,6 +1091,24 @@ const RiskAreas = ({ boardId, admin }: { boardId: number; admin: boolean }) => {
             </span>
             <span className='block text-muted-foreground'>{area.pathPatterns.join(', ')}</span>
             <span className='block text-muted-foreground'>{area.why}</span>
+            {area.source === 'learned' && (
+              <span className='block text-muted-foreground'>
+                Evidence:{' '}
+                {area.evidence.map((id, i) => (
+                  <span key={id}>
+                    {i > 0 && ', '}
+                    <Link className='hover:underline' to={`/boards/${boardId}?glob=${encodeURIComponent(id)}`}>
+                      {id}
+                    </Link>
+                  </span>
+                ))}
+                {admin && (
+                  <Button size='sm' variant='outline' className='ml-2' disabled={remove.isPending} onClick={() => remove.mutate(area.name)}>
+                    Remove
+                  </Button>
+                )}
+              </span>
+            )}
           </li>
         ))}
       </ul>

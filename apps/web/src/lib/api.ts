@@ -721,6 +721,8 @@ export const api = {
   riskAreas: (boardId: number) => request<RiskAreaView>('GET', `/api/boards/${boardId}/risk-areas`),
   /** Drops the learned risk areas and restores the defaults (admins). */
   resetRiskAreas: (boardId: number) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/reset`, {}),
+  /** Removes one learned risk area (admins). */
+  removeRiskArea: (boardId: number, name: string) => request<RiskAreaView>('POST', `/api/boards/${boardId}/risk-areas/remove`, {name}),
   /** What intake learned from people's retypes, or the catalog defaults (members). */
   typeLearning: (boardId: number) => request<TypeLearningResponse>('GET', `/api/boards/${boardId}/type-learning`),
   /** Forgets the board's type corrections: intake goes back to the defaults; the history stays (admins). */

@@ -2533,6 +2533,43 @@ export const escalateToSame = (
 };
 
 /**
+ * Slop's own cleanup of risk areas: a same still in Planning, escalated only for risk areas that have since been dropped, is a
+ * sub again and starts like one (unless something it starts after hasn't merged, which it keeps waiting for). Not a person's
+ * de-escalation, so no `Deescalated` event: the outcome learning must not read it as a correction. The note is on the event.
+ */
+export const liftRiskAreaEscalation = (
+  glob: Glob,
+  ctx: Context,
+  relations: RelationFacts | undefined,
+  dropped: readonly string[],
+): Result<Transition> => {
+  const prefix = "Touches the board's risk areas: ";
+  const reason = glob.escalation?.reason ?? '';
+  const named = reason.startsWith(prefix) ? reason.slice(prefix.length).split(', ') : [];
+  if (
+    glob.type !== 'same' ||
+    glob.status !== 'planning' ||
+    glob.escalation?.criterion !== 'risk_area' ||
+    glob.pr !== null ||
+    hasLiveRun(glob) ||
+    named.length === 0 ||
+    !named.every((n) => dropped.includes(n))
+  )
+    return unchanged(glob);
+  const note = `De-escalated by slop: the risk area${named.length === 1 ? '' : 's'} it was escalated for (${named.join(', ')}) ${named.length === 1 ? 'was' : 'were'} dropped as too wide or too thinly evidenced`;
+  const b = new Builder(glob, ctx)
+    .set({ type: 'sub', escalation: null })
+    .event('FieldsChanged', { type: { from: 'same', to: 'sub' }, note });
+  const awaited = awaitedOf(relations ?? NO_RELATIONS);
+  if (awaited.length > 0) {
+    b.set({ waiting: { since: ctx.now } }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+  } else {
+    b.status('implementing').queueRun(glob.creator);
+  }
+  return b.done();
+};
+
+/**
  * A person decides an escalation was unnecessary: the glob is a sub again. On a ready PR whose checks passed, the sub
  * gate runs on the head, so a sub with nothing else to flag merges.
  */
