@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 import { ChatDivider } from '@/components/chat-divider';
 import { ChatPanel } from '@/components/chat-panel';
 import { reducedMotion, stepMotion } from '@/lib/card-motion';
+import { cn } from '@/lib/utils';
 import { clampChatWidth, DEFAULT_CHAT_WIDTH, readChatWidth, writeChatWidth } from '@/lib/chat-width';
 
 /** The dock steps open and shut this much slower than the cards' own motion (same steps and easing, each one longer). */
@@ -14,7 +15,7 @@ const DOCK_SLOWDOWN = 1.2;
  * full width inside the dock, so its text never reflows. The width lives here, so dragging the divider re-renders neither the board
  * nor the shell: the pointer only moves the dock's own style, and the width is rendered and remembered once, when the drag ends.
  */
-export const ChatDock = ({ open, wide, onExited, ...panel }: { open: boolean; wide: boolean; onExited: () => void } & Omit<ComponentProps<typeof ChatPanel>, 'divider'>) => {
+export const ChatDock = ({ open, wide, narrow, onExited, ...panel }: { open: boolean; wide: boolean; narrow: boolean; onExited: () => void } & Omit<ComponentProps<typeof ChatPanel>, 'divider'>) => {
   const dock = useRef<HTMLDivElement>(null);
   const [savedWidth, setSavedWidth] = useState(readChatWidth);
   const [available, setAvailable] = useState(() => window.innerWidth);
@@ -77,7 +78,8 @@ export const ChatDock = ({ open, wide, onExited, ...panel }: { open: boolean; wi
   return (
     <div
       ref={dock}
-      className='min-h-0 min-w-0 overflow-hidden'
+      // On a phone the dock is a fixed layer over the whole viewport (above the board bar and tab row), not a flex item beside the board.
+      className={cn('min-h-0 min-w-0 overflow-hidden', narrow && 'fixed inset-0 z-50 h-dvh')}
       style={{ flexBasis: fullScreen ? '100%' : width, flexGrow: 0, flexShrink: 0 }}
       data-testid='chat-dock'
     >

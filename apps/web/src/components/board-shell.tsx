@@ -7,8 +7,7 @@ import { NotificationBar } from '@/components/notification-bar';
 import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { barRows, sessionForKey } from '@/lib/board-bar';
-import { isChatShortcut, WIDE_QUERY } from '@/lib/chat';
-import { spendBreakdown, spendLine } from '@/lib/review-settings';
+import { isChatShortcut, NARROW_QUERY, WIDE_QUERY } from '@/lib/chat';
 import { newCount } from '@/lib/inbox';
 import { MAIN_AREA_CLASS } from '@/lib/main-area';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
@@ -38,8 +37,6 @@ const BoardTabs = ({
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
-  // A slow poll: every board model call adds to the figure, but a few minutes' lag is fine for a monthly total.
-  const spend = useQuery({ queryKey: ['spend', boardId], queryFn: () => api.spend(boardId), refetchInterval: 5 * 60_000 });
   return (
     <header className='mx-5 mt-1.5 flex flex-wrap items-end gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex gap-6' aria-label='Board sections'>
@@ -56,11 +53,6 @@ const BoardTabs = ({
         ))}
       </nav>
       <div className='ml-auto flex items-center gap-1 pb-1.5'>
-        {spend.data !== undefined && (
-          <span className='mr-2 text-xs text-muted-foreground' data-testid='llm-spend' title={spendBreakdown(spend.data)}>
-            {spendLine(spend.data)}
-          </span>
-        )}
         <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'
@@ -110,6 +102,9 @@ export const BoardShell = () => {
   const [chatId, setChatId] = useState<number | null>(null);
   const [page, setPage] = useState<PageContext>(BOARD_PAGE);
   const wide = useMedia(WIDE_QUERY);
+  // Below `sm` the chat covers the whole view, and can't step back to a side panel.
+  const narrow = useMedia(NARROW_QUERY);
+  const coversView = fullScreen || narrow;
   const openChat = () => {
     setChatOpen(true);
     setFocusToken((n) => n + 1);
@@ -157,11 +152,14 @@ export const BoardShell = () => {
   return (
     <PageContextProvider page={page} setPage={setPage}>
     <div className='flex h-dvh flex-col'>
-      <BoardBar current={isBoard ? boardId : undefined} />
-      {isBoard && <NotificationBar boardId={boardId} />}
-      {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
+      {/* On a phone the chat is a layer over these; they must not take keyboard focus from behind it. */}
+      <div className='contents' inert={showChat && narrow}>
+        <BoardBar current={isBoard ? boardId : undefined} />
+        {isBoard && <NotificationBar boardId={boardId} />}
+        {isBoard && <BoardTabs boardId={boardId} onActions={setHeaderActions} onChat={toggleChat} chatOpen={showChat} />}
+      </div>
       <div className='flex min-h-0 flex-1'>
-        <div className={MAIN_AREA_CLASS} inert={showChat && fullScreen} data-testid='main-area'>
+        <div className={MAIN_AREA_CLASS} inert={showChat && coversView} data-testid='main-area'>
           <Outlet context={{ headerActions } satisfies BoardShellContext} />
         </div>
         {isBoard && mounted && (
@@ -169,13 +167,15 @@ export const BoardShell = () => {
             open={showChat}
             onExited={() => setDocked(false)}
             wide={wide}
+            narrow={narrow}
             boardId={boardId}
-            fullScreen={fullScreen}
+            fullScreen={coversView}
             focusToken={focusToken}
             chatId={chatId}
             onChatChange={setChatId}
             onClose={closeChat}
-            onFullScreenChange={setFullScreen}
+            // Stepping back from full screen (Escape, following a citation) has no side panel to go to on a phone: it closes the chat.
+            onFullScreenChange={(full) => (narrow && !full ? closeChat() : setFullScreen(full))}
           />
         )}
       </div>

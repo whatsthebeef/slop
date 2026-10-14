@@ -28,6 +28,8 @@ import { withGlob } from '@/lib/glob-list';
 import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
 import type { GlobTarget } from '@/lib/glob-section';
 import { isSlashShortcut } from '@/lib/chat';
+import { listScrollLeft, visibleListIndex } from '@/lib/list-snap';
+import { cn } from '@/lib/utils';
 import { useCurrentPage, usePageContext } from '@/lib/page-context';
 import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
@@ -78,7 +80,7 @@ const Column = ({
   filtered: boolean;
 }) => (
   <section
-    className='list-well flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2'
+    className='list-well flex min-w-0 flex-1 flex-col gap-2 rounded-lg border border-edge bg-muted p-2 max-sm:w-full max-sm:flex-none max-sm:shrink-0 max-sm:snap-start max-sm:overflow-y-auto'
     aria-label={LIST_TITLES[list]}
     data-testid={`list-${list}`}
   >
@@ -191,6 +193,9 @@ export const BoardPage = () => {
   const { headerActions } = useOutletContext<BoardShellContext>();
   usePageContext({ type: 'board' });
   const [creating, setCreating] = useState(false);
+  // Below `sm` the lists are a scroll-snap row; the dots show (and scroll to) the list on screen.
+  const listsRow = useRef<HTMLDivElement>(null);
+  const [activeList, setActiveList] = useState(0);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [bumps, setBumps] = useState<Record<string, Direction>>({});
   const [haltConfirm, setHaltConfirm] = useState<{
@@ -443,13 +448,31 @@ export const BoardPage = () => {
         }}
       />
 
+      <nav className='flex justify-center gap-2 pt-1.5 sm:hidden' aria-label='Lists' data-testid='list-dots'>
+        {LISTS.map((list, i) => (
+          <button
+            key={list}
+            type='button'
+            className={cn('h-2.5 w-2.5 rounded-full border border-foreground/60', i === activeList && 'bg-foreground')}
+            aria-label={LIST_TITLES[list]}
+            aria-current={i === activeList ? 'true' : undefined}
+            onClick={() => listsRow.current?.scrollTo({ left: listScrollLeft(i, listsRow.current.clientWidth), behavior: 'smooth' })}
+          />
+        ))}
+      </nav>
+
       <main
         ref={(el) => {
           motion.container.current = el;
         }}
-        className='flex-1 overflow-auto px-5 pb-4 pt-1.5'
+        className='flex-1 overflow-auto px-5 pb-4 pt-1.5 max-sm:overflow-hidden max-sm:px-3'
       >
-        <div className='relative flex min-h-full min-w-full items-stretch gap-3'>
+        <div
+          ref={listsRow}
+          className='relative flex min-h-full min-w-full items-stretch gap-3 max-sm:h-full max-sm:snap-x max-sm:snap-mandatory max-sm:overflow-x-auto max-sm:scroll-smooth'
+          data-testid='lists'
+          onScroll={(e) => setActiveList(visibleListIndex(e.currentTarget.scrollLeft, e.currentTarget.clientWidth, LISTS.length))}
+        >
           {LISTS.map((list) => {
             const inList = all.filter((g) => g.list === list);
             const items =

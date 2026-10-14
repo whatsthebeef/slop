@@ -308,7 +308,7 @@ export const BoardBar = ({ current }: { current?: number }) => {
       <li
         key={board.id}
         className={cn(
-          'grid grid-cols-[minmax(0,1fr)_1.75rem] items-stretch rounded-sm border',
+          'grid grid-cols-[minmax(0,1fr)_1.75rem] items-stretch rounded-sm border max-sm:shrink-0 max-sm:grid-cols-[auto_auto]',
           kind === 'session' && selected
             ? 'border-foreground bg-lcd text-lcd-foreground'
             : kind === 'loose'
@@ -319,28 +319,31 @@ export const BoardBar = ({ current }: { current?: number }) => {
         <Link
           to={`/boards/${board.id}`}
           aria-current={selected ? 'page' : undefined}
-          className={ROW}
+          className={cn(ROW, 'max-sm:flex max-sm:gap-0 max-sm:px-3 max-sm:whitespace-nowrap')}
           title={kind === 'session' ? `Press ${number}` : undefined}
           data-testid={`board-tab-${board.id}`}
         >
-          <span className="font-mono text-[13px] opacity-70">{number}</span>
+          <span className="font-mono text-[13px] opacity-70 max-sm:hidden">{number}</span>
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="truncate text-[15px] font-semibold tracking-tight">{board.name}</span>
-            <span className="shrink-0 font-mono text-[11px] opacity-60">#{board.id}</span>
+            <span className="shrink-0 font-mono text-[11px] opacity-60 max-sm:hidden">#{board.id}</span>
             {managed && (
               <span className="hidden truncate font-mono text-xs opacity-65 sm:inline">
                 {lastViewedLabel(board.lastViewedAt, now, selected)}
               </span>
             )}
           </span>
-          <Running count={board.running ?? 0} />
-          <Supers count={board.supers ?? 0} />
-          <Attention count={board.attention ?? 0} />
-          <YourTurn count={board.yourTurn ?? 0} />
-          <Stalled count={board.stalled ?? 0} />
-          {LABEL_NAMES.map((name) => (
-            <Reviews key={name} name={name} count={board.reviews?.[name] ?? 0} />
-          ))}
+          {/* The counts are grid cells of the row; `contents` keeps them so, and below `sm` they are dropped for the name alone. */}
+          <span className="contents max-sm:hidden">
+            <Running count={board.running ?? 0} />
+            <Supers count={board.supers ?? 0} />
+            <Attention count={board.attention ?? 0} />
+            <YourTurn count={board.yourTurn ?? 0} />
+            <Stalled count={board.stalled ?? 0} />
+            {LABEL_NAMES.map((name) => (
+              <Reviews key={name} name={name} count={board.reviews?.[name] ?? 0} />
+            ))}
+          </span>
         </Link>
         {control ? (
           <button
@@ -348,7 +351,11 @@ export const BoardBar = ({ current }: { current?: number }) => {
             disabled={busy}
             onClick={() => write.mutate({ id: board.id, add })}
             aria-label={add ? `Add ${board.name} to the bar` : `Remove ${board.name} from the bar`}
-            className="inline-flex items-center justify-center rounded-sm opacity-60 hover:opacity-100 disabled:opacity-30"
+            className={cn(
+              'inline-flex items-center justify-center rounded-sm opacity-60 hover:opacity-100 disabled:opacity-30',
+              // Removing stays on the All boards page; the bar's + (adding the board you're on) stays on a phone.
+              !add && 'max-sm:hidden',
+            )}
             data-testid={`${add ? 'add' : 'remove'}-session-${board.id}`}
           >
             {add ? <Plus className="h-4 w-4" aria-hidden /> : <X className="h-4 w-4" aria-hidden />}
@@ -364,7 +371,7 @@ export const BoardBar = ({ current }: { current?: number }) => {
     <>
       <header className="flex items-stretch gap-3 px-3 pt-4 pb-2.5 sm:px-5">
         <nav className="min-w-0 flex-1" aria-label="Boards">
-          <ul className="grid gap-0.5">
+          <ul className="grid gap-0.5 max-sm:flex max-sm:overflow-x-auto">
             {sessions.map((b) => row(b, 'session', String(b.position)))}
             {loose !== undefined && row(loose, 'loose', '–')}
           </ul>
