@@ -327,6 +327,8 @@ export const GroupPage = () => {
   return (
     <>
       <GroupPageView
+        // Fresh local state per group: after a merge the page for the target keeps the picker's old choice, which would merge it into itself.
+        key={shown.name}
         boardId={boardId}
         view={shown}
         others={(summaries.data ?? []).filter((g) => g.name !== shown.name)}
