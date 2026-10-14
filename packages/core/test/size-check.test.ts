@@ -7,6 +7,7 @@ import {
   SIZE_PARTS_MIN,
   SIZE_TASKS_MAX,
   SIZE_TASKS_MIN,
+  applyOwnership,
   buildProposal,
   estimateFromText,
   isChain,
@@ -358,5 +359,70 @@ describe('needsInvestigation', () => {
     expect(needsInvestigation(check(false, 3, 'model'))).toBe(false);
     expect(needsInvestigation(check(false, 1, 'text'))).toBe(false);
     expect(needsInvestigation(null)).toBe(false);
+  });
+});
+
+describe('ownership: a file belongs to one workstream', () => {
+  const ws = (name: string, files: string[], needs: number[] = []) => ({ name, goal: `${name} goal`, files, plan: `${name} plan`, needs });
+  const shared = (w: readonly { files: readonly string[] }[]) => w.flatMap((x) => x.files).filter((f, i, all) => all.indexOf(f) !== i);
+  it('leaves workstreams that share nothing as they are', () => {
+    const proposal = applyOwnership([ws('A', ['a.ts']), ws('B', ['b.ts'], [0]), ws('C', ['c.ts'], [0])]);
+    expect(proposal?.workstreams.map((w) => w.files)).toEqual([['a.ts'], ['b.ts'], ['c.ts']]);
+    expect(proposal?.notes).toBeUndefined();
+  });
+  it('moves a file two workstreams share to the earliest one they both need', () => {
+    const proposal = applyOwnership([ws('Contract', ['c.ts']), ws('Server', ['s.ts', 'readiness.ts'], [0]), ws('Web', ['w.ts', 'readiness.ts'], [0])]);
+    expect(proposal?.workstreams.map((w) => w.files)).toEqual([['c.ts', 'readiness.ts'], ['s.ts'], ['w.ts']]);
+    expect(proposal?.notes).toEqual(['moved readiness.ts to Contract: both Server and Web change it']);
+    const planned = applyOwnership([
+      { ...ws('Contract', ['c.ts']), plan: 'Contract plan\n\n- c.ts' },
+      { ...ws('Server', ['readiness.ts'], [0]), plan: 'Server plan\n\n- readiness.ts' },
+      { ...ws('Web', ['readiness.ts', 'w.ts'], [0]), plan: 'Web plan\n\n- readiness.ts\n- w.ts' },
+    ]);
+    expect(planned?.workstreams[1]?.plan).not.toContain('- readiness.ts');
+    expect(planned?.workstreams[2]?.plan).not.toContain('- readiness.ts');
+    expect(planned?.workstreams[2]?.plan).toContain('- w.ts');
+    expect(planned?.workstreams[0]?.plan).toContain('- readiness.ts');
+    expect(proposal).toMatchObject({ criticalPath: 2, maxParallel: 2 });
+  });
+  it('leaves the file with the workstream the other builds on', () => {
+    const proposal = applyOwnership([ws('A', ['x.ts']), ws('B', ['x.ts', 'b.ts'], [0]), ws('C', ['c.ts'])]);
+    expect(proposal?.workstreams.map((w) => w.files)).toEqual([['x.ts'], ['b.ts'], ['c.ts']]);
+  });
+  it('merges two parallel workstreams that share a file, keeping both plans and the union of needs', () => {
+    const proposal = applyOwnership([ws('Core', ['core.ts']), ws('Gate', ['g.ts', 'readiness.ts'], [0]), ws('Readiness', ['r.ts', 'readiness.ts'], []), ws('Web', ['web.ts'], [1])]);
+    expect(proposal?.workstreams.map((w) => w.name)).toEqual(['Core', 'Gate and Readiness', 'Web']);
+    const merged = proposal?.workstreams[1];
+    expect(merged?.files).toEqual(['g.ts', 'readiness.ts', 'r.ts']);
+    expect(merged?.plan).toBe('Gate plan\n\nReadiness plan');
+    expect(merged?.needs).toEqual([0]);
+    expect(proposal?.workstreams[2]?.needs).toEqual([1]);
+    expect(proposal?.notes).toEqual(['merged Gate and Readiness: both change readiness.ts']);
+  });
+  it('merges a workstream sitting between the two, so the merged one never waits on itself', () => {
+    const proposal = applyOwnership([ws('A', ['lib/x.ts']), ws('Mid', ['m.ts'], [0]), ws('B', ['lib/'], [1]), ws('Other', ['o.ts'])]);
+    expect(proposal?.workstreams.map((w) => w.name)).toEqual(['A and Mid and B', 'Other']);
+    expect(proposal?.workstreams.map((w) => w.needs)).toEqual([[], []]);
+  });
+  it('counts a directory entry as owning the files under it', () => {
+    const moved = applyOwnership([ws('Scripts', ['catalog/scripts/']), ws('Tool', ['catalog/scripts/run.sh', 't.ts'], [0]), ws('Docs', ['d.md'])]);
+    expect(moved?.workstreams.map((w) => w.files)).toEqual([['catalog/scripts/'], ['t.ts'], ['d.md']]);
+    expect(moved?.notes).toEqual(['moved catalog/scripts/run.sh to Scripts: both Scripts and Tool change it']);
+    // The directory sits with the later workstream, which would still own the file: the two merge.
+    const merged = applyOwnership([ws('Tool', ['catalog/scripts/run.sh']), ws('Scripts', ['catalog/scripts/'], [0]), ws('Docs', ['d.md'])]);
+    expect(merged?.workstreams.map((w) => w.name)).toEqual(['Tool and Scripts', 'Docs']);
+  });
+  it('is null when the proposal collapses to one workstream', () => {
+    expect(applyOwnership([ws('A', ['x.ts']), ws('B', ['x.ts'])])).toBeNull();
+  });
+  it('never leaves a file under two workstreams, through buildProposal too', () => {
+    const proposal = buildProposal(PLAN, [
+      { name: 'A', goal: null, files: ['x.ts', 'a.ts'], plan: '## Tasks\n1. a', needs: [] },
+      { name: 'B', goal: null, files: ['x.ts', 'b.ts'], plan: '## Tasks\n2. b', needs: [] },
+      { name: 'C', goal: null, files: ['c.ts'], plan: '## Tasks\n3. c', needs: [] },
+    ]);
+    expect(proposal?.workstreams.map((w) => w.name)).toEqual(['A and B', 'C']);
+    expect(shared(proposal?.workstreams ?? [])).toEqual([]);
+    expect(proposal?.notes).toEqual(['merged A and B: both change x.ts']);
   });
 });

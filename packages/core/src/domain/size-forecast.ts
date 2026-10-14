@@ -5,7 +5,7 @@ import type { Area, GlobOutcome } from './intake-learning.js';
 import type { Investigation } from './investigation.js';
 import type { RiskTier } from './knowledge.js';
 import type { SizeEstimate, SizeProposal, SizeThreshold, Workstream } from './size-check.js';
-import { MAX_PROPOSED_PARTS, isChain, splitShape } from './size-check.js';
+import { MAX_PROPOSED_PARTS, applyOwnership, isChain, splitShape } from './size-check.js';
 
 /**
  * The size forecast (spec, Intake): what a plan will touch, read from the code and from similar merged globs rather than
@@ -523,8 +523,8 @@ export const proposalFromForecast = (plan: string, forecast: SizeForecast): Size
       needs: after[index] ?? [],
     };
   });
-  const proposal: SizeProposal = { workstreams, ...splitShape(workstreams) };
-  return isChain(proposal) ? null : proposal;
+  const proposal = applyOwnership(workstreams);
+  return proposal === null || isChain(proposal) ? null : proposal;
 };
 
 /** Parts in an order that builds what others need first (stable otherwise). */
