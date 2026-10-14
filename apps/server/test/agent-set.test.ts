@@ -37,7 +37,7 @@ describe('catalog agent-set hash', () => {
     expect(set.hash).toBe(hashAgentSet(set.files));
   });
 
-  it('tells the investigator to output relations and the orchestrator to stop recording overlaps; the catalog hash follows the text', async () => {
+  it('tells the investigator to output relations and workstreams and the orchestrator to fan them out; the catalog hash follows the text', async () => {
     const set = await new FsCatalog(new URL('../../../catalog', import.meta.url).pathname).agentSet();
     const text = (name: string): string => set.files.find((f) => f.path === `agents/${name}.md`)?.content ?? '';
     // The investigator's block has `relations` (with decision relations), and no `dependencies` left.
@@ -45,13 +45,14 @@ describe('catalog agent-set hash', () => {
     expect(text('investigator')).toMatch(/`until` `decided`/);
     expect(text('investigator')).not.toMatch(/"dependencies"/);
     expect(text('investigator')).toMatch(/not\*\* a relation/);
-    // The orchestrator's split guidance names relations and says there is no overlaps field.
-    expect(text('orchestrator')).toMatch(/Relations between parts/);
-    expect(text('orchestrator')).toMatch(/don't record overlaps/);
+    // The orchestrator no longer splits on the board: it fans out workstreams inside the run, and there is no overlaps field.
+    expect(text('orchestrator')).toMatch(/never call `split_glob`/);
+    expect(text('orchestrator')).toMatch(/## Workstreams/);
     expect(text('orchestrator')).not.toMatch(/go in `overlaps`/);
+    expect(text('investigator')).toMatch(/## Workstreams/);
     // Editing either file moves the hash the boards' agent-set version follows.
     for (const name of ['investigator', 'orchestrator']) {
-      const edited = set.files.map((f) => (f.path === `agents/${name}.md` ? { ...f, content: f.content.replace('elations', 'ependencies') } : f));
+      const edited = set.files.map((f) => (f.path === `agents/${name}.md` ? { ...f, content: f.content.replace('Workstreams', 'Workstreamz') } : f));
       expect(hashAgentSet(edited)).not.toBe(set.hash);
     }
   });
