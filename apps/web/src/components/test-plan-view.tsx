@@ -154,8 +154,15 @@ export const TestPlanPreview = ({
           </code>
         ),
       // The list brings its own box, so the block is not wrapped in the code box.
+      // react-markdown hands `pre` the `code` element (not what the override returns), so spot the block by its class.
       pre: ({ children }) =>
-        isValidElement(children) && children.type === SpecBlock ? children : <pre>{children}</pre>,
+        isValidElement<{ className?: unknown }>(children) &&
+        typeof children.props.className === 'string' &&
+        children.props.className.includes('language-atf-specs') ? (
+          children
+        ) : (
+          <pre>{children}</pre>
+        ),
     }),
     [validation, checked, results],
   );

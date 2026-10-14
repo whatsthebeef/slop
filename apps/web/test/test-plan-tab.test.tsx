@@ -255,6 +255,8 @@ describe('test plan: saved', () => {
       'no result yet',
     );
     expect(screen.getByTestId('atf-specs-list').textContent).toContain('@smoke');
+    // The list brings its own box: it must not sit inside the code block's <pre>.
+    expect(screen.getByTestId('atf-specs-list').closest('pre')).toBeNull();
   });
 
   it('shows the validation badge from the artifact provenance', async () => {
