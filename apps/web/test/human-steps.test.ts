@@ -214,13 +214,13 @@ describe('section markup', () => {
     expect(out).toContain('infra/x.sh');
     expect(out).toContain('done by dev@example.com on 2026-10-06');
     expect(out).toContain('lucide-user-round');
-    expect(out).toContain('Add a step');
+    expect(out).toContain('Add step');
     expect(out.match(/data-testid="step-tick"/g)).toHaveLength(2);
     expect(out.match(/data-testid="step-copy"/g)).toHaveLength(2);
   });
 
   it('is hidden with no steps unless the viewer can add', () => {
     expect(html(merged([]), admin, false)).toBe('');
-    expect(html(merged([]))).toContain('Add a step');
+    expect(html(merged([]))).toContain('Add step');
   });
 });
