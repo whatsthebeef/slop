@@ -39,6 +39,7 @@ describe('cornerMarker', () => {
   it('shows one marker by precedence: stalled, needs a human, working, standby, none', () => {
     expect(cornerMarker(escalated(), NOW)).toMatchObject({ kind: 'needs-human' });
     expect(cornerMarker(view({ status: 'in_progress', ...live('active') }), NOW)).toMatchObject({ kind: 'working', text: 'working' });
+    expect(cornerMarker(view({ status: 'in_progress', ...live('queued') }), NOW)).toMatchObject({ kind: 'working', text: 'starting' });
     expect(cornerMarker(prOpen({ type: 'sub', ...live('watching') }), NOW)).toMatchObject({ kind: 'standby' });
     expect(cornerMarker(view({ status: 'planning' }), NOW)).toBeNull();
     // Stalled beats an escalation, and the escalation's reason stays reachable in the tooltip.
@@ -107,6 +108,7 @@ describe('marker and line never repeat each other', () => {
     expect(nowHeadline('stalled', 'stalled · merge conflict')).toBe(`${marker?.text} · ${line?.text}`);
     expect(nowHeadline('stalled', 'stalled')).toBe('stalled');
     expect(nowHeadline('machine', 'implementing')).toBe('working · implementing');
+    expect(nowHeadline('machine', 'queued 3 min', true)).toBe('queued 3 min');
     expect(nowHeadline('machine', 'standby')).toBe('standby · listening for CI and reviews');
     const working = cardStatus(view({ status: 'in_progress', ...live('active') }), NOW);
     expect(working?.text).not.toMatch(/working|standby/i);

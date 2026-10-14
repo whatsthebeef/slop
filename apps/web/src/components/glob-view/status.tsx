@@ -119,14 +119,14 @@ export const NowPanel = ({
     ) : position === null ? null : (
       <>
         <span className="text-muted-foreground">Now: </span>
-        {position.holder === 'machine' && <MachineIcon className="mr-1 inline" decorative />}
+        {position.holder === 'machine' && <MachineIcon className="mr-1 inline" working={position.spinning} decorative />}
         {position.holder === 'human' && 'Their turn · '}
         {position.holder === 'stalled' && seen?.dismissed === true
           ? `Stalled · ${seen.label}`
           : position.holder === 'stalled' || position.holder === 'machine'
-            ? capitalised(nowHeadline(position.holder, position.label))
+            ? capitalised(nowHeadline(position.holder, position.label, position.queued))
             : capitalised(headlineReason(position.text))}
-        {minutes !== null && minutes > 0 && (
+        {minutes !== null && minutes > 0 && !(position.holder === 'machine' && position.queued) && (
           <span className="font-normal text-muted-foreground"> · {minutes} min</span>
         )}
         {session !== null && (

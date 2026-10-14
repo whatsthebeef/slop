@@ -2,7 +2,7 @@ import { decisionOf, dueText, findingsLabel, reviewOutdated, scopeLabel, upcomin
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
 import { AlertTriangle, Bug, GitBranch, Hourglass, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { ActorIcon, HumanIcon } from '@/components/actor-icons';
+import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -173,6 +173,7 @@ const CornerMarkerView = ({
 };
 
 const PositionIcon = ({ position }: { position: Position }) => {
+  if (position.spinning && position.holder === 'machine') return <MachineIcon working className='h-3 w-3 shrink-0' decorative />;
   if (position.spinning) return <Loader2 className='h-3 w-3 shrink-0 animate-spin' aria-hidden />;
   if (position.holder === 'waiting') return <Hourglass className='h-3 w-3 shrink-0' aria-hidden />;
   if (position.holder === 'stalled') return <AlertTriangle className='h-3 w-3 shrink-0' aria-hidden />;
