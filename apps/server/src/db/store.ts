@@ -294,6 +294,7 @@ const toRelation = (row: typeof schema.relations.$inferSelect): Relation => ({
   reason: row.reason,
   evidence: row.evidence,
   source: row.source,
+  group: row.group,
   dismissedAt: row.dismissedAt?.toISOString() ?? null,
   dismissedPlanHash: row.dismissedPlanHash,
   overriddenAt: row.overriddenAt?.toISOString() ?? null,
@@ -310,6 +311,7 @@ const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
   reason: r.reason,
   evidence: r.evidence,
   source: r.source,
+  group: r.group,
   dismissedAt: r.dismissedAt === null ? null : new Date(r.dismissedAt),
   dismissedPlanHash: r.dismissedPlanHash,
   overriddenAt: r.overriddenAt === null ? null : new Date(r.overriddenAt),
@@ -1440,6 +1442,7 @@ export class PgStore implements Store {
         if (patch.evidence !== undefined) set.evidence = patch.evidence;
         if (patch.dismissedAt !== undefined) set.dismissedAt = patch.dismissedAt === null ? null : new Date(patch.dismissedAt);
         if (patch.dismissedPlanHash !== undefined) set.dismissedPlanHash = patch.dismissedPlanHash;
+        if (patch.group !== undefined) set.group = patch.group;
         if (patch.overriddenAt !== undefined) set.overriddenAt = patch.overriddenAt === null ? null : new Date(patch.overriddenAt);
         if (Object.keys(set).length > 0) await t.update(schema.relations).set(set).where(eq(schema.relations.id, id));
       },

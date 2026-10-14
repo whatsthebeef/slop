@@ -108,6 +108,7 @@ export const relation = (from: string, to: string, patch: Partial<Relation> = {}
   reason: null,
   evidence: [],
   source: 'person',
+  group: null,
   dismissedAt: null,
   dismissedPlanHash: null,
   overriddenAt: null,

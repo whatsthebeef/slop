@@ -198,3 +198,103 @@ export const groupView = (
     lastActivityAt: latest(members.map((m) => m.glob.updatedAt)),
   };
 };
+
+/** How long a merged glob of the group still shows in a neighbour's context. */
+export const GROUP_CONTEXT_MERGED_DAYS = 14;
+/** The most neighbours the context lists (open ones first); `more` says how many were left out. */
+export const GROUP_CONTEXT_MAX_GLOBS = 12;
+const PLAN_LINE_CHARS = 160;
+
+export interface GroupContextGlob {
+  readonly id: string;
+  readonly title: string;
+  readonly status: Status;
+  /** The first line of the glob's plan that says something (headings and list markers dropped), cut short. */
+  readonly plan: string;
+}
+
+export interface GroupContextDecision {
+  readonly id: string;
+  readonly title: string;
+  /** The group's globs it holds back (empty for one that is only in the group). */
+  readonly holdsBack: readonly string[];
+}
+
+/** What a run learns about its neighbours: the group's other open or recently merged globs and its open decisions. */
+export interface GroupContext {
+  readonly name: string;
+  readonly progress: GroupProgress;
+  readonly globs: readonly GroupContextGlob[];
+  /** Neighbours left out of `globs` (beyond the cap). */
+  readonly more: number;
+  readonly decisions: readonly GroupContextDecision[];
+}
+
+/** The first meaningful line of a plan, for a one-line summary. */
+export const planLine = (plan: string | null): string => {
+  for (const raw of (plan ?? '').split('\n')) {
+    if (/^\s*-{3,}\s*$/.test(raw)) continue;
+    const line = raw.replace(/^\s*(?:#+|[-*>]|\d+\.)\s*(?:\[[ xX]\]\s*)?/, '').trim();
+    if (line === '') continue;
+    return line.length > PLAN_LINE_CHARS ? `${line.slice(0, PLAN_LINE_CHARS - 1)}…` : line;
+  }
+  return '';
+};
+
+/** The group's other work globs that are open or merged in the last `GROUP_CONTEXT_MERGED_DAYS` days, open ones first. */
+export const contextNeighbours = (glob: Glob, members: readonly Glob[], now: string): Glob[] => {
+  const cutoff = new Date(new Date(now).getTime() - GROUP_CONTEXT_MERGED_DAYS * 86_400_000).toISOString();
+  return members
+    .filter((g) => !isDecisionGlob(g) && g.id !== glob.id && (!hasMerged(g) || g.updatedAt >= cutoff))
+    .sort((a, b) => Number(hasMerged(a)) - Number(hasMerged(b)) || a.id.localeCompare(b.id, 'en', { numeric: true }));
+};
+
+/**
+ * The group section of `get_context` for `glob`: its group's other work globs that are open or merged in the last
+ * `GROUP_CONTEXT_MERGED_DAYS` days, and the open decisions (those holding a glob of the group, and the group's own).
+ * `null` when the glob has no group or has no such neighbours. `members` is every glob carrying the group (including `glob`),
+ * `relations` their relations, `plans` the plan text by glob ID, `others` the decision globs outside the group those relations point at.
+ */
+export const groupContext = (
+  glob: Glob,
+  members: readonly Glob[],
+  relations: readonly Relation[],
+  plans: ReadonlyMap<string, string>,
+  others: readonly Glob[],
+  now: string,
+): GroupContext | null => {
+  if (glob.group === null || normaliseGroup(glob.group) === '') return null;
+  const work = members.filter((g) => !isDecisionGlob(g));
+  const neighbours = contextNeighbours(glob, members, now);
+  const held = new Map<string, string[]>();
+  const byId = new Map([...others, ...members].map((g) => [g.id, g]));
+  const workIds = new Set(work.map((g) => g.id));
+  for (const r of relations) {
+    const to = byId.get(r.to);
+    // A decision outside the group still shows when it holds a glob of the group.
+    if (!isActive(r) || !workIds.has(r.from) || to === undefined || !isDecisionGlob(to) || isMet(r, toState(to))) continue;
+    held.set(r.to, [...(held.get(r.to) ?? []), r.from]);
+  }
+  for (const g of members) {
+    if (!isDecisionGlob(g) || g.id === glob.id || held.has(g.id)) continue;
+    const state = toState(g);
+    if (state === 'open' || state === 'planning') held.set(g.id, []);
+  }
+  const decisions = [...held]
+    .map(([id, holdsBack]): GroupContextDecision => ({
+      id,
+      title: byId.get(id)?.title ?? id,
+      holdsBack: [...new Set(holdsBack)].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+  if (neighbours.length === 0 && decisions.length === 0) return null;
+  return {
+    name: glob.group,
+    progress: progressOf(work),
+    globs: neighbours
+      .slice(0, GROUP_CONTEXT_MAX_GLOBS)
+      .map((g): GroupContextGlob => ({ id: g.id, title: g.title, status: g.status, plan: planLine(plans.get(g.id) ?? null) })),
+    more: Math.max(0, neighbours.length - GROUP_CONTEXT_MAX_GLOBS),
+    decisions,
+  };
+};

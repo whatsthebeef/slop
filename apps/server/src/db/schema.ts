@@ -386,6 +386,8 @@ export const relations = pgTable(
     reason: text('reason'),
     evidence: jsonb('evidence').$type<readonly string[]>().notNull().default(sql`'[]'::jsonb`),
     source: text('source', { enum: RELATION_SOURCES }).$type<RelationSource>().notNull(),
+    /** The group a group-wide relation was set for (its name as then spelled). */
+    group: text('group'),
     dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
     dismissedPlanHash: text('dismissed_plan_hash'),
     overriddenAt: timestamp('overridden_at', { withTimezone: true }),

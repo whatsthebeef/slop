@@ -1,11 +1,11 @@
 import type { Board, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
-import { isWrongReply, machine, parseId } from '@slop/core';
+import { isWrongReply, machine, parseId, subGateCheckOf } from '@slop/core';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/store.js';
 import type { CodeHost } from '../codehost.js';
-import { SUB_GATE_CHECK, repoOf } from '../codehost.js';
+import { repoOf } from '../codehost.js';
 import { agentSetTrailer } from './trailers.js';
 import type { Delivery } from './webhooks.js';
 
@@ -88,6 +88,8 @@ export const githubDeliveryHandler =
     onBasePush?: (boardId: number) => void;
     /** Absent: review comments' feedback isn't recorded. */
     feedback?: Pick<ReviewFeedbackService, 'record'>;
+    /** The board's merge policy's `subGateCheck` (absent or undefined: the default). */
+    subGateCheck?: (boardId: number) => Promise<string | undefined>;
   }) =>
   async (delivery: Delivery): Promise<boolean> => {
     const inserted = await deps.db
@@ -113,6 +115,7 @@ const handle = async (
     boardOf: (id: number) => Promise<Board | null>;
     onBasePush?: (boardId: number) => void;
     feedback?: Pick<ReviewFeedbackService, 'record'>;
+    subGateCheck?: (boardId: number) => Promise<string | undefined>;
   },
   delivery: Delivery,
 ): Promise<boolean> => {
@@ -238,7 +241,8 @@ const handle = async (
       if (glob === null) return true;
       await apply(glob, (g, ctx) => machine.checksChanged(g, ctx));
       const run = event.check_run;
-      if (run?.name === SUB_GATE_CHECK && run.status === 'completed') {
+      // The name alone isn't enough: `checks` also runs on the base branch's pushes, but the machine ignores a sha that isn't the PR's head.
+      if (run?.status === 'completed' && run.name === subGateCheckOf({ subGateCheck: await deps.subGateCheck?.(glob.boardId) })) {
         const passed = run.conclusion === 'success';
         await apply(glob, (g, ctx) => machine.subGateCheckCompleted(g, { sha: run.head_sha, passed }, ctx));
       }

@@ -58,6 +58,7 @@ A big glob is cut into **workstreams** (W0, W1, …) that the orchestrator build
 1. Work as in Mode A, but only on the files in your brief. Don't edit a file another workstream owns, and don't change the W0 contract; if the work needs either, stop that part and report it under `## Needs from other workstreams` (file, what you need, why) instead of editing around it.
 2. **Commit** your work in the worktree as `<id>: <workstream>`, ending with the trailer lines the orchestrator gave you (`Slop-Agent-Set`, and `Slop-Run` when unattended). This is the one exception to "no commits". Never push, and never touch the glob's branch or other worktrees.
 3. Write your summary to the output path the orchestrator gave you (one file per workstream), with the usual sections plus `## Needs from other workstreams` (leave it out when empty). Run only the fast checks for your files.
+4. The orchestrator records each workstream's outcome in the record's `workstreams` block, so state in your summary the files you changed (it takes them from git), anything that conflicted or you had to redo, and roughly how long the work took.
 
 ## Flag what needs a human
 
@@ -108,3 +109,9 @@ When a component filters its input before calling a pure, unit-tested function, 
 ### Hotspot files
 
 `glob-dialog.tsx` is a known hotspot on this board: it changed in 17 merges in 8 hours on 2026-10-13. Treat it as one even when `get_context` or the investigation doesn't name it. Put new dialog sections, hooks or helpers in their own files next to it, and keep the edit to `glob-dialog.tsx` to the import and the line that renders or calls them.
+
+### Accurate summaries and hold-changing migrations
+
+Before reporting (Mode A, B or C), check every edit your summary claims against `git status` and `git diff`, and claim only what is in the tree. Don't edit the board's installed agent files (`.claude/agents/*.md`, `.claude/commands/*`): they come from the agent set and change only through approved learnings. Change the generic catalog (`catalog/agents/`) only when the plan asks for it. If the plan seems to need an agent-file edit it doesn't ask for, say so under `## Deviations from plan` and don't claim it as done. For example, s15f144's record said the orchestrator's step 6 was edited when `orchestrator.md` was unchanged.
+
+When a data migration changes a hold, test it against every glob type, including legacy subs. In s15f144, step 3 of migration 0071 skipped flagged subs and left a legacy sub stranded.

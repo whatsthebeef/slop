@@ -159,7 +159,7 @@ const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => 
 
 // One executor table; each runner drains only its own lane (`laneOf(kind)`).
 const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
-    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError, attachmentObjects, attachmentObjects === null ? null : (globId) => attachments?.pendingFor(globId) ?? Promise.resolve(0)),
+    ...codeHostExecutors(github, boardOf, routines, boards, undefined, integrations, notifications, async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).sizeIgnoredPaths, logError, attachmentObjects, attachmentObjects === null ? null : (globId) => attachments?.pendingFor(globId) ?? Promise.resolve(0), async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).subGateCheck),
     ...deployExecutors(
       deploys,
       new Deployers({ codebuild: new CodeBuildDeployer() }),
@@ -656,7 +656,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => codeSync.mark(boardId) }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => codeSync.mark(boardId), subGateCheck: async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).subGateCheck }),
 });
 
 app.onError((error, c) => {

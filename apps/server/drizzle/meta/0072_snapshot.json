@@ -1,5 +1,5 @@
 {
-  "id": "277dd51a-24ee-4d23-a413-73e7955b0ca1",
+  "id": "e5f70461-6d9f-4ccb-b6e3-8e0b8253f7c8",
   "prevId": "a3c4045d-7908-4254-be44-910df51555b5",
   "version": "7",
   "dialect": "postgresql",
@@ -127,103 +127,6 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.atf_batches": {
-      "name": "atf_batches",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "board_id": {
-          "name": "board_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "environment": {
-          "name": "environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sha": {
-          "name": "sha",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "specs": {
-          "name": "specs",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "greps": {
-          "name": "greps",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "atf_batches_deploy_idx": {
-          "name": "atf_batches_deploy_idx",
-          "columns": [
-            {
-              "expression": "board_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sha",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "atf_batches_board_id_boards_id_fk": {
-          "name": "atf_batches_board_id_boards_id_fk",
-          "tableFrom": "atf_batches",
-          "tableTo": "boards",
-          "columnsFrom": [
-            "board_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -955,12 +858,6 @@
         },
         "deploy": {
           "name": "deploy",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "atf": {
-          "name": "atf",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
@@ -2953,12 +2850,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
-        },
-        "checked_at": {
-          "name": "checked_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -5769,6 +5660,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "group": {
+          "name": "group",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "dismissed_at": {
           "name": "dismissed_at",
           "type": "timestamp with time zone",
@@ -7122,79 +7019,6 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.test_run_specs": {
-      "name": "test_run_specs",
-      "schema": "",
-      "columns": {
-        "test_run_id": {
-          "name": "test_run_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "spec": {
-          "name": "spec",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "tests": {
-          "name": "tests",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "failed_tests": {
-          "name": "failed_tests",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "duration_ms": {
-          "name": "duration_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "test_run_specs_test_run_id_test_runs_id_fk": {
-          "name": "test_run_specs_test_run_id_test_runs_id_fk",
-          "tableFrom": "test_run_specs",
-          "tableTo": "test_runs",
-          "columnsFrom": [
-            "test_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "test_run_specs_test_run_id_spec_pk": {
-          "name": "test_run_specs_test_run_id_spec_pk",
-          "columns": [
-            "test_run_id",
-            "spec"
-          ]
-        }
-      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

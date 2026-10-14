@@ -500,7 +500,7 @@ describe('dependency inference', () => {
       if (entry === undefined) throw new Error('no glob');
       store.state.globs.set(made.id, { ...entry, glob: { ...entry.glob, status: 'planning', waiting: { since: '2026-10-05T12:00:00.000Z' } } });
       const held = made;
-      const base = { boardId, dismissedPlanHash: null, from: held.id, gate: 'start' as const, until: 'decided' as const, reason: null, evidence: [], createdAt: '2026-10-05T12:00:00.000Z', dismissedAt: null, overriddenAt: null };
+      const base = { boardId, dismissedPlanHash: null, from: held.id, gate: 'start' as const, until: 'decided' as const, reason: null, evidence: [], createdAt: '2026-10-05T12:00:00.000Z', dismissedAt: null, overriddenAt: null, group: null };
       let n = 0;
       await store.transaction(async (tx) => {
         for (const [to, source] of [[learning.id, 'inferred'], [manual.id, 'person'], [real.id, 'inferred']] as const)
@@ -523,7 +523,7 @@ describe('dependency inference', () => {
       if (entry === undefined) throw new Error('no glob');
       store.state.globs.set(held.id, { ...entry, glob: { ...entry.glob, status: 'planning', waiting: { since: '2026-10-05T12:00:00.000Z' } } });
       await store.transaction((tx) =>
-        tx.insertRelation({ id: 'rel-1', boardId, from: held.id, to: learning.id, gate: 'start', until: 'decided', reason: null, evidence: [], source: 'inferred', dismissedAt: null, dismissedPlanHash: null, overriddenAt: null, createdAt: '2026-10-05T12:00:00.000Z' }),
+        tx.insertRelation({ id: 'rel-1', boardId, from: held.id, to: learning.id, gate: 'start', until: 'decided', reason: null, evidence: [], source: 'inferred', group: null, dismissedAt: null, dismissedPlanHash: null, overriddenAt: null, createdAt: '2026-10-05T12:00:00.000Z' }),
       );
       expect(await inference.dismissLearningHolds(boardId)).toBe(1);
       expect((await current(held.id)).waiting ?? null).toBeNull();

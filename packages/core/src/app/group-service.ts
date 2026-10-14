@@ -86,6 +86,15 @@ export class GroupService {
     return this.regroup(email, boardId, from, into, true);
   }
 
+  /** Group-wide relations set for the group follow its new name, so late joiners keep getting them. */
+  private async carryRelations(boardId: number, from: string, name: string): Promise<void> {
+    await this.deps.store.transaction(async (tx) => {
+      for (const r of await tx.listRelations(boardId)) {
+        if (r.group !== null && r.group !== name && normaliseGroup(r.group) === normaliseGroup(from)) await tx.updateRelation(r.id, { group: name });
+      }
+    });
+  }
+
   private async regroup(email: string, boardId: number, from: string, target: string, merging: boolean): Promise<Result<RegroupResult>> {
     const membership = await this.deps.boards.get(email, boardId);
     if (!membership.ok) return membership;
@@ -126,6 +135,7 @@ export class GroupService {
       if (result.ok) moved += 1;
       else failed.push({ id: glob.id, message: result.error.message });
     }
+    await this.carryRelations(boardId, from, name);
     return ok({ name, moved, failed });
   }
 }

@@ -200,3 +200,10 @@ End the plan file with one fenced block, ```` ```investigation ````, holding a J
 - `files`: the files or symbols that show the link.
 - Leave the field out if you didn't check, since absent means no opinion. Use `[]` only after you looked in the code and found none. An empty list drops the `needs` that slop guessed from the plan.
 - A `needs` you recommend on a hotspot refactor glob goes here too.
+
+### Plans that hold up on a rerun
+
+- A failed or superseded run often needs the plan changed before it is run again: plan.md or an attachment was edited before 7 of 51 recent reruns. Catch these gaps in the investigation, so they are fixed before the first run and not discovered at the rerun.
+- **Every run:** where the plan is ambiguous, contradicts the code, or has a "Done when" line that can't be checked, quote the line under `## Risks / Unknowns` and say what it should say.
+- **Rerun of a failed or superseded run:** first check whether the plan or an attachment caused the failure. Look for a wrong or missing requirement, an outdated attachment, or a criterion the code can't meet. If one did, don't re-propose the same approach. Name the plan or attachment change needed.
+- If the run can't go ahead without that change, set `needsHuman` to `needed: true` with the change as the `reason`.

@@ -16,7 +16,7 @@ type Subject = Pick<Glob, 'implementer' | 'planner'>;
 
 /** The due, blocking work step that is the viewer's, or null: the glob view's main button and the status line's Your turn. */
 export const blockingTurn = (steps: readonly ListedHumanStep[], glob: Subject, viewer: HumanStepViewer | undefined): ListedHumanStep | null =>
-  viewer === undefined ? null : yourTurn(steps.filter((s) => isWorkStep(s) && isBlockingStep(s)), glob, viewer);
+  viewer === undefined ? null : yourTurn(steps.filter((s) => isWorkStep(s) && isBlockingStep(s) && s.predicted !== true), glob, viewer);
 
 /** The main button for a due blocking step: "Rollout" for a rollout, the step's title for other kinds. */
 export const mainStep = (
@@ -26,6 +26,12 @@ export const mainStep = (
   const step = blockingTurn(glob.humanSteps ?? [], glob, viewer);
   return step === null ? null : { step, label: step.kind === 'rollout' ? 'Rollout' : step.title };
 };
+
+/** What the glob view says in place of a predicted rollout's title, state and actions: the run writes the real steps. */
+export const PREDICTED_ROLLOUT_TEXT = 'Rollout predicted: the run writes the steps';
+
+/** What a step is called in a sentence: a predicted rollout reads as a prediction, not as its placeholder title. */
+const stepName = (step: Pick<ListedHumanStep, 'title' | 'predicted'>): string => (step.predicted === true ? PREDICTED_ROLLOUT_TEXT : step.title);
 
 /** What a due step's main button does: copy its command, tick it, or wait (disabled, with why). Never just scroll to the section. */
 export type StepMain =
@@ -63,7 +69,7 @@ export const rolloutLine = (
   const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
   return {
     text: 'rollout',
-    tip: `Merged; ${String(progress.total - progress.open)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${first.title}`}`,
+    tip: `Merged; ${String(progress.total - progress.open)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${stepName(first)}`}`,
     turn,
   };
 };
@@ -74,7 +80,7 @@ export const approveHold = (glob: Glob & { readonly humanSteps?: readonly Listed
   const steps = glob.humanSteps ?? [];
   if (blockProgress(steps, 'sign_off').open === 0) return null;
   const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
-  return `Waits for the rollout${first === undefined ? '' : `: ${first.title}`}`;
+  return `Waits for the rollout${first === undefined ? '' : `: ${stepName(first)}`}`;
 };
 
 /** One key for every glob: the viewer's last toggle of the Human steps section. */
@@ -90,6 +96,7 @@ export const whoText = (who: string): string => (who === 'anyone' ? 'anyone' : w
 
 /** The state as the section shows it: when a pending step falls due, who ticked a done one. */
 export const stateText = (step: ListedHumanStep): string => {
+  if (step.predicted === true) return 'predicted by the investigator';
   switch (step.state) {
     case 'due':
       return 'due now';

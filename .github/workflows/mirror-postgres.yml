@@ -1,4 +1,4 @@
-# Mirrors the Postgres image the checks and sub-gate workflows use from Docker Hub to GitHub's
+# Mirrors the Postgres image the checks workflow uses from Docker Hub to GitHub's
 # registry, so CI doesn't hit Docker Hub's anonymous pull limit. Run it once (Actions > Run workflow)
 # before relying on the image, and again whenever the tag below changes. It also re-runs weekly to
 # pick up upstream patch releases.
@@ -12,8 +12,8 @@
 #   gh auth token | docker login ghcr.io -u <owner> --password-stdin
 #   docker buildx imagetools create --tag ghcr.io/<owner>/pgvector:pg17 pgvector/pgvector:pg17
 # Then make the package public (GitHub > Packages > pgvector > Package settings > Change visibility):
-# a package pushed from outside this repo's workflows isn't linked to the repo, so checks and
-# sub-gate can't pull it with GITHUB_TOKEN until it is public or linked.
+# a package pushed from outside this repo's workflows isn't linked to the repo, so checks
+# can't pull it with GITHUB_TOKEN until it is public or linked.
 name: mirror-postgres
 
 on:

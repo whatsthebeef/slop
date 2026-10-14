@@ -14,9 +14,6 @@ export const repoOf = (board: Board): Repo | null => {
     : null;
 };
 
-/** The check run the sub gate's GitHub Action reports as; slop applies its policy once it passes (rows 12–13). */
-export const SUB_GATE_CHECK = 'sub-gate';
-
 /**
  * The neutral check run slop reports "N findings" under. It is informational, so every reading of a head's checks
  * leaves it out (a repo with no other CI would otherwise never look passed).

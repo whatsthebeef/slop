@@ -269,6 +269,8 @@ export interface Relation {
   /** Files or symbols that show it. */
   readonly evidence: readonly string[];
   readonly source: RelationSource;
+  /** The group this relation was set for ("every glob in group X waits for D"); null for an ordinary one. Set on each glob's own row. */
+  readonly group: string | null;
   /** Set when a person dismissed it as not a dependency, with the plan hash then (a changed plan may infer it again). */
   readonly dismissedAt: string | null;
   readonly dismissedPlanHash: string | null;
@@ -278,7 +280,7 @@ export interface Relation {
 }
 
 /** The fields of a relation that change after it is made. */
-export type RelationPatch = Partial<Pick<Relation, 'until' | 'reason' | 'evidence' | 'dismissedAt' | 'dismissedPlanHash' | 'overriddenAt'>>;
+export type RelationPatch = Partial<Pick<Relation, 'until' | 'reason' | 'evidence' | 'dismissedAt' | 'dismissedPlanHash' | 'overriddenAt' | 'group'>>;
 
 /**
  * How two decisions relate, as the KB pipeline (or an admin) found: closed into another learning (`duplicate_of`,

@@ -5,6 +5,7 @@ import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
 import type { Board, CheckFailure, Glob } from './types.js';
 import { isMergeHeld } from './relations.js';
+import { DEFAULT_SUB_GATE_CHECK, subGateWorkflowPath } from './merge-policy.js';
 
 /**
  * Board readiness: what a board needs before slop can run its globs end to end, checked where slop
@@ -54,8 +55,10 @@ export interface ReadinessFacts {
   /** Whether slop's GitHub App can reach the repo; null without a repo or before the app exists. */
   readonly repoConnected: boolean | null;
   readonly installUrl: string | null;
-  /** Whether the base branch has `.github/workflows/sub-gate.yml`; null when slop can't read the repo. */
-  readonly subGateWorkflow: boolean | null;
+  /** The check a sub waits for (the merge policy's `subGateCheck`, `checks` by default). */
+  readonly gateCheck: string;
+  /** Whether the base branch has the workflow that reports `gateCheck` (`subGateWorkflowPath`); null when slop can't read the repo. */
+  readonly checksWorkflow: boolean | null;
   /** Whether a workflow on the base branch runs `anthropics/claude-code-action`; null when slop can't read the repo. */
   readonly claudeWorkflow: boolean | null;
   /** slop's GitHub App bot name (`<slug>[bot]`); null before the app exists. */
@@ -213,27 +216,28 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
             ),
   );
 
-  const subGatePath = '.github/workflows/sub-gate.yml';
+  const gatePath = subGateWorkflowPath(facts.gateCheck);
+  const gateTitle = 'Checks workflow';
   items.push(
-    facts.subGateWorkflow === null
-      ? item('sub_gate', 'Sub-gate workflow', 'unknown', "slop can't read the repo yet", null)
-      : facts.subGateWorkflow
+    facts.checksWorkflow === null
+      ? item('sub_gate', gateTitle, 'unknown', "slop can't read the repo yet", null)
+      : facts.checksWorkflow
         ? item(
             'sub_gate',
-            'Sub-gate workflow',
+            gateTitle,
             'ok',
-            `${subGatePath} is on ${board.baseBranch}; make checks (.github/workflows/checks.yml, run on every PR) and sub-gate required status checks on ${board.baseBranch} so merges honour them`,
+            `${gatePath} is on ${board.baseBranch}, so every PR gets a \`${facts.gateCheck}\` run that subs wait for; make \`${facts.gateCheck}\` a required status check on ${board.baseBranch} so merges honour it`,
             null,
           )
         : item(
             'sub_gate',
-            'Sub-gate workflow',
+            gateTitle,
             'missing',
-            `Subs can't merge themselves without ${subGatePath} on ${board.baseBranch}`,
+            `Subs can't merge themselves without ${gatePath} (reporting \`${facts.gateCheck}\`) on ${board.baseBranch}`,
             {
               kind: 'link',
               label: 'Add the workflow',
-              href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=${subGatePath}`,
+              href: `https://github.com/${repo ?? ''}/new/${board.baseBranch}?filename=${gatePath}`,
             },
           ),
   );
@@ -577,9 +581,9 @@ export const behindAdvice = (glob: Glob): string =>
 
 /**
  * A short hint on a card when a glob looks stuck on setup rather than on work: a ready sub with no
- * sub-gate result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
+ * gate check result, a sub whose gate passed but hasn't merged, or a routine failure with a known fix.
  */
-export const stuckHint = (glob: Glob, now: string): string | null => {
+export const stuckHint = (glob: Glob, now: string, gateCheck: string = DEFAULT_SUB_GATE_CHECK): string | null => {
   if (glob.failure !== null) {
     const fix = routineFailureFix(glob.failure.reason);
     if (fix !== null) return fix.fix;
@@ -598,14 +602,14 @@ export const stuckHint = (glob: Glob, now: string): string | null => {
   if (minutes < STUCK_MINUTES) return null;
   const head = glob.pr?.headSha ?? null;
   if (head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'passed') {
-    return "The sub-gate passed but slop hasn't merged it: check the board's sub size limit and sensitive paths, or merge it";
+    return `The \`${gateCheck}\` check passed but slop hasn't merged it: check the board's sub size limit and sensitive paths, or merge it`;
   }
   if (
     glob.headChecks === null ||
     glob.headChecks.sha !== head ||
     glob.headChecks.state === 'pending'
   ) {
-    return `No sub-gate result after ${String(STUCK_MINUTES)} minutes: is .github/workflows/sub-gate.yml on the base branch?`;
+    return `No \`${gateCheck}\` result after ${String(STUCK_MINUTES)} minutes: is ${subGateWorkflowPath(gateCheck)} on the base branch?`;
   }
   return null;
 };

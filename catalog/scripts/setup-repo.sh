@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Prepares a GitHub repository for slop, using your gh login.
 #   - merge settings: squash only, PR title as the squash commit title, delete merged branches
-#   - optional --protect <check>...: branch protection on the base branch (required checks,
-#     up to date before merging, no direct pushes); pass `checks` (every PR's lint, type check
-#     and tests) and `sub-gate`
+#   - optional --protect [<check>...]: branch protection on the base branch (required checks,
+#     up to date before merging, no direct pushes); with no names it requires `checks` (every PR's
+#     lint, type check and tests), the check subs wait for before slop merges them
 #   - checks slop's GitHub App is subscribed to the events slop needs and, for any it isn't, prints the
 #     App's settings link (GitHub has no API to subscribe: a person ticks them in the UI)
 #   - prints the links to install slop's GitHub App and the Claude GitHub App on the repo
 #     (GitHub only allows that in the browser or with a classic personal access token)
-# Usage: setup-repo.sh <owner/repo> --app <slop-app-slug> [--base main] [--protect <check> ...]
+# Usage: setup-repo.sh <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]]
 set -euo pipefail
 
 repo="${1:-}"; shift || true
-app=""; base=""; checks=()
+app=""; base=""; checks=(); protect=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app) app="$2"; shift ;;
     --base) base="$2"; shift ;;
-    --protect) shift; while [[ $# -gt 0 && "$1" != --* ]]; do checks+=("$1"); shift; done; continue ;;
+    --protect) shift; protect=1; while [[ $# -gt 0 && "$1" != --* ]]; do checks+=("$1"); shift; done; continue ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift
 done
-[[ -n "$repo" && -n "$app" ]] || { echo "Usage: $0 <owner/repo> --app <slop-app-slug> [--base main] [--protect <check> ...]" >&2; exit 1; }
+[[ -n "$repo" && -n "$app" ]] || { echo "Usage: $0 <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]]" >&2; exit 1; }
 base="${base:-$(gh api "repos/$repo" --jq .default_branch)}"
 
 echo "Merge settings for $repo..."
@@ -32,6 +32,7 @@ gh api -X PATCH "repos/$repo" \
   -F delete_branch_on_merge=true --silent
 echo "  squash only, PR title as commit title, merged branches deleted"
 
+[[ $protect -eq 1 && ${#checks[@]} -eq 0 ]] && checks=(checks)
 if [[ ${#checks[@]} -gt 0 ]]; then
   echo "Branch protection on $base (required: ${checks[*]})..."
   contexts=$(printf '%s\n' "${checks[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
