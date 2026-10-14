@@ -123,7 +123,7 @@ export const boardContextBlock = (areas: readonly RiskArea[], subMaxChangedLines
   [
     'Risk areas of this board (work in one needs a person to review it afterwards, so type "same"; match your "files" against the path patterns):',
     ...(areas.length === 0 ? ['(none)'] : areas.map(riskAreaLine)),
-    `Learned sub size of this board: about ${String(subMaxChangedLines)} changed lines. Work beyond it that is settled is split into parts, not typed "same" for its size alone.`,
+    `Learned sub size of this board: about ${String(subMaxChangedLines)} changed lines. Settled work beyond it stays one glob, sized for one review (the agents divide it into workstreams in the run); it is not typed "same" for its size alone.`,
   ].join('\n');
 
 const EPOCH = '1970-01-01T00:00:00.000Z';
@@ -139,7 +139,7 @@ Respond with one JSON object and nothing else:
   - "sub" (the default; be optimistic): the plan is settled and has no open questions. One routine can implement it and merge it; a person at most spot-checks it afterwards. Whatever its area, and whether or not it overlaps work in progress (merge order is handled elsewhere).
   - "same": the plan is settled, but a person must review the result afterwards: the work matches one of the board's risk areas (listed after the request; the path patterns are matched against your "files"), it is user-facing or sensitive, or the request asks for a review.
   - "super": the plan still has decisions only a person can make during the work: a design to agree, options to choose between, "discuss with…", open questions, or a decisions section with no tasks. Claude would otherwise have to guess. Do not choose "super" just because the work is big or the request says "design" about something already decided.
-  - Size is separate: big settled work is split later into subs and sames. Big unsettled work is a "super" whose first output is the split.
+  - Size is separate: big settled work stays one glob, sized for one review; the agents divide it into workstreams in the run, so do not split it or choose "super" for it. A "super" is for unsettled work that needs a person to pair on it.
   - When unsure, choose "sub" rather than "same". Choose "super" only on real evidence of an open decision.
 - typeReason: one short sentence saying when a person is needed (or that none is), e.g. "Settled plan, no open questions" or "The plan leaves the storage design open".
 - category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.

@@ -221,6 +221,7 @@ export interface GlobOutcome {
     readonly type: FieldCorrection<SlopType> | null;
     /** A sub the gate converted to a same, and why. */
     readonly subConverted: 'size' | 'sensitive' | null;
+    /** The glob was cut (`GlobSplit`): a scope cut, meaning intake bundled independent features into one request. */
     readonly split: boolean;
   };
   /** The sub gate's changed-line count; null when the glob never went through it. */
@@ -374,7 +375,7 @@ const noteOf = (outcome: GlobOutcome | null): string | null => {
     const lines = outcome.size.changedLines;
     parts.push(`sub converted to same for ${subConverted === 'size' ? `size${lines === null ? '' : `, ${lines} lines`}` : 'a sensitive path'}`);
   }
-  if (outcome.corrections.split) parts.push('split into parts');
+  if (outcome.corrections.split) parts.push('cut down to one feature (intake had bundled independent features)');
   return parts.length === 0 ? null : parts.join('; ');
 };
 
