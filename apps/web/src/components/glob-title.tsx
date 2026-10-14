@@ -1,5 +1,4 @@
 import type { EditFailure } from '@slop/core';
-import { Pencil } from 'lucide-react';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import type { GlobChanges } from '@/lib/api';
@@ -36,20 +35,27 @@ export const GlobTitle = ({
 
   if (!editing) {
     return (
-      <h1 className='group flex min-w-0 flex-1 items-baseline gap-1.5 text-xl font-semibold' data-testid='glob-title'>
+      <h1 className='min-w-0 flex-1 text-xl font-semibold' data-testid='glob-title'>
         {editable ? (
-          <button
-            type='button'
-            className='flex min-w-0 items-baseline gap-1.5 rounded text-left font-semibold break-words hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          <span
+            role='button'
+            tabIndex={0}
+            title='Click to edit'
+            aria-label='Edit title'
+            className='block min-w-0 cursor-text rounded break-words hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
             onClick={begin}
-            aria-label={`Edit title: ${title}`}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                begin();
+              }
+            }}
             data-testid='glob-title-edit'
           >
-            <span className='min-w-0 break-words'>{title}</span>
-            <Pencil aria-hidden className='size-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' />
-          </button>
+            {title}
+          </span>
         ) : (
-          <span className='min-w-0 break-words'>{title}</span>
+          <span className='block min-w-0 break-words'>{title}</span>
         )}
       </h1>
     );

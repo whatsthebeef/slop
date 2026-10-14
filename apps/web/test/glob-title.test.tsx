@@ -56,4 +56,30 @@ describe('GlobTitle', () => {
     expect(onUpdate).not.toHaveBeenCalled();
     expect(onEscape).not.toHaveBeenCalled();
   });
+
+  it('has no pencil icon and hints at editing without one', () => {
+    renderTitle();
+    expect(document.body.querySelector('svg')).toBeNull();
+    const edit = screen.getByTestId('glob-title-edit');
+    expect(edit.getAttribute('title')).toBe('Click to edit');
+    expect(edit.getAttribute('role')).toBe('button');
+    expect(edit.getAttribute('aria-label')).toBe('Edit title');
+    expect(edit.tabIndex).toBe(0);
+  });
+
+  it('starts editing on Enter for an editor', async () => {
+    const user = userEvent.setup();
+    renderTitle();
+    screen.getByTestId('glob-title-edit').focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByTestId('glob-title-input')).toBeTruthy();
+  });
+
+  it('gives a non-editor no hint and no editing', async () => {
+    const user = userEvent.setup();
+    renderTitle({ editable: false });
+    await user.click(screen.getByText(LONG));
+    expect(screen.queryByTitle('Click to edit')).toBeNull();
+    expect(screen.queryByTestId('glob-title-input')).toBeNull();
+  });
 });
