@@ -646,6 +646,14 @@ When a glob was picked up again with its PR already ready (for example for a con
 
 In s15f92 on 2026-10-13, the glob was picked up at 18:51 for a conflict. The fix was pushed (a9a5a40, 4d85729), but the session skipped `mark_ready` because PR #323 was already ready. The glob sat in Doing with no Merge until `mark_ready` was called at about 19:07. The developer asked: "Still not seeing the option to merge or any indication of anything happening on the card. Is this a bug?"
 
+**A sub's `mark_ready` squash-merges straight away, at the head slop has recorded.**
+
+- Push every commit before you call `mark_ready`.
+- Never push to a ready sub except to fix failed checks.
+- If a merge fails with "Head branch was modified", compare `get_glob`'s `pr.headSha` with `git ls-remote origin <id>`. If they differ, slop missed the push. Push again (an empty commit is enough) so the push webhook records the real head, then call `pick_up` and `mark_ready`. Retrying `mark_ready` or Start again on its own reuses the stale head and fails the same way (bug s15b103: `readyRequested` in `packages/core/src/domain/machine.ts` reuses `glob.pr.headSha` for an already-ready PR).
+
+In s15t152, routine run ddfdf665 pushed 0b61855 around the time of its `mark_ready` on b060874, and slop kept `pr.headSha=b060874`. Runs ddfdf665, 4c6a637e and a34c92e0 and a manual `mark_ready` all failed with "Head branch was modified". The empty commit 3bbd92d updated the head, and `pick_up` followed by `mark_ready` moved the glob to `pr_open`.
+
 ### Diagnosing production incidents
 
 When a developer reports a production failure (a 5xx, an outage, missing data), don't present the first known pattern that fits as the cause. That includes the deploy restarts after a burst of merges under Routine runs.
