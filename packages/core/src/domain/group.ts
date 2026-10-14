@@ -1,3 +1,5 @@
+import type { DecisionAttributes } from './attributes.js';
+
 /** Group names compare ignoring case, surrounding space and the separators `_`, `-` and whitespace. */
 export const normaliseGroup = (s: string): string => s.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
 
@@ -84,4 +86,19 @@ export const proposeSplitGroups = (globs: readonly GroupableGlob[], existing: re
     for (const m of members) if (m.glob.group === null) proposals.push({ id: m.glob.id, group });
   }
   return proposals.sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+};
+
+/**
+ * The group a decision glob starts in, so the board's group filter and chips work for decisions as for work: a learning
+ * (submitted or mined) takes its routed target's name (`build_test_lint`, `orchestrator.md`),
+ * a hotspot decision is in `hotspots`, and any other takes the group of the work glob its scope names, when it has one.
+ */
+export const decisionGroup = (attributes: DecisionAttributes, scopeGlobGroup: string | null): string | null => {
+  const { origin } = attributes;
+  if (origin.kind === 'hotspot') return 'hotspots';
+  if (origin.kind === 'submitted' || origin.kind === 'mined') {
+    const name = attributes.target?.routed?.name ?? null;
+    if (name !== null && name.trim() !== '') return name.trim();
+  }
+  return scopeGlobGroup;
 };

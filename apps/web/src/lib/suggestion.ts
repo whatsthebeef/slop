@@ -8,8 +8,8 @@ export const SUGGESTION_ACTION_TEXT: Readonly<Record<SuggestAction, string>> = {
   reject: 'Reject',
 };
 
-/** The Decide section sits above the assessment, so Apply scrolls up to the form it opens. */
-export const APPLY_HINT_TEXT = 'Opens the decision form in the Decide section above, filled in. You confirm it.';
+/** The Decide block holds the suggestion and its form. */
+export const APPLY_HINT_TEXT = 'Fills the decision form in with the suggested outcome and reason. You confirm it.';
 
 /** What the Suggest card shows: nothing yet, a job working (or waiting for the model), a usable suggestion, or one the draft or target has outgrown. */
 export type SuggestionState = 'none' | 'working' | 'ready' | 'stale';

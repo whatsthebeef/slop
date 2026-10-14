@@ -18,11 +18,14 @@ import {
   watching,
 } from '@/components/decision-learning';
 import { CollapsibleMarkdown } from '@/components/markdown-view';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
+import { decideButtons } from '@/lib/decide-main';
 import { APPLY_HINT_TEXT, applyPrefill, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -168,18 +171,15 @@ const OutcomeForm = ({
   choice,
   attributes,
   boardId,
-  busy,
   draftText,
   target,
   watchable,
   prefill,
-  onCancel,
-  onDecide,
+  onInput,
 }: {
   choice: Choice;
   attributes: DecisionAttributes;
   boardId: number;
-  busy: boolean;
   draftText: string;
   /** Where the change goes: a spec (merge policy, local-run) is replaced whole, a new document's body is its content. */
   target: KbTarget | null;
@@ -187,8 +187,8 @@ const OutcomeForm = ({
   watchable: boolean;
   /** Suggest's Apply: the form opens with these filled in; nothing is decided until the person confirms. */
   prefill?: SuggestionPrefill | undefined;
-  onCancel: () => void;
-  onDecide: (input: DecideInput) => Promise<boolean>;
+  /** The outcome as it would be sent, or null while a field it needs is empty; the main button submits it. */
+  onInput: (input: DecideInput | null) => void;
 }) => {
   const [reason, setReason] = useState(prefill?.reason ?? '');
   const [edited, setEdited] = useState(prefill?.editedDraft ?? draftText);
@@ -202,7 +202,6 @@ const OutcomeForm = ({
   useEffect(() => {
     if (!touched) setEdited(draftText);
   }, [draftText, touched]);
-  const send = (input: DecideInput) => void onDecide(input).then((done) => done && onCancel());
   const trimmed = reason.trim();
   const inputFor = (): DecideInput => {
     switch (choice) {
@@ -218,6 +217,15 @@ const OutcomeForm = ({
         return { outcome: choice, ...watching(watch) };
     }
   };
+  const valid = !(
+    (choice === 'reject' && trimmed === '') ||
+    (choice === 'accept_with_edits' && edited.trim() === '') ||
+    (choice === 'retarget' && name.trim() === '')
+  );
+  const sending = valid ? JSON.stringify(inputFor()) : null;
+  useEffect(() => {
+    onInput(sending === null ? null : (JSON.parse(sending) as DecideInput));
+  }, [sending]);
   const whole = target?.kind === 'local_run' || target?.kind === 'merge_policy';
   const editLabel = whole
     ? target.kind === 'merge_policy'
@@ -281,25 +289,6 @@ const OutcomeForm = ({
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} />
         </Label>
       )}
-      <div className='flex justify-end gap-2'>
-        <Button size='sm' variant='ghost' onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button
-          size='sm'
-          variant={choice === 'reject' ? 'destructive' : 'default'}
-          data-testid='confirm-outcome'
-          disabled={
-            busy ||
-            (choice === 'reject' && trimmed === '') ||
-            (choice === 'accept_with_edits' && edited.trim() === '') ||
-            (choice === 'retarget' && name.trim() === '')
-          }
-          onClick={() => send(inputFor())}
-        >
-          {CHOICES.find((c) => c.outcome === choice)?.label}
-        </Button>
-      </div>
     </div>
   );
 };
@@ -343,31 +332,11 @@ const ProposedChange = ({ globId }: { globId: string }) => {
   );
 };
 
-/**
- * The assessment slop wrote about the proposal (what it changes, flags, the rule-based outcome), beside the review
- * section, and Suggest: an on-demand model recommendation. Apply opens the decide form pre-filled (`onApply`); nothing is
- * decided without the person's confirmation there.
- */
-export const DecisionAssessment = ({
-  glob,
-  canSuggest,
-  onApply,
-}: {
-  glob: GlobView;
-  /** Admins and POs ask for suggestions. */
-  canSuggest: boolean;
-  onApply: (prefill: SuggestionPrefill) => void;
-}) => {
+/** Suggest: an on-demand model recommendation for the Decide block; its state, stored suggestion and the ask. */
+const useSuggest = (glob: GlobView, canSuggest: boolean) => {
   const client = useQueryClient();
-  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
-  const versions = useQuery({
-    queryKey: artifactKey(glob.id, 'assessment', ''),
-    queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
-    enabled: has,
-  });
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  const latest = versions.data?.at(-1);
   // Under the `artifact` key, so the live `glob.artifacts` hint that announces the stored suggestion refetches it.
   const suggestion = useQuery({
     queryKey: ['artifact', glob.id, 'suggestion-view'],
@@ -376,51 +345,46 @@ export const DecisionAssessment = ({
     refetchInterval: (query) => (query.state.data?.pending === true ? SUGGEST_POLL_MS : false),
   });
   const state = suggestionState(suggestion.data);
-  const stored = suggestion.data?.suggestion?.suggestion;
-  const prefill = applyPrefill(suggestion.data);
+  const ask = () => {
+    setBusy(true);
+    setFailed(false);
+    // The rule-based assessment is free: refresh it first, so the card and the suggestion read the same flags.
+    api
+      .assess(glob.id)
+      .then(() => api.suggest(glob.id))
+      .then(() => client.invalidateQueries({ queryKey: ['artifact', glob.id] }))
+      .then(() => client.invalidateQueries({ queryKey: ['globs', glob.boardId] }))
+      .catch(() => setFailed(true))
+      .finally(() => setBusy(false));
+  };
+  return { state, stored: suggestion.data?.suggestion?.suggestion, prefill: applyPrefill(suggestion.data), error: suggestion.data?.error ?? null, busy, failed, ask };
+};
+
+/** The latest assessment and suggestion, read in the Decide block before deciding. */
+const LatestAssessment = ({ glob, suggest, canSuggest }: { glob: GlobView; suggest: ReturnType<typeof useSuggest>; canSuggest: boolean }) => {
+  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
+  const versions = useQuery({
+    queryKey: artifactKey(glob.id, 'assessment', ''),
+    queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
+    enabled: has,
+  });
+  const latest = versions.data?.at(-1);
+  const { state, stored } = suggest;
   const text = stored?.editedDraft ?? stored?.mergedText ?? null;
   return (
     <div className='grid gap-2' data-testid='assessment'>
-      <div className='flex items-center gap-2'>
-        <h3 className='text-xs font-semibold text-muted-foreground'>Assessment</h3>
-        {canSuggest && (
-          <Tip text='Ask the model what to do with this: approve, approve with an edit, merge into another learning, or reject. It reads the draft, the target section, the sibling learnings and the changes merged since'>
-            <Button
-              size='sm'
-              variant='outline'
-              disabled={busy || state === 'working'}
-              data-testid='suggest'
-              onClick={() => {
-                setBusy(true);
-                setFailed(false);
-                // The rule-based assessment is free: refresh it first, so the card and the suggestion read the same flags.
-                api
-                  .assess(glob.id)
-                  .then(() => api.suggest(glob.id))
-                  .then(() => client.invalidateQueries({ queryKey: ['artifact', glob.id] }))
-                  .then(() => client.invalidateQueries({ queryKey: ['globs', glob.boardId] }))
-                  .catch(() => setFailed(true))
-                  .finally(() => setBusy(false));
-              }}
-            >
-              {state === 'working' ? 'Suggesting…' : state === 'none' ? 'Suggest' : 'Suggest again'}
-            </Button>
-          </Tip>
-        )}
-        {failed && <span className='text-xs text-red'>Could not ask for a suggestion.</span>}
-      </div>
-      {latest === undefined ? (
-        <p className='text-sm text-muted-foreground'>{has ? 'Loading…' : 'Not assessed yet.'}</p>
-      ) : (
+      {latest !== undefined && (
         <div className='rounded border p-3'>
           <CollapsibleMarkdown content={latest.content} />
         </div>
       )}
+      {latest === undefined && has && <p className='text-sm text-muted-foreground'>Loading…</p>}
       {canSuggest && state === 'working' && (
         <p className='text-xs text-muted-foreground' data-testid='suggest-working'>
-          {suggestion.data?.error == null ? 'Asking the model…' : suggestion.data.error}
+          {suggest.error === null ? 'Asking the model…' : suggest.error}
         </p>
       )}
+      {suggest.failed && <p className='text-xs text-red'>Could not ask for a suggestion.</p>}
       {canSuggest && stored !== undefined && (
         <div className='grid gap-2 rounded border border-edge p-3' data-testid='suggestion'>
           <div className='flex flex-wrap items-center gap-2'>
@@ -443,17 +407,33 @@ export const DecisionAssessment = ({
               <pre className='mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono'>{text}</pre>
             </details>
           )}
-          {prefill !== null && (
-            <div className='flex items-center gap-2'>
-              <Button size='sm' data-testid='apply-suggestion' onClick={() => onApply(prefill)}>
-                {stored.action === 'merge_into' ? `Apply: reject, merged into ${stored.mergeInto ?? 'another learning'}` : 'Apply'}
-              </Button>
-              <span className='text-xs text-muted-foreground'>{APPLY_HINT_TEXT}</span>
-            </div>
-          )}
         </div>
       )}
     </div>
+  );
+};
+
+/** Older assessments, newest first, collapsed: the latest lives in the Decide block. */
+export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
+  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
+  const versions = useQuery({
+    queryKey: artifactKey(glob.id, 'assessment', ''),
+    queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
+    enabled: has,
+  });
+  const older = [...(versions.data ?? [])].slice(0, -1).reverse();
+  if (older.length === 0) return null;
+  return (
+    <details className='grid gap-2' data-testid='assessment-history'>
+      <summary className='cursor-pointer text-xs font-semibold text-muted-foreground'>Earlier assessments ({older.length})</summary>
+      <div className='mt-2 grid gap-2'>
+        {older.map((v) => (
+          <div key={v.version} className='rounded border p-3'>
+            <CollapsibleMarkdown content={v.content} />
+          </div>
+        ))}
+      </div>
+    </details>
   );
 };
 
@@ -607,8 +587,212 @@ const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attribu
 };
 
 /**
- * What a decision glob shows in place of a work glob's branch, PR and runs: its scope, the proposed change with its diff, the
- * conflict flag, the outcome so far and (for an admin or PO with it in Doing) the five outcomes.
+ * The Decide block at the top of a decision glob: the latest assessment and suggestion to read, and one split button that
+ * walks Suggest → Apply → the applied outcome (which submits it). Reject stays beside it once an outcome is chosen; the
+ * other outcomes fold into the ▾. The outcome's fields appear only when it needs them.
+ */
+const DecideBlock = ({
+  glob,
+  attributes,
+  board,
+  busy,
+  canDecide,
+  hasItem,
+  isDocument,
+  accept,
+  adminOnly,
+  learning,
+  target,
+  draftText,
+  onDecide,
+}: {
+  glob: GlobView;
+  attributes: DecisionAttributes;
+  board: BoardView;
+  busy: boolean;
+  canDecide: boolean;
+  hasItem: boolean;
+  isDocument: boolean;
+  accept: { label: string; tip: string };
+  adminOnly: string | null;
+  learning: DecisionLearning | null;
+  target: KbTarget | null;
+  draftText: string;
+  onDecide: (input: DecideInput) => Promise<boolean>;
+}) => {
+  const admin = board.role === 'admin';
+  const canSuggest = admin || board.role === 'po';
+  const suggest = useSuggest(glob, canSuggest);
+  const [choice, setChoice] = useState<Choice | null>(null);
+  const [applied, setApplied] = useState<SuggestionPrefill | null>(null);
+  const [input, setInput] = useState<DecideInput | null>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setChoice(null);
+    setApplied(null);
+  }, [glob.id, glob.version]);
+  useEffect(() => {
+    if (choice === null) setInput(null);
+  }, [choice]);
+  useEffect(() => {
+    if (applied === null || choice !== applied.outcome) return;
+    const form = formRef.current;
+    form?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    form?.querySelector<HTMLElement>('textarea, input, select')?.focus({ preventScroll: true });
+  }, [applied, choice]);
+  const buttons = decideButtons({ state: suggest.state, hasPrefill: suggest.prefill !== null, canSuggest, choice });
+  const labelOf = (key: Choice) => (key === 'accept' ? accept.label : (CHOICES.find((c) => c.outcome === key)?.label ?? key));
+  const tipOf = (key: Choice) => (key === 'accept' ? accept.tip : (CHOICES.find((c) => c.outcome === key)?.tip ?? ''));
+  const reasonOff = (key: Choice): string | null => {
+    if (!hasItem && (key === 'accept_with_edits' || key === 'retarget')) return 'This decision has no knowledge item to edit or retarget';
+    if (adminOnly !== null && (key === 'accept' || key === 'accept_with_edits')) return `An admin decides it: it ${adminOnly}`;
+    return null;
+  };
+  const off = (key: Choice) => !canDecide || reasonOff(key) !== null;
+  const pick = (key: Choice) => {
+    setApplied(null);
+    setChoice(key);
+  };
+  const submit = () => {
+    if (input === null) return;
+    void onDecide(input).then((done) => {
+      if (done) setChoice(null);
+    });
+  };
+  const main = buttons.main;
+  const mainLabel =
+    main.kind === 'suggest'
+      ? main.again
+        ? 'Suggest again'
+        : 'Suggest'
+      : main.kind === 'suggesting'
+        ? 'Suggesting…'
+        : main.kind === 'apply'
+          ? suggest.stored?.action === 'merge_into'
+            ? `Apply: reject, merged into ${suggest.stored.mergeInto ?? 'another learning'}`
+            : 'Apply'
+          : labelOf(main.outcome);
+  const mainTip =
+    main.kind === 'suggest' || main.kind === 'suggesting'
+      ? 'Ask the model what to do with this: approve, approve with an edit, merge into another learning, or reject. It reads the draft, the target section, the sibling learnings and the changes merged since'
+      : main.kind === 'apply'
+        ? APPLY_HINT_TEXT
+        : tipOf(main.outcome);
+  const mainDisabled =
+    busy ||
+    main.kind === 'suggesting' ||
+    (main.kind === 'suggest' && suggest.busy) ||
+    (main.kind === 'outcome' && (off(main.outcome) || (choice === main.outcome && input === null)));
+  const onMain = () => {
+    switch (main.kind) {
+      case 'suggest':
+        suggest.ask();
+        return;
+      case 'apply':
+        if (suggest.prefill !== null) {
+          setApplied(suggest.prefill);
+          setChoice(suggest.prefill.outcome);
+        }
+        return;
+      case 'outcome':
+        if (choice === main.outcome) submit();
+        else pick(main.outcome);
+        return;
+      case 'suggesting':
+        return;
+    }
+  };
+  const menuKeys = buttons.menu;
+  const working = main.kind === 'suggesting' || (main.kind === 'suggest' && suggest.busy);
+  return (
+    <div className='grid gap-3 rounded border border-edge p-3' data-testid='decide-block'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Decide</h3>
+      {(canSuggest || (glob.artifacts ?? []).some((a) => a.kind === 'assessment')) && (
+        <LatestAssessment glob={glob} suggest={suggest} canSuggest={canSuggest} />
+      )}
+      {(canDecide || canSuggest) && (
+        <div className='grid gap-2' data-testid='outcomes'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <div className='flex'>
+              <Tip text={reasonOff(main.kind === 'outcome' ? main.outcome : 'reject') ?? mainTip}>
+                <Button
+                  size='sm'
+                  className='rounded-r-none'
+                  disabled={mainDisabled}
+                  data-testid={main.kind === 'outcome' ? `outcome-${main.outcome}` : main.kind === 'apply' ? 'apply-suggestion' : 'suggest'}
+                  onClick={onMain}
+                >
+                  {working && <Loader2 className='mr-1 size-3.5 animate-spin' aria-hidden />}
+                  {mainLabel}
+                </Button>
+              </Tip>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size='sm'
+                    className='rounded-l-none border-l-primary-foreground/40 px-1.5'
+                    disabled={busy}
+                    aria-label='More outcomes'
+                    data-testid='more-outcomes'
+                  >
+                    <ChevronDown className='size-3.5' aria-hidden />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='start' data-testid='outcomes-menu'>
+                  {buttons.suggestAgain && (
+                    <DropdownMenuItem data-testid='suggest' disabled={suggest.busy} onSelect={suggest.ask}>
+                      Suggest again
+                    </DropdownMenuItem>
+                  )}
+                  {buttons.clear && (
+                    <DropdownMenuItem data-testid='outcome-clear' onSelect={() => setChoice(null)}>
+                      Clear the choice
+                    </DropdownMenuItem>
+                  )}
+                  {menuKeys.map((key) => (
+                    <DropdownMenuItem key={key} disabled={off(key)} data-testid={`outcome-${key}`} onSelect={() => pick(key)}>
+                      <span className='grid'>
+                        <span className='font-medium'>{labelOf(key)}</span>
+                        <span className='text-xs text-muted-foreground'>{reasonOff(key) ?? tipOf(key)}</span>
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {buttons.rejectBeside && (
+              <Button size='sm' variant='danger' disabled={busy || off('reject')} data-testid='outcome-reject' onClick={() => pick('reject')}>
+                {labelOf('reject')}
+              </Button>
+            )}
+          </div>
+          {admin && hasItem && learning?.status === 'open' && !isDocument && (
+            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={learning} busy={busy} />
+          )}
+          {choice !== null && (
+            <div ref={formRef}>
+              <OutcomeForm
+                key={`${choice}-${applied?.outcome === choice ? 'applied' : 'plain'}`}
+                choice={choice}
+                prefill={applied?.outcome === choice ? applied : undefined}
+                attributes={attributes}
+                boardId={glob.boardId}
+                draftText={draftText}
+                target={target}
+                watchable={admin && canWatch(learning, attributes)}
+                onInput={setInput}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * What a decision glob shows in place of a work glob's branch, PR and runs: the Decide block first (the latest suggestion
+ * and the outcomes), then its scope, the proposed change with its diff, the conflict flag and the outcome so far.
  */
 export const DecisionSection = ({
   board,
@@ -616,33 +800,14 @@ export const DecisionSection = ({
   busy,
   onDecide,
   onUpdate,
-  applied,
 }: {
   board: BoardView;
   glob: GlobView;
   busy: boolean;
   onDecide: (input: DecideInput) => Promise<boolean>;
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
-  /** Suggest's Apply: opens the form for its outcome, pre-filled. */
-  applied?: SuggestionPrefill | null;
 }) => {
   const attributes = decisionOf(glob);
-  const [choice, setChoice] = useState<Choice | null>(null);
-  useEffect(() => setChoice(null), [glob.id, glob.version]);
-  useEffect(() => {
-    if (applied != null) setChoice(applied.outcome);
-  }, [applied]);
-  // Apply comes from the assessment below this section: bring the opened form into view, once per Apply press.
-  const formRef = useRef<HTMLDivElement>(null);
-  const scrolledFor = useRef<SuggestionPrefill | null>(null);
-  useEffect(() => {
-    if (applied == null || choice !== applied.outcome || scrolledFor.current === applied) return;
-    scrolledFor.current = applied;
-    const form = formRef.current;
-    if (form === null) return;
-    form.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    form.querySelector<HTMLElement>('textarea, input, select, button:not(:disabled)')?.focus({ preventScroll: true });
-  }, [applied, choice]);
   const diff = useQuery({
     queryKey: globDiffKey(glob.id),
     queryFn: () => api.globDiff(glob.id),
@@ -667,38 +832,7 @@ export const DecisionSection = ({
   const outcome = attributes.outcome;
   const hasItem = isLearning(attributes);
   return (
-    <section className='grid gap-3 rounded border border-edge p-3' data-testid='decision-section'>
-      <div className='flex flex-wrap items-center gap-2 text-xs'>
-        <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
-          {hotspotPath === null ? `Applies to ${scopeLabel(attributes.scope)}` : <>Conflict hotspot: <span className='font-mono'>{hotspotPath}</span></>}
-        </span>
-        <span className='text-muted-foreground'>via {attributes.channel}</span>
-        {conflicts.length > 0 && (
-          <Tip text='This decision contradicts a decision with a broader scope, which wins where they disagree'>
-            <span className='rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200' data-testid='conflicts-chip'>
-              Conflicts with{' '}
-              {conflicts.map((id, i) => (
-                <span key={id}>
-                  {i > 0 && ', '}
-                  <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id, { section: 'decision' })}>
-                    {id}
-                  </Link>
-                </span>
-              ))}{' '}
-              (broader scope)
-            </span>
-          </Tip>
-        )}
-      </div>
-
-      {deciders && glob.status !== 'signed_off' && <ScopeEditor glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
-
-      {hasItem && <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />}
-      {hasItem && attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
-      {hasItem && learning !== null && <ProcessingState glob={glob} learning={learning} routed={target !== null} admin={admin} />}
-      {hasItem && learning?.status === 'open' && <StaleNote glob={glob} attributes={attributes} admin={admin} />}
-      {learning?.effectCheck != null && <EffectCheckView boardId={glob.boardId} check={learning.effectCheck} />}
-
+    <section className='grid gap-3' data-testid='decision-section'>
       {outcome !== null && (
         <p className='text-sm' data-testid='decision-outcome'>
           <span className='font-medium'>{OUTCOME_TEXT[outcome.kind]}</span> by {outcome.by} on {when(outcome.at)}
@@ -716,59 +850,62 @@ export const DecisionSection = ({
         </p>
       )}
 
-      {attributes.document !== undefined && diff.data?.draft != null ? (
-        <DocumentProposal boardId={glob.boardId} document={attributes.document} content={diff.data.draft.content} />
-      ) : (
-        <ProposedChange globId={glob.id} />
+      {(canDecide || deciders) && glob.status !== 'signed_off' && (
+        <DecideBlock
+          glob={glob}
+          attributes={attributes}
+          board={board}
+          busy={busy}
+          canDecide={canDecide}
+          hasItem={hasItem}
+          isDocument={isDocument}
+          accept={accept}
+          adminOnly={adminOnly}
+          learning={learning}
+          target={target}
+          draftText={diff.data?.draft?.content ?? ''}
+          onDecide={onDecide}
+        />
       )}
 
-      {canDecide && (
-        <div className='grid gap-2' data-testid='outcomes'>
-          <h3 className='text-xs font-semibold text-muted-foreground'>Decide</h3>
-          <div className='flex flex-wrap gap-2'>
-            {CHOICES.map(({ outcome: key, label: plain, tip: plainTip }) => {
-              const label = key === 'accept' ? accept.label : plain;
-              const tip = key === 'accept' ? accept.tip : plainTip;
-              const unavailable = !hasItem && (key === 'accept_with_edits' || key === 'retarget');
-              const kept = adminOnly !== null && (key === 'accept' || key === 'accept_with_edits');
-              return (
-                <Tip key={key} text={unavailable ? 'This decision has no knowledge item to edit or retarget' : kept ? `An admin decides it: it ${adminOnly}` : tip}>
-                  <Button
-                    size='sm'
-                    variant={choice === key ? 'default' : key === 'reject' ? 'danger' : 'outline'}
-                    disabled={busy || unavailable || kept}
-                    aria-pressed={choice === key}
-                    data-testid={`outcome-${key}`}
-                    onClick={() => setChoice(choice === key ? null : key)}
-                  >
-                    {label}
-                  </Button>
-                </Tip>
-              );
-            })}
-          </div>
-          {admin && hasItem && learning?.status === 'open' && !isDocument && (
-            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={learning} busy={busy} />
-          )}
-          {choice !== null && (
-            <div ref={formRef}>
-            <OutcomeForm
-              key={`${choice}-${applied?.outcome === choice ? 'applied' : 'plain'}`}
-              choice={choice}
-              prefill={applied?.outcome === choice ? applied : undefined}
-              attributes={attributes}
-              boardId={glob.boardId}
-              busy={busy}
-              draftText={diff.data?.draft?.content ?? ''}
-              target={target}
-              watchable={admin && canWatch(learning, attributes)}
-              onCancel={() => setChoice(null)}
-              onDecide={onDecide}
-            />
-            </div>
+      <div className='grid gap-3 rounded border border-edge p-3'>
+        <div className='flex flex-wrap items-center gap-2 text-xs'>
+          <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
+            {hotspotPath === null ? `Applies to ${scopeLabel(attributes.scope)}` : <>Conflict hotspot: <span className='font-mono'>{hotspotPath}</span></>}
+          </span>
+          <span className='text-muted-foreground'>via {attributes.channel}</span>
+          {conflicts.length > 0 && (
+            <Tip text='This decision contradicts a decision with a broader scope, which wins where they disagree'>
+              <span className='rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200' data-testid='conflicts-chip'>
+                Conflicts with{' '}
+                {conflicts.map((id, i) => (
+                  <span key={id}>
+                    {i > 0 && ', '}
+                    <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id, { section: 'decision' })}>
+                      {id}
+                    </Link>
+                  </span>
+                ))}{' '}
+                (broader scope)
+              </span>
+            </Tip>
           )}
         </div>
-      )}
+
+        {deciders && glob.status !== 'signed_off' && <ScopeEditor glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
+
+        {hasItem && <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />}
+        {hasItem && attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
+        {hasItem && learning !== null && <ProcessingState glob={glob} learning={learning} routed={target !== null} admin={admin} />}
+        {hasItem && learning?.status === 'open' && <StaleNote glob={glob} attributes={attributes} admin={admin} />}
+        {learning?.effectCheck != null && <EffectCheckView boardId={glob.boardId} check={learning.effectCheck} />}
+
+        {attributes.document !== undefined && diff.data?.draft != null ? (
+          <DocumentProposal boardId={glob.boardId} document={attributes.document} content={diff.data.draft.content} />
+        ) : (
+          <ProposedChange globId={glob.id} />
+        )}
+      </div>
     </section>
   );
 };

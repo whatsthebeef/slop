@@ -187,6 +187,7 @@ export const HumanSteps = ({
   canAdd,
   startOpen = false,
   openSignal = 0,
+  collapsed = false,
   ...actions
 }: {
   glob: GlobView;
@@ -196,9 +197,11 @@ export const HumanSteps = ({
   startOpen?: boolean;
   /** Bumped by the main button: opens the section again if the viewer collapsed it. */
   openSignal?: number;
+  /** Starts collapsed whatever is still to do (a decision glob: the steps sit below the assessments). */
+  collapsed?: boolean;
 } & StepActions) => {
   const steps = glob.humanSteps ?? [];
-  const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : readStepsOpen()));
+  const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : collapsed ? false : readStepsOpen()));
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   useEffect(() => {

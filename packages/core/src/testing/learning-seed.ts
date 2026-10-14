@@ -5,6 +5,7 @@ import { parseId } from '../domain/ids.js';
 import { kbEffectsFor } from '../domain/kb.js';
 import type { DraftPreview, LearningWire, LearningStatus } from '../domain/kb.js';
 import { kbAttributesOf, kbLinksOf, proposalText } from '../domain/kb-glob.js';
+import { decisionGroup } from '../domain/group.js';
 import { learningWire } from '../domain/learning-wire.js';
 import * as machine from '../domain/machine.js';
 import type { Transition } from '../domain/machine.js';
@@ -171,6 +172,7 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
       const parsed = parseId(item.id);
       if (board === null || parsed?.letter !== 'k' || parsed.boardId !== item.boardId) throw new Error(`${item.id} is not a KB item ID on board ${String(item.boardId)}`);
       const open: LearningWire = { ...item, status: 'open' };
+      const seeded: DecisionAttributes = { scope: defaultScope(), origin: { kind: item.source }, channel: channelOf(item), outcome: null, ...kbAttributesOf(open) };
       const created = machine.create(
         {
           id: item.id,
@@ -178,8 +180,8 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
           title: decisionGlobTitle(item.statement),
           type: 'same',
           category: 'decision',
-          attributes: { scope: defaultScope(), origin: { kind: item.source }, channel: channelOf(item), outcome: null, ...kbAttributesOf(open) },
-          group: null,
+          attributes: seeded,
+          group: decisionGroup(seeded, null),
           environment: null,
           autoTrigger: false,
         },

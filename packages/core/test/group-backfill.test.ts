@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { DecisionAttributes } from '../src/domain/attributes.js';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { GroupBackfillService } from '../src/app/group-backfill-service.js';
 import { IntakeService } from '../src/app/intake-service.js';
 import type { Result } from '../src/domain/errors.js';
-import { proposeSplitGroups } from '../src/domain/group.js';
+import { decisionGroup, proposeSplitGroups } from '../src/domain/group.js';
 import type { GroupableGlob } from '../src/domain/group.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -114,5 +115,23 @@ describe('group backfill', () => {
     await create('Big thing 1/2: first');
     const refused = await backfill.run(DEV, boardId, false);
     expect(refused.ok).toBe(false);
+  });
+});
+
+describe('the group a decision glob starts in', () => {
+  const attributes = (patch: Partial<DecisionAttributes>): DecisionAttributes => ({
+    scope: { kind: 'project', ref: null },
+    origin: { kind: 'submitted' },
+    channel: 'agent',
+    outcome: null,
+    ...patch,
+  });
+
+  it('is the routed target of a learning, hotspots for a hotspot, else the scoped glob\'s group', () => {
+    const routed = { kind: 'doc' as const, name: 'build_test_lint', section: null, newDocument: null };
+    expect(decisionGroup(attributes({ target: { suggested: 'build doc', routed } }), 'g')).toBe('build_test_lint');
+    expect(decisionGroup(attributes({ target: { suggested: 'build doc', routed: null } }), null)).toBeNull();
+    expect(decisionGroup(attributes({ origin: { kind: 'hotspot', path: 'a.ts' } }), 'g')).toBe('hotspots');
+    expect(decisionGroup(attributes({ origin: { kind: 'extracted', decisionId: 1 } }), 'g')).toBe('g');
   });
 });
