@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
 import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts } from '../src/lib/card-rows';
+import { humanSteps as deriveHumanSteps, whoseMove } from '@slop/core';
+import type { StoredHumanStep } from '@slop/core';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const head = 'd16d563aaaa';
@@ -246,15 +248,22 @@ describe('cornerStatus text stays a word or two', () => {
 });
 
 describe('a startable same in Planning', () => {
-  const placeholder = {
-    id: 'hs-1', kind: 'rollout', title: 'Rollout: steps to be written', state: 'pending', due: 'after_merge', who: 'admin', blocks: ['sign_off'], predicted: true,
-  } as unknown as NonNullable<GlobView['humanSteps']>[number];
+  // The server's move for a Planning same carrying the investigation's predicted rollout placeholder.
+  const stored: StoredHumanStep = {
+    id: 'hs-1', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Rollout: steps to be written', detail: null, who: 'admin', due: 'after_merge',
+    state: 'open', blocks: ['sign_off'], check: null, script: null, origin: 'investigation', createdBy: 'dev@example.com', createdAt: NOW,
+    doneBy: null, doneAt: null, dismissedReason: null,
+  };
+  const withPlaceholder = (): Partial<GlobView> => {
+    const g = glob({ status: 'planning', type: 'same' });
+    return { move: whoseMove(g, deriveHumanSteps(g, {}, [stored]), [], [], NOW) } as Partial<GlobView>;
+  };
   const startable = (patch: Partial<GlobView> = {}) => view({ type: 'same', status: 'planning', list: 'planning', allowedActions: ['start', 'pick_up'], ...patch });
   const ended = run({ state: 'ended', outcome: 'completed' });
 
   it.each([
     ['a plain one', {}],
-    ['a predicted rollout placeholder', { humanSteps: [placeholder] }],
+    ['a predicted rollout placeholder', withPlaceholder()],
     ['an unanswered oversized flag', { sizeCheck: { flagged: true, decision: null } } as Partial<GlobView>],
     ['a split original', { sizeCheck: { flagged: true, decision: 'split' } } as Partial<GlobView>],
     ['a finished investigate-only run', { runs: [ended], currentRun: ended }],
