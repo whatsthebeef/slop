@@ -433,7 +433,12 @@ hub.tap((hint) => {
 // consolidation then merges same-fact open items (verified quotes) and flags stale ones; it waits while its model is down.
 // Daily effect checks compare each approved change's signal before and after it. Hourly, the sub size limit learns
 // from merged subs' outcomes.
-const riskAreas = new RiskAreaService({ store, clock, changes: new CodeHostChanges(github, logError) });
+const riskAreas = new RiskAreaService({
+  store,
+  clock,
+  changes: new CodeHostChanges(github, logError),
+  lift: (boardId, names) => globs.liftRiskAreaEscalations(boardId, names),
+});
 const subLimit = new SubLimitService({
   store,
   notifier: hub,

@@ -90,8 +90,12 @@ describe('Risk areas and the adaptive sub step in Postgres', () => {
     await drop();
   });
 
-  const request = (method: string, path: string, email = ADMIN) =>
-    app.request(path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer dev:${email}` } });
+  const request = (method: string, path: string, email = ADMIN, body?: object) =>
+    app.request(path, {
+      method,
+      headers: { 'content-type': 'application/json', authorization: `Bearer dev:${email}` },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
 
   it('starts a board at step 500, and keeps the step with the limit', async () => {
     expect((await store.transaction((tx) => tx.getBoard(boardId)))?.subLimitStep).toBe(500);
@@ -111,15 +115,26 @@ describe('Risk areas and the adaptive sub step in Postgres', () => {
     expect(view.status).toBe(200);
     const seeded = viewOf(await view.json());
     expect(seeded.areas).toHaveLength(5);
-    expect(await riskAreas.record(boardId, { kind: 'reverted', globId: 's1t1', paths: ['apps/billing/src/a.ts'], at: NOW })).toBe(true);
-    expect(await riskAreas.record(boardId, { kind: 'reverted', globId: 's1t1', paths: ['apps/billing/src/a.ts'], at: NOW })).toBe(false);
+    const paths = ['apps/billing/src/payments/a.ts'];
+    expect(await riskAreas.record(boardId, { kind: 'reverted', globId: 's1t1', paths, at: NOW })).toBe(true);
+    expect(await riskAreas.record(boardId, { kind: 'reverted', globId: 's1t1', paths, at: NOW })).toBe(false);
+    // One glob is a candidate; the second separate glob adds the area.
+    expect((await store.transaction((tx) => tx.listRiskAreas(boardId))).some((a) => a.source === 'learned')).toBe(false);
+    expect(await riskAreas.record(boardId, { kind: 'reverted', globId: 's1t2', paths, at: NOW })).toBe(true);
     const learned = (await store.transaction((tx) => tx.listRiskAreas(boardId))).find((a) => a.source === 'learned');
-    expect(learned).toMatchObject({ name: 'Learned: apps/billing/src', pathPatterns: ['apps/billing/src/**'], strength: 1 });
-    expect((await store.transaction((tx) => tx.listRiskAreaChanges(boardId)))[0]).toMatchObject({ kind: 'added', cause: 'reverted', globId: 's1t1' });
+    expect(learned).toMatchObject({ name: 'Learned: apps/billing/src/payments', pathPatterns: ['apps/billing/src/payments/**'], strength: 2 });
+    expect((await store.transaction((tx) => tx.listRiskAreaChanges(boardId)))[0]).toMatchObject({ kind: 'added', cause: 'reverted', globId: 's1t2' });
     // The unique index keeps a repeated change out.
     expect(
-      await store.transaction((tx) => tx.insertRiskAreaChange({ boardId, at: NOW, areaName: 'Learned: apps/billing/src', kind: 'added', globId: 's1t1', cause: 'reverted' })),
+      await store.transaction((tx) => tx.insertRiskAreaChange({ boardId, at: NOW, areaName: 'Learned: apps/billing/src/payments', kind: 'added', globId: 's1t2', cause: 'reverted' })),
     ).toBe(false);
+    // A person removes the learned area, and the evidence globs show in the view.
+    const shown = viewOf(await (await request('GET', `/api/boards/${String(boardId)}/risk-areas`, DEV)).json());
+    expect(shown.areas.find((a) => a.source === 'learned')).toMatchObject({ evidence: expect.arrayContaining(['s1t1', 's1t2']) as unknown });
+    const removeUrl = `/api/boards/${String(boardId)}/risk-areas/remove`;
+    expect((await request('POST', removeUrl, DEV, { name: 'Learned: apps/billing/src/payments' })).status).toBe(403);
+    expect((await request('POST', removeUrl, ADMIN, { name: 'Learned: apps/billing/src/payments' })).status).toBe(200);
+    expect((await store.transaction((tx) => tx.listRiskAreas(boardId))).some((a) => a.source === 'learned')).toBe(false);
     expect((await request('POST', `/api/boards/${String(boardId)}/risk-areas/reset`, DEV)).status).toBe(403);
     const reset = await request('POST', `/api/boards/${String(boardId)}/risk-areas/reset`);
     expect(reset.status).toBe(200);

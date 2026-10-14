@@ -912,7 +912,7 @@ describe('SubLimitService', () => {
     });
 
     it('leaves the limit alone for a small sub that needed fixes, and signals the risk areas instead', async () => {
-      const changes: ChangeSource = { mergedDiff: () => Promise.resolve({ changedLines: 10, files: ['apps/billing/src/charge.ts'] }) };
+      const changes: ChangeSource = { mergedDiff: () => Promise.resolve({ changedLines: 10, files: ['apps/billing/src/payments/charge.ts'] }) };
       const riskAreas = new RiskAreaService({ store, clock: { now: () => NOW }, changes });
       const learner = new SubLimitService({ store, notifier: new RecordingNotifier(), diffs: new FakeDiffs(null), riskAreas });
       addGlobs(sub('s1t1'));
@@ -921,9 +921,10 @@ describe('SubLimitService', () => {
       expect(result.changes).toEqual([{ globId: 's1t1', outcome: 'needed_fixes', from: 2000, to: 2000 }]);
       expect(await limit()).toBe(2000);
       const areas = await store.transaction((tx) => tx.listRiskAreas(boardId));
-      expect(areas.find((a) => a.source === 'learned')).toMatchObject({ name: 'Learned: apps/billing/src', pathPatterns: ['apps/billing/src/**'], strength: 1 });
+      // One glob's evidence is only a candidate: no learned area yet.
+      expect(areas.some((a) => a.source === 'learned')).toBe(false);
       const changesMade = await store.transaction((tx) => tx.listRiskAreaChanges(boardId));
-      expect(changesMade).toEqual([expect.objectContaining({ kind: 'added', cause: 'small_fix', globId: 's1t1' })]);
+      expect(changesMade).toEqual([expect.objectContaining({ kind: 'candidate', cause: 'small_fix', globId: 's1t1' })]);
     });
   });
 

@@ -1745,6 +1745,27 @@ export class GlobService {
     return this.command(email, id, null, (glob, ctx) => machine.escalateToSame(glob, input, ctx));
   }
 
+  /**
+   * Risk-area cleanup: de-escalates the globs in Planning that were escalated only for the dropped areas. Returns how many
+   * became subs again.
+   */
+  async liftRiskAreaEscalations(boardId: number, dropped: readonly string[]): Promise<number> {
+    const candidates = await this.deps.store.transaction((tx) => tx.listGlobs(boardId, {}));
+    let lifted = 0;
+    for (const glob of candidates) {
+      if (glob.type !== 'same' || glob.status !== 'planning' || glob.escalation?.criterion !== 'risk_area') continue;
+      const result = await this.command(
+        null,
+        glob.id,
+        null,
+        (g, ctx, _board, facts) => machine.liftRiskAreaEscalation(g, ctx, facts.relations, dropped),
+        { relations: true },
+      );
+      if (result.ok && result.value.type === 'sub') lifted++;
+    }
+    return lifted;
+  }
+
   /** A person makes an escalated glob a sub again. */
   async deescalate(email: string, id: string, version: number) {
     const refused = await this.refuseTypeChoice(email, id, 'sub');
