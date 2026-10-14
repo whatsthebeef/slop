@@ -705,11 +705,6 @@ export const GlobCard = ({
       <div className='leading-snug font-medium break-words' data-testid='card-title'>
         {glob.title}
       </div>
-      {glob.status === 'signed_off' && glob.signedOffAt != null && (
-        <div className='font-mono text-[11px] text-muted-foreground' data-testid='card-signed-off'>
-          Signed off {new Date(glob.signedOffAt).toLocaleDateString()}
-        </div>
-      )}
       <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
           <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
@@ -740,13 +735,6 @@ export const GlobCard = ({
                   testId='draft-chip'
                 >
                   PR still draft
-                </ChipButton>
-              </Tip>
-            )}
-            {glob.provisioning === 'failed' && (
-              <Tip text='slop could not create the branch and draft PR; it retries in the background'>
-                <ChipButton onOpen={() => onOpenSection(cardTargets.actions())} className='font-mono text-[11px] text-red' testId='provisioning-chip'>
-                  provisioning failed
                 </ChipButton>
               </Tip>
             )}
