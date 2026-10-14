@@ -38,3 +38,12 @@ Agent definitions hold short rules that always apply to that agent; bulky or sit
 ## First `sstor init` on an existing checkout
 
 The manifest only covers files sstor manages, so the first run also removes what the old agent system installed: `qa.md`, `unit_test_writer.md`, `.claude/agents/docs/`, `run-task.md` (in `commands/` and `skills/`), `.claude/memory/workflow_config.md`, `deploy.sh` copies under `.claude/`, the `atlassian-rovo` MCP entry and `mcp__atlassian*` permissions.
+
+## ATF scripts and the test plan
+
+A glob's test plan (`test_plan` artifact) lists the ATF specs to run once its merge is deployed. The catalog's scripts let a board's ATF stage run exactly those:
+
+- `scripts/atf-specs.sh` is sourced by the ATF stage (`buildspec-atf.yml` does it). It asks slop for the spec list of the deployed commit and exports `SLOP_ATF_SPECS` (newline-separated paths) and `SLOP_ATF_GREP`. It needs `SLOP_URL`, `SLOP_BOARD` and `SLOP_TOKEN` (a board integration token, kept as a build secret), and `SLOP_ATF_WAIT` (seconds, default 120) bounds the wait while slop is still checking the deploy. Every failure is a warning: the list stays empty and the default suite runs. It skips the fetch when `SLOP_ATF_SPECS` is already set (the push option).
+- The board's own `.sstor/atf.sh` should run only `SLOP_ATF_SPECS` (and `SLOP_ATF_GREP` as the runner's grep) when set, else its default suite.
+- `scripts/atf-report.sh` reports counts and per-spec results (`file`, status, counts) from the JUnit files, plus `missing` for a listed spec with no test case. It never fails the stage.
+- Push option: a board can instead let slop start its ATF CodeBuild project after the deploy (board setting `atf` with mode `push`). Slop needs `codebuild:StartBuild` on that project, and `sts:AssumeRole` with a trust relationship when a role ARN is set. Creating the project and role is a person's step.
