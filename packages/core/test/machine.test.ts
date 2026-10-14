@@ -865,6 +865,121 @@ describe('labels and review checklists (rows 21, 22, 27–30)', () => {
     expect(errorCode(m.reviewLabel(t.glob, 'QA', { kind: 'resubmit' }, ctx()))).toBe('invalid_transition');
   });
 
+  describe('draft items', () => {
+    const draftTexts = (t: m.Transition) => items(t).filter((i) => i.draft === true).map((i) => i.text);
+    const save = (g: Glob, text: string, itemId?: string) =>
+      value(m.reviewLabel(g, 'QA', { kind: 'save_draft_item', text, ...(itemId === undefined ? {} : { itemId }) }, ctx()));
+
+    it('saves, edits and removes drafts without changing the label or raising events', () => {
+      const a = save(reviewing, ' first ');
+      expect(a.glob.labels.QA).toBe('required');
+      expect(a.events).toEqual([]);
+      expect(a.effects).toEqual([]);
+      expect(a.changed).toBe(true);
+      expect(items(a)[0]).toMatchObject({ id: '1', text: 'first', done: false, draft: true, addedBy: dev.email });
+      const b = save(a.glob, 'second');
+      const edited = save(b.glob, 'first!', '1');
+      expect(draftTexts(edited)).toEqual(['first!', 'second']);
+      expect(save(edited.glob, 'first!', '1').changed).toBe(false);
+      const removed = value(m.reviewLabel(edited.glob, 'QA', { kind: 'remove_draft_item', itemId: '1' }, ctx()));
+      expect(draftTexts(removed)).toEqual(['second']);
+      expect(removed.events).toEqual([]);
+    });
+
+    it('draft ids stay unique after a removal', () => {
+      const a = save(reviewing, 'a').glob;
+      const b = save(a, 'b').glob;
+      const gap = value(m.reviewLabel(b, 'QA', { kind: 'remove_draft_item', itemId: '1' }, ctx())).glob;
+      const c = save(gap, 'c');
+      expect(items(c).map((i) => i.id)).toEqual(['2', '3']);
+    });
+
+    it('send_items promotes the drafts and moves the label to added', () => {
+      const drafts = save(save(reviewing, 'a').glob, 'b').glob;
+      const t = value(m.reviewLabel(drafts, 'QA', { kind: 'send_items' }, ctx()));
+      expect(t.glob.labels.QA).toBe('added');
+      expect(items(t)).toEqual([
+        { id: '1', text: 'a', done: false, addedBy: dev.email, addedAt: NOW, doneBy: null, doneAt: null },
+        { id: '2', text: 'b', done: false, addedBy: dev.email, addedAt: NOW, doneBy: null, doneAt: null },
+      ]);
+      expect(items(t).some((i) => 'draft' in i)).toBe(false);
+      expect(t.events[0]).toMatchObject({ type: 'LabelChanged', data: { from: 'required', to: 'added', items: ['a', 'b'] } });
+    });
+
+    it('send_items needs drafts and a required label', () => {
+      expect(errorCode(m.reviewLabel(reviewing, 'QA', { kind: 'send_items' }, ctx()))).toBe('invalid_input');
+      expect(errorCode(m.reviewLabel(reviewing, 'FR', { kind: 'send_items' }, ctx()))).toBe('invalid_transition');
+    });
+
+    it('submit_items also promotes existing drafts', () => {
+      const drafts = save(reviewing, 'draft').glob;
+      const t = value(m.reviewLabel(drafts, 'QA', { kind: 'submit_items', items: ['typed'] }, ctx()));
+      expect(items(t).map((i) => [i.id, i.text, 'draft' in i])).toEqual([
+        ['1', 'draft', false],
+        ['2', 'typed', false],
+      ]);
+      expect(t.events[0]?.data).toMatchObject({ items: ['draft', 'typed'] });
+      const only = value(m.reviewLabel(drafts, 'QA', { kind: 'submit_items', items: [] }, ctx()));
+      expect(only.glob.labels.QA).toBe('added');
+    });
+
+    it('drafts are ignored by open counts', () => {
+      const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
+      const back = value(m.reviewLabel(added, 'QA', { kind: 'resubmit' }, ctx())).glob;
+      const withDraft = save(back, 'draft').glob;
+      const approved = value(m.reviewLabel(withDraft, 'QA', { kind: 'approve' }, ctx()));
+      expect(approved.events[0]?.data).toMatchObject({ open: 1 });
+    });
+
+    it('approving discards unsent drafts', () => {
+      const t = value(m.reviewLabel(save(reviewing, 'unsent').glob, 'QA', { kind: 'approve' }, ctx()));
+      expect(t.glob.labels.QA).toBe('approved');
+      expect(items(t)).toEqual([]);
+      expect(t.events[0]?.data).toMatchObject({ open: 0 });
+    });
+
+    it('rejects empty and oversized text, too many items, wrong state, and unknown or sent ids', () => {
+      expect(errorCode(m.reviewLabel(reviewing, 'QA', { kind: 'save_draft_item', text: '  ' }, ctx()))).toBe('invalid_input');
+      expect(
+        errorCode(m.reviewLabel(reviewing, 'QA', { kind: 'save_draft_item', text: 'x'.repeat(m.MAX_CHECKLIST_ITEM_LENGTH + 1) }, ctx())),
+      ).toBe('invalid_input');
+      expect(errorCode(m.reviewLabel(reviewing, 'FR', { kind: 'save_draft_item', text: 'x' }, ctx()))).toBe('invalid_transition');
+      expect(errorCode(m.reviewLabel(reviewing, 'FR', { kind: 'remove_draft_item', itemId: '1' }, ctx()))).toBe('invalid_transition');
+      expect(errorCode(m.reviewLabel(reviewing, 'QA', { kind: 'remove_draft_item', itemId: '9' }, ctx()))).toBe('invalid_input');
+      expect(errorCode(m.reviewLabel(reviewing, 'QA', { kind: 'save_draft_item', text: 'x', itemId: '9' }, ctx()))).toBe('invalid_input');
+      const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
+      const resent = value(m.reviewLabel(added, 'QA', { kind: 'resubmit' }, ctx())).glob;
+      expect(errorCode(m.reviewLabel(resent, 'QA', { kind: 'remove_draft_item', itemId: '1' }, ctx()))).toBe('invalid_input');
+      expect(errorCode(m.reviewLabel(resent, 'QA', { kind: 'save_draft_item', text: 'x', itemId: '1' }, ctx()))).toBe('invalid_input');
+      expect(errorCode(m.reviewLabel(added, 'QA', { kind: 'save_draft_item', text: 'x' }, ctx()))).toBe('invalid_transition');
+      expect(errorCode(m.reviewLabel(added, 'QA', { kind: 'send_items' }, ctx()))).toBe('invalid_transition');
+      const stuffed = Array.from({ length: m.MAX_CHECKLIST_ITEMS }, (_, i) => ({
+        id: String(i + 1),
+        text: 'd',
+        done: false,
+        addedBy: 'x',
+        addedAt: NOW,
+        doneBy: null,
+        doneAt: null,
+        draft: true,
+      }));
+      const filled = { ...reviewing, checklists: { QA: stuffed } };
+      expect(errorCode(m.reviewLabel(filled, 'QA', { kind: 'save_draft_item', text: 'one more' }, ctx()))).toBe('invalid_input');
+    });
+
+    it.each(['sub', 'same', 'super'] as const)('sending items on a %s starts no run and raises no effect', (type) => {
+      const g = glob({ type, status: 'reviewing', labels: { QA: 'required' }, runs: [] });
+      const drafts = save(g, 'a').glob;
+      const t = value(m.reviewLabel(drafts, 'QA', { kind: 'send_items' }, ctx()));
+      expect(t.effects).toEqual([]);
+      expect(t.glob.runs).toEqual([]);
+      expect(t.glob.generation).toBe(g.generation);
+      const submitted = value(m.reviewLabel(g, 'QA', { kind: 'submit_items', items: ['b'] }, ctx()));
+      expect(submitted.effects).toEqual([]);
+      expect(submitted.glob.runs).toEqual([]);
+    });
+  });
+
   it('row 22: re-opening an approved label returns a signed-off glob to reviewing, keeping its items', () => {
     const added = value(m.reviewLabel(reviewing, 'QA', { kind: 'submit_items', items: ['a'] }, ctx())).glob;
     const signedOff = value(m.reviewLabel(added, 'QA', { kind: 'approve' }, ctx())).glob;
