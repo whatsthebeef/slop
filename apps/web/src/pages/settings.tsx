@@ -510,7 +510,7 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
         Oversized threshold: more than {current.maxTasks} tasks or {current.maxParts} independent parts, with at least {current.minParallel} buildable at the same time ({learned ? 'learned from outcomes' : 'the default'})
       </p>
       <p className='text-xs text-muted-foreground' data-testid='size-threshold-forecast'>
-        Judged from the code (the forecast), the part limit is {Math.max(current.maxParts, 3)} or more separate modules, and only when at least 2 of them can be built at the same time.
+        Judged from the code (the forecast), the part limit is {Math.max(current.maxParts, 3)} or more separate modules, and only when at least {current.minParallel} of them can be built at the same time.
       </p>
       <p className='text-xs text-muted-foreground' data-testid='size-threshold-defaults'>
         Default: {defaults.maxTasks} tasks, {defaults.maxParts} independent parts, fan-out from {defaults.minParallel} parallel. Learned: {current.maxTasks} tasks, {current.maxParts} independent parts, fan-out from {current.minParallel} parallel.
@@ -524,7 +524,7 @@ const SizeThreshold = ({ boardId, admin }: { boardId: number; admin: boolean }) 
         </div>
       )}
       <p className='text-xs text-muted-foreground'>
-        Intake flags a glob above it, and only when at least two of its parts could be built at the same time (a long serial plan stays whole), and
+        Intake flags a glob above it, and only when at least {current.minParallel} of its parts could be built at the same time (a long serial plan stays whole), and
         advises with its size workstreams and critical path. A flagged glob that merges cleanly without fanning out raises the threshold. A glob that fans out and merges cleanly lowers the fan-out floor (the parallel parts it takes to flag and fan out); one whose workstreams fail, are retried or conflict, or that otherwise struggles, raises it. An unflagged glob that struggles (the most review rounds, a failed run or a very long PR) lowers it.
         Tasks stay between {bounds.tasks.min} and {bounds.tasks.max}, parts between {bounds.parts.min} and {bounds.parts.max}, fan-out floor between {bounds.parallel.min} and {bounds.parallel.max}, in steps of {bounds.step}.
       </p>
