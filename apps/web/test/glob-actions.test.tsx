@@ -698,7 +698,8 @@ describe('glob view: the conflict section', () => {
       }),
     );
     const facts = within(section()).getByTestId('conflict-facts');
-    expect(facts.textContent).toContain('conflicts with main, since s1t9 merged');
+    expect(within(section()).getByTestId('block-head').textContent).toBe('Conflicts with main');
+    expect(facts.textContent).toBe('Since s1t9 merged, both sides changed 2 files.');
     expect(within(section()).getByTestId('conflict-files').textContent).toBe(`Files changed on both sides (2)${files.join('')}`);
   });
 
