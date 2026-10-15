@@ -75,6 +75,13 @@ describe('size forecast', () => {
         const step = script[Math.min(turns++, script.length - 1)];
         return Promise.resolve(JSON.stringify(step));
       }
+      if (request.system.startsWith('You divide')) {
+        // Two parallel workstreams, so a plan judged big is flagged (size alone never flags).
+        const tasks = [...request.prompt.matchAll(/^- \[ \] .*$/gm)].map((m) => m[0]);
+        const half = Math.ceil(tasks.length / 2);
+        const part = (name: string, list: string[]) => ({ name, goal: name, files: [], plan: `## Tasks\n${list.join('\n')}\n`, needs: [] });
+        return Promise.resolve(JSON.stringify({ workstreams: [part('First', tasks.slice(0, half)), part('Second', tasks.slice(half))] }));
+      }
       return Promise.resolve(request.system.startsWith('You judge') ? judged : 'no json');
     },
   };
