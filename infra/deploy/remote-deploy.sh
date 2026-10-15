@@ -3,7 +3,7 @@
 # The new image is pulled before anything running is touched. If it doesn't answer its health check, the
 # previous image is started again and the script fails, so CodeBuild goes red and the old release keeps serving.
 #
-# Environment: IMAGE (ECR URI with tag), PUBLIC_URL (the public address), optionally PUBLIC_URL_ALIASES (other addresses that reach it), AWS_REGION, STAGE, BACKUP_BUCKET.
+# Environment: IMAGE (ECR URI with tag), MIN_FREE_MB (free disk required before the pull, default 4096), PUBLIC_URL (the public address), optionally PUBLIC_URL_ALIASES (other addresses that reach it), AWS_REGION, STAGE, BACKUP_BUCKET.
 # Next to it, extracted from the same image by the SSM command: compose.yaml (compose.prod.yaml from the repo) and
 # backup.sh (the nightly dump, scheduled below).
 set -euo pipefail
@@ -110,6 +110,40 @@ wait_healthy() {
 
 ECR_HOST="${IMAGE%%/*}"
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_HOST"
+
+# Free MB on the filesystem holding Docker's images.
+free_mb() { df -Pm /var/lib/docker | awk 'NR==2{print $4}'; }
+
+# Keep the release now running ($IMAGE once deployed) and the one before it (for rollback); remove the other images
+# of this repository, then dangling images and build cache. Images used by a running container are never removed
+# (docker image rm is not forced). Best effort: a failure here is reported but never fails the deploy.
+prune_images() {
+  local repo="${IMAGE%:*}" before after running refs
+  before="$(free_mb || echo 0)"
+  running="$(docker ps --format '{{.Image}}' | sort -u | tr '\n' ' ')" || running=""
+  refs="$(docker images --format '{{.Repository}}:{{.Tag}}' "$repo" | grep -v ':<none>$' || true)"
+  # shellcheck disable=SC2086
+  printf '%s\n' "$refs" | images_to_remove "$@" $running | while IFS= read -r ref; do
+    docker image rm "$ref" >/dev/null 2>&1 || echo "Could not remove $ref"
+  done || true
+  docker image prune -f >/dev/null || true
+  docker builder prune -f >/dev/null || true
+  after="$(free_mb || echo 0)"
+  echo "Pruned old images: $(( after - before )) MB freed, $after MB free"
+}
+
+# Room for the new image: MIN_FREE_MB (default 4096, about twice a release image) free on /var/lib/docker. If short,
+# prune first; if still short, fail with a plain message instead of docker's bare "no space left on device".
+MIN_FREE_MB="${MIN_FREE_MB:-4096}"
+case "$MIN_FREE_MB" in '' | *[!0-9]*) echo "ERROR: MIN_FREE_MB must be a number of MB, got '$MIN_FREE_MB'" >&2; exit 1 ;; esac
+if ! has_enough_disk "$(free_mb)" 0 "$MIN_FREE_MB"; then
+  echo "Low disk: $(free_mb) MB free, need $MIN_FREE_MB MB; pruning old images before the pull"
+  prune_images "$PREVIOUS" || true
+  if ! has_enough_disk "$(free_mb)" 0 "$MIN_FREE_MB"; then
+    echo "ERROR: $(disk_full_message "$(free_mb)" "$MIN_FREE_MB")" >&2
+    exit 1
+  fi
+fi
 docker pull "$IMAGE"
 
 compose "$IMAGE" up -d --remove-orphans
@@ -117,7 +151,7 @@ if wait_healthy; then
   echo "$IMAGE" > current-image
   if [ -n "${COMMIT_TIME:-}" ]; then echo "$COMMIT_TIME" > current-commit-time; fi
   echo "Deployed $IMAGE"
-  docker image prune -f >/dev/null || true
+  prune_images "$IMAGE" "$PREVIOUS" || echo "WARNING: pruning old images failed; the deploy itself succeeded" >&2
   exit 0
 fi
 
