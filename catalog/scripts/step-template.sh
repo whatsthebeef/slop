@@ -233,7 +233,5 @@ main() {
 }
 
 # A test sources this file to call the helpers; the guard keeps the main flow from running then.
-if [[ "${STEP_TEMPLATE_SOURCE_ONLY:-}" == 1 ]]; then
-  return 0 2>/dev/null || exit 0
-fi
+[[ "${STEP_TEMPLATE_SOURCE_ONLY:-}" == 1 ]] && return 0
 main "$@"
