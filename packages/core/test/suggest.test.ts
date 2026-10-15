@@ -423,12 +423,44 @@ describe('suggest', () => {
       expect(viewed.suggestion?.suggestion.check).toEqual({ signalKey: measured.key, reason: 'Runs failing with "no progress" should drop.' });
     });
 
-    it('offers no signals to a learning that has its own', async () => {
-      const made = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
-      answer({ action: 'approve', reason: 'Sound.', checkSignal: 'finding:major', checkReason: 'r' });
-      expect(await suggest.run(made.id)).toBe('done');
-      expect(llm.requests[0]?.prompt).not.toContain('Signals the board measures');
-      expect(unwrap(await suggest.view(ADMIN, made.id)).suggestion?.suggestion.check).toBeUndefined();
+    it('offers no signals to a learning that has its own, or to a document proposal', async () => {
+      const measured: KbSignal = {
+        key: 'finding:major',
+        kind: 'finding',
+        agent: null,
+        label: 'major findings',
+        window: { from: START, to: START },
+        figures: { affected: 2, eligible: 8, rate: 0.25, count: 2 },
+        globIds: [],
+        examples: [],
+        measuredAt: START,
+      };
+      const withSignals = new SuggestService({
+        store,
+        clock,
+        notifier,
+        knowledge: new KnowledgeService({ store, clock, catalog, notifier, signals: { measure: () => Promise.resolve([measured]) } }),
+        llm,
+        model: 'test-model',
+      });
+      const mined = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
+      const seeded = await item(mined.id);
+      expect(await store.transaction((tx) => learningSeed(tx, { clock }).updateSeeded({ ...seeded, signal: measured }, seeded.version))).toBe(true);
+      const proposal = unwrap(
+        await knowledge.submitLearning(DEV, boardId, {
+          sourceGlobId: null,
+          type: 'pattern',
+          statement: 'How the code is laid out',
+          evidence: 'Whole document',
+          document: { name: 'architecture', area: 'architecture', audience: ['implementer'], description: 'How the code is laid out', content: '# Architecture\n' },
+        }),
+      );
+      for (const id of [mined.id, proposal.id]) {
+        answer({ action: 'approve', reason: 'Sound.', checkSignal: measured.key, checkReason: 'r' });
+        expect(await withSignals.run(id)).toBe('done');
+        expect(llm.requests.at(-1)?.prompt).not.toContain('Signals the board measures');
+        expect(unwrap(await withSignals.view(ADMIN, id)).suggestion?.suggestion.check).toBeUndefined();
+      }
     });
 
     it('does not store an answer that merges into an unknown learning: the attempt fails', async () => {

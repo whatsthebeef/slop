@@ -2,9 +2,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Action, DecisionAttributes, DecisionLearning, KbSignal, KbTarget } from '@slop/core';
+import type { Action, DecisionAttributes, DecisionLearning, EffectCheck, KbSignal, KbTarget } from '@slop/core';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EffectCheckView, SignalFigures } from '../src/components/decision-learning';
 import { GlobDetail } from '../src/components/glob-dialog';
 import { api } from '../src/lib/api';
 import type { BoardView, GlobDiff, GlobView } from '../src/lib/api';
@@ -577,5 +578,36 @@ describe('the watch signal step', () => {
     expect(await screen.findByTestId('outcome-form-accept')).toBeTruthy();
     expect(screen.queryByTestId('watch-signal')).toBeNull();
     expect(screen.queryByTestId('watch-own')).toBeNull();
+  });
+});
+
+describe('plain figures (s15t201)', () => {
+  it('reads a mined learning\'s signal as one plain line, with no slash figures', () => {
+    render(<SignalFigures signal={{ ...signal, key: 'failure:no progress', label: 'no progress for 2 hours', figures: { affected: 9, eligible: 45, rate: 0.2, count: 9 } }} />);
+    const line = screen.getByTestId('signal').textContent;
+    expect(line).toContain('no progress for 2 hours: 9 of 45 runs (20%) in the last 4 weeks');
+    expect(line).not.toMatch(/\d+\/\d+/);
+  });
+
+  it('reads an effect check\'s before and after figures as "a of b globs (x%)"', () => {
+    const figures = (affected: number, eligible: number, rate: number) => ({ affected, eligible, rate, globIds: [], affectedGlobIds: [] });
+    const check: EffectCheck = {
+      state: 'improved',
+      key: 'failure:no progress',
+      label: 'no progress for 2 hours',
+      basis: { kind: 'time', since: '2026-10-07T00:00:00Z' },
+      n: 10,
+      before: figures(3, 10, 0.3),
+      after: figures(1, 10, 0.1),
+      worse: [],
+      raisedItemId: null,
+      checkedAt: null,
+    };
+    render(
+      <MemoryRouter>
+        <EffectCheckView boardId={1} check={check} />
+      </MemoryRouter>,
+    );
+    expect(screen.getAllByTestId('effect-figure').map((c) => c.textContent)).toEqual(['3 of 10 globs (30%)', '1 of 10 globs (10%)']);
   });
 });
