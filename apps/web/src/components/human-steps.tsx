@@ -66,7 +66,6 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
   const predicted = step.predicted === true;
   const work = isWorkStep(step);
   const open = step.state === 'due' || step.state === 'pending';
-  const script = step.script ?? null;
   return (
     <li
       className={cn('grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 rounded border p-2 text-xs', mine && step.state === 'due' && 'border-foreground')}
@@ -99,7 +98,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         {step.check != null && step.check !== '' && <span data-testid='step-check'>checked by slop: {step.check}</span>}
       </div>
       {step.detail != null && step.detail !== '' && <StepDetail detail={step.detail} />}
-      {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
+      <StepFields glob={glob} step={step} source={source} showDetail={false} />
       {work && open && !dismissing && (
         <button type='button' className='justify-self-start text-[11px] underline' data-testid='step-dismiss' onClick={() => setDismissing(true)}>
           Dismiss
@@ -110,37 +109,175 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
   );
 };
 
-/** A step's script: the command to run (or the link to its artifact), a copy button and a link to the file. */
-const ScriptRow = ({ glob, script, source }: { glob: GlobView; script: HumanStepScript; source: ScriptSource }) => {
+/** One command in a monospace box with a copy button; `extra` sits beside the button (a link to the script's file). */
+const CommandBox = ({
+  command,
+  extra,
+  testId = 'step-command',
+  copyId = 'step-command-copy',
+  copyText,
+}: {
+  command: string;
+  extra?: ReactNode;
+  testId?: string;
+  copyId?: string;
+  copyText?: () => Promise<string>;
+}) => {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    const text = await scriptCopyText(glob.boardId, glob.id, script, api.rolloutScript, window.location.origin);
-    setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
+    const text = copyText === undefined ? command : await copyText();
+    setCopied(
+      await copyOrSelect(
+        text,
+        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
+        () => undefined,
+      ),
+    );
   };
-  const sourceUrl = 'path' in script ? scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch)) : null;
   return (
-    <div className='flex flex-wrap items-center gap-2 text-[11px]'>
-      {'path' in script ? (
-        <>
-          <span className='text-muted-foreground'>Run:</span>
-          <code className='break-all font-mono' data-testid='step-script-path'>
-            {scriptRunCommand(script.path)}
-          </code>
-        </>
-      ) : (
-        <Link className='min-w-0 break-words underline [overflow-wrap:anywhere]' to={scriptArtifactPath(glob.boardId, glob.id, script)} data-testid='step-script-link'>
-          Rollout script: {script.artifact}
-        </Link>
-      )}
-      <Button size='sm' variant='outline' data-testid='step-copy' onClick={() => void copy()}>
+    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded border bg-muted p-1.5 text-[11px]">
+      <code className="min-w-0 grow break-all font-mono" data-testid={testId}>
+        {command}
+      </code>
+      <Button size="sm" variant="outline" data-testid={copyId} onClick={() => void copy()}>
         {copied ? 'Copied' : 'Copy'}
       </Button>
-      {sourceUrl !== null && (
-        <a className='underline' href={sourceUrl} target='_blank' rel='noreferrer' data-testid='step-script-source'>
-          View script
-        </a>
-      )}
+      {extra}
     </div>
+  );
+};
+
+/** A step's script: the command to run (or the link to its artifact), a copy button and a link to the file. */
+const ScriptRow = ({
+  glob,
+  script,
+  source,
+}: {
+  glob: GlobView;
+  script: HumanStepScript;
+  source: ScriptSource;
+}) => {
+  if ('path' in script) {
+    const sourceUrl = scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch));
+    return (
+      <CommandBox
+        command={scriptRunCommand(script.path)}
+        testId="step-script-path"
+        copyId="step-copy"
+        extra={
+          sourceUrl === null ? undefined : (
+            <a
+              className="underline"
+              href={sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="step-script-source"
+            >
+              View script
+            </a>
+          )
+        }
+      />
+    );
+  }
+  const copyText = () =>
+    scriptCopyText(glob.boardId, glob.id, script, api.rolloutScript, window.location.origin);
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+      <Link
+        className="min-w-0 break-words underline [overflow-wrap:anywhere]"
+        to={scriptArtifactPath(glob.boardId, glob.id, script)}
+        data-testid="step-script-link"
+      >
+        Rollout script: {script.artifact}
+      </Link>
+      <CopyButton copyText={copyText} />
+    </div>
+  );
+};
+
+const CopyButton = ({ copyText }: { copyText: () => Promise<string> }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      data-testid="step-copy"
+      onClick={() =>
+        void copyText()
+          .then((text) =>
+            copyOrSelect(
+              text,
+              typeof navigator === 'undefined' ? undefined : navigator.clipboard,
+              () => undefined,
+            ),
+          )
+          .then(setCopied)
+      }
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
+  );
+};
+
+/** A labelled line of plain text: the label quiet, the text as written. */
+const Field = ({ label, text, testId }: { label: string; text: string; testId: string }) => (
+  <p
+    className="min-w-0 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]"
+    data-testid={testId}
+  >
+    <span className="text-muted-foreground">{label}: </span>
+    {text}
+  </p>
+);
+
+/**
+ * What a step says, laid out from its fields, plain text, empty fields left out: Why; Before you start (the permissions);
+ * Run (the script's run command once, then each command, every one in its own copyable box); Check it worked. The step's
+ * free `detail` (anything the fields don't cover) shows as plain text after Why when `showDetail`.
+ */
+const StepFields = ({
+  glob,
+  step,
+  source,
+  showDetail,
+}: {
+  glob: GlobView;
+  step: ListedHumanStep;
+  source: ScriptSource;
+  showDetail: boolean;
+}) => {
+  const script = step.script ?? null;
+  const commands = step.commands ?? [];
+  const detail = step.detail?.trim() ?? '';
+  const why = step.why?.trim() ?? '';
+  const permissions = step.permissions?.trim() ?? '';
+  const verify = step.verify?.trim() ?? '';
+  return (
+    <>
+      {why !== '' && <Field label="Why" text={why} testId="step-why" />}
+      {showDetail && detail !== '' && (
+        <p
+          className="min-w-0 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]"
+          data-testid="step-detail"
+        >
+          {detail}
+        </p>
+      )}
+      {permissions !== '' && (
+        <Field label="Before you start" text={permissions} testId="step-permissions" />
+      )}
+      {(script !== null || commands.length > 0) && (
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1" data-testid="step-run">
+          <span className="text-[11px] text-muted-foreground">Run</span>
+          {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
+          {commands.map((command, i) => (
+            <CommandBox key={`${String(i)}:${command}`} command={command} />
+          ))}
+        </div>
+      )}
+      {verify !== '' && <Field label="Check it worked" text={verify} testId="step-verify" />}
+    </>
   );
 };
 
@@ -179,9 +316,7 @@ const DismissForm = ({ busy, onDismiss, onClose }: { busy: boolean; onDismiss: (
  */
 const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
   const [dismissing, setDismissing] = useState(false);
-  const script = step.script ?? null;
   const waits = step.check != null && step.check !== '';
-  const detail = step.detail?.trim() ?? '';
   return (
     <li className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border bg-background p-3 text-sm' data-testid='due-step' data-kind={step.kind}>
       <div className='flex flex-wrap items-center gap-2'>
@@ -195,12 +330,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
       <span className='text-xs text-muted-foreground' data-testid='step-who'>
         for {whoText(step.who)}
       </span>
-      {detail !== '' && (
-        <p className='min-w-0 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]' data-testid='step-detail'>
-          {detail}
-        </p>
-      )}
-      {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
+      <StepFields glob={glob} step={step} source={source} showDetail />
       {waits && (
         <span className='text-[11px] text-muted-foreground' data-testid='step-check'>
           waits for {step.check} to turn on; slop ticks this itself
