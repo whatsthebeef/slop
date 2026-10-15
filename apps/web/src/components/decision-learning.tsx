@@ -1,13 +1,13 @@
-import { basisText, llmWaitingReason, MAX_PROCESSING_ATTEMPTS, STALE_AFTER_DAYS, STALE_BELOW_THRESHOLD_RUNS, STALE_KEEP_DAYS } from '@slop/core';
-import type { DecisionAttributes, DecisionDocument, DecisionLearning, EffectCheck, EffectFigures, KbSignal, KbStaleReason } from '@slop/core';
+import { basisText, figuresText, llmWaitingReason, MAX_PROCESSING_ATTEMPTS, plainSignal, relevantSignals, STALE_AFTER_DAYS, STALE_BELOW_THRESHOLD_RUNS, STALE_KEEP_DAYS } from '@slop/core';
+import type { DecisionAttributes, DecisionDocument, DecisionLearning, EffectCheck, EffectFigures, KbSignal, KbStaleReason, SuggestedCheck } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
-import { Label, Select, Textarea } from '@/components/ui/input';
+import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { GlobView } from '@/lib/api';
 import { watchMode } from '@/lib/decide-flow';
@@ -16,8 +16,6 @@ import { globDiffKey, globKey, globsKey } from '@/lib/live';
 import { useToast } from '@/toast';
 
 const when = (iso: string | null) => (iso === null ? '—' : new Date(iso).toLocaleString());
-
-const percent = (rate: number) => `${Math.round(rate * 100)}%`;
 
 const message = (error: unknown) => (error instanceof RequestError ? error.body.message : 'Something went wrong');
 
@@ -110,39 +108,18 @@ export const ProcessingState = ({ glob, learning, routed, admin }: { glob: GlobV
   );
 };
 
-/** A mined learning's signal: the figures behind it, as last measured (refreshed weekly while open). */
-export const SignalFigures = ({ signal }: { signal: KbSignal }) => {
-  const occurrences = signal.figures.count !== signal.figures.affected;
-  return (
-    <table className='w-fit text-xs' data-testid='signal'>
-      <thead className='text-muted-foreground'>
-        <tr>
-          <th className='pr-4 text-left font-normal'>Signal</th>
-          <th className='pr-4 text-right font-normal'>Affected</th>
-          <th className='pr-4 text-right font-normal'>Of</th>
-          <th className='pr-4 text-right font-normal'>Rate</th>
-          {occurrences && <th className='pr-4 text-right font-normal'>Occurrences</th>}
-          <th className='text-left font-normal'>Window</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td className='pr-4'>
-            {signal.label}
-            {signal.agent !== null && <span className='text-muted-foreground'> ({signal.agent})</span>}
-          </td>
-          <td className='pr-4 text-right tabular-nums'>{signal.figures.affected}</td>
-          <td className='pr-4 text-right tabular-nums'>{signal.figures.eligible}</td>
-          <td className='pr-4 text-right tabular-nums'>{percent(signal.figures.rate)}</td>
-          {occurrences && <td className='pr-4 text-right tabular-nums'>{signal.figures.count}</td>}
-          <td className='text-muted-foreground'>
-            {signal.window.from.slice(0, 10)} – {signal.window.to.slice(0, 10)}
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  );
-};
+/** A mined learning's signal: the figures behind it in plain words, as last measured (refreshed weekly while open). */
+export const SignalFigures = ({ signal }: { signal: KbSignal }) => (
+  <p className='text-xs' data-testid='signal'>
+    {plainSignal(signal)}
+    {signal.agent !== null && <span className='text-muted-foreground'> ({signal.agent})</span>}
+    {signal.figures.count !== signal.figures.affected && <span className='text-muted-foreground'>, {signal.figures.count} occurrences</span>}
+    <span className='text-muted-foreground'>
+      {' '}
+      · {signal.window.from.slice(0, 10)} – {signal.window.to.slice(0, 10)}
+    </span>
+  </p>
+);
 
 export const EFFECT_VERDICTS: Record<Exclude<EffectCheck['state'], 'watching'>, string> = {
   improved: 'improved',
@@ -159,9 +136,9 @@ export const sinceText = (check: EffectCheck): string =>
 const EffectRow = ({ boardId, name, figures }: { boardId: number; name: string; figures: EffectFigures }) => (
   <tr>
     <td className='pr-4'>{name}</td>
-    <td className='pr-4 text-right tabular-nums'>{figures.affected}</td>
-    <td className='pr-4 text-right tabular-nums'>{figures.eligible}</td>
-    <td className='pr-4 text-right tabular-nums'>{percent(figures.rate)}</td>
+    <td className='pr-4' data-testid='effect-figure'>
+      {figuresText('', figures)}
+    </td>
     <td className='text-muted-foreground'>{figures.affectedGlobIds.length === 0 ? '—' : <GlobLinks boardId={boardId} ids={figures.affectedGlobIds} />}</td>
   </tr>
 );
@@ -191,10 +168,8 @@ export const EffectCheckView = ({ boardId, check }: { boardId: number; check: Ef
           <thead className='text-muted-foreground'>
             <tr>
               <th className='pr-4 text-left font-normal'></th>
-              <th className='pr-4 text-right font-normal'>Affected</th>
-              <th className='pr-4 text-right font-normal'>Of</th>
-              <th className='pr-4 text-right font-normal'>Rate</th>
-              <th className='text-left font-normal'>Affected globs</th>
+              <th className='pr-4 text-left font-normal'>Globs affected</th>
+              <th className='text-left font-normal'>Which</th>
             </tr>
           </thead>
           <tbody>
@@ -254,12 +229,40 @@ export const StaleNote = ({ glob, attributes, admin }: { glob: GlobView; attribu
 /** What the watch step says it does, in one line. */
 const WATCH_EXPLAIN = 'If the signal gets worse after approval, slop flags it.';
 
+/** The value of the selector's "Other…" entry: it opens the whole list instead of choosing a signal. */
+const OTHER = '__other';
+
 /**
- * The optional "did it work" step of an approval: a choice among the board's signals as measured now (default: don't watch),
- * or for an item with a signal of its own the one line naming it, with no choice to make.
+ * The optional "Check it worked" step of an approval: the signal slop recommends (pre-selected, with its reason), at
+ * most two other signals that relate to the learning, "Other…" for the board's whole list (searchable) and "Don't check".
+ * An item with a signal of its own shows the one line naming it, with no choice to make.
  */
-export const WatchSignal = ({ boardId, value, onChange, own }: { boardId: number; value: string; onChange: (key: string) => void; own?: KbSignal | undefined }) => {
+export const WatchSignal = ({
+  boardId,
+  value,
+  onChange,
+  own,
+  recommended,
+  learningText = '',
+}: {
+  boardId: number;
+  value: string;
+  onChange: (key: string) => void;
+  own?: KbSignal | undefined;
+  recommended?: SuggestedCheck | null | undefined;
+  /** What the learning says (its statement and target), to rank the signals shown by. */
+  learningText?: string;
+}) => {
   const signals = useQuery({ queryKey: ['kb-signals', boardId], queryFn: () => api.boardSignals(boardId), enabled: own === undefined });
+  const [all, setAll] = useState(false);
+  const [search, setSearch] = useState('');
+  const [touched, setTouched] = useState(false);
+  const known = signals.data ?? [];
+  const recommendedKey = recommended !== null && recommended !== undefined && known.some((s) => s.key === recommended.signalKey) ? recommended.signalKey : null;
+  // The recommendation pre-selects its check until the person chooses.
+  useEffect(() => {
+    if (!touched && recommendedKey !== null && value === '') onChange(recommendedKey);
+  }, [touched, recommendedKey, value, onChange]);
   if (own !== undefined) {
     return (
       <p className='text-xs text-muted-foreground' data-testid='watch-own'>
@@ -267,17 +270,62 @@ export const WatchSignal = ({ boardId, value, onChange, own }: { boardId: number
       </p>
     );
   }
+  const choose = (key: string) => {
+    setTouched(true);
+    onChange(key);
+  };
+  const shown = relevantSignals(known, learningText, recommendedKey);
+  const chosen = known.find((s) => s.key === value);
+  const options = chosen !== undefined && !shown.includes(chosen) ? [...shown, chosen] : shown;
+  const needle = search.trim().toLowerCase();
+  const matching = known.filter((s) => needle === '' || s.label.toLowerCase().includes(needle) || s.key.toLowerCase().includes(needle));
   return (
     <Label className='text-xs'>
-      Check it worked (optional): watch
-      <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={signals.data === undefined} data-testid='watch-signal'>
-        <option value=''>Don't watch</option>
-        {(signals.data ?? []).map((s) => (
+      Check it worked (optional)
+      <Select
+        value={value}
+        onChange={(e) => {
+          if (e.target.value === OTHER) setAll(true);
+          else choose(e.target.value);
+        }}
+        disabled={signals.data === undefined}
+        data-testid='watch-signal'
+      >
+        {options.map((s) => (
           <option key={s.key} value={s.key}>
-            {s.label} ({s.figures.affected}/{s.figures.eligible}, {percent(s.figures.rate)})
+            {plainSignal(s)}
+            {s.key === recommendedKey ? ' (recommended)' : ''}
           </option>
         ))}
+        <option value={OTHER}>Other…</option>
+        <option value=''>Don't check</option>
       </Select>
+      {recommended !== null && recommended !== undefined && recommendedKey !== null && (
+        <span className='font-normal text-muted-foreground' data-testid='watch-reason'>
+          {recommended.reason}
+        </span>
+      )}
+      {all && (
+        <span className='grid gap-1 font-normal' data-testid='watch-all'>
+          <Input value={search} placeholder='Search signals' onChange={(e) => setSearch(e.target.value)} data-testid='watch-search' />
+          <Select
+            size={Math.min(6, Math.max(2, matching.length))}
+            value={value}
+            onChange={(e) => {
+              choose(e.target.value);
+              setAll(false);
+              setSearch('');
+            }}
+            data-testid='watch-list'
+          >
+            {matching.map((s) => (
+              <option key={s.key} value={s.key}>
+                {plainSignal(s)}
+              </option>
+            ))}
+          </Select>
+        </span>
+      )}
       <span className='font-normal text-muted-foreground'>{WATCH_EXPLAIN}</span>
     </Label>
   );
@@ -331,7 +379,7 @@ export const KeepAsLearning = ({
         Statement
         <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
       </Label>
-      {mode !== null && <WatchSignal boardId={glob.boardId} value={watch} onChange={setWatch} own={attributes.signal} />}
+      {mode !== null && <WatchSignal boardId={glob.boardId} value={watch} onChange={setWatch} own={attributes.signal} learningText={statement} />}
       <div className='flex justify-end gap-2'>
         <Button type='button' size='sm' variant='ghost' onClick={onClose}>
           Cancel

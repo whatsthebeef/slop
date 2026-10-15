@@ -1116,6 +1116,50 @@ export const signalDefinition = (key: string): SignalDefinition | null => {
   return SIGNALS.find((s) => s.kind === kind) ?? null;
 };
 
+/** Kinds whose figures count runs rather than globs. */
+const RUN_KINDS: readonly SignalKind[] = ['failure', 'run_superseded'];
+
+/** What a signal's figures count, in a word: "runs" for the run signals, else "globs". */
+export const signalUnit = (key: string): 'runs' | 'globs' => {
+  const kind = signalKindOf(key);
+  return kind !== null && RUN_KINDS.includes(kind) ? 'runs' : 'globs';
+};
+
+/** Figures in plain words: "9 of 45 runs (20%)". */
+export const figuresText = (key: string, figures: Pick<SignalFigures, 'affected' | 'eligible' | 'rate'>): string =>
+  `${String(figures.affected)} of ${String(figures.eligible)} ${signalUnit(key)} (${String(Math.round(figures.rate * 100))}%)`;
+
+/** A signal as a person reads it: "<label>: 9 of 45 runs (20%) in the last 4 weeks". */
+export const plainSignal = (signal: Pick<KbSignal, 'key' | 'label' | 'figures'>): string =>
+  `${signal.label}: ${figuresText(signal.key, signal.figures)} ${WINDOW_WORDS}`;
+
+/** How many signals the check selector shows before "Other…": the recommended one and the best matches. */
+export const SIGNALS_SHOWN = 3;
+
+const SIGNAL_WORD = /[a-z0-9_]{4,}/g;
+const signalWords = (text: string): Set<string> => new Set(text.toLowerCase().match(SIGNAL_WORD) ?? []);
+
+/**
+ * The signals a learning's "Check it worked" offers first: the recommended one (when it is among them), then the
+ * others ranked by how many words their label and key share with the learning's text (target, statement, evidence),
+ * best first and never one that shares none, up to `SIGNALS_SHOWN` in all.
+ */
+export const relevantSignals = <T extends Pick<KbSignal, 'key' | 'label'>>(signals: readonly T[], learningText: string, recommended: string | null): T[] => {
+  const wanted = signalWords(learningText);
+  const first = recommended === null ? undefined : signals.find((s) => s.key === recommended);
+  const ranked = signals
+    .filter((s) => s !== first)
+    .map((s) => {
+      let score = 0;
+      for (const w of signalWords(`${s.label} ${s.key}`)) if (wanted.has(w)) score++;
+      return { s, score };
+    })
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score || a.s.key.localeCompare(b.s.key))
+    .map((r) => r.s);
+  return [...(first === undefined ? [] : [first]), ...ranked].slice(0, SIGNALS_SHOWN);
+};
+
 /** Every signal's measurements for the activity's window. */
 export const measureSignals = (activity: BoardActivity): Measurement[] => SIGNALS.flatMap((s) => s.measure(activity));
 

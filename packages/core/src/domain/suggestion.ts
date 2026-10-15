@@ -25,7 +25,7 @@ export const SUGGESTION_LABEL = 'suggestion';
 export const RULES_MODEL = 'rules';
 
 /** Bumped when the prompt or the output contract changes, so older suggestions read as stale. */
-export const SUGGEST_PROMPT_VERSION = 1;
+export const SUGGEST_PROMPT_VERSION = 2;
 
 export const SUGGEST_SIBLINGS_MAX = 8;
 export const SUGGEST_MERGES_MAX = 8;
@@ -48,6 +48,12 @@ export interface SuggestionStamp {
   readonly promptVersion: number;
 }
 
+/** The "Check it worked" signal a recommendation proposes watching, with why it should improve if the learning works. */
+export interface SuggestedCheck {
+  readonly signalKey: string;
+  readonly reason: string;
+}
+
 export interface Suggestion {
   readonly action: SuggestAction;
   /** approve_with_edit: the full section text (or a new document's body). */
@@ -57,6 +63,8 @@ export interface Suggestion {
   /** merge_into: the combined section text for that learning. */
   readonly mergedText: string | null;
   readonly reason: string;
+  /** The signal to watch after approval; absent when none fits (or none was asked for). */
+  readonly check?: SuggestedCheck;
 }
 
 export interface StoredSuggestion {
@@ -82,6 +90,12 @@ export interface SuggestSibling {
 export interface SuggestMerge {
   readonly id: string;
   readonly title: string;
+}
+
+/** A signal the board measures, in plain words, that the recommendation may pick as the check. */
+export interface SuggestSignal {
+  readonly key: string;
+  readonly text: string;
 }
 
 export interface SuggestOutcome {
@@ -110,6 +124,8 @@ export interface SuggestInputs {
   readonly merges: readonly SuggestMerge[];
   readonly outcomes: readonly SuggestOutcome[];
   readonly flags: SuggestFlags;
+  /** The signals an approval may watch; empty when the learning has a signal of its own or none is measured. */
+  readonly signals: readonly SuggestSignal[];
 }
 
 const sameTarget = (a: KbTarget | null, b: KbTarget | null): boolean => a !== null && b !== null && a.kind === b.kind && a.name === b.name;
@@ -187,7 +203,8 @@ Rules:
 - Ground the reason in the input: cite glob IDs (from merges), learning IDs (siblings, outcomes) and the section by name. Do not invent IDs, files or facts that are not in the input.
 - "reason" is 2 to 3 sentences.
 - Prefer approve when the draft is sound; do not edit for style alone.
-- Answer with one JSON object and nothing else: {"action": "...", "reason": "...", "editedDraft": null, "mergeInto": null, "mergedText": null}. Fill only the fields the action needs.`;
+- When the input lists signals the board measures, also name the one signal most likely to improve if the learning works, as "checkSignal" (its key, exactly as listed) with a one-line "checkReason" in plain words, e.g. "Runs failing with 'no progress for 2 hours' should drop." Pick none (both null) when no listed signal clearly relates to the learning; never pick one only because it is listed. Both are null when the action is "reject" or when no signals are listed.
+- Answer with one JSON object and nothing else: {"action": "...", "reason": "...", "editedDraft": null, "mergeInto": null, "mergedText": null, "checkSignal": null, "checkReason": null}. Fill only the fields the action needs.`;
 
 /** The user prompt: the inputs as labelled sections the model can cite. */
 export const suggestPrompt = (inputs: SuggestInputs): string => {
@@ -220,6 +237,7 @@ export const suggestPrompt = (inputs: SuggestInputs): string => {
   out.push(...(inputs.merges.length === 0 ? ['None.'] : inputs.merges.map((m) => `- ${m.id}: ${m.title}`)));
   out.push('', '## Recent outcomes on this file');
   out.push(...(inputs.outcomes.length === 0 ? ['None.'] : inputs.outcomes.map((o) => `- ${o.id} ${o.status}: ${o.statement}${o.reason === null ? '' : ` (reason: ${o.reason})`}`)));
+  if (inputs.signals.length > 0) out.push('', '## Signals the board measures (key: reading)', ...inputs.signals.map((g) => `- ${g.key}: ${g.text}`));
   out.push('', '## Automatic flags', `Rule-based outcome: ${inputs.flags.suggestedOutcome ?? 'none'}`, ...(inputs.flags.flags.length === 0 ? ['No flags.'] : inputs.flags.flags.map((f) => `- ${f}`)));
   return out.join('\n');
 };
@@ -231,7 +249,10 @@ const str = (value: unknown): string | null => (typeof value === 'string' && val
  * `siblingIds` are the open learnings it may merge into; `learning` says whether the decision has a knowledge item
  * (without one only approve and reject exist).
  */
-export const checkSuggestion = (raw: unknown, context: { readonly siblingIds: readonly string[]; readonly learning: boolean }): Result<Suggestion> => {
+export const checkSuggestion = (
+  raw: unknown,
+  context: { readonly siblingIds: readonly string[]; readonly learning: boolean; readonly signalKeys?: readonly string[] },
+): Result<Suggestion> => {
   if (typeof raw !== 'object' || raw === null) return invalidInput('The suggestion is not a JSON object');
   const get = (key: string): unknown => Object.getOwnPropertyDescriptor(raw, key)?.value;
   const action = SUGGEST_ACTIONS.find((a) => a === get('action'));
@@ -248,12 +269,17 @@ export const checkSuggestion = (raw: unknown, context: { readonly siblingIds: re
     if (mergedText === null) return invalidInput('merge_into needs mergedText');
   }
   if ((editedDraft ?? '').length > SUGGEST_OUTPUT_TEXT_MAX || (mergedText ?? '').length > SUGGEST_OUTPUT_TEXT_MAX) return invalidInput('The suggested text is too long');
+  // A check the model got wrong (an unknown key, no reason) costs the check only, never the recommendation.
+  const checkSignal = str(get('checkSignal'));
+  const checkReason = str(get('checkReason'));
+  const check = action !== 'reject' && checkSignal !== null && checkReason !== null && (context.signalKeys ?? []).includes(checkSignal);
   return ok({
     action,
     reason: cut(reason.trim(), SUGGEST_REASON_MAX * 2),
     editedDraft: action === 'approve_with_edit' ? editedDraft : null,
     mergeInto: action === 'merge_into' ? mergeInto : null,
     mergedText: action === 'merge_into' ? mergedText : null,
+    ...(check ? { check: { signalKey: checkSignal, reason: cut(checkReason.trim(), SUGGEST_REASON_MAX) } } : {}),
   });
 };
 
@@ -306,6 +332,7 @@ export const renderSuggestion = (stored: StoredSuggestion): string => {
   const s = stored.suggestion;
   const lines = ['## Suggestion', '', `**${ACTION_TEXT[s.action]}.** ${s.reason}`];
   if (s.mergeInto !== null) lines.push('', `Merge into ${s.mergeInto}.`);
+  if (s.check !== undefined) lines.push('', `Check it worked: ${s.check.signalKey}. ${s.check.reason}`);
   const text = s.editedDraft ?? s.mergedText;
   if (text !== null) lines.push('', s.action === 'merge_into' ? 'Combined text:' : 'Edited text:', '', ...text.split('\n').map((l) => `> ${l}`));
   lines.push('', `_Made by ${stored.model} at ${stored.at}._`, '', FENCE, JSON.stringify(stored), '```', '');
@@ -334,7 +361,9 @@ const isSuggestion = (value: unknown): value is Suggestion =>
   'mergeInto' in value &&
   (value.mergeInto === null || typeof value.mergeInto === 'string') &&
   'mergedText' in value &&
-  (value.mergedText === null || typeof value.mergedText === 'string');
+  (value.mergedText === null || typeof value.mergedText === 'string') &&
+  (!('check' in value) ||
+    (typeof value.check === 'object' && value.check !== null && 'signalKey' in value.check && typeof value.check.signalKey === 'string' && 'reason' in value.check && typeof value.check.reason === 'string'));
 
 /** The structured suggestion stored in an artifact's content; null when there is none or it doesn't read. */
 export const readSuggestion = (content: string): StoredSuggestion | null => {
