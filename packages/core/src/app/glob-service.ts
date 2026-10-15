@@ -34,6 +34,8 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
+import { readMergePolicy } from './knowledge-service.js';
+import { subGateCheckOf } from '../domain/merge-policy.js';
 import { fileKeysOf } from './attachment-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { AttachConflict, linkInboxItem } from './inbox-service.js';
@@ -407,6 +409,11 @@ export class GlobService {
     });
   }
 
+  /** The check a sub on the board waits for (its merge policy's `subGateCheck`, `checks` by default), for the card's stuck hint. */
+  async gateCheckOf(boardId: number): Promise<string> {
+    return subGateCheckOf(await this.deps.store.transaction((tx) => readMergePolicy(tx, boardId)));
+  }
+
   /** The viewer's dismissed message keys on each of the board's globs, for the board list. */
   async dismissedKeysOf(email: string, boardId: number): Promise<Map<string, string[]>> {
     const rows = await this.deps.store.transaction((tx) => tx.listStatusDismissals(email, boardId));
@@ -694,7 +701,9 @@ export class GlobService {
       let scripts = false;
       for (const step of parsed) {
         let script: HumanStepScript | null = null;
-        if (step.script !== null && step.script.trim() !== '') {
+        if (step.scriptPath !== null) {
+          script = { path: step.scriptPath };
+        } else if (step.script !== null && step.script.trim() !== '') {
           const label = rolloutScriptLabel(step.title);
           script = { artifact: label };
           const latest = (await tx.artifactVersions(id, ROLLOUT_SCRIPT_KIND, label)).at(-1);
@@ -825,7 +834,9 @@ export class GlobService {
       } else {
         for (const written of answer.steps) {
           let script: HumanStepScript | null = null;
-          if (written.script !== null && written.script.trim() !== '') {
+          if (written.scriptPath !== null) {
+            script = { path: written.scriptPath };
+          } else if (written.script !== null && written.script.trim() !== '') {
             const label = rolloutScriptLabel(written.title);
             script = { artifact: label };
             await addArtifact(tx, this.deps.clock, glob, 'slop', { kind: ROLLOUT_SCRIPT_KIND, label, content: written.script, link: null, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });

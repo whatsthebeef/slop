@@ -63,9 +63,9 @@ describe('parseRollout', () => {
 `),
     );
     expect(steps).toEqual([
-      { kind: 'script', title: 'Deploy the host stack', detail: 'Run it from a laptop with the deploy role.', check: 'fileAttachments', script: 'infra/deploy/host-deploy.sh' },
-      { kind: 'setting', title: 'Add ATTACHMENTS_BUCKET to /slop/prod/server-env', detail: null, check: 'attachmentEvents', script: null },
-      { kind: 'manual', title: 'Turn on the network setting in the Claude app', detail: null, check: null, script: null },
+      { kind: 'script', title: 'Deploy the host stack', detail: 'Run it from a laptop with the deploy role.', check: 'fileAttachments', script: 'infra/deploy/host-deploy.sh', scriptPath: null },
+      { kind: 'setting', title: 'Add ATTACHMENTS_BUCKET to /slop/prod/server-env', detail: null, check: 'attachmentEvents', script: null, scriptPath: null },
+      { kind: 'manual', title: 'Turn on the network setting in the Claude app', detail: null, check: null, script: null, scriptPath: null },
     ]);
   });
 
@@ -118,6 +118,34 @@ ${FENCE}
     expect(word?.detail).toBe(words);
   });
 
+  it("points a step at a repo script with a `script: path` line, which isn't shown as detail and wins over a fenced body", () => {
+    const [step, bold] = parseRollout(
+      record(`## Rollout
+- script: Protect the main branch
+  - **Why:** slop needs the ruleset.
+  - script: \`scripts/rollout/s15t170-ruleset.sh\`
+  - **Do this:** run:
+    ${FENCE}bash
+    bash scripts/rollout/s15t170-ruleset.sh
+    ${FENCE}
+- script: Second
+  - **Script:** catalog/scripts/setup-repo.sh
+`),
+    );
+    expect(step?.scriptPath).toBe('scripts/rollout/s15t170-ruleset.sh');
+    expect(step?.script).toBeNull();
+    expect(step?.detail).not.toContain('s15t170-ruleset.sh`');
+    expect(step?.detail).toContain('**Do this:** run:');
+    expect(bold?.scriptPath).toBe('catalog/scripts/setup-repo.sh');
+  });
+
+  it('ignores a script line whose path is absolute, climbs out of the repo or has spaces', () => {
+    for (const path of ['/etc/passwd', '../x.sh', 'a/../../x.sh', 'a b.sh', 'build']) {
+      const [step] = parseRollout(`## Rollout\n- script: Run it\n  - script: ${path}\n`);
+      expect(step?.scriptPath).toBeNull();
+    }
+  });
+
   it('treats an item with no kind as manual, and stops at the next heading of the same level', () => {
     const steps = parseRollout('## Rollout\n- Ask the PO to enable it\n\n### Details\n- not a step either way\n\n## Next\n- nope\n');
     expect(steps.map((s) => [s.kind, s.title])).toEqual([
@@ -162,7 +190,7 @@ ${FENCE}
 
   it('keeps a step whose check is not a capability, with check null and a note in the detail', () => {
     const [step] = parseRollout('## Rollout\n- setting: Set the thing (check: telepathy)\n');
-    expect(step).toEqual({ kind: 'setting', title: 'Set the thing', detail: 'check: telepathy is not a capability slop knows', check: null, script: null });
+    expect(step).toEqual({ kind: 'setting', title: 'Set the thing', detail: 'check: telepathy is not a capability slop knows', check: null, script: null, scriptPath: null });
   });
 
   it('makes titles unique and gives a script with no title a name', () => {
@@ -273,6 +301,13 @@ describe('the implementation record becomes rollout steps', () => {
     expect(script.content).toBe('infra/deploy/host-deploy.sh');
     expect(events('added')).toHaveLength(2);
     expect(notifier.hints.map((h) => h.kind)).toContain('glob.changed');
+  });
+
+  it('stores a step that names a repo script with the path as its script, and no artifact', async () => {
+    const g = await newGlob();
+    await put(g.id, record('## Rollout\n- script: Protect the branch\n  - script: scripts/rollout/x-ruleset.sh\n  - **Do this:** run it\n'));
+    expect(stepsOf(g.id).map((s) => s.script)).toEqual([{ path: 'scripts/rollout/x-ruleset.sh' }]);
+    expect(unwrap(await artifacts.versions(DEV, g.id, 'rollout_script', 'rollout: protect-the-branch'))).toHaveLength(0);
   });
 
   it('is idempotent: the same record twice adds no steps, events or script versions', async () => {

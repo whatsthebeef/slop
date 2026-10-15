@@ -86,3 +86,42 @@ describe('Human steps with long text', () => {
     expect(screen.getByTestId('human-steps').className).toContain('grid-cols-[minmax(0,1fr)]');
   });
 });
+
+describe('Human steps with a repo script', () => {
+  const withScript = (state: 'merged' | 'draft') =>
+    ({
+      ...coreGlob(),
+      list: 'planning',
+      branch: 's1t1',
+      currentRun: null,
+      pr: { state, number: 3, headSha: 'abc123' },
+      prs: [],
+      humanSteps: [{ id: 'hs1', title: 'Protect main', detail: null, kind: 'rollout', state: 'due', who: 'anyone', due: 'after_merge', script: { path: 'scripts/rollout/s1t1-ruleset.sh' } }],
+    }) as unknown as GlobView;
+  const show = (glob: GlobView) =>
+    render(
+      <MemoryRouter>
+        <HumanSteps glob={glob} canAdd={false} repo='acme/app' baseBranch='main' startOpen onAdd={vi.fn()} onComplete={vi.fn()} onDismiss={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+  it('shows the run command on its own line, copies it, and links the file on the base branch once merged', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    show(withScript('merged'));
+    expect(screen.getByTestId('step-script-path').textContent).toBe('bash scripts/rollout/s1t1-ruleset.sh');
+    await userEvent.click(screen.getByTestId('step-copy'));
+    expect(writeText).toHaveBeenCalledWith('bash scripts/rollout/s1t1-ruleset.sh');
+    expect(screen.getByTestId('step-script-source').getAttribute('href')).toBe('https://github.com/acme/app/blob/main/scripts/rollout/s1t1-ruleset.sh');
+  });
+
+  it('links the file at the recorded squash commit when slop has one', () => {
+    show({ ...withScript('merged'), prs: [{ number: 3, mergeSha: 'feed42', mergedAt: '2026-10-15T00:00:00Z' }] });
+    expect(screen.getByTestId('step-script-source').getAttribute('href')).toBe('https://github.com/acme/app/blob/feed42/scripts/rollout/s1t1-ruleset.sh');
+  });
+
+  it('links the file at the PR head before the merge', () => {
+    show(withScript('draft'));
+    expect(screen.getByTestId('step-script-source').getAttribute('href')).toBe('https://github.com/acme/app/blob/abc123/scripts/rollout/s1t1-ruleset.sh');
+  });
+});

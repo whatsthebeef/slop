@@ -772,8 +772,8 @@ export const GlobCard = ({
         <div className='flex shrink-0 items-center gap-1.5'>
           {armStep !== null && (
             <>
-              <DotSeparator testId='card-arm-separator' />
               <ArmSystemLabel step={armStep} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
+              <DotSeparator testId='card-arm-separator' />
             </>
           )}
           <Avatar email={person} planner={glob.implementer === null} />

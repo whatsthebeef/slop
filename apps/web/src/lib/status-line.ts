@@ -84,7 +84,7 @@ const ALSO = {
 
 /** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
 export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer): StatusLine | null => {
-  const hint = stuckHint(glob, now);
+  const hint = stuckHint(glob, now, glob.gateCheck);
   const checks = checksExplanation(glob);
   const failed = glob.status === 'failed' || glob.failure !== null;
   const failure = glob.failure;
