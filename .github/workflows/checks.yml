@@ -55,3 +55,16 @@ jobs:
         run: pnpm typecheck
       - name: Test
         run: pnpm test
+      # Shell tests of the catalog scripts. shellcheck and jq are on ubuntu-latest; install them if a runner image lacks them,
+      # so the tests' shellcheck checks run instead of skipping.
+      - name: Catalog shell tests
+        run: |
+          for t in shellcheck jq; do
+            command -v "$t" >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq "$t"; }
+          done
+          status=0
+          while IFS= read -r -d '' t; do
+            echo "== $t"
+            bash "$t" || status=1
+          done < <(find catalog/scripts -name '*.test.sh' -print0 | sort -z)
+          exit $status

@@ -105,3 +105,34 @@ describe('ATF push allow-list and server admins', () => {
     expect(() => loadConfig({ ATF_PUSH_ALLOWED_ROLE_ACCOUNTS: '1234' })).toThrow('ATF_PUSH_ALLOWED_ROLE_ACCOUNTS');
   });
 });
+
+describe('ATF OIDC and AWS identity settings', () => {
+  it('are off by default and the audience is left to PUBLIC_URL', () => {
+    const c = loadConfig({});
+    expect(c.ATF_OIDC_ALLOWED_ISSUERS).toEqual([]);
+    expect(c.ATF_AWS_ALLOWED_ISSUERS).toEqual([]);
+    expect(c.ATF_AWS_ALLOWED_ACCOUNTS).toEqual([]);
+    expect(c.ATF_OIDC_AUDIENCE).toBeUndefined();
+  });
+  it('parses issuers and accounts', () => {
+    const c = loadConfig({
+      ATF_OIDC_ALLOWED_ISSUERS: 'https://token.actions.githubusercontent.com, https://gitlab.com',
+      ATF_OIDC_AUDIENCE: 'https://slop.example.com',
+      ATF_AWS_ALLOWED_ISSUERS: 'https://abc.tokens.sts.global.api.aws',
+      ATF_AWS_ALLOWED_ACCOUNTS: '123456789012',
+    });
+    expect(c.ATF_OIDC_ALLOWED_ISSUERS).toEqual(['https://token.actions.githubusercontent.com', 'https://gitlab.com']);
+    expect(c.ATF_AWS_ALLOWED_ISSUERS).toEqual(['https://abc.tokens.sts.global.api.aws']);
+    expect(c.ATF_AWS_ALLOWED_ACCOUNTS).toEqual(['123456789012']);
+  });
+  it('refuses issuers that are not exact https URLs, bad accounts, and an issuer on both lists', () => {
+    for (const bad of ['http://idp.example.com', 'https://*.example.com', 'idp.example.com', 'https://idp.example.com/', 'https://idp.example.com?x=1']) {
+      expect(() => loadConfig({ ATF_OIDC_ALLOWED_ISSUERS: bad })).toThrow('ATF_OIDC_ALLOWED_ISSUERS');
+      expect(() => loadConfig({ ATF_AWS_ALLOWED_ISSUERS: bad })).toThrow('ATF_AWS_ALLOWED_ISSUERS');
+    }
+    expect(() => loadConfig({ ATF_AWS_ALLOWED_ACCOUNTS: '12' })).toThrow('ATF_AWS_ALLOWED_ACCOUNTS');
+    expect(() =>
+      loadConfig({ ATF_OIDC_ALLOWED_ISSUERS: 'https://a.example.com', ATF_AWS_ALLOWED_ISSUERS: 'https://a.example.com' }),
+    ).toThrow('must not share');
+  });
+});

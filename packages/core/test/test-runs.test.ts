@@ -36,6 +36,7 @@ const run = (patch: Partial<TestRun> = {}): TestRun => ({
   url: null,
   finishedAt: NOW,
   eventId: 'aws:r1',
+  runnerId: null,
   ...patch,
 });
 
@@ -236,4 +237,88 @@ describe('TestRunService', () => {
     await store.transaction((tx) => tx.deleteGlob('s1t1'));
     expect(store.state.testRuns.map((r) => r.globId)).toEqual([null]);
   });
+
+  describe('bound to a runner', () => {
+    let otherBoardId: number;
+    let runnerA: number;
+    let runnerB: number;
+
+    beforeEach(async () => {
+      [otherBoardId, runnerA, runnerB] = await store.transaction(async (tx) => {
+        // A second board on the same repo, as a team might have for another product line.
+        const other = await tx.insertBoard({ ...board, name: 'other', environments: [...board.environments], sensitivePaths: [] });
+        await tx.insertGlob(glob({ id: `s${String(other.id)}t1`, boardId: other.id, status: 'reviewing', environment: 'dev', pr: { number: 9, state: 'ready', headSha: HEAD } }), null);
+        const make = async (name: string) => {
+          const runner = await tx.insertAtfRunner({
+            boardId: board.id,
+            name,
+            method: 'oidc',
+            config: {},
+            environments: ['staging'],
+            enabled: true,
+            createdBy: 'admin@example.com',
+            createdAt: NOW,
+          });
+          if (runner === null) throw new Error('runner not inserted');
+          return runner.id;
+        };
+        return [other.id, await make('GitHub Actions'), await make('CodeBuild')];
+      });
+      await deploy(DEPLOYED, 'aws:d1', '2026-10-05T11:00:00.000Z');
+    });
+
+    it('records on the runner’s board only, whatever repo the report names, and keeps the runner', async () => {
+      // Unbound, a report fans out to every board on the repo.
+      expect(await service.recordAtf(report({ eventId: 'aws:fan' }))).toEqual([board.id, otherBoardId]);
+      store.state.testRuns = [];
+      expect(await service.recordAtf(report({ repo: '', eventId: 'runner:1:a' }), { boardId: board.id, runnerId: runnerA })).toEqual([board.id]);
+      expect(store.state.testRuns).toEqual([expect.objectContaining({ boardId: board.id, runnerId: runnerA, environment: 'staging', sha: DEPLOYED })]);
+    });
+
+    it('stamps the runner’s last result, and records the legacy board token with no runner', async () => {
+      await service.recordAtf(report({ repo: '', eventId: 'runner:1:a' }), { boardId: board.id, runnerId: runnerA });
+      const stamped = await store.transaction((tx) => tx.getAtfRunner(board.id, runnerA));
+      expect(stamped?.lastResultAt).toBe(NOW);
+      expect((await store.transaction((tx) => tx.getAtfRunner(board.id, runnerB)))?.lastResultAt).toBeNull();
+      await service.recordAtf(report({ eventId: 'runner:legacy:a' }), { boardId: board.id, runnerId: null });
+      expect(store.state.testRuns.map((r) => r.runnerId)).toEqual([runnerA, null]);
+    });
+
+    it('records a redelivery once, and a second runner’s run beside the first’s', async () => {
+      const post = (runnerId: number, eventId: string) => service.recordAtf(report({ eventId }), { boardId: board.id, runnerId });
+      expect(await post(runnerA, `runner:${String(runnerA)}:k1`)).toEqual([board.id]);
+      expect(await post(runnerA, `runner:${String(runnerA)}:k1`)).toEqual([]);
+      expect(await post(runnerB, `runner:${String(runnerB)}:k1`)).toEqual([board.id]);
+      expect(store.state.testRuns).toHaveLength(2);
+    });
+
+    it('takes a branch run only for a glob of the runner’s board', async () => {
+      const bound = { boardId: board.id, runnerId: runnerA };
+      expect(await service.recordAtf(report({ branch: `s${String(otherBoardId)}t1`, sha: HEAD, environment: null, eventId: 'runner:1:x' }), bound)).toEqual([]);
+      expect(store.state.testRuns).toEqual([]);
+      expect(await service.recordAtf(report({ branch: 's1t1', sha: HEAD, environment: null, eventId: 'runner:1:y' }), bound)).toEqual([board.id]);
+      expect(store.state.testRuns).toEqual([expect.objectContaining({ globId: 's1t1', runnerId: runnerA })]);
+    });
+
+    it('ignores an environment the board does not observe, and a board that is gone', async () => {
+      expect(await service.recordAtf(report({ environment: 'dev', eventId: 'runner:1:z' }), { boardId: board.id, runnerId: runnerA })).toEqual([]);
+      expect(await service.recordAtf(report({ eventId: 'runner:1:w' }), { boardId: 9999, runnerId: runnerA })).toEqual([]);
+    });
+
+    it('names the runners on the card and in the glob view only when the board has more than one', async () => {
+      await environments.recordContainment(board.id, 'staging', DEPLOYED, [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
+      await service.recordAtf(report({ eventId: 'runner:1:a' }), { boardId: board.id, runnerId: runnerA });
+      const names = async () => (await service.boardState(board.id, ['s1t1'])).get('s1t1')?.map((i) => i.runnerName);
+      // Two registered runners, one of them posting: names show.
+      expect(await names()).toEqual(['GitHub Actions']);
+      await store.transaction((tx) => tx.updateAtfRunner(board.id, runnerB, { revokedAt: NOW }));
+      expect(await names()).toEqual([undefined]);
+      // A legacy run beside a runner's is two sources.
+      await service.recordAtf(report({ eventId: 'runner:legacy:a', failed: 2 }), { boardId: board.id, runnerId: null });
+      expect(await names()).toEqual(expect.arrayContaining(['GitHub Actions', 'Legacy runner']));
+      const view = await service.forGlob('dev@example.com', 's1t1');
+      expect(view.ok && view.value.runs.map((r) => r.runnerName).sort()).toEqual(['GitHub Actions', 'Legacy runner']);
+    });
+  });
 });
+

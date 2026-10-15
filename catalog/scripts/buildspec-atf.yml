@@ -10,11 +10,26 @@
 #
 # Which specs run: .sstor/atf-specs.sh asks slop for the specs the globs merged in this deploy planned (their test
 # plans), exports them as SLOP_ATF_SPECS (one path per line) and SLOP_ATF_GREP, and .sstor/atf.sh runs only those, or the
-# board's default suite when the list is empty. The project needs SLOP_URL, SLOP_BOARD and SLOP_TOKEN (the board's
-# integration token, from Secrets Manager or Parameter Store) for that; without them, or if slop can't be reached, the
-# default suite runs. A board that has slop start this project (push mode) gets the list in SLOP_ATF_SPECS already.
+# board's default suite when the list is empty.
 #
-# The project's role needs events:PutEvents on the default EventBridge bus for the report to reach slop.
+# Identity: no stored slop secret. The project's role asks AWS for a short-lived JWT (AWS outbound identity federation,
+# STS GetWebIdentityToken) and slop checks it against the role ARN registered on the board as an "AWS IAM" ATF runner.
+# The project needs only SLOP_URL and SLOP_BOARD (plus SLOP_ENVIRONMENT, SLOP_SHA); do NOT set SLOP_TOKEN, which would be
+# used instead (the board's integration token, deprecated for ATF). The scripts then post results to slop over HTTP.
+# If slop can't be reached or doesn't know the role, the default suite runs and nothing is reported; the pipeline never fails.
+# One-time setup (README.md, "AWS IAM runner"): an account owner enables outbound identity federation and gives this
+# project's role sts:GetWebIdentityToken; a server admin allows the account; a board admin registers the role.
+# SLOP_OIDC_AUDIENCE overrides the token's audience when it isn't SLOP_URL.
+#
+# The scripts call `aws sts get-web-identity-token` and, if the CLI doesn't have that command (the CodeBuild image's CLI is
+# older than the feature: check `aws sts get-web-identity-token help` in the image), a boto3 one-liner that needs a
+# recent boto3. When neither works, install a current AWS CLI v2 in an install phase before the build phase (the AWS
+# installer zip), or `pip install --upgrade boto3` for the boto3 route.
+# The scripts need curl and python3, which the standard images have.
+#
+# To keep sending results over EventBridge instead (AWS only), set SLOP_ATF_TRANSPORT=eventbridge; the project's role then
+# needs events:PutEvents on the default bus. A board that has slop start this project (push mode) gets the list in
+# SLOP_ATF_SPECS already.
 version: 0.2
 
 phases:

@@ -1,9 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { BoardService, DeployService, EnvironmentService, Result, TestRunService, TestRunSpec } from '@slop/core';
+import type { BoardService, DeployService, EnvironmentService, Result, TestRunService } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { SignedLinks } from '../signed-links.js';
 import type { Env } from './app.js';
+import { atfDetailSchema, linkSchema, reportedSpecs, shaSchema } from './atf-report.js';
 import { errorBody, statusOf } from './views.js';
 
 export interface DeployRoutesDeps {
@@ -50,15 +51,6 @@ const codeBuildEventSchema = z.object({
   }),
 });
 
-/** A commit on the code host, full or abbreviated. */
-const shaSchema = z
-  .string()
-  .regex(/^[0-9a-f]{7,40}$/i)
-  .transform((sha) => sha.toLowerCase());
-
-/** A link slop shows on the board: https only, so a reporter can't plant a script URL. */
-const linkSchema = z.url({ protocol: /^https$/ }).max(2000);
-
 /** What every `slop.ci` event carries, whichever kind it is. */
 const slopCiBase = z.object({
   id: z.string().min(1).max(200),
@@ -79,41 +71,13 @@ const environmentDeployedSchema = slopCiBase.extend({
   }),
 });
 
-/** A test count from the pipeline's report. */
-const countSchema = z.number().int().min(0).max(10_000_000);
-
-/** One spec's result in a run's report (`atf-report.sh` groups the JUnit test cases by file); `missing` is a planned spec the script found no test for (slop adds any the script didn't). */
-const runSpecSchema = z.object({
-  file: z.string().min(1).max(300),
-  status: z.enum(['passed', 'failed', 'skipped', 'missing']),
-  tests: countSchema.optional(),
-  failed: countSchema.optional(),
-  durationMs: countSchema.optional(),
-});
-
-/** Most per-spec rows kept from one report; the rest are dropped, and the counts are always kept. */
-const MAX_REPORTED_SPECS = 1000;
-
 /**
  * `slop.ci`'s "Slop ATF Completed": a pipeline ran the acceptance tests on a glob's branch (`branch` is the glob's ID)
  * or against a release or integration environment (`environment`, at the `sha` it tested, else what it runs now).
  */
 const atfCompletedSchema = slopCiBase.extend({
   'detail-type': z.literal('Slop ATF Completed'),
-  detail: z
-    .object({
-      repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
-      sha: shaSchema.optional(),
-      environment: z.string().min(1).max(100).optional(),
-      branch: z.string().min(1).max(255).optional(),
-      passed: countSchema,
-      failed: countSchema,
-      skipped: countSchema.optional(),
-      url: linkSchema.optional(),
-      // Malformed per-spec rows lose only the rows: the counts above are still recorded.
-      specs: z.array(runSpecSchema).optional().catch(undefined),
-    })
-    .refine((d) => d.environment !== undefined || d.branch !== undefined, 'needs an environment or a branch'),
+  detail: atfDetailSchema,
 });
 
 /**
@@ -124,18 +88,6 @@ const atfCompletedSchema = slopCiBase.extend({
 const slopCiEventSchema = z.discriminatedUnion('detail-type', [environmentDeployedSchema, atfCompletedSchema]);
 
 type SlopCiEvent = z.infer<typeof slopCiEventSchema>;
-
-/** The report's spec rows as the service takes them: the first row of a repeated file wins, tests default to 0. */
-const reportedSpecs = (specs: readonly z.infer<typeof runSpecSchema>[]): TestRunSpec[] => {
-  const seen = new Set<string>();
-  const rows: TestRunSpec[] = [];
-  for (const s of specs.slice(0, MAX_REPORTED_SPECS)) {
-    if (seen.has(s.file)) continue;
-    seen.add(s.file);
-    rows.push({ spec: s.file, status: s.status, tests: s.tests ?? 0, failedTests: s.failed ?? 0, durationMs: s.durationMs ?? null });
-  }
-  return rows;
-};
 
 /** Why a build failed, from its first failed phase: e.g. "DOWNLOAD_SOURCE: Connection ... is not available". */
 const failureReason = (detail: z.infer<typeof codeBuildEventSchema>['detail'], status: string): string => {

@@ -69,7 +69,7 @@ export type { Containment, EnvironmentDeploy, EnvironmentIndicator, GlobPresence
 export * as testRuns from './domain/test-runs.js';
 export { REVIEW_GUIDE_AREA } from './domain/code-review.js';
 export { SPEC_STATUSES, TEST_RUN_KINDS } from './domain/test-runs.js';
-export type { AtfBatch, AtfBatchGrep, AtfBatchSpec, AtfIndicator, EnvironmentCommit, GlobSpecResult, NewAtfBatch, NewTestRun, OwnSpecs, PlannedSpecCounts, SpecStatus, StoredRunSpec, TestRun, TestRunKind, TestRunSpec } from './domain/test-runs.js';
+export type { AtfBatch, AtfBatchGrep, AtfBatchSpec, AtfIndicator, EnvironmentCommit, GlobSpecResult, NewAtfBatch, NewTestRun, OwnSpecs, PlannedSpecCounts, RunnerNames, SpecStatus, StoredRunSpec, TestRun, TestRunKind, TestRunSpec } from './domain/test-runs.js';
 export * as machine from './domain/machine.js';
 export type { Action, ActionFacts, Context, DecideInput, FieldChanges, LabelCommand, Transition } from './domain/machine.js';
 export * from './ports.js';
@@ -137,6 +137,9 @@ export * from './app/decision-glob-service.js';
 export * from './app/suggest-service.js';
 export * from './app/rollout-service.js';
 export * from './app/integration-token-service.js';
+export * from './domain/atf-runners.js';
+export * from './domain/atf-webhooks.js';
+export * from './app/atf-runner-service.js';
 export * from './app/inbox-pipeline.js';
 export * from './app/report-service.js';
 export { FakeEmbedder, vectorOf } from './testing/fake-embedder.js';
