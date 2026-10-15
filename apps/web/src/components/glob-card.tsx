@@ -1,6 +1,6 @@
-import { decisionOf, isHumanCategory, scopeLabel } from '@slop/core';
-import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { Bug, ListChecks, Loader2, Rocket, Scale, Sparkles, UserRound } from 'lucide-react';
+import { decisionOf, fixOf, isHumanCategory, modeOf, scopeLabel } from '@slop/core';
+import type { Action, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
+import { Bug, Loader2, Rocket, Scale, UserRound } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -24,32 +24,48 @@ import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
 
-/** The small dot between a header's values: the card's ID and type, its status and category icon, and the glob view's header. */
+/** The small dot between a header's values: the card's ID and type, its status and fix marker, and the glob view's header. */
 export const DotSeparator = ({ testId }: { testId?: string }) => (
   <span aria-hidden='true' className='shrink-0' data-testid={testId}>
     ·
   </span>
 );
 
-/** The glob's category as a small icon in the card's corner. */
-type CategoryGlyph = ComponentType<{ className?: string; 'aria-label'?: string; role?: 'img' }>;
+/** A small icon in the card's corner. */
+type MarkerGlyph = ComponentType<{ className?: string; 'aria-label'?: string; role?: 'img' }>;
 
 /** An action is a person's to do: the same person icon as the human actor (lucide spreads the Tip's props onto its svg). */
-const ActionGlyph: CategoryGlyph = UserRound;
+const ActionGlyph: MarkerGlyph = UserRound;
 
-export const CATEGORY_ICON: Record<Category, { icon: CategoryGlyph; className: string }> = {
-  bug: { icon: Bug, className: 'text-red' },
-  feature: { icon: Sparkles, className: 'text-muted-foreground' },
-  task: { icon: ListChecks, className: 'text-muted-foreground' },
+/** The icons of the human modes, which the board filter also uses. */
+export const HUMAN_MODE_ICON: Record<'decision' | 'action', { icon: MarkerGlyph; className: string }> = {
   decision: { icon: Scale, className: 'text-muted-foreground' },
   action: { icon: ActionGlyph, className: 'text-muted-foreground' },
 };
 
-export const CategoryIcon = ({ category }: { category: Category }) => {
-  const { icon: Icon, className } = CATEGORY_ICON[category];
+/** The fix marker: work that repairs something broken. */
+export const FIX_ICON = { icon: Bug as MarkerGlyph, className: 'text-red' };
+
+/**
+ * The corner marker of a glob: the red bug of a fix, or the person icon of a human mode. Machine work that is not a fix has
+ * none (its mode is written beside the ID).
+ */
+export const hasKindMarker = (glob: Pick<GlobView, 'category' | 'type' | 'fix'>): boolean => isHumanCategory(glob.category) || fixOf(glob);
+
+export const KindMarker = ({ glob }: { glob: Pick<GlobView, 'category' | 'type' | 'fix'> }) => {
+  const mode = modeOf(glob);
+  if (mode === 'decision' || mode === 'action') {
+    const { icon: Icon, className } = HUMAN_MODE_ICON[mode];
+    return (
+      <Tip text={`Human: ${mode}`}>
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={mode} role='img' />
+      </Tip>
+    );
+  }
+  if (!fixOf(glob)) return null;
   return (
-    <Tip text={`Category: ${category}`}>
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={category} role='img' />
+    <Tip text='Fix: repairs something broken'>
+      <FIX_ICON.icon className={cn('h-3.5 w-3.5 shrink-0', FIX_ICON.className)} aria-label='fix' role='img' />
     </Tip>
   );
 };
@@ -710,12 +726,12 @@ export const GlobCard = ({
       data-testid={`card-${glob.id}`}
     >
       <div className='flex items-center justify-between gap-2 font-mono text-[11px] text-muted-foreground' data-testid='card-header'>
-        {/* The ID never truncates: the status text gives way first, the category icon never moves. */}
+        {/* The ID never truncates: the status text gives way first, the fix marker never moves. */}
         <span className='inline-flex shrink-0 gap-[3px] whitespace-nowrap' data-testid='card-id'>
           <span>{glob.id}</span>
           <DotSeparator />
           <span data-testid='card-type'>
-            {glob.type ?? glob.category}
+            {modeOf(glob)}
             {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
           </span>
         </span>
@@ -723,16 +739,16 @@ export const GlobCard = ({
           {tag !== undefined && (
             <>
               <MoveTagView tag={tag} />
-              <DotSeparator testId='card-corner-separator' />
+              {hasKindMarker(glob) && <DotSeparator testId='card-corner-separator' />}
             </>
           )}
           {tag === undefined && status !== null && (
             <>
               <CornerStatusView status={status} pending={pending} onAct={onAct} onOpenSection={onOpenSection} />
-              <DotSeparator testId='card-corner-separator' />
+              {hasKindMarker(glob) && <DotSeparator testId='card-corner-separator' />}
             </>
           )}
-          <CategoryIcon category={glob.category} />
+          <KindMarker glob={glob} />
         </span>
       </div>
       <div className='leading-snug font-medium break-words' data-testid='card-title'>

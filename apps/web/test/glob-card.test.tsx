@@ -28,6 +28,7 @@ const prOpen = (patch: Partial<GlobView> = {}) =>
 const files = ['apps/web/src/components/glob-dialog.tsx', 'apps/web/src/pages/board.tsx'];
 const stalledByConflict = () =>
   view({
+    category: 'bug',
     status: 'failed',
     failure: { reason: `Merge conflict with main in ${files.join(', ')}`, at: NOW, kind: 'merge', conflict: { base: 'main', files } },
   });
@@ -106,21 +107,21 @@ describe('card rows', () => {
     expect(status?.querySelector('.truncate')?.textContent).toMatch(/^merge conflict( · \d+ min)?$/);
     expect(status?.querySelector('button')?.className).toContain('whitespace-nowrap');
     expect(status?.querySelector('button')?.className).toContain('truncate');
-    // It shrinks (the ID only at 0.2 of its rate) and may reach zero width; the category icon never does.
+    // It shrinks (the ID only at 0.2 of its rate) and may reach zero width; the fix marker never does.
     expect(status?.className).toContain('min-w-0');
     expect(status?.className).toContain('shrink');
     expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-0');
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('gap-[3px]');
-    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('task');
+    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('fix');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
     expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
     expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
   });
 
-  it('keeps a very long status truncated, with the category icon still there and the whole text in the tip', () => {
+  it('keeps a very long status truncated, with the fix marker still there and the whole text in the tip', () => {
     const reason = 'A reason that goes on and on about a thing that went wrong in a place nobody expected it to';
-    const html = markup(view({ status: 'planning', failure: { reason, at: NOW } }));
+    const html = markup(view({ category: 'bug', status: 'planning', failure: { reason, at: NOW } }));
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
     expect(status?.querySelector('.truncate')).not.toBeNull();
@@ -215,12 +216,12 @@ describe('card rows', () => {
     expect(dom(html).querySelector('[data-testid="overlap-chip"]')).toBeNull();
   });
 
-  it('puts the category icon last in the header, the status just before it, and the ID on the left', () => {
+  it('puts the fix marker last in the header, the status just before it, and the ID on the left', () => {
     const root = dom(markup(stalledByConflict()));
     const header = root.querySelector('[data-testid="card-header"]');
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
-    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('task');
+    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('fix');
     const separator = corner?.lastElementChild?.previousElementSibling;
     expect(separator?.getAttribute('data-testid')).toBe('card-corner-separator');
     expect(separator?.textContent).toBe('·');
@@ -231,7 +232,7 @@ describe('card rows', () => {
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
   });
 
-  it('orders the corner: status text, then the status icon, then the category icon', () => {
+  it('orders the corner: status text, then the status icon, then the fix marker', () => {
     const root = dom(markup(stalledByConflict()));
     const button = root.querySelector('[data-testid="card-status"] button');
     const kids = Array.from(button?.children ?? []);
@@ -728,6 +729,17 @@ describe('an action glob card', () => {
     expect(dom(markup(done)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('done');
     const dismissed = action({ status: 'signed_off', attributes: { assignee: null, outcome: { kind: 'dismissed', by: 'a@b.c', at: NOW, reason: 'moved' } } });
     expect(dom(markup(dismissed)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('dismissed');
+  });
+
+  it('writes the mode beside the ID and marks a fix, but nothing for other machine work', () => {
+    const plain = dom(markup(view({ category: 'feature', type: 'sub' })));
+    expect(plain.querySelector('[data-testid="card-type"]')?.textContent).toBe('sub');
+    expect(plain.querySelector('[data-testid="card-corner"] [role="img"]')).toBeNull();
+    const fix = dom(markup(view({ category: 'task', type: 'same', fix: true })));
+    expect(fix.querySelector('[data-testid="card-type"]')?.textContent).toBe('same');
+    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    // The stored flag wins over the old category.
+    expect(dom(markup(view({ category: 'bug', type: 'same', fix: false }))).querySelector('[data-testid="card-corner"] [role="img"]')).toBeNull();
   });
 
   it('shows a decision with its category word, not a type', () => {

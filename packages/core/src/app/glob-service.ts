@@ -1055,6 +1055,15 @@ export class GlobService {
     return actor === null || !actor.ok || canChooseType(actor.value.role, to) ? null : forbidden(CHOOSE_TYPE_REFUSAL);
   }
 
+  /** A person changing a glob's work kind must be a board admin; null when allowed or when other checks will answer. */
+  private async refuseWorkKindChange(email: string, id: string): Promise<Result<never> | null> {
+    const actor = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return glob === null ? null : this.actorFor(tx, email, glob.boardId);
+    });
+    return actor === null || !actor.ok || actor.value.role === 'admin' ? null : forbidden('Only board admins can change the work kind');
+  }
+
   /**
    * An action glob: something a person does, then marks done. No type, intake, size check, branch or relations (nothing holds an
    * action back); plan.md v1 is the caller's, else the action template.
@@ -1589,6 +1598,11 @@ export class GlobService {
     }
     if (changes.type !== undefined) {
       const refused = await this.refuseTypeChoice(email, id, changes.type);
+      if (refused !== null) return refused;
+    }
+    // The work kind feeds the time report: only a board admin corrects it (the fix flag is anyone's to flip).
+    if (changes.workKind !== undefined) {
+      const refused = await this.refuseWorkKindChange(email, id);
       if (refused !== null) return refused;
     }
     // A same becoming a sub is about to start: the merge policy may hold it.
