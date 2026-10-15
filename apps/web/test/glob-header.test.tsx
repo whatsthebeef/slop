@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GlobHeader, HEADER_HEIGHT_VAR } from '../src/components/glob-view/header';
@@ -238,15 +238,24 @@ describe('GlobHeader', () => {
       const corner = getByTestId('header-corner');
       expect(getByTestId('header-status').textContent).toBe('merging');
       expect([...corner.children].map((c) => c.getAttribute('data-testid') ?? 'category')).toEqual(['header-status', 'header-dot', 'category']);
+      expect(corner.children[2]?.className).toContain('ml-1.5');
       expect(getByTestId('header-status').textContent).not.toContain('Doing');
       expect(getByTestId('glob-list').textContent).toContain('Doing');
     });
 
-    it('shows the Arm system label by the list, linking to the board filtered to it', () => {
+    it('shows the Arm system label by the list', () => {
       const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
       const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', humanSteps: [step] }));
       expect(getByTestId('arm-system-label').textContent).toBe('Arm system');
-      expect(getByTestId('arm-system-label').getAttribute('href')).toBe('/boards/1?arm=1');
+      const section = document.createElement('div');
+      section.setAttribute('data-section', 'human-steps');
+      section.append(document.createElement('span'));
+      document.body.append(section);
+      const scroll = vi.fn();
+      section.scrollIntoView = scroll;
+      fireEvent.click(getByTestId('arm-system-label'));
+      expect(scroll).toHaveBeenCalledTimes(1);
+      section.remove();
       cleanup();
       const none = renderBar(view({ status: 'planning', humanSteps: [] }));
       expect(none.queryByTestId('arm-system-label')).toBeNull();
