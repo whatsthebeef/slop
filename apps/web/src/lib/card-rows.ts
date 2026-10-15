@@ -82,15 +82,13 @@ const learnedReasons = (glob: GlobView): string[] =>
     .map((i) => `${i.id}: ${i.evidence ?? 'a run failed without it'}`);
 
 /**
- * The status without details: no elapsed times ("run failed · 18 min", "queued 3 min", "queued · 3 min") and no commit SHAs
- * ("checks running on abc1234", "merging when checks pass · abc1234"). Those live in the tooltip and the glob view.
+ * The status without elapsed times ("run failed · 18 min", "queued 3 min", "queued · 3 min"): they live in the tooltip and
+ * the glob view. No status text carries a commit SHA; that is only ever in the tooltip.
  */
 export const plainText = (text: string): string =>
   text
     .replace(/\s*·\s*\d+ min\b/g, '')
     .replace(/\s+\d+ min\b/g, '')
-    .replace(/\s*·\s*[0-9a-f]{7,40}\b/g, '')
-    .replace(/\s+on [0-9a-f]{7,40}\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -152,6 +150,8 @@ export const cornerStatus = (
   viewer?: HumanStepViewer,
   repo?: string,
   waitingOnThis = 0,
+  /** The board's base branch, for "merging from <base>". */
+  base?: string,
 ): CornerStatus | null => {
   const decision = decisionOf(glob);
   if (decision !== null) return decision.outcome === null ? null : decidedStatus(glob, decision);
@@ -169,8 +169,8 @@ export const cornerStatus = (
     const tip = `Signed off${when}`;
     return { kind: 'signed-off', icon: 'check', text: 'signed off', label: 'signed off', tip, tone: 'text-muted-foreground', click: null };
   }
-  const status = statusLine(glob, now, viewer);
-  const position = positionOf(glob, now, viewer);
+  const status = statusLine(glob, now, viewer, base);
+  const position = positionOf(glob, now, viewer, base);
   const held = holdLine(glob);
   const workstreams = workstreamLine(glob);
   const standby = onStandby(glob);

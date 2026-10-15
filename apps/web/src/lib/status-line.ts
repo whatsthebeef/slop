@@ -14,6 +14,7 @@ import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction 
 import { rolloutLine } from './human-steps';
 import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
 import type { GlobView } from './api';
+import { checksInFlightWhileMerging, mergingChecksText } from './check-wording';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
@@ -87,7 +88,7 @@ const ALSO = {
 } as const;
 
 /** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
-export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer): StatusLine | null => {
+export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer, base?: string): StatusLine | null => {
   const hint = stuckHint(glob, now, glob.gateCheck);
   const checks = checksExplanation(glob);
   const merging = glob.status === 'merging';
@@ -163,22 +164,15 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   }
   if (merging) {
     const sha = glob.pr?.headSha ?? null;
-    const recorded = glob.headChecks;
-    const base = glob.conflict?.base ?? glob.behind?.base ?? 'main';
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
-    // The head moved past the checks slop recorded: it just pushed a base merge and waits for the new head's checks.
-    const full =
-      sha !== null && recorded != null && recorded.sha !== sha
-        ? `merging · updating with ${base}`
-        : recorded == null || recorded.state === 'pending'
-          ? 'merging · checks running'
-          : 'merging';
+    // Checks in flight read the shared merging wording ("merging when checks pass", or "merging from <base>" while catching up).
+    const full = checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging';
     candidates.push(
       make({
         kind: 'merging',
         full,
         tone: 'text-muted-foreground',
-        tip: `Merging ${short}: slop merges it once the checks pass${hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : ''}`,
+        tip: `Merging ${short}: slop merges it once the checks pass, and stops and says why if they fail${hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : ''}`,
       }),
     );
   }
@@ -418,8 +412,9 @@ export const viewStatusLine = (
   glob: GlobView,
   now: string,
   waiting: readonly Waiting[],
+  baseBranch?: string,
 ): StatusLine | null => {
-  const base = statusLine(glob, now);
+  const base = statusLine(glob, now, undefined, baseBranch);
   // Checks still running are shown by the activity label.
   const stopped = waiting.filter((w) => w.running !== true);
   if (stopped.length === 0) return base;

@@ -231,6 +231,8 @@ export const useGlobActions = ({
     main,
     variant,
     viewer,
+    /** The board's base branch, for the header's "merging from <base>". */
+    base: board.baseBranch,
     stepTurn,
     stepsSignal,
     setStepsSignal,
