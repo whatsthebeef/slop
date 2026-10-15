@@ -52,16 +52,18 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
 ];
 
 /**
- * A learning's order: the action row (its outcome is the main button) first, then the decision block, which holds all of
- * its content. The work-glob sections (Plan, Artifacts, Deploys, Environments, Tests, Findings, Size) have nothing to show
- * for a learning. The Activity log and edit fields that follow the actions come last (see `GlobDetail`).
+ * A learning's order: the same blocks above the actions as every other glob (conflict, problem, the decision block, labels,
+ * escalation), then the action row (its outcome is the main button), then the information blocks. The work-glob sections
+ * (Plan, Artifacts, Deploys, Environments, Tests, Findings, Size) have nothing to show for a learning. The Activity log and
+ * edit fields that follow the actions come last (see `GlobDetail`).
  */
 export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
-  'actions',
-  'decision',
   'conflict',
-  'escalation',
+  'problem',
+  'decision',
   'labels',
+  'escalation',
+  'actions',
   'related',
   'choices',
   'assessment',
@@ -70,12 +72,12 @@ export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
 
 /**
  * The order the glob view renders: while a step is due, the due-steps block sits with the other blocks that need a person,
- * after the Decide and review blocks and before the information blocks (a learning: right after its Decide block). Otherwise
- * the fixed order above.
+ * after the Decide and review blocks and before the information blocks, in every kind of view. Otherwise the fixed order
+ * above.
  */
 export const viewSections = (decision: boolean, stepsDue: boolean, learning = false): readonly GlobSection[] => {
   const base = learning ? LEARNING_VIEW_SECTIONS : decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS;
   if (!stepsDue) return base;
-  const at = learning ? base.indexOf('decision') + 1 : base.indexOf('escalation');
+  const at = base.indexOf('escalation');
   return [...base.slice(0, at), 'due-steps', ...base.slice(at)];
 };
