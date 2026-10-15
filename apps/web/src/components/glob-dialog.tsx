@@ -15,6 +15,7 @@ import type { GlobViewContext } from './glob-view/context';
 import { useGlobEdits } from './glob-view/edit-fields';
 import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta } from './glob-view/meta';
+import type { SuggestionHandler } from './glob-view/related';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
 import { viewSections } from './glob-view/sections';
 import { useNowState } from './glob-view/status';
@@ -44,6 +45,8 @@ export const GlobDetail = ({
   onCompleteStep,
   onMarkDeployed,
   onDismissStep,
+  onFailStep,
+  onSuggestion,
   onAction,
   onReviewLabel,
   onDismissEdge,
@@ -79,6 +82,10 @@ export const GlobDetail = ({
   onCompleteStep: (stepId: string) => Promise<boolean>;
   onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
+  /** "It failed" on a due step. */
+  onFailStep?: (stepId: string, note: string) => Promise<boolean>;
+  /** Accept or dismiss a card suggestion. */
+  onSuggestion?: SuggestionHandler;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean, text?: string) => Promise<boolean>;
@@ -178,6 +185,8 @@ export const GlobDetail = ({
     onCompleteStep,
     ...(onMarkDeployed === undefined ? {} : { onMarkDeployed }),
     onDismissStep,
+    ...(onFailStep === undefined ? {} : { onFailStep }),
+    ...(onSuggestion === undefined ? {} : { onSuggestion }),
   };
 
   return (

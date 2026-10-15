@@ -7,7 +7,7 @@ import { clickTip, positionClick, sentence, statusClick, tipLines, yourTurnClick
 import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
 import type { Position } from './position';
-import { blockedParts, holdLine, statusLine, workstreamLine } from './status-line';
+import { blockedParts, holdLine, relationTips, statusLine, workstreamLine } from './status-line';
 import type { StatusLine } from './status-line';
 
 /**
@@ -184,6 +184,7 @@ export const cornerStatus = (
       ...(position === null ? [] : [position.tip]),
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
       ...(held === null || kind === 'hold' ? [] : [held.tip]),
+      ...relationTips(glob),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
       ...(waitingTip === null || kind === 'waiting-on-this' ? [] : [waitingTip]),
     ];

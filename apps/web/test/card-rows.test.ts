@@ -182,7 +182,7 @@ describe('cornerStatus', () => {
   it('says what it waits on once, with the chain in the tooltip and no "blocked by"', () => {
     const status = at(ahead(['s1t1', 's1t2', 's1t3', 's1t4']));
     expect(status).toMatchObject({ kind: 'hold', icon: 'hourglass', text: 'waiting · s1t1 +3' });
-    expect(status?.tip).toContain('Waits for s1t1 (Doing)');
+    expect(status?.tip).toContain('Waits for s1t1 to be merged and rolled out (Doing)');
     expect(JSON.stringify(status)).not.toMatch(/blocked by/i);
   });
 

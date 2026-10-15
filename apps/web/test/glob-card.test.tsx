@@ -157,7 +157,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Asks you to confirm.'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 to be merged and rolled out (Doing)'],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Checks are running on d16d563'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -356,7 +356,7 @@ describe('card rows', () => {
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
     expect(html).not.toContain('after-chip');
-    expect(html).toContain('Waits for s1t1 (Doing)');
+    expect(html).toContain('Waits for s1t1 to be merged and rolled out (Doing)');
   });
 
   it('has no split chip: a part of a split shows nothing about it on the card', () => {
@@ -689,8 +689,8 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
   it('the tooltip lists every hold with its reason, and a click opens the Related section', async () => {
     const holding = [hold('s1t1', { reason: 'uses its store' }), hold('s1t2', { state: 'planning', reason: 'same file' })];
     const html = markup(view({ status: 'planning', holding }));
-    expect(html).toContain('Waits for s1t1 (Doing): uses its store');
-    expect(html).toContain('Waits for s1t2 (Planning): same file');
+    expect(html).toContain('Waits for s1t1 to be merged and rolled out (Doing): uses its store');
+    expect(html).toContain('Waits for s1t2 to be merged and rolled out (Planning): same file');
     const user = userEvent.setup();
     const onOpenSection = vi.fn();
     render(

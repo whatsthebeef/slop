@@ -284,13 +284,13 @@ describe('glob view: escalation, dependencies and edit fields', () => {
         }),
       }),
     );
-    expect(within(screen.getByTestId('related-holding')).getAllByText("· can't start until merged")).toHaveLength(2);
+    expect(within(screen.getByTestId('related-holding')).getAllByText("· can't start until merged and rolled out")).toHaveLength(2);
     expect(screen.getByTestId('related-holding').textContent).toContain('uses the endpoint it adds');
     expect(screen.getByTestId('related-holding').textContent).toContain('inferred by slop');
     expect(screen.getByTestId('related-decisions').textContent).toContain("can't start until decided");
     expect(screen.queryByTestId('related-parts')).toBeNull();
     expect(screen.getByTestId('related-holding').textContent).toContain('s1t5');
-    expect(screen.getByTestId('related-holds-back').textContent).toContain("can't merge until this is merged");
+    expect(screen.getByTestId('related-holds-back').textContent).toContain("can't merge until this is merged and rolled out");
     const done = screen.getByTestId('related-done');
     expect(done.tagName).toBe('DETAILS');
     expect(done.hasAttribute('open')).toBe(false);
