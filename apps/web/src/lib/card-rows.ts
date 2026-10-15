@@ -1,4 +1,4 @@
-import { decisionOf } from '@slop/core';
+import { decisionOf, labelsWaiting, signOffText } from '@slop/core';
 import type { HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
@@ -97,6 +97,13 @@ export const plainText = (text: string): string =>
 const awaitingSignOff = (glob: GlobView): boolean =>
   glob.status === 'reviewing' && Object.values(glob.labels).some((state) => state !== 'approved');
 
+/** "Merged; QA and CR are waiting for a person to approve them." */
+const signOffTip = (labels: GlobView['labels']): string => {
+  const waiting = labelsWaiting(labels);
+  const names = waiting.length <= 1 ? waiting.join('') : `${waiting.slice(0, -1).join(', ')} and ${waiting[waiting.length - 1]}`;
+  return `Merged; ${names === '' ? 'the labels are' : `${names} ${waiting.length === 1 ? 'is' : 'are'}`} waiting for a person to approve ${waiting.length === 1 ? 'it' : 'them'}.`;
+};
+
 /**
  * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
  * sign-off, an escalation in Planning). A decision glob has no corner status, so its turn is the status line's.
@@ -190,8 +197,8 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
   if (awaitingSignOff(glob) && position === null) {
-    return make('sign-off', 'human', 'sign off', 'text-signal-strong', { kind: 'section', target: cardTargets.label() }, [
-      'Merged; the labels are waiting for a person to approve them',
+    return make('sign-off', 'human', signOffText(glob.labels), 'text-signal-strong', { kind: 'section', target: cardTargets.label() }, [
+      signOffTip(glob.labels),
     ]);
   }
   // A fanned-out glob's workstreams say more than the machine's general position.
