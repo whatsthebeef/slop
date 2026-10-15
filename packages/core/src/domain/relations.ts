@@ -8,8 +8,8 @@
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
-import { RELATION_GATES } from './types.js';
-import type { Glob, Relation, RelationGate, RelationPatch, RelationSource, RelationUntil } from './types.js';
+import { RELATION_GATES, RELATION_UNTILS } from './types.js';
+import type { Glob, Relation, RelationGate, RelationKind, RelationPatch, RelationSource, RelationUntil } from './types.js';
 
 /**
  * Where the glob a relation points at stands. `merged`: Reviewing (a super that merged and continues is still `open`).
@@ -114,7 +114,15 @@ export const startIds = (relations: readonly Relation[]): string[] => [
 // Words
 
 export const GATE_WORDS: Readonly<Record<RelationGate, string>> = { start: 'start', merge: 'merge', sign_off: 'sign off' };
-export const UNTIL_WORDS: Readonly<Record<RelationUntil, string>> = { merged: 'merged', decided: 'decided', done: 'done', signed_off: 'signed off' };
+/** `merged` also waits for the rollout (a merged glob's open rollout steps keep it holding), so it reads "merged and rolled out". */
+export const UNTIL_WORDS: Readonly<Record<RelationUntil, string>> = { merged: 'merged and rolled out', decided: 'decided', done: 'done', signed_off: 'signed off' };
+
+/** Accepts `rolled_out` as another way to write `until: 'merged'` (the wire value stays `merged`); null for anything else. */
+export const normaliseUntil = (value: string): RelationUntil | null => {
+  const v = value.trim().toLowerCase();
+  if (v === 'rolled_out' || v === 'merged_and_rolled_out') return 'merged';
+  return (RELATION_UNTILS as readonly string[]).includes(v) ? (v as RelationUntil) : null;
+};
 
 /** "can't start until s15f82 is merged": what one relation says, for a refusal or a row. */
 export const holdWords = (r: Pick<Relation, 'gate' | 'to' | 'until'>): string =>
@@ -129,7 +137,7 @@ export const waitNote = ({ relation, state }: Unmet): string => {
       case 'planning':
         return `Waits for ${to} to merge (it is in Planning)`;
       case 'rollout':
-        return `Waits for the rollout of ${to} to be done (it has merged)`;
+        return `Waits for the rollout of ${to} to be done (it has merged; its rollout steps are open)`;
       default:
         return `Waits for ${to} to merge`;
     }
@@ -180,6 +188,8 @@ export interface NewRelation {
   readonly reason: string | null;
   readonly evidence: readonly string[];
   readonly source: RelationSource;
+  /** Absent means `waits`. */
+  readonly kind?: RelationKind;
   /** The group it is set for, when it is one of a group-wide decision's relations. */
   readonly group?: string | null;
 }
@@ -294,19 +304,19 @@ export const wouldCycle = (relations: readonly Relation[], draft: RelationDraft)
 };
 
 /**
- * Checks a relation a person, an agent or slop wants to add: not to itself, `to` on this board, within the limit for the
- * glob and gate, and no cycle. `board` is every relation of the board (read under the board's relation lock), `lookup` finds
- * any glob's board by ID.
+ * Checks a relation a person, an agent or slop wants to add: not to itself, `to` exists (on any board: the caller checks that
+ * the actor may view it), within the limit for the glob and gate, and no cycle. `board` is every relation in play (the glob's
+ * board plus the forward closure of `to`, read under the relations lock), `lookup` finds any glob by ID. `_boardId` is kept
+ * so existing callers compile; it no longer limits `to` to one board.
  */
 export const checkRelation = (
   draft: RelationDraft,
-  boardId: number,
+  _boardId: number,
   board: readonly Relation[],
   lookup: (id: string) => Pick<Glob, 'boardId'> | undefined,
 ): Result<null> => {
   if (draft.from === draft.to) return invalidInput('A glob cannot wait for itself');
-  const other = lookup(draft.to);
-  if (other === undefined || other.boardId !== boardId) return invalidInput(`No glob ${draft.to} on this board`);
+  if (lookup(draft.to) === undefined) return invalidInput(`No glob ${draft.to}`);
   const same = board.filter((r) => r.from === draft.from && r.gate === draft.gate && r.to !== draft.to && !lifted(r));
   if (same.length >= MAX_RELATIONS) return invalidInput(`A glob can have at most ${MAX_RELATIONS} relations for one gate`);
   if (wouldCycle(board, draft)) {
@@ -336,6 +346,13 @@ export const startReaches = (relations: readonly Relation[], from: string, targe
 // ---------------------------------------------------------------------------
 // What holds a glob back, as the views and whose-move read it
 
+/** The other board's side of a cross-board relation. `hidden`: the viewer is not a member of that board, so the glob's id and title are left out. */
+export interface ExternalGlob {
+  readonly boardId: number;
+  readonly boardName: string | null;
+  readonly hidden: boolean;
+}
+
 /** What a holding or a relation row says about the glob it points at. */
 export interface TitleInfo {
   readonly title: string;
@@ -359,6 +376,8 @@ export interface Holding {
   readonly state: ToState;
   readonly reason: string | null;
   readonly source: RelationSource;
+  /** Set when `to` is on another board: its name, and whether the viewer may not see it (then `to` is `another board` and `toTitle` null). */
+  readonly external?: ExternalGlob;
 }
 
 /**
@@ -428,6 +447,8 @@ export interface HeldBack {
   readonly until: RelationUntil;
   readonly reason: string | null;
   readonly source: RelationSource;
+  /** Set when `from` is on another board (see `Holding.external`). */
+  readonly external?: ExternalGlob;
 }
 
 /** How a relation of this glob stopped holding: its `to` reached `until` or was deleted, or a person dismissed or overrode it. */
@@ -445,11 +466,30 @@ export interface DoneRelation {
   readonly how: DoneHow;
 }
 
+/** One side of a supersession: the glob that supersedes this one, or one this glob supersedes. */
+export interface Supersession {
+  readonly id: string;
+  readonly title: string | null;
+  readonly reason: string | null;
+  readonly source: RelationSource;
+  /** The relation's ID, so it can be dismissed. */
+  readonly relationId?: string;
+  /** Set when the other glob is on a board the viewer can't see (then `id` is `another board` and `title` null). */
+  readonly hidden?: boolean;
+  readonly external?: ExternalGlob;
+}
+
 /** The glob's relations in three groups: what holds it back now, what it holds back, and what no longer holds. */
 export interface RelationsView {
   readonly holding: readonly Holding[];
   readonly holdsBack: readonly HeldBack[];
   readonly done: readonly DoneRelation[];
+  /** The glob that supersedes this one (absent from older servers; null: none). */
+  readonly supersededBy?: Supersession | null;
+  /** The globs this one supersedes. */
+  readonly supersedes?: readonly Supersession[];
+  /** How many relations on other boards the viewer can't see wait for this glob. */
+  readonly waitedOnByOtherBoards?: number;
 }
 
 /** The relations of the glob that no longer hold, with how each stopped (dismissals and overrides first, then met and deleted). */

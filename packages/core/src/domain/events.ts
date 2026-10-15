@@ -112,6 +112,8 @@ export const DOMAIN_EVENT_TYPES = [
   'SignOffHeld',
   /** The last `sign_off` relation was met, so a glob with approved labels moved to Signed off. */
   'SignOffReleased',
+  /** A person or agent reported that a work step's run failed (data: the step id and title, the note). The step stays open. */
+  'HumanStepFailed',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 
@@ -291,6 +293,13 @@ export type Effect =
    */
   | { readonly kind: 'commit_agent_set'; readonly globId: string; readonly boardId: number }
   /**
+   * The automatic relation pass for one glob: read what changed in its text, and add or suggest relations (`llm` lane). Not
+   * generation-checked (the executor re-reads the glob; a deleted glob drops it). The outbox keeps one unclaimed job per glob
+   * and pushes its `runAfter` out to now + `RELATION_SCAN_DEBOUNCE_MS` on every trigger (a trailing debounce, like `commit_agent_set`),
+   * so ten saves in a burst make one pass. The job carries no text.
+   */
+  | { readonly kind: 'scan_relations'; readonly globId: string }
+  /**
    * Remove a file attachment's object from storage (a detached file, a deleted glob's files, a refused or orphaned upload).
    * `globId` is the glob the key was under, which may be gone; not generation-checked. Deleting a missing key succeeds.
    */
@@ -310,7 +319,7 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
  * `llm`: the KB pipeline's routing and drafting and the knowledge page's regeneration. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
  * llm-lane kind runs wherever those are on.
  */
-const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', suggest_decision: 'llm', regenerate_knowledge_page: 'llm', write_rollout_steps: 'llm' };
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', suggest_decision: 'llm', regenerate_knowledge_page: 'llm', write_rollout_steps: 'llm', scan_relations: 'llm' };
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
 
@@ -391,6 +400,12 @@ export const knowledgePageEffect = (boardId: number, full = false): Effect => ({
 
 /** How long after the last agent-set bump the board's agent set is committed (a batch of approvals makes one commit). */
 export const AGENT_SET_COMMIT_DELAY_MS = 10 * 60_000;
+
+/** How long after the last trigger the automatic relation pass for a glob runs (a burst of saves makes one pass). */
+export const RELATION_SCAN_DEBOUNCE_MS = 30_000;
+
+/** Ask for an automatic relation pass on the glob; the outbox coalesces and delays it. */
+export const scanRelationsEffect = (globId: string): Effect => ({ kind: 'scan_relations', globId });
 
 /** Commit the board's agent set through its "Agent set vN" glob once bumps have settled. */
 export const agentSetCommitEffect = (boardId: number): Effect => ({ kind: 'commit_agent_set', globId: `board-${String(boardId)}`, boardId });

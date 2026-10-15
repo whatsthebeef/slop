@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
 import {
   MAX_RELATIONS,
+  UNTIL_WORDS,
   applyWrite,
+  normaliseUntil,
   awaitedOf,
   checkRelation,
   checkRelationShape,
@@ -22,6 +24,8 @@ import {
 } from '../src/domain/relations.js';
 import type { RelationDraft, ToState } from '../src/domain/relations.js';
 import type { Relation } from '../src/domain/types.js';
+import { RELATION_SCAN_DEBOUNCE_MS, laneOf } from '../src/domain/events.js';
+import type { Effect } from '../src/domain/events.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { NOW, ctx, dev, glob as fixture, relation, relationFacts } from './fixtures.js';
 
@@ -129,13 +133,17 @@ describe('what a glob waits for', () => {
   });
 
   it('words each gate and what it waits for', () => {
-    expect(holdWords({ gate: 'start', to: 's1t2', until: 'merged' })).toBe("can't start until s1t2 is merged");
+    expect(holdWords({ gate: 'start', to: 's1t2', until: 'merged' })).toBe("can't start until s1t2 is merged and rolled out");
     expect(holdWords({ gate: 'merge', to: 's1k4', until: 'decided' })).toBe("can't merge until s1k4 is decided");
     expect(holdWords({ gate: 'sign_off', to: 's1t3', until: 'signed_off' })).toBe("can't sign off until s1t3 is signed off");
     const note = (rel: Relation, state: ToState) => waitNote({ relation: rel, state });
-    expect(note(relation('s1t1', 's1t2', { gate: 'sign_off' }), 'open')).toBe('Waits for s1t2 to be merged before it can sign off');
+    expect(note(relation('s1t1', 's1t2', { gate: 'sign_off' }), 'open')).toBe('Waits for s1t2 to be merged and rolled out before it can sign off');
     expect(note(relation('s1t1', 's1k4', { until: 'decided', reason: 'it picks the schema' }), 'open')).toBe('Waits for s1k4 to be decided before it can start: it picks the schema');
-    expect(note(relation('s1t1', 's1t2'), 'rollout')).toBe('Waits for the rollout of s1t2 to be done (it has merged)');
+    expect(note(relation('s1t1', 's1t2'), 'rollout')).toBe('Waits for the rollout of s1t2 to be done (it has merged; its rollout steps are open)');
+    // "to merge" only when it has not merged yet.
+    expect(note(relation('s1t1', 's1t2'), 'open')).toBe('Waits for s1t2 to merge');
+    expect(note(relation('s1t1', 's1t2'), 'planning')).toBe('Waits for s1t2 to merge (it is in Planning)');
+    expect(UNTIL_WORDS.merged).toBe('merged and rolled out');
     expect(note(relation('s1t1', 's1t2', { source: 'learned', reason: 'run r1 failed' }), 'open')).toBe('Waits for s1t2: run r1 failed');
   });
 
@@ -241,8 +249,11 @@ describe('cycles', () => {
     it('refuses itself, another board, an unknown glob, a cycle and too many', () => {
       const message = (result: Result<null>) => (result.ok ? null : result.error.message);
       expect(message(checkRelation(draft('a', 'a'), 1, [], lookup))).toContain('itself');
-      expect(message(checkRelation(draft('a', 'other'), 1, [], lookup))).toContain('No glob other on this board');
-      expect(message(checkRelation(draft('a', 'x1'), 1, [], lookup))).toContain('No glob x1 on this board');
+      // `to` may be on another board (the service checks the actor may view it); only a missing glob is refused.
+      expect(checkRelation(draft('a', 'other'), 1, [], lookup).ok).toBe(true);
+      expect(message(checkRelation(draft('a', 'x1'), 1, [], lookup))).toContain('No glob x1');
+      // The cycle check runs across boards: a on board 1 waits for `other` on board 2, which waits for a.
+      expect(message(checkRelation(draft('other', 'a'), 2, [rel('a', 'other')], lookup))).toContain('would be a cycle');
       expect(message(checkRelation(draft('b', 'a'), 1, [rel('a', 'b')], lookup))).toContain("a already waits for b, so b can't start until a is merged");
       expect(checkRelation(draft('a', 'b'), 1, [rel('a', 'b')], lookup).ok).toBe(true);
       const full = Array.from({ length: MAX_RELATIONS }, (_, i) => rel('a', `t${String(i)}`));
@@ -321,6 +332,33 @@ describe('relations in the memory store', () => {
     expect(await store.transaction((tx) => tx.listRelations(1))).toEqual([]);
     expect(await store.transaction((tx) => tx.listRelations(2))).toEqual([elsewhere]);
     await store.transaction((tx) => tx.lockBoardRelations(1));
+  });
+
+  it('keeps a supersession out of the three list methods, and reads it with its own two (kind-filter parity with Postgres)', async () => {
+    const waits = relation('s1t1', 's1t2');
+    const supersession = relation('s1t11', 's1t13', { kind: 'superseded_by', gate: 'sign_off', source: 'agent', reason: 'replaces it' });
+    await store.transaction(async (tx) => {
+      expect(await tx.insertRelation(waits)).toBe(true);
+      expect(await tx.insertRelation(supersession)).toBe(true);
+      // The same pair and gate is allowed once per kind.
+      expect(await tx.insertRelation({ ...waits, id: 'other-kind', kind: 'superseded_by' })).toBe(true);
+      expect(await tx.insertRelation({ ...supersession, id: 'dup' })).toBe(false);
+    });
+    expect(await store.transaction((tx) => tx.listRelations(1))).toEqual([waits]);
+    expect(await store.transaction((tx) => tx.listRelationsFrom(['s1t11', 's1t1']))).toEqual([waits]);
+    expect(await store.transaction((tx) => tx.listRelationsTo(['s1t13', 's1t2']))).toEqual([waits]);
+    expect((await store.transaction((tx) => tx.listSupersessions(['s1t11']))).map((r) => r.id)).toEqual([supersession.id]);
+    expect((await store.transaction((tx) => tx.listSupersededBy(['s1t13']))).map((r) => r.id)).toEqual([supersession.id]);
+    expect(await store.transaction((tx) => tx.listSupersessions([]))).toEqual([]);
+    expect(await store.transaction((tx) => tx.listSupersededBy(['s1t11']))).toEqual([]);
+    await store.transaction((tx) => tx.lockRelations());
+  });
+
+  it('lists a cross-board relation from the holder and to the target on any board', async () => {
+    const cross = relation('s1t1', 's2t5', { boardId: 1 });
+    await store.transaction((tx) => tx.insertRelation(cross));
+    expect(await store.transaction((tx) => tx.listRelationsTo(['s2t5']))).toEqual([cross]);
+    expect(await store.transaction((tx) => tx.listRelations(2))).toEqual([]);
   });
 
   it('a transaction that throws leaves no relation behind', async () => {
@@ -447,5 +485,40 @@ describe('the service and relations', () => {
     expect(awaitedOf(listed?.relations ?? { relations: [], states: new Map() }).map((a) => a.id)).toEqual([first.id]);
     expect(listed?.holding.map((h) => [h.to, h.toTitle, h.gate, h.until, h.state])).toEqual([[first.id, first.title, 'start', 'merged', 'planning']]);
     expect(view.holding.map((h) => h.to)).toEqual([first.id]);
+  });
+});
+
+describe('until aliases', () => {
+  it('accepts rolled_out for merged, keeps the others, and refuses the rest', () => {
+    expect(normaliseUntil('rolled_out')).toBe('merged');
+    expect(normaliseUntil('Merged')).toBe('merged');
+    expect(normaliseUntil('signed_off')).toBe('signed_off');
+    expect(normaliseUntil('decided')).toBe('decided');
+    expect(normaliseUntil('soon')).toBeNull();
+    expect(UNTIL_WORDS.merged).toBe('merged and rolled out');
+  });
+});
+
+describe('the relation scan effect in the memory store', () => {
+  afterEach(() => vi.useRealTimers());
+  const scan = (globId: string): Effect => ({ kind: 'scan_relations', globId });
+  const jobs = (store: MemoryStore) => store.transaction((tx) => tx.latestOutboxJobs(['s1t1', 's1t2'], ['scan_relations']));
+
+  it('runs on the llm lane', () => {
+    expect(laneOf('scan_relations')).toBe('llm');
+  });
+
+  it('keeps one unclaimed job per glob and pushes its runAfter to now + 30 s on every trigger', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-15T12:00:00.000Z'));
+    const store = new MemoryStore();
+    await store.transaction((tx) => tx.enqueueEffects([scan('s1t1')]));
+    expect((await jobs(store))[0]?.runAfter).toBe('2026-10-15T12:00:30.000Z');
+    vi.setSystemTime(new Date('2026-10-15T12:00:20.000Z'));
+    await store.transaction((tx) => tx.enqueueEffects([scan('s1t1'), scan('s1t1'), scan('s1t2')]));
+    const after = await jobs(store);
+    expect(after).toHaveLength(2);
+    expect(after.find((j) => j.globId === 's1t1')?.runAfter).toBe(new Date(Date.parse('2026-10-15T12:00:20.000Z') + RELATION_SCAN_DEBOUNCE_MS).toISOString());
+    expect(store.state.outbox.filter((e) => e.kind === 'scan_relations')).toHaveLength(2);
   });
 });
