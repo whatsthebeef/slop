@@ -26,6 +26,10 @@ This is not the change_reviewer's checklist (area `review`); keep the two consis
 
 - <naming, error handling, test placement>
 
+## Spec and guide drift
+
+- A change to behaviour that the project's spec or guide (<e.g. docs/spec.md, docs/guide.md>) describes must update the matching section; flag a missing or stale update and name the section.
+
 ## Out of scope for review comments
 
 - <e.g. formatting the formatter owns; generated files under <path>>
