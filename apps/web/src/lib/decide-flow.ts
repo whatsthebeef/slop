@@ -27,15 +27,38 @@ export const adminOnlyReason = (kind: KnowledgeKind | undefined): string | null 
   return null;
 };
 
-/** The change's heading in words: what it edits and where, from its target and whether the draft only adds text (never claiming a new section: the diff can't show that). */
-export const changeHeading = (target: KbTarget | null, additive: boolean): string | null => {
+/** How a draft changes its target section: it creates the section, only adds to it, edits it, or changes nothing. */
+export type ChangeKind = 'new_section' | 'addition' | 'edit' | 'none';
+
+/**
+ * Which kind of change a preview is. A new section only when the API says the section did not exist before (an older
+ * server sends nothing, and the change is then never called new); an empty diff is no change, never an addition.
+ */
+export const changeKindOf = (diff: readonly { readonly op: string }[], sectionExisted?: boolean): ChangeKind => {
+  const added = diff.some((l) => l.op === 'added');
+  const removed = diff.some((l) => l.op === 'removed');
+  if (!added && !removed) return 'none';
+  if (sectionExisted === false && added && !removed) return 'new_section';
+  return added && !removed ? 'addition' : 'edit';
+};
+
+/** The change's heading in words: what it edits and where, from its target and what kind of change the draft is. */
+export const changeHeading = (target: KbTarget | null, kind: ChangeKind): string | null => {
   if (target === null) return null;
   if (target.kind === 'merge_policy') return 'Merge policy setting';
   if (target.kind === 'local_run') return 'Local-run spec';
   if (target.newDocument !== null) return `New document ${target.name}`;
   const where = target.section === null ? target.name : `${target.name} › ${target.section}`;
-  // The diff can't say whether the section already existed, so an addition is not called a new section.
-  return additive ? `Addition to ${where}` : `Edit to ${where}`;
+  switch (kind) {
+    case 'new_section':
+      return target.section === null ? `Addition to ${where}` : `New section in ${where}`;
+    case 'addition':
+      return `Addition to ${where}`;
+    case 'none':
+      return `No change to ${where}`;
+    case 'edit':
+      return `Edit to ${where}`;
+  }
 };
 
 /** Whether a scope is worth showing: not for a change routed to a document or a setting, which applies wherever it is written. */
@@ -43,10 +66,10 @@ export const scopeMatters = (document: boolean, hotspot: boolean, target: KbTarg
 
 /** What each scope kind means, for the explained options. */
 export const SCOPE_EXPLAINED = {
-  glob: 'One glob: only this glob',
-  future_work: "Future work: every new glob, optionally only one group's",
-  area_group: "A group: only that group's globs",
-  project: 'Whole project',
+  glob: 'This glob only',
+  future_work: 'All new globs (blank group), or new globs in one group',
+  area_group: 'Globs in one group',
+  project: 'The whole project (existing and new globs)',
 } as const;
 
 /** The header's text when the viewer can't approve this change themselves. */

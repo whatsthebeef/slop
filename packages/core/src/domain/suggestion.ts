@@ -1,3 +1,5 @@
+import { assessmentOf } from './decision-glob.js';
+import type { AssessmentInput } from './decision-glob.js';
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
 import type { KbTarget, LearningStatus } from './kb.js';
@@ -18,6 +20,9 @@ export type SuggestAction = (typeof SUGGEST_ACTIONS)[number];
 
 /** The `assessment` artifact's label for a suggestion; the label-less assessment stays the deterministic one. */
 export const SUGGESTION_LABEL = 'suggestion';
+
+/** The `model` of a recommendation the fixed rules wrote (no model call): the provisional and automatic one. */
+export const RULES_MODEL = 'rules';
 
 /** Bumped when the prompt or the output contract changes, so older suggestions read as stale. */
 export const SUGGEST_PROMPT_VERSION = 1;
@@ -252,9 +257,40 @@ export const checkSuggestion = (raw: unknown, context: { readonly siblingIds: re
   });
 };
 
-/** True when the draft or the target moved (or the prompt changed) since the suggestion was made. */
+/**
+ * True when the draft or the target moved (or the prompt changed) since the suggestion was made. A recommendation the
+ * rules wrote reads only the draft, so it is stale only when the draft moved.
+ */
 export const suggestionStale = (stored: StoredSuggestion, now: SuggestionStamp): boolean =>
-  stored.stamp.draftVersion !== now.draftVersion || stored.stamp.targetVersion !== now.targetVersion || stored.stamp.promptVersion !== now.promptVersion;
+  stored.model === RULES_MODEL
+    ? stored.stamp.draftVersion !== now.draftVersion
+    : stored.stamp.draftVersion !== now.draftVersion || stored.stamp.targetVersion !== now.targetVersion || stored.stamp.promptVersion !== now.promptVersion;
+
+/**
+ * The recommendation the fixed rules give without asking a model, so a learning always has one: written when it is
+ * created (judged on the statement alone, no draft yet), and again whenever it is routed, drafted or drafted again.
+ * Never "none": covered or contradicting items lean to reject (nothing in a document changes), everything else to approve.
+ */
+export const rulesSuggestion = (input: AssessmentInput, draftVersion: number | null, at: string): StoredSuggestion => {
+  const { suggested, flags } = assessmentOf(input);
+  const { item } = input;
+  const waiting = item !== null && item.status === 'open' && item.document === null && item.draft === null;
+  const reject = suggested === 'reject' || suggested === 'needs_work';
+  const flagText = flags.join(' ');
+  const reason = reject
+    ? `${flagText} Rejecting is the safer outcome: no document changes.`
+    : waiting
+      ? `Judged on the statement alone; it is checked again when the draft arrives.${flagText === '' ? '' : ` ${flagText}`}`
+      : flagText === ''
+        ? 'Drafted, and nothing was flagged.'
+        : `${flagText} Approving changes only the document it names.`;
+  return {
+    suggestion: { action: reject ? 'reject' : 'approve', editedDraft: null, mergeInto: null, mergedText: null, reason: reason.trim() },
+    model: RULES_MODEL,
+    at,
+    stamp: { draftVersion, targetVersion: null, promptVersion: SUGGEST_PROMPT_VERSION },
+  };
+};
 
 const ACTION_TEXT: Readonly<Record<SuggestAction, string>> = {
   approve: 'Approve as drafted',

@@ -687,7 +687,8 @@ describe('the KB wire contract', () => {
       preview: PREVIEW,
       draft: DRAFT,
       learning: { status: 'open', processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
+      sectionExisted: true,
     });
-    expect(keysOf(body)).toEqual(['target', 'currentVersion', 'preview', 'draft', 'learning']);
+    expect(keysOf(body)).toEqual(['target', 'currentVersion', 'preview', 'draft', 'learning', 'sectionExisted']);
   });
 });

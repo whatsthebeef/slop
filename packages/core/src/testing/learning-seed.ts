@@ -13,7 +13,7 @@ import type { Result } from '../domain/errors.js';
 import type { Actor, Glob, GlobLink } from '../domain/types.js';
 import type { Hint, Tx } from '../ports.js';
 import { DECISION_SYSTEM_ACTOR, decisionContext } from '../app/decision-glob.js';
-import { boardLearnings, readLearnings } from '../app/learning-reads.js';
+import { boardLearnings, readLearning, readLearnings } from '../app/learning-reads.js';
 import { assessLearning, assessmentDue, learningConflicts, refreshOnApproval, writeLearningArtifacts } from '../app/learning-writes.js';
 import type { LearningArtifactState, LearningWriteContext } from '../app/learning-writes.js';
 
@@ -161,7 +161,8 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
   };
 
   /** Writes the assessment of an automated channel's open learning: at creation, when drafted, and when its conflict flags move. */
-  const assess = (glob: Glob, item: LearningWire, preview: DraftPreview | null, due: boolean): Promise<void> => assessLearning(tx, writes(), glob, item, preview, due);
+  const assess = async (glob: Glob, item: LearningWire, preview: DraftPreview | null, due: boolean): Promise<void> =>
+    assessLearning(tx, writes(), glob, item, preview, due, due ? ((await readLearning(tx, glob.id))?.artifacts.draft?.version ?? null) : null);
 
   return {
     readSeeded: read,
@@ -217,6 +218,8 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
         statusAfter: item.status,
         draftBefore: before.draft,
         draftAfter: item.draft,
+        targetBefore: before.target,
+        targetAfter: item.target,
         conflictsBefore: decisionOf(glob)?.conflictsWith ?? [],
         conflictsAfter: decisionOf(written.glob)?.conflictsWith ?? [],
       });

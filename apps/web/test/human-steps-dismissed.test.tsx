@@ -27,7 +27,7 @@ const renderSteps = (humanSteps: ListedHumanStep[]) => {
   const glob = { ...coreGlob(), list: 'planning', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
   render(
     <MemoryRouter>
-      <HumanSteps glob={glob} canAdd onAdd={vi.fn(() => Promise.resolve(true))} onComplete={vi.fn(() => Promise.resolve(true))} onDismiss={vi.fn(() => Promise.resolve(true))} />
+      <HumanSteps glob={glob} canAdd startOpen onAdd={vi.fn(() => Promise.resolve(true))} onComplete={vi.fn(() => Promise.resolve(true))} onDismiss={vi.fn(() => Promise.resolve(true))} />
     </MemoryRouter>,
   );
 };
@@ -38,10 +38,11 @@ const dismissed = (id: string, reason: string): ListedHumanStep =>
 describe('Dismissed human steps', () => {
   it('collapses dismissed steps into one "N dismissed" line; open and done steps stay listed and the heading ignores dismissed ones', () => {
     renderSteps([step({ id: 'a', state: 'due' }), step({ id: 'b', state: 'done' }), dismissed('c', 'wrong'), dismissed('d', 'dup')]);
-    expect(screen.getAllByTestId('human-step')).toHaveLength(2);
+    expect(screen.getAllByTestId('due-step')).toHaveLength(1);
+    expect(screen.getAllByTestId('human-step')).toHaveLength(1);
     expect(screen.getByTestId('dismissed-toggle').textContent).toBe('2 dismissed ▸');
     expect(screen.queryAllByTestId('dismissed-step')).toHaveLength(0);
-    expect(screen.getByTestId('human-steps-toggle').textContent).toContain('Human steps (2)');
+    expect(screen.getByTestId('human-steps-toggle').textContent).toContain('More steps (1)');
   });
 
   it('expands to each dismissed step with its reason, who and when', async () => {

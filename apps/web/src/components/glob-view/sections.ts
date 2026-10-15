@@ -46,3 +46,32 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
   'findings',
   'human-steps',
 ];
+
+/**
+ * A learning's order: the action row (its outcome is the main button) first, then the decision block, which holds all of
+ * its content. The work-glob sections (Plan, Artifacts, Deploys, Environments, Tests, Findings, Size) have nothing to show
+ * for a learning. The Activity log and edit fields that follow the actions come last (see `GlobDetail`).
+ */
+export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
+  'actions',
+  'decision',
+  'conflict',
+  'escalation',
+  'labels',
+  'related',
+  'choices',
+  'assessment',
+  'human-steps',
+];
+
+/**
+ * The order the glob view renders: while a step is due, the Human steps move to the top, like the Decide and review blocks
+ * (after the conflict and escalation notices; a decision glob keeps its Decide block first). Otherwise the fixed order above.
+ */
+export const viewSections = (decision: boolean, stepsDue: boolean, learning = false): readonly GlobSection[] => {
+  const base = learning ? LEARNING_VIEW_SECTIONS : decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS;
+  if (!stepsDue) return base;
+  const rest = base.filter((name) => name !== 'human-steps');
+  const at = rest.indexOf(decision || learning ? 'decision' : 'escalation') + 1;
+  return [...rest.slice(0, at), 'human-steps', ...rest.slice(at)];
+};

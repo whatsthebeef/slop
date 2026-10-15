@@ -1,5 +1,5 @@
 import { decisionOf, isHumanCategory, machine } from '@slop/core';
-import { isLearning } from '../decision-outcomes';
+import { DecisionMainAction, isLearning } from '../decision-outcomes';
 import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -627,9 +627,21 @@ export const GlobActions = ({
   const moves = splitMoves(ctx, state, onSplitting);
   // A due step still leads.
   const lead = stepTurn === null ? moves.lead : null;
-  // A decision's one Approve (and its ▾) is in the proposal block, so the header has no main action for it.
+  // A learning's outcome is this row's main button (the recommended outcome, the rest in its ▾). A hotspot keeps its one Approve in
+  // the block, so the row has no main action for it.
+  const flow = ctx.decide ?? null;
+  const outcome =
+    flow !== null &&
+    flow.hasItem &&
+    glob.status !== 'signed_off' &&
+    (flow.canDecide || ctx.board.role === 'admin' || ctx.board.role === 'po') &&
+    (flow.learning === null || flow.learning.status === 'open') &&
+    stepTurn === null &&
+    lead === null
+      ? flow
+      : null;
   const inBlock = ctx.decide != null && state.main === 'decide';
-  const main = lead === null && !inBlock ? state.main : null;
+  const main = lead === null && !inBlock && outcome === null ? state.main : null;
   const moreActions = actions.filter(
     (a) => a !== main && !(inBlock && a === 'decide') && tiers.get(a) !== 'destructive',
   );
@@ -638,8 +650,52 @@ export const GlobActions = ({
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
-  const hasMain = main !== null || stepTurn !== null || lead !== null;
+  const hasMain = main !== null || stepTurn !== null || lead !== null || outcome !== null;
   const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
+  const menuItems = (
+    <>
+      {moves.menu.map((move) => (
+        <DropdownMenuItem
+          key={move.id}
+          data-testid={`more-${move.id}`}
+          onSelect={move.run}
+        >
+          <span className="flex items-center gap-1.5 font-medium">
+            <HumanIcon decorative />
+            {move.label}
+          </span>
+          <span className="text-xs text-muted-foreground">{move.tip}</span>
+        </DropdownMenuItem>
+      ))}
+      {moreActions.map((action) => {
+        const shown = actionPresentation(action, glob, false, state.viewer?.email);
+        return (
+          <DropdownMenuItem
+            key={action}
+            data-testid={`more-${action}`}
+            onSelect={() => state.begin(action)}
+          >
+            <span className="flex items-center gap-1.5 font-medium">
+              <ActorIcon actor={shown.icon} decorative />
+              {shown.label}
+            </span>
+            <span className="whitespace-pre-line text-xs text-muted-foreground">
+              {tipOf(action, glob, state.viewer?.email)}
+            </span>
+          </DropdownMenuItem>
+        );
+      })}
+      {disabled.map(({ action, label, icon, tip }) => (
+        <DropdownMenuItem key={action} disabled>
+          <span className="flex items-center gap-1.5 font-medium">
+            <ActorIcon actor={icon} decorative />
+            {label}
+          </span>
+          <span className="text-xs text-muted-foreground">{tip}</span>
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -666,46 +722,7 @@ export const GlobActions = ({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-testid="more-menu">
-        {moves.menu.map((move) => (
-          <DropdownMenuItem
-            key={move.id}
-            data-testid={`more-${move.id}`}
-            onSelect={move.run}
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              <HumanIcon decorative />
-              {move.label}
-            </span>
-            <span className="text-xs text-muted-foreground">{move.tip}</span>
-          </DropdownMenuItem>
-        ))}
-        {moreActions.map((action) => {
-          const shown = actionPresentation(action, glob, false, state.viewer?.email);
-          return (
-            <DropdownMenuItem
-              key={action}
-              data-testid={`more-${action}`}
-              onSelect={() => state.begin(action)}
-            >
-              <span className="flex items-center gap-1.5 font-medium">
-                <ActorIcon actor={shown.icon} decorative />
-                {shown.label}
-              </span>
-              <span className="whitespace-pre-line text-xs text-muted-foreground">
-                {tipOf(action, glob, state.viewer?.email)}
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
-        {disabled.map(({ action, label, icon, tip }) => (
-          <DropdownMenuItem key={action} disabled>
-            <span className="flex items-center gap-1.5 font-medium">
-              <ActorIcon actor={icon} decorative />
-              {label}
-            </span>
-            <span className="text-xs text-muted-foreground">{tip}</span>
-          </DropdownMenuItem>
-        ))}
+        {menuItems}
       </DropdownMenuContent>
     </DropdownMenu>
   ) : undefined;
@@ -747,6 +764,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
+            {outcome !== null && <DecisionMainAction flow={outcome} extra={menuItems} />}
             {main !== null && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>

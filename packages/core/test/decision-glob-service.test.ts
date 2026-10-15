@@ -211,7 +211,7 @@ describe('decision globs', () => {
       expect(plan?.provenance.by).toBe('routine');
       const versions = await assessments(made.globId);
       expect(versions).toHaveLength(1);
-      expect(versions[0]?.content).toMatch(/Scope: future work/);
+      expect(versions[0]?.content).toMatch(/Scope: All new globs/);
     });
 
     it('scopes a non-decision learning to future work by default, and numbers it in the k sequence of the KB items', async () => {
@@ -719,7 +719,7 @@ describe('decision globs', () => {
       const after = await newWork({ title: 'After the decision' });
       const [attachment] = await artifactsOf(after.id, 'attachment');
       expect(attachment).toMatchObject({ label: 'Decisions' });
-      expect(attachment?.content).toContain(`${made.globId} (the whole project): Project rule`);
+      expect(attachment?.content).toContain(`${made.globId} (The whole project (existing and new globs)): Project rule`);
       expect((await artifactsOf(before.id, 'attachment'))).toEqual([]);
     });
 
@@ -733,7 +733,7 @@ describe('decision globs', () => {
       if (second === undefined) throw new Error('expected two parts');
       const [attachment] = await artifactsOf(second.id, 'attachment');
       expect(attachment).toMatchObject({ label: 'Decisions' });
-      expect(attachment?.content).toContain(`${made.globId} (the whole project): Project rule`);
+      expect(attachment?.content).toContain(`${made.globId} (The whole project (existing and new globs)): Project rule`);
     });
 
     it('lets only admins and POs change a scope, and refuses other attributes', async () => {
@@ -766,7 +766,7 @@ describe('decision globs', () => {
       expect(context.payload).toEqual(context.plan);
       expect(context.payload?.content).toContain(GEN);
       expect(context.attributes).toMatchObject({ channel: 'agent', origin: { kind: 'submitted' } });
-      expect(context.available.map((a) => a.kind)).toEqual(['assessment']);
+      expect(context.available.map((a) => a.kind)).toEqual(['assessment', 'assessment']);
       expect(context.scopedDecisions).toEqual([]);
       const read = unwrap(await artifacts.artifact(DEV, made.globId, 'assessment', ''));
       expect(read.content).toMatch(/## Assessment/);
@@ -810,7 +810,7 @@ describe('decision globs', () => {
       const view = unwrap(await globs.get(ADMIN, made.globId));
       // A learning is never deleted (it is rejected instead).
       expect(view.allowedActions).toEqual(['pick_up']);
-      expect(view.artifacts.map((a) => a.kind)).toEqual(['plan', 'assessment']);
+      expect(view.artifacts.map((a) => a.kind)).toEqual(['plan', 'assessment', 'assessment']);
       expect(unwrap(await globs.get(DEV, made.globId)).allowedActions).toEqual([]);
     });
 

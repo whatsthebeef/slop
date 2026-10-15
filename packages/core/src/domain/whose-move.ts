@@ -3,7 +3,8 @@ import type { HumanStep, HumanStepViewer, StepAction } from './human-steps.js';
 import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
 import type { MachineStep, StallThresholds } from './machine-steps.js';
-import type { Glob } from './types.js';
+import { LABEL_NAMES } from './types.js';
+import type { ChecklistItem, Glob, LabelName, Labels } from './types.js';
 import type { Holding } from './relations.js';
 
 /**
@@ -50,9 +51,37 @@ export interface MoveOptions {
   readonly complete?: boolean;
 }
 
-/** A state a person is the one to move in, whatever steps say: sign-off labels asked for. */
-const personReason = (glob: Glob): string | null =>
-  glob.status === 'reviewing' && Object.values(glob.labels).some((l) => l === 'required' || l === 'added') ? 'Review needed' : null;
+/** The labels a merged glob still waits on a person to approve, in FR, CR, QA order. */
+export const labelsWaiting = (labels: Labels): LabelName[] => LABEL_NAMES.filter((name) => labels[name] === 'required' || labels[name] === 'added');
+
+/** The one wording for a merged glob whose labels wait for sign-off: "sign off · QA, CR"; just "sign off" with no labels listed. */
+export const signOffText = (labels: Labels): string => {
+  const waiting = labelsWaiting(labels);
+  return waiting.length === 0 ? 'sign off' : `sign off · ${waiting.join(', ')}`;
+};
+
+/** The unticked, sent items on labels in state `added`: the feedback the developer has to deal with, in FR, CR, QA order. */
+export const openFeedback = (glob: Pick<Glob, 'labels' | 'checklists'>): { readonly label: LabelName; readonly items: readonly ChecklistItem[] }[] =>
+  LABEL_NAMES.flatMap((label) => {
+    const items = glob.labels[label] === 'added' ? (glob.checklists[label] ?? []).filter((item) => !item.done && item.draft !== true) : [];
+    return items.length === 0 ? [] : [{ label, items }];
+  });
+
+/** The one wording for feedback waiting on the developer: "fix feedback · QA 2", the labels with open items and how many each. */
+export const feedbackText = (glob: Pick<Glob, 'labels' | 'checklists'>, verb = 'fix feedback'): string =>
+  `${verb} · ${openFeedback(glob)
+    .map((f) => `${f.label} ${String(f.items.length)}`)
+    .join(', ')}`;
+
+/**
+ * A state a person is the one to move in, whatever steps say: open feedback on a label is the developer's turn and outranks
+ * sign-off, which is the reviewer's turn.
+ */
+const personReason = (glob: Glob): string | null => {
+  if (glob.status !== 'reviewing') return null;
+  if (openFeedback(glob).length > 0) return feedbackText(glob);
+  return labelsWaiting(glob.labels).length > 0 ? signOffText(glob.labels) : null;
+};
 
 /** An escalation is a person's turn only when nothing else holds the ball: it never outranks a machine step (see `whoseMove`). */
 const escalationReason = (glob: Glob): string | null =>

@@ -1,7 +1,7 @@
 import { evidenceCount } from './kb.js';
 import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, LearningWire, LearningStatus, KbPossibleCoverage, KbProcessing, KbTarget, ProposedDocument } from './kb.js';
 import { isDecisionAttributes } from './attributes.js';
-import type { DecisionAttributes, DecisionScope, ScopeKind } from './attributes.js';
+import type { DecisionAttributes, DecisionChannel, DecisionScope, ScopeKind } from './attributes.js';
 import { isHumanCategory } from './types.js';
 import type { Glob } from './types.js';
 
@@ -32,18 +32,44 @@ export const isArchivedDecision = (glob: Glob): boolean => decisionOf(glob)?.arc
 /** How far a scope reaches; a broader scope outranks a narrower one when two decisions disagree. */
 export const SCOPE_RANK: Readonly<Record<ScopeKind, number>> = { glob: 0, future_work: 1, area_group: 2, project: 3 };
 
+/** The scope in plain words, as the glob view, the Knowledge page and the card tooltips show it. */
 export const scopeLabel = (scope: DecisionScope): string => {
   switch (scope.kind) {
     case 'glob':
-      return `glob ${scope.ref}`;
+      return 'This glob only';
     case 'future_work':
-      return scope.ref === null ? 'future work' : `future work in ${scope.ref}`;
+      return scope.ref === null ? 'All new globs' : `New globs in group ${scope.ref}`;
     case 'area_group':
-      return `group ${scope.ref}`;
+      return `Globs in group ${scope.ref}`;
     case 'project':
-      return 'the whole project';
+      return 'The whole project (existing and new globs)';
   }
 };
+
+/** Who a decision came from: an agent, a person, or the Matrix (patterns slop mines from the board's activity). */
+export type ChannelSource = 'agent' | 'person' | 'matrix';
+
+export const channelSource = (channel: DecisionChannel): ChannelSource => {
+  switch (channel) {
+    case 'agent':
+      return 'agent';
+    case 'mined':
+      return 'matrix';
+    case 'inbox':
+    case 'human':
+    case 'migration':
+      return 'person';
+  }
+};
+
+export const SOURCE_TEXT: Readonly<Record<ChannelSource, string>> = {
+  agent: 'From an agent',
+  person: 'From a person',
+  matrix: 'The Matrix',
+};
+
+/** The channel in plain words ("From an agent", "From a person", "The Matrix"). */
+export const channelLabel = (channel: DecisionChannel): string => SOURCE_TEXT[channelSource(channel)];
 
 /** The idempotency keys of decision globs, one per proposal source, so any creation is safe to repeat. */
 export const learningKey = (itemId: string): string => `kb:${itemId}`;
@@ -299,7 +325,7 @@ export const assessmentOf = (input: AssessmentInput): Assessment => {
     '### Suggested outcome',
     '',
     suggested === null
-      ? 'None: not enough to suggest one yet.'
+      ? 'Approve (the default): nothing flagged yet, so nothing argues against it.'
       : suggested === 'accept'
         ? 'Accept: drafted, with no flags.'
         : suggested === 'needs_work'

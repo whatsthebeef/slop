@@ -55,3 +55,22 @@ describe('filter pane Arm system toggle', () => {
     expect(screen.getByTestId('filter-arm').getAttribute('aria-pressed')).toBe('true');
   });
 });
+
+describe('filter pane text filter', () => {
+  const show = () => render(<FilterPane open values={{ category: 'feature,task,bug' }} onChange={vi.fn()} onClose={vi.fn()} />);
+
+  it('is the last control in the pane and wide enough for its placeholder', () => {
+    show();
+    const text = screen.getByTestId('filter-id');
+    const controls = [...screen.getByTestId('filter-pane').querySelectorAll('input, button:not([data-testid="filter-close"])')];
+    expect(controls.at(-1)).toBe(text);
+    expect(text.className).toContain('w-64');
+  });
+
+  it('keeps its id and the / shortcut hint', () => {
+    show();
+    const text = screen.getByTestId('filter-id');
+    expect(text.id).toBe('board-filter-text');
+    expect(text.getAttribute('aria-keyshortcuts')).toBe('/');
+  });
+});
