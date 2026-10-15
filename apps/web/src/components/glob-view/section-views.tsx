@@ -14,7 +14,7 @@ import { ArtifactsPanel } from './artifacts';
 import { ChoicesPanel } from './choices';
 import { ConflictSection } from './conflict';
 import type { GlobViewContext } from './context';
-import { DecisionAssessmentPanel, DecisionHoldsBack, DecisionPanel } from './decision';
+import { DecisionAssessmentPanel, DecisionPanel } from './decision';
 import { DeploysPanel } from './deploys';
 import { EditFieldsSection } from './edit-fields';
 import type { GlobEdits } from './edit-fields';
@@ -75,12 +75,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.human && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  related: ({ ctx, actions, onDismissEdge, onAddRelation }) =>
-    actions.human ? (
-      <DecisionHoldsBack ctx={ctx} onAddRelation={onAddRelation} />
-    ) : (
-      <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} />
-    ),
+  related: ({ ctx, onDismissEdge, onAddRelation }) => <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} />,
   size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection
       ctx={ctx}

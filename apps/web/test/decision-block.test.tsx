@@ -2,9 +2,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Action, DecisionAttributes, DecisionLearning, KbSignal, KbTarget } from '@slop/core';
+import type { Action, DecisionAttributes, DecisionLearning, EffectCheck, KbSignal, KbTarget } from '@slop/core';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EffectCheckView, SignalFigures } from '../src/components/decision-learning';
 import { GlobDetail } from '../src/components/glob-dialog';
 import { api } from '../src/lib/api';
 import type { BoardView, GlobDiff, GlobView } from '../src/lib/api';
@@ -476,9 +477,78 @@ describe('the watch signal step', () => {
     const select = await screen.findByTestId('watch-signal');
     if (!(select instanceof HTMLSelectElement)) throw new Error('the watch step is a select');
     expect(select.value).toBe('');
-    expect(select.options[0]?.textContent).toBe("Don't watch");
-    expect(screen.getByText(/Check it worked \(optional\): watch/)).toBeTruthy();
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Other…', "Don't check"]);
+    expect(screen.getByText(/Check it worked \(optional\)/)).toBeTruthy();
     expect(screen.getByText(/slop flags it/)).toBeTruthy();
+  });
+
+  describe('with a recommended check (s15t201)', () => {
+    const sig = (key: string, label: string, affected = 9, eligible = 45): KbSignal => ({ ...signal, key, label, figures: { affected, eligible, rate: affected / eligible, count: affected } });
+    const measured = [
+      sig('failure:no progress', 'no progress for 2 hours'),
+      sig('finding:major', 'major review findings', 2, 8),
+      sig('finding:minor', 'minor review findings', 1, 8),
+      sig('finding:nit', 'nit review findings', 1, 8),
+      sig('plan_amended', 'plans amended after review', 3, 10),
+      sig('tester_loops', 'tester failing the first attempt', 4, 10),
+    ];
+    const recommending = () => {
+      vi.spyOn(api, 'boardSignals').mockResolvedValue(measured);
+      const stored = suggestionOf('approve');
+      if (stored.suggestion === null) throw new Error('a suggestion');
+      vi.spyOn(api, 'suggestion').mockResolvedValue({
+        ...stored,
+        suggestion: { ...stored.suggestion, suggestion: { ...stored.suggestion.suggestion, check: { signalKey: 'failure:no progress', reason: 'Runs failing with "no progress" should drop.' } } },
+      });
+    };
+
+    it('pre-selects it with its reason, shows at most three signals plus Other and Don\'t check, in plain words', async () => {
+      recommending();
+      const user = userEvent.setup();
+      renderGlob(decision({ evidenceCount: 2 }));
+      const outcomes = await actionRow();
+      await user.click(await within(outcomes).findByRole('button', { name: 'Approve change' }));
+      const select = await screen.findByTestId('watch-signal');
+      if (!(select instanceof HTMLSelectElement)) throw new Error('the watch step is a select');
+      await waitFor(() => expect(select.value).toBe('failure:no progress'));
+      const labels = [...select.options].map((o) => o.textContent);
+      expect(labels[0]).toBe('no progress for 2 hours: 9 of 45 runs (20%) in the last 4 weeks (recommended)');
+      expect(labels.slice(-2)).toEqual(['Other…', "Don't check"]);
+      expect(labels.length).toBeLessThanOrEqual(5);
+      expect(labels.join()).not.toMatch(/\d+\/\d+/);
+      expect((await screen.findByTestId('watch-reason')).textContent).toBe('Runs failing with "no progress" should drop.');
+    });
+
+    it('sends the recommended check on approval, and nothing once Don\'t check is chosen', async () => {
+      recommending();
+      const user = userEvent.setup();
+      const { onDecide } = renderGlob(decision());
+      const outcomes = await actionRow();
+      await user.click(await within(outcomes).findByRole('button', { name: 'Approve change' }));
+      const select = await screen.findByTestId('watch-signal');
+      await waitFor(() => expect(select).toHaveProperty('value', 'failure:no progress'));
+      await user.click(screen.getByTestId('accept-confirm'));
+      expect(onDecide).toHaveBeenLastCalledWith({ outcome: 'accept', watchSignal: 'failure:no progress' });
+    });
+
+    it('opens the whole list, searchable, from Other…', async () => {
+      recommending();
+      const user = userEvent.setup();
+      renderGlob(decision());
+      const outcomes = await actionRow();
+      await user.click(await within(outcomes).findByRole('button', { name: 'Approve change' }));
+      const select = await screen.findByTestId('watch-signal');
+      await waitFor(() => expect(select).toHaveProperty('value', 'failure:no progress'));
+      await user.selectOptions(select, 'Other…');
+      const list = await screen.findByTestId('watch-list');
+      if (!(list instanceof HTMLSelectElement)) throw new Error('the list is a select');
+      expect(list.options).toHaveLength(measured.length);
+      await user.type(screen.getByTestId('watch-search'), 'tester');
+      expect([...list.options].map((o) => o.value)).toEqual(['tester_loops']);
+      await user.selectOptions(list, 'tester_loops');
+      expect(screen.queryByTestId('watch-all')).toBeNull();
+      expect(screen.getByTestId('watch-signal')).toHaveProperty('value', 'tester_loops');
+    });
   });
 
   it('sends nothing to watch by default', async () => {
@@ -486,7 +556,25 @@ describe('the watch signal step', () => {
     const { onDecide } = renderGlob(decision());
     const outcomes = await actionRow();
     await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
-    await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
+    expect(within(outcomes).getByRole('button', { name: 'Approve change' })).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('accept-confirm-text').textContent).toBe('Applies the change to its target, then moves this decision to Reviewing.');
+    await user.click(screen.getByTestId('accept-confirm'));
+    expect(onDecide).toHaveBeenCalledWith({ outcome: 'accept' });
+  });
+
+  it('confirms a hotspot\'s refactor glob in its own form, with its own text, and creates it on Create', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'plan').mockResolvedValue({
+      current: { content: 'Refactor the file.', version: 1, provenance: { actor: 'slop', by: 'sessionator' }, createdAt: '2026-10-08T00:00:00Z' },
+      versions: [{ version: 1 }],
+    } as unknown as Awaited<ReturnType<typeof api.plan>>);
+    const { onDecide } = renderGlob(decision({ origin: { kind: 'hotspot', path: 'src/a.ts' }, channel: 'mined' }));
+    await user.click(await screen.findByRole('button', { name: 'Create refactor glob' }));
+    const text = (await screen.findByTestId('accept-confirm-text')).textContent;
+    expect(text).toContain('Creates a refactor glob from this proposal (Tests live next to the code they cover)');
+    expect(text).not.toContain('no knowledge change');
+    expect(onDecide).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('accept-confirm'));
     expect(onDecide).toHaveBeenCalledWith({ outcome: 'accept' });
   });
 
@@ -508,5 +596,36 @@ describe('the watch signal step', () => {
     expect(await screen.findByTestId('outcome-form-accept')).toBeTruthy();
     expect(screen.queryByTestId('watch-signal')).toBeNull();
     expect(screen.queryByTestId('watch-own')).toBeNull();
+  });
+});
+
+describe('plain figures (s15t201)', () => {
+  it('reads a mined learning\'s signal as one plain line, with no slash figures', () => {
+    render(<SignalFigures signal={{ ...signal, key: 'failure:no progress', label: 'no progress for 2 hours', figures: { affected: 9, eligible: 45, rate: 0.2, count: 9 } }} />);
+    const line = screen.getByTestId('signal').textContent;
+    expect(line).toContain('no progress for 2 hours: 9 of 45 runs (20%) in the last 4 weeks');
+    expect(line).not.toMatch(/\d+\/\d+/);
+  });
+
+  it('reads an effect check\'s before and after figures as "a of b globs (x%)"', () => {
+    const figures = (affected: number, eligible: number, rate: number) => ({ affected, eligible, rate, globIds: [], affectedGlobIds: [] });
+    const check: EffectCheck = {
+      state: 'improved',
+      key: 'failure:no progress',
+      label: 'no progress for 2 hours',
+      basis: { kind: 'time', since: '2026-10-07T00:00:00Z' },
+      n: 10,
+      before: figures(3, 10, 0.3),
+      after: figures(1, 10, 0.1),
+      worse: [],
+      raisedItemId: null,
+      checkedAt: null,
+    };
+    render(
+      <MemoryRouter>
+        <EffectCheckView boardId={1} check={check} />
+      </MemoryRouter>,
+    );
+    expect(screen.getAllByTestId('effect-figure').map((c) => c.textContent)).toEqual(['3 of 10 globs (30%)', '1 of 10 globs (10%)']);
   });
 });
