@@ -30,7 +30,7 @@ describe('the merge gate (machine)', () => {
     const g = open();
     const refused = machine.requestMerge(g, ctx(dev), { continue: false, facts: { relations: facts('merge', 'open') } });
     expect(code(refused)).toBe('invalid_transition');
-    expect(message(refused)).toBe("Can't merge until s1t1 is merged");
+    expect(message(refused)).toBe("Can't merge until s1t1 is merged and rolled out");
     expect(machine.allowedActions(g, dev, { relations: facts('merge', 'open') })).not.toContain('merge');
     expect(machine.allowedActions(g, dev, { relations: facts('merge', 'merged') })).toContain('merge');
     const met = unwrap(machine.requestMerge(g, ctx(dev), { continue: false, facts: { relations: facts('merge', 'merged') } }));
@@ -258,7 +258,7 @@ describe('the relation service: gates, resumes and the relations API', () => {
     unwrap(await globs.addRelation(DEV, g.id, (await current(g.id)).version, { to: first.id, gate: 'merge' }));
     const refused = await globs.merge(DEV, g.id, (await current(g.id)).version);
     expect(code(refused)).toBe('invalid_transition');
-    expect(message(refused)).toBe(`Can't merge until ${first.id} is merged`);
+    expect(message(refused)).toBe(`Can't merge until ${first.id} is merged and rolled out`);
     expect(unwrap(await globs.get(DEV, g.id)).allowedActions).not.toContain('merge');
     await merge(first.id);
     expect(unwrap(await globs.get(DEV, g.id)).allowedActions).toContain('merge');
@@ -402,17 +402,17 @@ describe('the relation service: gates, resumes and the relations API', () => {
       const a = await create();
       const b = await create();
       const d = decision('s1k1');
-      const made = await create({ after: [a.id], relations: [{ to: b.id, gate: 'merge' }, { to: d.id, gate: 'sign_off', reason: 'ship when decided' }], relationsBy: 'agent' });
+      const made = await create({ after: [a.id], afterReason: 'uses its migration', relations: [{ to: b.id, gate: 'merge', reason: 'shares its helper' }, { to: d.id, gate: 'sign_off', reason: 'ship when decided' }], relationsBy: 'agent' });
       expect(rows(made.id).map((r) => [r.to, r.gate, r.until, r.source, r.reason])).toEqual([
-        [a.id, 'start', 'merged', 'agent', null],
-        [b.id, 'merge', 'merged', 'agent', null],
+        [a.id, 'start', 'merged', 'agent', 'uses its migration'],
+        [b.id, 'merge', 'merged', 'agent', 'shares its helper'],
         [d.id, 'sign_off', 'decided', 'agent', 'ship when decided'],
       ]);
       const c = await create();
       const updated = unwrap(await globs.update(DEV, made.id, made.version, { relations: [{ to: c.id, gate: 'merge', reason: 'later' }, { to: b.id, gate: 'merge', until: 'signed_off', reason: 'wait for sign-off' }] }));
       expect(updated.version).toBe(made.version + 1);
       expect(rows(made.id).map((r) => [r.to, r.gate, r.until, r.reason])).toEqual([
-        [a.id, 'start', 'merged', null],
+        [a.id, 'start', 'merged', 'uses its migration'],
         [b.id, 'merge', 'signed_off', 'wait for sign-off'],
         [d.id, 'sign_off', 'decided', 'ship when decided'],
         [c.id, 'merge', 'merged', 'later'],
@@ -497,5 +497,87 @@ describe('the relation service: gates, resumes and the relations API', () => {
     const all = unwrap(await globs.listWithArtifacts(DEV, boardId, { include: 'all' }, (x) => x.id === waiting.id));
     expect(all[0]?.holding).toMatchObject([{ to: open2.id, toTitle: 'Not yet', gate: 'start', until: 'merged', state: 'planning', source: 'person', toIsDecision: false }]);
     expect(holdingOf(all[0]?.relations ?? { relations: [], states: new Map() }, new Map())[0]?.toTitle).toBeNull();
+  });
+
+  describe('reasons: an agent says why a relation exists', () => {
+    const NEED = (to: string): string =>
+      `Relation to ${to} needs a one-line reason: name the file or symbol this glob uses from it, or why it must wait. Pass \`reason\` (shorthand for needs/after) or \`relations: [{to, reason}]\`.`;
+
+    it('refuses an agent create without a reason, and accepts afterReason and per-relation reasons', async () => {
+      const a = await create();
+      const bare = await globs.create(ADMIN, { boardId, title: 'W', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, after: [a.id], relationsBy: 'agent' });
+      expect(code(bare)).toBe('invalid_input');
+      expect(message(bare)).toBe(NEED(a.id));
+      expect(rows()).toHaveLength(0);
+      const viaBy = await globs.create(ADMIN, { boardId, title: 'W', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, relations: [{ to: a.id, gate: 'merge' }], by: 'auto' });
+      expect(message(viaBy)).toBe(NEED(a.id));
+      const ok1 = await create({ after: [a.id], afterReason: 'uses a()', by: 'agent' });
+      expect(rows(ok1.id)[0]).toMatchObject({ to: a.id, source: 'agent', reason: 'uses a()' });
+      const ok2 = await create({ relations: [{ to: a.id, gate: 'sign_off', reason: 'handover waits' }], relationsBy: 'agent' });
+      expect(rows(ok2.id)[0]).toMatchObject({ gate: 'sign_off', reason: 'handover waits' });
+    });
+
+    it('a person is never refused, and a target that holds nothing needs no reason', async () => {
+      const a = await create();
+      const made = await create({ after: [a.id] });
+      expect(rows(made.id)[0]).toMatchObject({ source: 'person', reason: null });
+      const done = await create();
+      await merge(done.id);
+      const skipped = await create({ type: 'sub', after: [done.id], by: 'agent' });
+      expect(rows(skipped.id)).toEqual([]);
+    });
+
+    it('add_relation and update (relations, after) refuse an agent without a reason; an unchanged or reasoned row is fine', async () => {
+      const a = await create();
+      const b = await create();
+      const g = await create();
+      const refused = await globs.addRelation(DEV, g.id, null, { to: a.id }, 'held_by', 'agent');
+      expect(message(refused)).toBe(NEED(a.id));
+      expect(code(await globs.addRelation(DEV, g.id, null, { to: a.id, reason: 'x' }, 'held_by', 'agent'))).toBeNull();
+      // The row already has a reason: restating it without one changes nothing and is not refused.
+      expect(code(await globs.addRelation(DEV, g.id, null, { to: a.id }, 'held_by', 'agent'))).toBeNull();
+      const v = (await current(g.id)).version;
+      expect(message(await globs.update(DEV, g.id, v, { relations: [{ to: b.id, gate: 'merge' }], relationsBy: 'agent' }))).toBe(NEED(b.id));
+      expect(message(await globs.update(DEV, g.id, v, { after: [a.id, b.id], by: 'agent' }))).toBe(NEED(b.id));
+      const updated = unwrap(await globs.update(DEV, g.id, v, { after: [a.id, b.id], afterReason: 'b gives it the table', by: 'agent' }));
+      expect(updated.version).toBeGreaterThan(v);
+      expect(rows(g.id).map((r) => [r.to, r.source, r.reason])).toEqual([
+        [a.id, 'agent', 'x'],
+        [b.id, 'agent', 'b gives it the table'],
+      ]);
+    });
+
+    it('an agent update after is stored as an agent relation, not a person one', async () => {
+      const a = await create();
+      const g = await create();
+      unwrap(await globs.update(DEV, g.id, g.version, { after: [a.id], afterReason: 'needs a', by: 'agent' }));
+      expect(rows(g.id)[0]?.source).toBe('agent');
+    });
+
+    it('accepts rolled_out as another way to write until merged', async () => {
+      const a = await create();
+      const g = await create({ relations: [{ to: a.id, gate: 'sign_off', until: 'rolled_out', reason: 'r' }], relationsBy: 'agent' });
+      expect(rows(g.id)[0]?.until).toBe('merged');
+      const bad = await globs.addRelation(DEV, g.id, null, { to: a.id, gate: 'merge', until: 'nonsense' as never, reason: 'r' }, 'held_by', 'agent');
+      expect(code(bad)).toBe('invalid_input');
+    });
+
+    it('split parts get a generated reason instead of null', async () => {
+      const g = await create();
+      const parts = unwrap(
+        await globs.split(ADMIN, g.id, g.version, {
+          parts: [
+            { title: 'One', plan: 'one' },
+            { title: 'Two', plan: 'two', after: [0] },
+            { title: 'Three', plan: 'three', after: [0, 1] },
+          ],
+          idempotencyKey: null,
+        }),
+      );
+      const second = parts[1];
+      const third = parts[2];
+      expect(rows(second?.id).map((r) => r.reason)).toEqual([`Part 2 of ${g.id}'s split needs part 1`]);
+      expect(rows(third?.id).map((r) => r.reason)).toEqual([`Part 3 of ${g.id}'s split needs part 1`, `Part 3 of ${g.id}'s split needs part 2`]);
+    });
   });
 });
