@@ -19,7 +19,7 @@ vi.mock('@aws-sdk/client-codebuild', () => ({
 }));
 
 const { startAtf } = await import('../src/atf-executors.js');
-const { CodeBuildAtfStarter, atfIdempotencyToken, atfVariables, combineGreps } =
+const { AtfRefusedError, CodeBuildAtfStarter, atfIdempotencyToken, atfVariables, combineGreps } =
   await import('../src/atf-starter.js');
 import type { AtfStart, AtfStarter } from '../src/atf-starter.js';
 
@@ -29,6 +29,7 @@ const integration: AtfIntegration = {
   project: 'atf-project',
   mode: 'push',
 };
+const policy = { projects: ['atf-project'], roleAccounts: ['123456789012'] };
 const job: AtfStart = {
   boardId: 7,
   integration,
@@ -45,7 +46,7 @@ describe('the CodeBuild ATF starter', () => {
   });
 
   it('starts the project with the spec list in variable overrides and a per-deploy idempotency token', async () => {
-    const started = await new CodeBuildAtfStarter().start(job);
+    const started = await new CodeBuildAtfStarter(policy).start(job);
     expect(started).toEqual({
       buildId: 'atf-project:1234',
       url: 'https://eu-west-1.console.aws.amazon.com/codesuite/codebuild/projects/atf-project/build/atf-project%3A1234/?region=eu-west-1',
@@ -97,16 +98,48 @@ describe('the CodeBuild ATF starter', () => {
       sessionToken: 'ST',
       expiration: new Date('2026-10-05T13:00:00Z'),
     };
-    const starter = new CodeBuildAtfStarter((roleArn, region) => {
-      assumed.push(`${roleArn}@${region}`);
+    const starter = new CodeBuildAtfStarter(policy, (roleArn, region, externalId) => {
+      assumed.push(`${roleArn}@${region}#${externalId}`);
       return Promise.resolve(credentials);
     });
     await starter.start({
       ...job,
-      integration: { ...integration, roleArn: 'arn:aws:iam::1:role/slop-atf' },
+      integration: { ...integration, roleArn: 'arn:aws:iam::123456789012:role/slop-atf', externalId: 'ext-7' },
     });
-    expect(assumed).toEqual(['arn:aws:iam::1:role/slop-atf@eu-west-1']);
+    expect(assumed).toEqual(['arn:aws:iam::123456789012:role/slop-atf@eu-west-1#ext-7']);
     expect(calls.clients[0]?.config).toEqual({ region: 'eu-west-1', credentials });
+  });
+});
+
+describe('the CodeBuild ATF starter and the server allow-list', () => {
+  const withRole = { ...integration, roleArn: 'arn:aws:iam::123456789012:role/slop-atf', externalId: 'ext-7' };
+  const assumeNever = () => Promise.reject(new Error('must not assume'));
+
+  beforeEach(() => {
+    calls.clients.length = 0;
+    calls.inputs.length = 0;
+  });
+
+  it('starts nothing without an allow-list, so slop never uses its own credentials for a board-chosen project', async () => {
+    await expect(new CodeBuildAtfStarter().start(job)).rejects.toBeInstanceOf(AtfRefusedError);
+    expect(calls.clients).toEqual([]);
+    expect(calls.inputs).toEqual([]);
+  });
+
+  it('refuses a project or a role account outside the allow-list at start time, before any AWS call', async () => {
+    const starter = new CodeBuildAtfStarter(policy, assumeNever);
+    await expect(starter.start({ ...job, integration: { ...integration, project: 'other-deploy' } })).rejects.toBeInstanceOf(AtfRefusedError);
+    await expect(
+      starter.start({ ...job, integration: { ...withRole, roleArn: 'arn:aws:iam::999999999999:role/slop-atf' } }),
+    ).rejects.toBeInstanceOf(AtfRefusedError);
+    expect(calls.clients).toEqual([]);
+    expect(calls.inputs).toEqual([]);
+  });
+
+  it('refuses to assume a role that has no ExternalId', async () => {
+    const noId: AtfIntegration = { ...integration, roleArn: withRole.roleArn };
+    await expect(new CodeBuildAtfStarter(policy, assumeNever).start({ ...job, integration: noId })).rejects.toBeInstanceOf(AtfRefusedError);
+    expect(calls.inputs).toEqual([]);
   });
 });
 
@@ -162,6 +195,19 @@ describe('the start_atf executor', () => {
     expect(await outcome()).toBe('done');
     expect(starts).toHaveLength(2);
     expect(starts[0]).toEqual({ ...job, specs: ['e2e/a.spec.ts'], greps: ['@smoke'] });
+  });
+
+  it('drops, and logs, a start the allow-list refuses instead of retrying it', async () => {
+    const refusing: AtfStarter = { start: () => Promise.reject(new AtfRefusedError('not on the allow-list')) };
+    const logged: string[] = [];
+    const outcome = await startAtf(effect, {
+      testRuns: { atfBatch: () => Promise.resolve({ ok: true, value: { status: 'ready', batch } }) },
+      starter: refusing,
+      boardOf: () => Promise.resolve({ atf: integration }),
+      log: (_t: string, m: string) => logged.push(m),
+    });
+    expect(outcome).toBe('dropped');
+    expect(logged.join('\n')).toContain('not on the allow-list');
   });
 
   it('drops the effect when the board went back to pull, a newer deploy replaced the commit, or the batch errors', async () => {

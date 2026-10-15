@@ -1377,6 +1377,16 @@ const AtfSettings = ({
           <code>codebuild:StartBuild</code> on the project for slop's role (or for the role above, which must trust slop's
           role for <code>sts:AssumeRole</code>). A failed start never blocks anything.
         </p>
+        <p className='text-xs text-muted-foreground'>
+          Only a server admin can turn push mode on or change its project or role, and only for projects and role accounts on
+          the server's allow-list.
+        </p>
+        {atf.externalId !== undefined && (
+          <p className='text-xs text-muted-foreground' data-testid='atf-external-id'>
+            ExternalId slop sends when it assumes the role: <code>{atf.externalId}</code>. Put it in the role's trust policy as an{' '}
+            <code>sts:ExternalId</code> condition.
+          </p>
+        )}
       </>
     )}
   </div>

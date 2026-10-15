@@ -426,6 +426,14 @@ export interface AtfIntegration {
   /** A role slop assumes to start the build; the server's own credentials when absent. */
   readonly roleArn?: string;
   readonly mode: 'pull' | 'push';
+  /**
+   * The `sts:ExternalId` slop sends on every AssumeRole for this board (the role owner puts it in the trust policy's
+   * `sts:ExternalId` condition). Slop generates it when a server admin first sets a push role; a board setting never carries it.
+   */
+  readonly externalId?: string;
+  /** The server admin who last set or changed the push configuration, and when. */
+  readonly pushChangedBy?: string;
+  readonly pushChangedAt?: string;
 }
 
 export interface Board {

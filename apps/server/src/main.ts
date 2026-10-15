@@ -110,7 +110,8 @@ const routines =
     : new SecretRoutines(secretStore, secretNames(config.SECRETS_PREFIX).routinesPrefix, config.SECRETS_CACHE_SECONDS * 1000);
 const hub = new HintHub();
 const auth = new Auth(db, config);
-const boards = new BoardService({ store, notifier: hub });
+const atfPolicy = { projects: config.ATF_PUSH_ALLOWED_PROJECTS, roleAccounts: config.ATF_PUSH_ALLOWED_ROLE_ACCOUNTS };
+const boards = new BoardService({ store, notifier: hub, atfPolicy, serverAdmins: config.SLOP_SERVER_ADMINS });
 // The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
 const branchFiles = new HostBranchFiles(() => github, logError);
 const catalog = new FsCatalog(config.CATALOG_DIR);
@@ -168,7 +169,7 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
       logError,
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
-    ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(), boardOf, log: logError }),
+    ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(atfPolicy), boardOf, log: logError }),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
     // `rolloutService` is built below and only called once a job runs.
     ...rolloutExecutors(

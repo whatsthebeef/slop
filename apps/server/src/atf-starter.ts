@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { CodeBuildClient, StartBuildCommand } from '@aws-sdk/client-codebuild';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
-import type { AtfIntegration } from '@slop/core';
+import { ATF_PUSH_OFF, atfPushRefusal } from '@slop/core';
+import type { AtfIntegration, AtfPushPolicy } from '@slop/core';
 
 /** What a push-mode ATF start needs: where, at which commit, and what to run (empty: the board's default suite). */
 export interface AtfStart {
@@ -53,12 +54,15 @@ export interface RoleCredentials {
   readonly expiration: Date;
 }
 
-export type AssumeRole = (roleArn: string, region: string) => Promise<RoleCredentials>;
+export type AssumeRole = (roleArn: string, region: string, externalId: string) => Promise<RoleCredentials>;
 
-/** `sts:AssumeRole` with slop's own credentials; the session lasts the shortest time STS allows. */
-export const assumeWithSts: AssumeRole = async (roleArn, region) => {
+/** The server's allow-list refuses this start (or the setting is unusable): retrying can't help. */
+export class AtfRefusedError extends Error {}
+
+/** `sts:AssumeRole` with slop's own credentials and the board's ExternalId; the session lasts the shortest time STS allows. */
+export const assumeWithSts: AssumeRole = async (roleArn, region, externalId) => {
   const { Credentials: c } = await new STSClient({ region }).send(
-    new AssumeRoleCommand({ RoleArn: roleArn, RoleSessionName: 'slop-atf', DurationSeconds: 900 }),
+    new AssumeRoleCommand({ RoleArn: roleArn, RoleSessionName: 'slop-atf', DurationSeconds: 900, ExternalId: externalId }),
     { abortSignal: AbortSignal.timeout(15_000) },
   );
   if (
@@ -85,9 +89,18 @@ export const assumeWithSts: AssumeRole = async (roleArn, region) => {
 export class CodeBuildAtfStarter implements AtfStarter {
   private readonly clients = new Map<string, CodeBuildClient>();
 
-  constructor(private readonly assume: AssumeRole = assumeWithSts) {}
+  constructor(
+    private readonly policy: AtfPushPolicy = ATF_PUSH_OFF,
+    private readonly assume: AssumeRole = assumeWithSts,
+  ) {}
 
   async start(job: AtfStart): Promise<StartedAtf> {
+    // The save-time check can be stale (the allow-list changed since): the server's configuration decides at start time too.
+    const refusal = atfPushRefusal(job.integration, this.policy);
+    if (refusal !== null) throw new AtfRefusedError(refusal);
+    if (job.integration.roleArn !== undefined && job.integration.externalId === undefined) {
+      throw new AtfRefusedError(`Board ${String(job.boardId)} has a push role but no ExternalId: a server admin sets the push setup again`);
+    }
     const { region, project } = job.integration;
     const { build } = await (
       await this.client(job.integration)
@@ -110,10 +123,10 @@ export class CodeBuildAtfStarter implements AtfStarter {
     return { buildId: build.id, url };
   }
 
-  private async client({ region, roleArn }: AtfIntegration): Promise<CodeBuildClient> {
+  private async client({ region, roleArn, externalId }: AtfIntegration): Promise<CodeBuildClient> {
     // Role credentials expire, so a role's client is rebuilt for every start (starts are rare).
-    if (roleArn !== undefined) {
-      const credentials = await this.assume(roleArn, region);
+    if (roleArn !== undefined && externalId !== undefined) {
+      const credentials = await this.assume(roleArn, region, externalId);
       return new CodeBuildClient({ region, credentials });
     }
     let client = this.clients.get(region);

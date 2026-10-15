@@ -47,3 +47,15 @@ A glob's test plan (`test_plan` artifact) lists the ATF specs to run once its me
 - The board's own `.sstor/atf.sh` should run only `SLOP_ATF_SPECS` (and `SLOP_ATF_GREP` as the runner's grep) when set, else its default suite.
 - `scripts/atf-report.sh` reports counts and per-spec results (`file`, status, counts) from the JUnit files, plus `missing` for a listed spec with no test case. It never fails the stage.
 - Push option: a board can instead let slop start its ATF CodeBuild project after the deploy (board setting `atf` with mode `push`). Slop needs `codebuild:StartBuild` on that project, and `sts:AssumeRole` with a trust relationship when a role ARN is set. Creating the project and role is a person's step.
+  - The server's configuration decides what slop may start, not the board: `ATF_PUSH_ALLOWED_PROJECTS` (CodeBuild project names, comma-separated; a trailing `*` makes a prefix) and `ATF_PUSH_ALLOWED_ROLE_ACCOUNTS` (12-digit account IDs whose roles slop may assume). With no project allow-list push mode is off. A setting outside the lists is refused when saved and again when a start runs.
+  - Only a server admin (`SLOP_SERVER_ADMINS`, emails), not a board admin, can turn push mode on or change its project or role; slop records who and when. A board admin can still switch the board to pull.
+  - Every `sts:AssumeRole` carries an `ExternalId` that slop generates once per board (shown in the board's ATF settings; AWS doesn't treat an ExternalId as a secret). The role's trust policy must require it:
+
+    ```json
+    {
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::<slop-account>:role/<slop-instance-role>" },
+      "Action": "sts:AssumeRole",
+      "Condition": { "StringEquals": { "sts:ExternalId": "<the board's ExternalId>" } }
+    }
+    ```

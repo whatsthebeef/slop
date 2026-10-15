@@ -10,7 +10,9 @@ import { MAX_REVIEW_TOOL_CAP } from '../domain/review-tools.js';
 import { mergeReviewSettings } from '../domain/review-settings.js';
 import type { ReviewBoardSettings } from '../domain/review-settings.js';
 import { REVIEW_SEVERITIES } from '../domain/independent-review.js';
-import type { BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
+import { atfPushRefusal, samePushTarget } from '../domain/atf-policy.js';
+import type { AtfPushPolicy } from '../domain/atf-policy.js';
+import type { AtfIntegration, BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
 import type { Notifier, Store, Tx } from '../ports.js';
 
 export interface CreateBoardInput {
@@ -162,7 +164,18 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
 
 /** Boards, settings and members. Roles live in slop, per board. */
 export class BoardService {
-  constructor(private readonly deps: { readonly store: Store; readonly notifier: Notifier }) {}
+  constructor(
+    private readonly deps: {
+      readonly store: Store;
+      readonly notifier: Notifier;
+      /** What push-mode ATF may start (the server's configuration); absent: push mode is off. */
+      readonly atfPolicy?: AtfPushPolicy;
+      /** Emails of the server's admins (not board admins): only they set up ATF push mode. */
+      readonly serverAdmins?: readonly string[];
+      readonly newExternalId?: () => string;
+      readonly clock?: { now(): string };
+    },
+  ) {}
 
   /** `whoami`: the person's boards and their role on each. */
   async memberships(email: string): Promise<Membership[]> {
@@ -267,9 +280,12 @@ export class BoardService {
       const board = await tx.getBoard(boardId);
       if (board === null) return notFound(`No board ${boardId}`);
       if (board.version !== version) return invalidInput('The board settings have changed; reload them');
+      const atf = this.checkAtf(email, board, settings.atf);
+      if (!atf.ok) return atf;
       const next: Board = {
         ...board,
         ...settings,
+        ...(settings.atf === undefined ? {} : { atf: atf.value }),
         review: settings.review === undefined ? board.review : mergeReviewSettings(board.review, trimReview(settings.review)),
         version: board.version + 1,
       };
@@ -342,6 +358,46 @@ export class BoardService {
       }
       await tx.deleteMember(boardId, target);
       return ok(null);
+    });
+  }
+
+  /**
+   * The ATF setting to store. A board admin may switch ATF to pull or off, or leave a push setup as it is; turning on or
+   * changing push mode (its project or role) is for a server admin, and only for what the server's allow-list permits. The
+   * ExternalId is slop's: generated once per board when a push role is first set, never taken from the request.
+   */
+  private checkAtf(email: string, board: Board, requested: AtfIntegration | null | undefined): Result<AtfIntegration | null> {
+    if (requested === undefined) return ok(board.atf);
+    if (requested === null) return ok(null);
+    // The request never sets these: slop's own fields.
+    const setting: AtfIntegration = {
+      provider: requested.provider,
+      region: requested.region,
+      project: requested.project,
+      mode: requested.mode,
+      ...(requested.roleArn === undefined ? {} : { roleArn: requested.roleArn }),
+    };
+    // Switching to pull keeps the ExternalId, so a later push setup still matches the role's trust policy.
+    if (setting.mode !== 'push') return ok({ ...setting, ...(board.atf?.externalId === undefined ? {} : { externalId: board.atf.externalId }) });
+    const serverAdmin = (this.deps.serverAdmins ?? []).includes(email.toLowerCase());
+    // A board admin may leave a push setup as it is; a server admin's resave still gives a role that has no ExternalId one.
+    if (samePushTarget(setting, board.atf) && (!serverAdmin || setting.roleArn === undefined || board.atf?.externalId !== undefined)) {
+      return ok(board.atf);
+    }
+    if (!serverAdmin) {
+      return forbidden('Only a server admin can turn on ATF push mode or change its project or role');
+    }
+    const refusal = atfPushRefusal(setting, this.deps.atfPolicy ?? { projects: [], roleAccounts: [] });
+    if (refusal !== null) return invalidInput(refusal);
+    const externalId =
+      setting.roleArn === undefined
+        ? {}
+        : { externalId: board.atf?.externalId ?? (this.deps.newExternalId ?? (() => globalThis.crypto.randomUUID()))() };
+    return ok({
+      ...setting,
+      ...externalId,
+      pushChangedBy: email,
+      pushChangedAt: (this.deps.clock ?? { now: () => new Date().toISOString() }).now(),
     });
   }
 

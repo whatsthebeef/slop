@@ -1,4 +1,5 @@
 export * from './domain/types.js';
+export * from './domain/atf-policy.js';
 export * from './domain/errors.js';
 export * from './domain/edit-failure.js';
 export * from './domain/events.js';
