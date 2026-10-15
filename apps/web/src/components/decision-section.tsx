@@ -1,18 +1,21 @@
-import { decisionOf, SCOPE_KINDS, scopeLabel } from '@slop/core';
-import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, ScopeKind } from '@slop/core';
+import { channelLabel, channelSource, decisionOf, readSuggestion, SCOPE_KINDS, scopeLabel } from '@slop/core';
+import type { ChannelSource, DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, ScopeKind } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import { HumanIcon, MachineIcon, MatrixIcon } from '@/components/actor-icons';
 import { DiffView } from '@/components/diff-view';
 import { DocumentProposal, EffectCheckView, inPipeline, PIPELINE_POLL_MS, ProcessingState, SignalFigures, StaleNote } from '@/components/decision-learning';
-import { isLearning, Outcomes, Recommendation } from '@/components/decision-outcomes';
+import { isLearning, OutcomeForms, Outcomes, Recommendation } from '@/components/decision-outcomes';
 import type { DecideFlow } from '@/components/decision-outcomes';
 import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
-import { changeHeading, SCOPE_EXPLAINED, scopeMatters } from '@/lib/decide-flow';
+import { changeHeading, changeKindOf, SCOPE_EXPLAINED, scopeMatters } from '@/lib/decide-flow';
+import { flagsOf } from '@/lib/assessment-flags';
+import { SUGGESTION_ACTION_TEXT } from '@/lib/suggestion';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -31,7 +34,7 @@ export const OUTCOME_TEXT: Record<DecisionOutcomeKind, string> = {
 /** What the scope's reference means for each kind: null when the kind takes none. */
 const REF_HINT: Record<ScopeKind, string | null> = {
   glob: 'Glob ID, e.g. s15t7',
-  future_work: 'Only this group (blank: all groups)',
+  future_work: 'Only this group (blank: all new globs)',
   area_group: 'Group name',
   project: null,
 };
@@ -121,7 +124,7 @@ const ProposedChange = ({ globId }: { globId: string }) => {
   if (diff.isError) return <p className='text-sm text-red'>Could not load the proposed change.</p>;
   if (diff.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the proposed change…</p>;
   const { target, preview } = diff.data;
-  const heading = changeHeading(target, preview !== null && preview.diff.some((l) => l.op === 'added') && preview.diff.every((l) => l.op !== 'removed'));
+  const heading = changeHeading(target, preview === null ? 'edit' : changeKindOf(preview.diff, diff.data.sectionExisted));
   return (
     <div className='grid gap-1' data-testid='proposed-change'>
       {heading !== null && (
@@ -153,12 +156,10 @@ const ProposedChange = ({ globId }: { globId: string }) => {
   );
 };
 
-/** Why the change: the proposal text (the full statement, which the title only abbreviates) and a one-line summary of the evidence, right above the change. */
-const Why = ({ glob, attributes }: { glob: GlobView; attributes: DecisionAttributes }) => {
+/** Why the change: the proposal text (the full statement, which the title only abbreviates), right above the change. */
+const Why = ({ glob }: { glob: GlobView }) => {
   const plan = useQuery({ queryKey: ['plan', glob.id], queryFn: () => api.plan(glob.id) });
   const text = (plan.data?.current?.content ?? '').trim();
-  const sources = attributes.sourceGlobs ?? [];
-  const seen = attributes.evidenceCount ?? 0;
   return (
     <div className='grid gap-1' data-testid='why'>
       <h3 className='text-xs font-semibold text-muted-foreground'>Why</h3>
@@ -169,26 +170,47 @@ const Why = ({ glob, attributes }: { glob: GlobView; attributes: DecisionAttribu
       ) : (
         <CollapsibleMarkdown content={text} />
       )}
-      {(seen > 0 || sources.length > 0) && (
-        <p className='text-xs text-muted-foreground' data-testid='evidence-summary'>
-          {seen > 0 && `Seen ${String(seen)} time${seen === 1 ? '' : 's'}`}
-          {sources.length > 0 && (
-            <>
-              {seen > 0 ? ' on ' : 'On '}
-              {sources.length} glob{sources.length === 1 ? '' : 's'}:{' '}
-              {sources.map((id, i) => (
-                <span key={id}>
-                  {i > 0 && ', '}
-                  <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id)}>
-                    {id}
-                  </Link>
-                </span>
-              ))}
-            </>
-          )}
-        </p>
-      )}
     </div>
+  );
+};
+
+/** How often the learning was seen and on which globs: the evidence behind it, one line. */
+const EvidenceSummary = ({ glob, attributes }: { glob: GlobView; attributes: DecisionAttributes }) => {
+  const sources = attributes.sourceGlobs ?? [];
+  const seen = attributes.evidenceCount ?? 0;
+  if (seen === 0 && sources.length === 0) return null;
+  return (
+    <p className='text-xs text-muted-foreground' data-testid='evidence-summary'>
+      {seen > 0 && `Seen ${String(seen)} time${seen === 1 ? '' : 's'}`}
+      {sources.length > 0 && (
+        <>
+          {seen > 0 ? ' on ' : 'On '}
+          {sources.length} glob{sources.length === 1 ? '' : 's'}:{' '}
+          {sources.map((id, i) => (
+            <span key={id}>
+              {i > 0 && ', '}
+              <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id)}>
+                {id}
+              </Link>
+            </span>
+          ))}
+        </>
+      )}
+    </p>
+  );
+};
+
+const SOURCE_ICON: Record<ChannelSource, typeof MachineIcon> = { agent: MachineIcon, person: HumanIcon, matrix: MatrixIcon };
+
+/** Where the decision came from, one quiet line with its icon: from an agent, from a person, or the Matrix. */
+const WhereFrom = ({ attributes }: { attributes: DecisionAttributes }) => {
+  const Icon = SOURCE_ICON[channelSource(attributes.channel)];
+  return (
+    <p className='flex items-center gap-1.5 text-xs text-muted-foreground' data-testid='decision-source'>
+      <span>Where it came from:</span>
+      <Icon decorative />
+      <span>{channelLabel(attributes.channel)}</span>
+    </p>
   );
 };
 
@@ -241,6 +263,76 @@ export const DecisionAssessment = ({ glob, all = false }: { glob: GlobView; all?
     </details>
   );
 };
+
+/** The flags the rules raised, from the latest rule-based assessment (it also lists scope, target and the like, which the view shows elsewhere). */
+const AssessmentFlags = ({ glob }: { glob: GlobView }) => {
+  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
+  const versions = useQuery({
+    queryKey: artifactKey(glob.id, 'assessment', ''),
+    queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
+    enabled: has,
+  });
+  const flags = flagsOf(versions.data?.at(-1)?.content ?? '');
+  if (flags.length === 0) return null;
+  return (
+    <div className='grid gap-1 text-xs' data-testid='assessment-flags'>
+      <h4 className='font-semibold text-muted-foreground'>Flags</h4>
+      <ul className='list-disc pl-4'>
+        {flags.map((f) => (
+          <li key={f}>{f}</li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+
+/** The recommendations before the latest one, newest first. */
+const EarlierRecommendations = ({ glob }: { glob: GlobView }) => {
+  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === 'suggestion');
+  const versions = useQuery({
+    queryKey: artifactKey(glob.id, 'assessment', 'suggestion'),
+    queryFn: () => api.artifactVersions(glob.id, 'assessment', 'suggestion'),
+    enabled: has,
+  });
+  const older = [...(versions.data ?? [])].slice(0, -1).reverse();
+  if (older.length === 0) return null;
+  return (
+    <div className='grid gap-1 text-xs' data-testid='assessment-history'>
+      <h4 className='font-semibold text-muted-foreground'>Earlier recommendations ({older.length})</h4>
+      <ul className='grid gap-1'>
+        {older.map((v) => {
+          const stored = readSuggestion(v.content);
+          return (
+            <li key={v.version} className='whitespace-pre-wrap break-words'>
+              {stored === null ? (
+                v.content
+              ) : (
+                <>
+                  <span className='font-medium'>{SUGGESTION_ACTION_TEXT[stored.suggestion.action]}.</span> {stored.suggestion.reason}{' '}
+                  <span className='text-muted-foreground'>({when(stored.at)})</span>
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
+/** A learning's Evidence and history, collapsed: the evidence behind it, what it is aimed at, the flags raised and the recommendations before the latest. */
+const EvidenceAndHistory = ({ glob, attributes, deciders }: { glob: GlobView; attributes: DecisionAttributes; deciders: boolean }) => (
+  <details className='grid gap-2' data-testid='evidence-history'>
+    <summary className='cursor-pointer text-xs font-semibold text-muted-foreground'>Evidence and history</summary>
+    <div className='mt-2 grid gap-3'>
+      <EvidenceSummary glob={glob} attributes={attributes} />
+      {attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
+      <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />
+      <AssessmentFlags glob={glob} />
+      <EarlierRecommendations glob={glob} />
+    </div>
+  </details>
+);
 
 const day = (iso: string) => iso.slice(0, 10);
 
@@ -450,38 +542,38 @@ export const DecisionSection = ({
         </p>
       )}
       <div className='grid gap-3 rounded border border-edge p-3' data-testid='proposal-block'>
-        <div className='flex flex-wrap items-center gap-2 text-xs'>
-          {hotspotPath !== null && (
-            <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
-              Conflict hotspot: <span className='font-mono'>{hotspotPath}</span>
-            </span>
-          )}
-          <span className='text-muted-foreground'>via {attributes.channel}</span>
-          {conflicts.length > 0 && (
-            <Tip text='This decision contradicts a decision with a broader scope, which wins where they disagree'>
-              <span className='rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200' data-testid='conflicts-chip'>
-                Conflicts with{' '}
-                {conflicts.map((id, i) => (
-                  <span key={id}>
-                    {i > 0 && ', '}
-                    <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id, { section: 'decision' })}>
-                      {id}
-                    </Link>
-                  </span>
-                ))}{' '}
-                (broader scope)
+        {(hotspotPath !== null || conflicts.length > 0) && (
+          <div className='flex flex-wrap items-center gap-2 text-xs'>
+            {hotspotPath !== null && (
+              <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
+                Conflict hotspot: <span className='font-mono'>{hotspotPath}</span>
               </span>
-            </Tip>
-          )}
-        </div>
+            )}
+            {conflicts.length > 0 && (
+              <Tip text='This decision contradicts a decision with a broader scope, which wins where they disagree'>
+                <span className='rounded bg-amber-500/15 px-1.5 text-amber-800 dark:text-amber-200' data-testid='conflicts-chip'>
+                  Conflicts with{' '}
+                  {conflicts.map((id, i) => (
+                    <span key={id}>
+                      {i > 0 && ', '}
+                      <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id, { section: 'decision' })}>
+                        {id}
+                      </Link>
+                    </span>
+                  ))}{' '}
+                  (broader scope)
+                </span>
+              </Tip>
+            )}
+          </div>
+        )}
 
-        {hasItem && <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />}
-        {hasItem && attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
         {hasItem && learning !== null && <ProcessingState glob={glob} learning={learning} routed={target !== null} admin={admin} />}
         {hasItem && learning?.status === 'open' && <StaleNote glob={glob} attributes={attributes} admin={admin} />}
         {learning?.effectCheck != null && <EffectCheckView boardId={glob.boardId} check={learning.effectCheck} />}
+        {!hasItem && attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
 
-        {hasItem && <Why glob={glob} attributes={attributes} />}
+        {hasItem && <Why glob={glob} />}
         {!hasItem && (
           <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
             {glob.title}
@@ -495,9 +587,12 @@ export const DecisionSection = ({
         )}
 
         {open && decide !== null && decide.canSuggest && <Recommendation glob={glob} suggest={decide.suggest} />}
-        {open && decide !== null && (canDecide || deciders) && <Outcomes flow={decide} />}
+        {/* A learning's outcome is the action row's main button; the body only holds the form that button opens. A hotspot keeps its buttons here. */}
+        {hasItem && open && decide !== null && (canDecide || deciders) && <OutcomeForms flow={decide} />}
+        {!hasItem && open && decide !== null && (canDecide || deciders) && <Outcomes flow={decide} />}
         {showScope && <AppliesTo glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
-        {hasItem && <DecisionAssessment glob={glob} />}
+        <WhereFrom attributes={attributes} />
+        {hasItem && <EvidenceAndHistory glob={glob} attributes={attributes} deciders={deciders} />}
       </div>
     </section>
   );

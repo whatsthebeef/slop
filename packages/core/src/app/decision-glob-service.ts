@@ -14,7 +14,8 @@ import type { Artifact, KnowledgeKind } from '../domain/knowledge.js';
 import type { Glob, Role } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { memberOf, roleOf } from './access.js';
-import { applyDecisionStep, createDecisionForExtracted, decisionContext, writeAssessment } from './decision-glob.js';
+import { sectionText } from '../domain/sections.js';
+import { applyDecisionStep, createDecisionForExtracted, decisionContext, writeAssessment, writeLeaning } from './decision-glob.js';
 import type { GlobService } from './glob-service.js';
 import type { Approval, KnowledgeService, TargetChange } from './knowledge-service.js';
 import { readLearning } from './learning-reads.js';
@@ -46,6 +47,8 @@ export interface DecisionDiff {
   readonly draft: KbDraft | null;
   /** The learning's own state, which the decision view shows beside the change (null: no learning). */
   readonly learning: DecisionLearning | null;
+  /** Whether the section the draft writes to is in the target now (false: the change adds a new section). Only with a draft in a section; absent from older servers. */
+  readonly sectionExisted?: boolean;
 }
 
 /** Where a learning is: whether it is still open, the pipeline's step and its failures, and the effect check of an approved change. */
@@ -361,6 +364,7 @@ export class DecisionGlobService {
       const document = learningDocument(learning.glob, learning.artifacts);
       const draft = document === null ? (learningDraft(learning.artifacts)?.draft ?? null) : { section: null, content: document.content };
       const state = pipelineState(learning.glob, learning.artifacts, learning.jobs);
+      const targetNow = document === null && draft?.section != null && preview !== null ? await this.deps.knowledge.targetStateFor(tx, learning) : null;
       return ok({
         target: learningTarget(learning.glob).routed,
         currentVersion: preview?.version ?? null,
@@ -374,6 +378,7 @@ export class DecisionGlobService {
           processAfter: state.runAfter,
           effectCheck: learningEffectCheck(learning.artifacts),
         },
+        ...(targetNow === null || draft?.section == null ? {} : { sectionExisted: sectionText(targetNow.text, draft.section) !== null }),
       });
     });
   }
@@ -388,7 +393,10 @@ export class DecisionGlobService {
       if (!actor.ok) return actor;
       const learning = isLearning(glob) ? await readLearning(tx, glob.id) : null;
       const preview = learning === null ? null : await this.deps.knowledge.previewFor(tx, learning);
-      const changed = await writeAssessment(tx, { clock: this.deps.clock }, glob, learning === null ? null : learningAssessmentFacts(learning), preview);
+      const facts = learning === null ? null : learningAssessmentFacts(learning);
+      const written = await writeAssessment(tx, { clock: this.deps.clock }, glob, facts, preview);
+      const leaned = learning === null || facts === null ? false : await writeLeaning(tx, { clock: this.deps.clock }, glob, facts, preview, learning.artifacts.draft?.version ?? null);
+      const changed = written || leaned;
       const latest = (await tx.artifactVersions(id, 'assessment', '')).at(-1);
       return latest === undefined ? invalidInput('No assessment could be written') : ok({ artifact: latest, changed, boardId: glob.boardId });
     });

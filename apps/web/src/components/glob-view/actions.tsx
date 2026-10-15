@@ -1,5 +1,5 @@
 import { decisionOf, machine } from '@slop/core';
-import { isLearning } from '../decision-outcomes';
+import { DecisionMainAction, isLearning } from '../decision-outcomes';
 import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -562,9 +562,21 @@ export const GlobActions = ({
   const moves = splitMoves(ctx, state, onSplitting);
   // A due step still leads.
   const lead = stepTurn === null ? moves.lead : null;
-  // A decision's one Approve (and its ▾) is in the proposal block, so the header has no main action for it.
+  // A learning's outcome is this row's main button (the recommended outcome, the rest in its ▾). A hotspot keeps its one Approve in
+  // the block, so the row has no main action for it.
+  const flow = ctx.decide ?? null;
+  const outcome =
+    flow !== null &&
+    flow.hasItem &&
+    glob.status !== 'signed_off' &&
+    (flow.canDecide || ctx.board.role === 'admin' || ctx.board.role === 'po') &&
+    (flow.learning === null || flow.learning.status === 'open') &&
+    stepTurn === null &&
+    lead === null
+      ? flow
+      : null;
   const inBlock = ctx.decide != null && state.main === 'decide';
-  const main = lead === null && !inBlock ? state.main : null;
+  const main = lead === null && !inBlock && outcome === null ? state.main : null;
   const moreActions = actions.filter(
     (a) => a !== main && !(inBlock && a === 'decide') && tiers.get(a) !== 'destructive',
   );
@@ -573,8 +585,52 @@ export const GlobActions = ({
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
-  const hasMain = main !== null || stepTurn !== null || lead !== null;
+  const hasMain = main !== null || stepTurn !== null || lead !== null || outcome !== null;
   const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
+  const menuItems = (
+    <>
+      {moves.menu.map((move) => (
+        <DropdownMenuItem
+          key={move.id}
+          data-testid={`more-${move.id}`}
+          onSelect={move.run}
+        >
+          <span className="flex items-center gap-1.5 font-medium">
+            <HumanIcon decorative />
+            {move.label}
+          </span>
+          <span className="text-xs text-muted-foreground">{move.tip}</span>
+        </DropdownMenuItem>
+      ))}
+      {moreActions.map((action) => {
+        const shown = actionPresentation(action, glob, false, state.viewer?.email);
+        return (
+          <DropdownMenuItem
+            key={action}
+            data-testid={`more-${action}`}
+            onSelect={() => state.begin(action)}
+          >
+            <span className="flex items-center gap-1.5 font-medium">
+              <ActorIcon actor={shown.icon} decorative />
+              {shown.label}
+            </span>
+            <span className="whitespace-pre-line text-xs text-muted-foreground">
+              {tipOf(action, glob, state.viewer?.email)}
+            </span>
+          </DropdownMenuItem>
+        );
+      })}
+      {disabled.map(({ action, label, icon, tip }) => (
+        <DropdownMenuItem key={action} disabled>
+          <span className="flex items-center gap-1.5 font-medium">
+            <ActorIcon actor={icon} decorative />
+            {label}
+          </span>
+          <span className="text-xs text-muted-foreground">{tip}</span>
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -601,46 +657,7 @@ export const GlobActions = ({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-testid="more-menu">
-        {moves.menu.map((move) => (
-          <DropdownMenuItem
-            key={move.id}
-            data-testid={`more-${move.id}`}
-            onSelect={move.run}
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              <HumanIcon decorative />
-              {move.label}
-            </span>
-            <span className="text-xs text-muted-foreground">{move.tip}</span>
-          </DropdownMenuItem>
-        ))}
-        {moreActions.map((action) => {
-          const shown = actionPresentation(action, glob, false, state.viewer?.email);
-          return (
-            <DropdownMenuItem
-              key={action}
-              data-testid={`more-${action}`}
-              onSelect={() => state.begin(action)}
-            >
-              <span className="flex items-center gap-1.5 font-medium">
-                <ActorIcon actor={shown.icon} decorative />
-                {shown.label}
-              </span>
-              <span className="whitespace-pre-line text-xs text-muted-foreground">
-                {tipOf(action, glob, state.viewer?.email)}
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
-        {disabled.map(({ action, label, icon, tip }) => (
-          <DropdownMenuItem key={action} disabled>
-            <span className="flex items-center gap-1.5 font-medium">
-              <ActorIcon actor={icon} decorative />
-              {label}
-            </span>
-            <span className="text-xs text-muted-foreground">{tip}</span>
-          </DropdownMenuItem>
-        ))}
+        {menuItems}
       </DropdownMenuContent>
     </DropdownMenu>
   ) : undefined;
@@ -682,6 +699,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
+            {outcome !== null && <DecisionMainAction flow={outcome} extra={menuItems} />}
             {main !== null && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>
@@ -808,9 +826,16 @@ export const GlobReset = ({
   const { board, glob } = ctx;
   const { busy, tiers, actions } = state;
   const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
-  // A learning is never deleted: it is rejected, which also suppresses its repeats.
+  // A learning can be deleted too, but only Reject suppresses its repeats, so its confirmation says so.
   const attributes = decisionOf(glob);
   const learning = attributes !== null && isLearning(attributes);
+  // Delete follows the server's permission: offered whenever the viewer may delete this glob.
+  const mayDelete = (glob.allowedActions ?? []).includes('delete');
+  const showDelete = mayDelete && !state.confirmDelete;
+  const hasContent =
+    resetActions.length > 0 || state.confirmDelete || state.confirmingAgain || showDelete;
+  // Never an empty red box: the area exists only while it has something to show.
+  if (!hasContent) return null;
   return (
     <div className="grid gap-2 rounded border border-destructive/50 p-3" data-testid="reset-area">
       <div className="flex flex-wrap gap-2">
@@ -827,7 +852,7 @@ export const GlobReset = ({
             </Button>
           </Tip>
         ))}
-        {!state.confirmDelete && !learning && (
+        {showDelete && (
           <Button variant="danger" size="sm" onClick={() => state.setConfirmDelete(true)}>
             Delete…
           </Button>
@@ -862,13 +887,28 @@ export const GlobReset = ({
       )}
       {state.confirmDelete && (
         <div className="grid gap-2 rounded border border-destructive/50 p-3 text-sm">
-          <p>
-            <strong>Delete {glob.id} permanently?</strong> This removes the glob, its branch, its
-            PR, its artifacts and its events, so its time leaves the reports. There is no archive.
-          </p>
+          {learning ? (
+            <p data-testid="delete-learning-warning">
+              <strong>Delete {glob.id} permanently?</strong> Deleting forgets this learning. If slop
+              spots the same thing again, it comes back as new. To say no and stop repeats, use{' '}
+              <a
+                href="#section-actions"
+                className="underline"
+                onClick={() => state.setConfirmDelete(false)}
+              >
+                Reject
+              </a>{' '}
+              instead.
+            </p>
+          ) : (
+            <p>
+              <strong>Delete {glob.id} permanently?</strong> This removes the glob, its branch, its
+              PR, its artifacts and its events, so its time leaves the reports. There is no archive.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => state.setConfirmDelete(false)}>
-              Keep it
+              {learning ? 'Cancel' : 'Keep it'}
             </Button>
             <Button
               variant="destructive"
