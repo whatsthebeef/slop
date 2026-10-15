@@ -155,6 +155,13 @@ export const cornerStatus = (
 ): CornerStatus | null => {
   const decision = decisionOf(glob);
   if (decision !== null) return decision.outcome === null ? null : decidedStatus(glob, decision);
+  // An open action's one status is what it waits for (the glob that builds its script); otherwise an action has none.
+  if (glob.category === 'action') {
+    const held = holdLine(glob);
+    return held === null
+      ? null
+      : { kind: 'hold', icon: held.icon, text: held.text, label: held.text, tip: held.tip, tone: 'text-muted-foreground', click: { kind: 'section', target: cardTargets.related() } };
+  }
   if (isHumanCategory(glob.category)) return null;
   // Signed off is the glob's whole state: nothing else shows, and the date lives in the tooltip.
   if (glob.status === 'signed_off') {

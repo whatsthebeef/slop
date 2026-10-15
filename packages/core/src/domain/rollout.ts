@@ -187,7 +187,7 @@ const FENCE_OPEN = /^( *)(`{3,}|~{3,})/;
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const NOTHING = /^(none|n\/a|na|nothing|no rollout|not needed|no)[.!]?$/i;
 /** `script: path`, as a bullet or not, with the label bold and the path in backticks or not. */
-const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)`?\s*$/i;
+export const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)`?\s*$/i;
 /** `script: path` inside a line: the path ends at a space, or at `.`, `,`, `;`, `:`, `!` or `)` before a space or the line's end. */
 const SCRIPT_INLINE = /(?:^|[\s(])(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+?)`?(?=[.,;:!)]?(?:\s|$))/gi;
 /** In prose a dotted word isn't a script (`script: e.g.`, `script: README.md`): an inline path needs a `/` or a script's extension. */

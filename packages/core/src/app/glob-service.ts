@@ -28,6 +28,10 @@ import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRo
 import type { DomainEvent } from '../domain/events.js';
 import type { PendingEffect } from '../domain/machine-steps.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
+import { scriptPathOf } from '../domain/action-script.js';
+import type { ActionScript, ScriptCheck } from '../domain/action-script.js';
+import type { CodeView } from './code-view.js';
+import { CodeViewUnavailable } from '../domain/code-view.js';
 import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, pickUpWarning, startIds, toState } from '../domain/relations.js';
 import type { AwaitedDependency, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, TitleInfo, ToState } from '../domain/relations.js';
 import type { InboxItem } from '../domain/inbox.js';
@@ -70,6 +74,8 @@ export interface GlobServiceDeps {
   readonly dependencyLearning?: DependencyLearningService;
   /** Infers a new glob's needs and overlaps from its plan and the open globs; without it a glob has only the edges it was given. */
   readonly inference?: Pick<DependencyInferenceService, 'infer'>;
+  /** Reads a file on the board's base branch, for the script an action runs; without it no script is checked. */
+  readonly codeView?: Pick<CodeView, 'read'>;
   /** Where a best-effort side task reports its failure (the server's error log). */
   readonly log?: (task: string, message: string) => void;
 }
@@ -96,6 +102,15 @@ export interface RelationInput {
 /** Whether a glob is already past a gate, so a relation on that gate holds nothing: started, merged or signed off. */
 const pastGate = (glob: Glob, gate: RelationGate): boolean =>
   gate === 'start' ? glob.status !== 'planning' : gate === 'merge' ? hasMerged(glob) : glob.status === 'signed_off';
+
+/** How long a script check is trusted when no push to the base branch arrives (webhooks are best effort). */
+const SCRIPT_CACHE_MS = 5 * 60 * 1000;
+/** A script not found is trusted only briefly: right after a push the local clone may not have fetched it yet. */
+const SCRIPT_MISSING_CACHE_MS = 15 * 1000;
+
+/** The facts the machine reads about an action's script. */
+const scriptFacts = (check: ScriptCheck | null): { readonly script?: ActionScript; readonly baseBranch?: string } =>
+  check === null ? {} : { script: check.script, baseBranch: check.baseBranch };
 
 /** The longest reason a relation keeps. */
 export const MAX_RELATION_REASON = 300;
@@ -354,6 +369,8 @@ export interface GlobView {
   readonly handover: Handover | null;
   /** The status messages the reader dismissed on this glob (their keys); other people's are never shown. */
   readonly dismissedKeys: readonly string[];
+  /** An open action's script and whether the base branch has it (null onBase: could not check); null when it names none. */
+  readonly script?: ActionScript | null;
 }
 
 /** The title of each glob and whether it is a decision or an action, for the holdings that name them. */
@@ -427,10 +444,15 @@ class DependantMoved extends Error {}
 export class GlobService {
   constructor(private readonly deps: GlobServiceDeps) {}
 
+  /** Whether the base branch has an action's script, by board and path; see `scriptCheckFor`. */
+  private readonly scriptCache = new Map<string, { readonly onBase: boolean | null; readonly at: number }>();
+
   // -------------------------------------------------------------------------
   // Reads
 
   async get(email: string, id: string): Promise<Result<GlobView>> {
+    // Read before the transaction: it asks the code host.
+    const check = await this.scriptCheckFor(id);
     return this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(id);
       if (glob === null) return notFound(`No glob ${id}`);
@@ -439,7 +461,7 @@ export class GlobService {
       const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
       const relations = await this.relationFacts(tx, await tx.listRelationsFrom([glob.id]));
       const sizeCheck = await tx.getSizeCheck(glob.id);
-      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations };
+      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, ...scriptFacts(check) };
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       return ok({
         glob,
@@ -454,8 +476,76 @@ export class GlobService {
         humanSteps: humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored),
         handover: await handoverOf(tx, this.deps.clock, glob),
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
+        script: check?.script ?? null,
       });
     });
+  }
+
+  /**
+   * The script an open action runs (a `script: <repo path>` line in its plan) and whether the board's base branch has it. Null for
+   * anything else. A code host that can't answer leaves `onBase` null (not checked, so nothing is blocked). Answers are cached per
+   * board and path until the base branch moves (`baseMoved`), and for a few minutes at most because webhooks are best effort.
+   */
+  async scriptCheckFor(id: string): Promise<ScriptCheck | null> {
+    const read = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob?.category !== 'action' || glob.status !== 'planning') return null;
+      const board = await tx.getBoard(glob.boardId);
+      return board === null ? null : { glob, baseBranch: board.baseBranch, plan: (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '' };
+    });
+    if (read === null) return null;
+    return this.checkScript(read.glob.boardId, read.baseBranch, scriptPathOf(read.plan));
+  }
+
+  /** The script checks of a board's open actions, by glob. */
+  async scriptChecksOf(boardId: number): Promise<Map<string, ScriptCheck>> {
+    const read = await this.deps.store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      const open = (await tx.listGlobs(boardId, { status: ['planning'], include: 'all' })).filter((g) => g.category === 'action');
+      return { board, plans: await Promise.all(open.map(async (g) => ({ id: g.id, plan: (await tx.listArtifacts(g.id, 'plan'))[0]?.content ?? '' }))) };
+    });
+    const found = new Map<string, ScriptCheck>();
+    if (read.board === null) return found;
+    const baseBranch = read.board.baseBranch;
+    const checks = await Promise.all(read.plans.map(async ({ id, plan }) => ({ id, check: await this.checkScript(boardId, baseBranch, scriptPathOf(plan)) })));
+    for (const { id, check } of checks) if (check !== null) found.set(id, check);
+    return found;
+  }
+
+  private async checkScript(boardId: number, baseBranch: string, path: string | null): Promise<ScriptCheck | null> {
+    if (path === null) return null;
+    const view = this.deps.codeView;
+    if (view === undefined) return { script: { path, onBase: null }, baseBranch };
+    const key = `${String(boardId)}|${path}`;
+    const now = Date.parse(this.deps.clock.now());
+    const cached = this.scriptCache.get(key);
+    if (cached !== undefined && now - cached.at < (cached.onBase ? SCRIPT_CACHE_MS : SCRIPT_MISSING_CACHE_MS)) return { script: { path, onBase: cached.onBase }, baseBranch };
+    try {
+      const onBase = (await view.read(boardId, null, path)) !== null;
+      this.scriptCache.set(key, { onBase, at: now });
+      return { script: { path, onBase }, baseBranch };
+    } catch (e) {
+      // Fails open: an unreachable code host doesn't stop a person from finishing their work.
+      if (!(e instanceof CodeViewUnavailable)) this.deps.log?.('action script check', e instanceof Error ? e.message : String(e));
+      // Cached briefly too, so a down host costs one failing read per path, not one per list load.
+      this.scriptCache.set(key, { onBase: null, at: now });
+      return { script: { path, onBase: null }, baseBranch };
+    }
+  }
+
+  /**
+   * The board's base branch received a push: forget what was read from it, and tell the board about the open actions whose script
+   * was not there (or not known) so their Done button is offered again when it is.
+   */
+  async baseMoved(boardId: number): Promise<void> {
+    const prefix = `${String(boardId)}|`;
+    const before = new Map([...this.scriptCache].filter(([k]) => k.startsWith(prefix)));
+    for (const key of before.keys()) this.scriptCache.delete(key);
+    const open = (await this.peekAll(boardId, { status: ['planning'], include: 'all' })).filter((g) => g.category === 'action');
+    for (const glob of open) {
+      const path = scriptPathOf(await this.peekPlan(glob.id));
+      if (path !== null && before.get(`${prefix}${path}`)?.onBase !== true) this.publish(glob);
+    }
   }
 
   /** The check a sub on the board waits for (its merge policy's `subGateCheck`, `checks` by default), for the card's stuck hint. */
@@ -1112,13 +1202,13 @@ export class GlobService {
   }
 
   /**
-   * An action glob: something a person does, then marks done. No type, intake, size check, branch or relations (nothing holds an
-   * action back); plan.md v1 is the caller's, else the action template.
+   * An action glob: something a person does, then marks done. No type, intake, size check or branch; plan.md v1 is the caller's,
+   * else the action template. It may wait for globs (a start relation, e.g. the glob that builds its script): it can't be done
+   * until they have merged.
    */
   private async createAction(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
     if (input.type !== null) return invalidInput('An action has no type');
     if (input.environment !== null) return invalidInput('An action has no environment');
-    if ((input.after ?? []).length > 0 || (input.relations ?? []).length > 0) return invalidInput('An action is never held back: it takes no relations');
     // `files` is an agent's advisory guess for exclusive paths; an action has no paths. (`inboxItem` and `intake` come from the web
     // form's own flow, so they are not refused here: the MCP tool refuses `inboxItem` on its own.)
     if ((input.files ?? []).length > 0) return invalidInput('An action takes no files: put them in the plan or attach them afterwards');
@@ -1152,8 +1242,23 @@ export class GlobService {
       );
       if (!created.ok) return created;
       const glob = { ...created.value.glob, version: 1 };
+      // What it waits for: the globs named in `after` and `relations`, those that merged already left out. Nothing points at the new
+      // action yet, so no cycle is possible.
+      const wanted = [...(input.after ?? []).map((to): RelationInput => ({ to })), ...(input.relations ?? [])];
+      const targets = new Map((await tx.getGlobs(wanted.map((w) => w.to.trim()))).map((g) => [g.id, g]));
+      const open = wanted.filter((w) => {
+        const target = targets.get(w.to.trim());
+        if (target === undefined || (w.gate ?? 'start') !== 'start') return true;
+        const until = w.until ?? defaultUntil(target);
+        return !((until === 'merged' && hasMerged(target)) || (until === 'done' && toState(target) === 'done'));
+      });
+      const planned = await this.planRelations(tx, glob, [], open, input.relationsBy ?? 'person');
+      if (!planned.ok) return planned;
+      if (planned.value.add.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
+      const written = applyWrite([], planned.value, { boardId: board.id, from: glob.id, now: ctx.now, newId: () => this.relationId() });
       if (!(await tx.insertGlob(glob, input.idempotencyKey))) throw new Error(`Glob ID collision for ${glob.id}`);
       await tx.appendEvents(created.value.events);
+      await this.writeNew(tx, glob, written.inserted, email, ctx.now);
       const artifact = await tx.insertArtifact({
         globId: glob.id,
         kind: 'plan',
@@ -1255,7 +1360,7 @@ export class GlobService {
         const target = known.get(r.to);
         if (target === undefined) continue;
         const until = r.until ?? (defaultUntil(target));
-        const shape = checkRelationShape({ id, category: input.category }, { to: r.to, until }, target);
+        const shape = checkRelationShape({ id, category: input.category }, { to: r.to, until, gate: r.gate ?? 'start' }, target);
         if (!shape.ok) return shape;
         const reason = (r.reason ?? '').trim();
         if (reason.length > MAX_RELATION_REASON) return invalidInput(`A reason is limited to ${MAX_RELATION_REASON} characters`);
@@ -1712,7 +1817,7 @@ export class GlobService {
       if (target?.boardId !== glob.boardId) return invalidInput(`No glob ${w.to} on this board`);
       const gate = w.gate ?? 'start';
       const until = w.until ?? (defaultUntil(target));
-      const shape = checkRelationShape(glob, { to: w.to, until }, target);
+      const shape = checkRelationShape(glob, { to: w.to, until, gate }, target);
       if (!shape.ok) return shape;
       const reason = (w.reason ?? '').trim();
       if (reason.length > MAX_RELATION_REASON) return invalidInput(`A reason is limited to ${MAX_RELATION_REASON} characters`);
@@ -2026,10 +2131,16 @@ export class GlobService {
   }
 
   /** Action globs: a person did the work (optionally noting what they checked); what waited for it is released. */
-  completeAction(email: string, id: string, version: number | null, note?: string) {
-    return this.command(email, id, version, (glob, ctx) => machine.completeAction(glob, note === undefined ? {} : { note }, ctx), {
-      applies: 'action',
-    });
+  async completeAction(email: string, id: string, version: number | null, note?: string) {
+    // Not done while a glob that builds its script hasn't merged, or while the script isn't on the base branch.
+    const check = await this.scriptCheckFor(id);
+    return this.command(
+      email,
+      id,
+      version,
+      (glob, ctx, _board, facts) => machine.completeAction(glob, note === undefined ? {} : { note }, ctx, { ...facts, ...scriptFacts(check) }),
+      { applies: 'action', relations: true },
+    );
   }
 
   /** Action globs: the work is not needed; the reason is required, and what waited for it is released. */
@@ -2225,6 +2336,11 @@ export class GlobService {
     });
     const released: string[] = [];
     for (const glob of dependants) {
+      // An action has no start to release: its Done is offered again by what it reads, so the row is only told to reload.
+      if (glob.category === 'action') {
+        this.publish(glob);
+        continue;
+      }
       // A start relation: a glob held in Planning starts once everything it waits for has merged.
       if (glob.status === 'planning' && glob.waiting != null) {
         const result = await this.release(glob.id);
