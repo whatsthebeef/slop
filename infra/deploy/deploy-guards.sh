@@ -78,3 +78,39 @@ merge_projects() {
 needs_volume_handover() {
   [ -z "${1:-}" ] && [ -n "${2:-}" ]
 }
+
+# change_set_refusals <stage>: reads a change set's resources on stdin, one per line and tab-separated:
+# Action, LogicalResourceId, ResourceType, Replacement, comma-separated names of the changed properties. Prints one line
+# per reason the host stack must not be deployed as it is, and nothing when the change set is fine: an instance that is
+# replaced (Replacement True or Conditional), or a volume added in prod (production's data volume is never created by the stack).
+change_set_refusals() {
+  local stage="$1" action id type repl props
+  while IFS=$'\t' read -r action id type repl props; do
+    if [ "$type" = AWS::EC2::Instance ]; then
+      case "$repl" in
+        True|Conditional) echo "the instance $id would be replaced (Replacement: $repl${props:+, changing $props})" ;;
+      esac
+    fi
+    if [ "$stage" = prod ] && [ "$type" = AWS::EC2::Volume ] && [ "$action" = Add ]; then
+      echo "a data volume $id would be created"
+    fi
+  done
+}
+
+# change_set_restarts: reads the same lines and prints one line when the instance is modified in place in a way that
+# stops and starts it (a changed userData or instance type), and nothing otherwise. A replacement is for change_set_refusals.
+change_set_restarts() {
+  local action id type repl props
+  while IFS=$'\t' read -r action id type repl props; do
+    [ "$type" = AWS::EC2::Instance ] && [ "$action" = Modify ] || continue
+    case "$repl" in True|Conditional) continue ;; esac
+    case ",$props," in *,UserData,*|*,InstanceType,*) echo "the instance $id would be stopped and started (changing $props)" ;; esac
+  done
+}
+
+# instance_restarted <id before> <launch time before> <id after> <launch time after>: true when the instance was replaced
+# (another id) or stopped and started (a new launch time), so the app is no longer running on it. Unknown values (empty)
+# before the deploy mean there was no instance to lose.
+instance_restarted() {
+  [ -n "${1:-}" ] && { [ "$1" != "${3:-}" ] || [ "${2:-}" != "${4:-}" ]; }
+}
