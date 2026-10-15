@@ -153,7 +153,7 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       const text = lead === undefined ? move.reason : machineText(lead, now);
       const tip =
         lead?.kind === 'recommendation'
-          ? ['Slop is getting its recommendation: it does so automatically when the learning is picked up and when the draft changes']
+          ? ['Slop is getting its recommendation, as it does when the learning is picked up and when the draft changes']
           : lead?.state === 'queued'
           ? [`Machine run queued: ${session === null ? 'no session yet' : 'open the session'}`, ...runDetail(glob)]
           : ['The machine is working on it', ...runDetail(glob)];
