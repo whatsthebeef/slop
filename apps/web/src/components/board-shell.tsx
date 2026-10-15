@@ -8,6 +8,7 @@ import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { barRows, sessionForKey } from '@/lib/board-bar';
 import { isChatShortcut, NARROW_QUERY, WIDE_QUERY } from '@/lib/chat';
+import { spendBreakdown, spendLine } from '@/lib/review-settings';
 import { newCount } from '@/lib/inbox';
 import { MAIN_AREA_CLASS } from '@/lib/main-area';
 import { BOARD_PAGE, PageContextProvider } from '@/lib/page-context';
@@ -22,7 +23,7 @@ export interface BoardShellContext {
 }
 
 /** Board, Inbox, Signed off, Knowledge and Settings as tabs on a thin line; the active one is underlined on it. The ＋, chat and settings icons sit at its right. */
-const BoardTabs = ({
+export const BoardTabs = ({
   boardId,
   onActions,
   onChat,
@@ -37,6 +38,7 @@ const BoardTabs = ({
   // The Inbox tab counts items waiting for a person; hints refresh it on the pages that listen, and a slow poll covers the rest.
   const inbox = useQuery({ queryKey: inboxKey(boardId), queryFn: () => api.inbox(boardId), refetchInterval: pollInterval(false) });
   const waiting = newCount(inbox.data ?? []);
+  const spend = useQuery({ queryKey: ['spend', boardId], queryFn: () => api.spend(boardId), refetchInterval: 5 * 60_000 });
   return (
     <header className='mx-5 mt-1.5 flex items-end gap-x-2 sm:flex-wrap sm:gap-x-6 border-b border-edge/50 text-sm'>
       <nav className='flex min-w-0 flex-1 gap-4 sm:flex-none sm:gap-6' aria-label='Board sections'>
@@ -53,6 +55,11 @@ const BoardTabs = ({
         ))}
       </nav>
       <div className='ml-auto flex shrink-0 items-center gap-1 pb-1.5'>
+        {spend.data !== undefined && (
+          <span className='mr-2 hidden text-xs text-muted-foreground sm:inline' data-testid='llm-spend' title={spendBreakdown(spend.data)}>
+            {spendLine(spend.data)}
+          </span>
+        )}
         <div ref={onActions} className='flex items-center' data-testid='header-actions' />
         <button
           type='button'
