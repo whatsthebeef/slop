@@ -95,6 +95,7 @@ describe('Human steps with a repo script', () => {
       branch: 's1t1',
       currentRun: null,
       pr: { state, number: 3, headSha: 'abc123' },
+      prs: [],
       humanSteps: [{ id: 'hs1', title: 'Protect main', detail: null, kind: 'rollout', state: 'due', who: 'anyone', due: 'after_merge', script: { path: 'scripts/rollout/s1t1-ruleset.sh' } }],
     }) as unknown as GlobView;
   const show = (glob: GlobView) =>
@@ -112,6 +113,11 @@ describe('Human steps with a repo script', () => {
     await userEvent.click(screen.getByTestId('step-copy'));
     expect(writeText).toHaveBeenCalledWith('bash scripts/rollout/s1t1-ruleset.sh');
     expect(screen.getByTestId('step-script-source').getAttribute('href')).toBe('https://github.com/acme/app/blob/main/scripts/rollout/s1t1-ruleset.sh');
+  });
+
+  it('links the file at the recorded squash commit when slop has one', () => {
+    show({ ...withScript('merged'), prs: [{ number: 3, mergeSha: 'feed42', mergedAt: '2026-10-15T00:00:00Z' }] } as unknown as GlobView);
+    expect(screen.getByTestId('step-script-source').getAttribute('href')).toBe('https://github.com/acme/app/blob/feed42/scripts/rollout/s1t1-ruleset.sh');
   });
 
   it('links the file at the PR head before the merge', () => {

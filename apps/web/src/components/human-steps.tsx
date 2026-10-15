@@ -32,6 +32,17 @@ import { StepDetail } from './step-detail';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 
+/**
+ * The ref a script's GitHub link points at: the squash commit of the latest PR slop recorded as merged (a super's Merge and
+ * continue), else the base branch once the PR is merged (the commit slop doesn't record for a normal merge, and a branch moves),
+ * else the PR head.
+ */
+const scriptRef = (glob: GlobView, baseBranch: string | null): string | null => {
+  const merged = glob.prs.at(-1)?.mergeSha;
+  if (merged !== undefined) return merged;
+  return glob.pr?.state === 'merged' ? baseBranch : (glob.pr?.headSha ?? glob.id);
+};
+
 /** Where a repo script lives on GitHub: the board's repo and base branch. */
 interface ScriptSource {
   readonly repo: string | null;
@@ -57,7 +68,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
     const text = await scriptCopyText(glob.boardId, glob.id, script ?? { path: '' }, api.rolloutScript, window.location.origin);
     setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
   };
-  const sourceUrl = script !== null && 'path' in script ? scriptSourceUrl(source.repo, script.path, glob.pr?.state === 'merged' ? source.baseBranch : (glob.pr?.headSha ?? glob.id)) : null;
+  const sourceUrl = script !== null && 'path' in script ? scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch)) : null;
   const reasonText = dismissReason(reason);
   return (
     <li

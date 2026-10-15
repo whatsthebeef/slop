@@ -140,7 +140,7 @@ ${FENCE}
   });
 
   it('ignores a script line whose path is absolute, climbs out of the repo or has spaces', () => {
-    for (const path of ['/etc/passwd', '../x.sh', 'a/../../x.sh', 'a b.sh']) {
+    for (const path of ['/etc/passwd', '../x.sh', 'a/../../x.sh', 'a b.sh', 'build']) {
       const [step] = parseRollout(`## Rollout\n- script: Run it\n  - script: ${path}\n`);
       expect(step?.scriptPath).toBeNull();
     }

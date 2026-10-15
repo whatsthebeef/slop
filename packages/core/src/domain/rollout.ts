@@ -133,8 +133,8 @@ const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
 const CHECK_SUFFIX = /\s*\(?\bcheck\s*:\s*([A-Za-z][\w-]*)\)?\s*$/i;
 
-/** A relative path inside the repo: no leading slash, no `..`, no spaces. */
-export const isRepoPath = (path: string): boolean => !path.startsWith('/') && !path.split('/').includes('..') && /^[\w.@+-]+(?:\/[\w.@+-]+)*$/.test(path);
+/** A relative path inside the repo: a `/` or an extension (not a bare word), no leading slash, no `..`, no spaces. */
+export const isRepoPath = (path: string): boolean => (path.includes('/') || path.includes('.')) && !path.startsWith('/') && !path.split('/').includes('..') && /^[\w.@+-]+(?:\/[\w.@+-]+)*$/.test(path);
 
 const isFenceClose = (line: string, fence: Fence): boolean => {
   const m = FENCE_OPEN.exec(line);
