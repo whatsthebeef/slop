@@ -52,6 +52,11 @@ export interface RolloutStep {
  * - A script's body is its first fenced code block; any other fenced block stays in the detail.
  * - A line `script: <repo path>` under a step (a bullet, bold and backticks are fine) points the step at a script committed
  *   in the repo (`scripts/rollout/<glob>-<slug>.sh`). The line is not shown as detail, and the path wins over a fenced body.
+ *   `script: <repo path>` inside a longer detail line counts too when the path has a `/` or a script's extension (it ends
+ *   at a space, or at `.`, `,`, `;`, `:`, `!` or `)` before one or the line's end); that line stays in the detail, since
+ *   it says more. The first path found wins.
+ * - Titles are plain text: a bold kind (`**manual:** Do x`, `**manual**: Do x`) reads as the kind, emphasis or a code
+ *   span around the whole title is dropped (`**Do x**` is `Do x`), and inline code inside it loses its backticks.
  * - Labelled lines under a step fill its fields: `Why:`, `Permissions:`, `Run:` (one command per line, several allowed, backticks
  *   stripped) and `Check:` or `Check it worked:` (a bullet, bold label and backticks are fine). The first of each single-valued
  *   label wins. Lines outside code fences that carry no label (and `Do this:` lines with nothing after them) stay as detail.
@@ -140,6 +145,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
       current.scriptPath = path[1];
       continue;
     }
+    // A path named inside a longer line points the step at it too, but the line stays: it carries other text.
+    if (current.scriptPath === null && path === null) current.scriptPath = inlineScript(line);
     const labelled = FIELD_LINE.exec(line);
     if (labelled?.[1] !== undefined && labelled[2] !== undefined) {
       const value = stripTicks(labelled[2]);
@@ -181,6 +188,10 @@ const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const NOTHING = /^(none|n\/a|na|nothing|no rollout|not needed|no)[.!]?$/i;
 /** `script: path`, as a bullet or not, with the label bold and the path in backticks or not. */
 export const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)`?\s*$/i;
+/** `script: path` inside a line: the path ends at a space, or at `.`, `,`, `;`, `:`, `!` or `)` before a space or the line's end. */
+const SCRIPT_INLINE = /(?:^|[\s(])(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+?)`?(?=[.,;:!)]?(?:\s|$))/gi;
+/** In prose a dotted word isn't a script (`script: e.g.`, `script: README.md`): an inline path needs a `/` or a script's extension. */
+const SCRIPT_LIKE = /\/|\.(?:sh|bash|mjs|js|ts|py)$/;
 /** `Why: …`, `Permissions: …`, `Run: …`, `Check: …` or `Check it worked: …`, as a bullet or not, with the label bold or not. */
 const FIELD_LINE =
   /^\s*(?:[-*+]\s+)?(?:\*\*)?(why|permissions|run|check(?: it worked)?)\s*:(?:\*\*)?\s*(.*)$/i;
@@ -188,10 +199,71 @@ const isScriptRun = (command: string, path: string): boolean =>
   command === `bash ${path}` || command === `sh ${path}` || command === `./${path}`;
 const stripTicks = (value: string): string => value.replace(/`/g, '').trim();
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
+/** A bold kind: `**manual:** x`, `**manual**: x` (or with `__`). */
+const BOLD_KIND = /^(\*\*|__)(script|setting|manual)(?:\s*:\s*\1|\1\s*:)\s*/i;
+/** Marks that can wrap a whole title, longest first so `**x**` isn't read as `*` around `*x*`. */
+const WRAPPERS = ['**', '__', '*', '_', '`'] as const;
 const CHECK_SUFFIX = /\s*\(?\bcheck\s*:\s*([A-Za-z][\w-]*)\)?\s*$/i;
 
 /** A relative path inside the repo: a `/` or an extension (not a bare word), no leading slash, no `..`, no spaces. */
 export const isRepoPath = (path: string): boolean => (path.includes('/') || path.includes('.')) && !path.startsWith('/') && !path.split('/').includes('..') && /^[\w.@+-]+(?:\/[\w.@+-]+)*$/.test(path);
+
+const inlineScript = (line: string): string | null => {
+  for (const m of line.matchAll(SCRIPT_INLINE)) if (m[1] !== undefined && isRepoPath(m[1]) && SCRIPT_LIKE.test(m[1])) return m[1];
+  return null;
+};
+
+/** Drops emphasis or a code span around the whole text (repeatedly, for `***x***`), then inline code's backticks. A mark that also appears inside (`**a** and **b**`) isn't a wrapper. */
+const unwrap = (text: string): string => {
+  let t = text.trim();
+  for (let mark = WRAPPERS.find((w) => isWrapped(t, w)); mark !== undefined; mark = WRAPPERS.find((w) => isWrapped(t, w))) t = t.slice(mark.length, -mark.length);
+  return t.replace(/`([^`]+)`/g, '$1');
+};
+const isWrapped = (text: string, mark: string): boolean => {
+  const inner = text.slice(mark.length, -mark.length);
+  return text.length > mark.length * 2 && text.startsWith(mark) && text.endsWith(mark) && !inner.includes(mark) && inner.trim() === inner;
+};
+
+/**
+ * A stored step title as `parseRollout` would write it now (kind, check suffix and emphasis read off, as `titleOf`
+ * does). A re-read matches steps stored before titles were plain (`**Check the backfill ran**`) with it.
+ */
+export const plainTitle = (text: string): string => titleOf(text)?.title ?? text.trim();
+
+/**
+ * Which stored step each parsed title is (an index into `stored`, or -1), each stored step used once: an exact title
+ * first, then the stored title made plain and numbered as `parseRollout` numbers repeats, so a stored `**Do x**` beside
+ * a stored `Do x` is `Do x (2)`.
+ */
+export const matchStoredTitles = (titles: readonly string[], stored: readonly string[]): number[] => {
+  const taken = new Set<number>();
+  const exact = titles.map((title) => {
+    const i = stored.findIndex((s, j) => !taken.has(j) && s === title);
+    if (i >= 0) taken.add(i);
+    return i;
+  });
+  const seen = new Map<string, number>();
+  for (const i of taken) {
+    const plain = plainTitle(stored[i] ?? '');
+    seen.set(plain, (seen.get(plain) ?? 0) + 1);
+  }
+  const byPlain = new Map<string, number>();
+  stored.forEach((s, j) => {
+    if (taken.has(j)) return;
+    const plain = plainTitle(s);
+    const n = (seen.get(plain) ?? 0) + 1;
+    seen.set(plain, n);
+    const key = n === 1 ? plain : `${plain} (${String(n)})`;
+    if (!byPlain.has(key)) byPlain.set(key, j);
+  });
+  return exact.map((i, k) => {
+    if (i >= 0) return i;
+    const j = byPlain.get(titles[k] ?? '');
+    if (j === undefined || taken.has(j)) return -1;
+    taken.add(j);
+    return j;
+  });
+};
 
 const isFenceClose = (line: string, fence: Fence): boolean => {
   const m = FENCE_OPEN.exec(line);
@@ -214,16 +286,19 @@ const trimBlank = (lines: readonly string[]): string[] => {
 };
 
 const titleOf = (text: string) => {
-  const prefix = KIND_PREFIX.exec(text.trim());
+  // `**manual:** x` reads as `manual: x`, and `**manual: x**` as well.
+  const whole = unwrap(text);
+  const bold = BOLD_KIND.exec(whole);
+  const prefix = KIND_PREFIX.exec(bold === null ? whole : `${bold[2] ?? ''}: ${whole.slice(bold[0].length)}`);
   const word = prefix?.[1]?.toLowerCase();
   const kind: RolloutStepKind = word === 'script' || word === 'setting' ? word : 'manual';
-  let title = (prefix === null ? text : (prefix[2] ?? '')).trim();
+  let title = unwrap(prefix === null ? whole : (prefix[2] ?? ''));
   if (NOTHING.test(title) && prefix === null) return null;
   let check: string | null = null;
   let unknownCheck: string | null = null;
   const suffix = CHECK_SUFFIX.exec(title);
   if (suffix?.[1] !== undefined) {
-    title = title.slice(0, suffix.index).trim();
+    title = unwrap(title.slice(0, suffix.index));
     if (isCapabilityName(suffix[1])) check = suffix[1];
     else unknownCheck = suffix[1];
   }

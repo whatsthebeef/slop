@@ -1,5 +1,6 @@
 import { HumanIcon } from '../actor-icons';
 import type { GlobViewContext } from './context';
+import { InlineMarkdown } from '../markdown-view';
 
 /** The action section: who is meant to do an action glob and, once it ended, who finished it, when, and the note or reason. Nothing for other globs. */
 export const ActionOutcome = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
@@ -17,10 +18,14 @@ export const ActionOutcome = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
           {action.assignee === null ? 'Anyone on the board can do it.' : `Assigned to ${action.assignee}.`}
         </p>
       ) : (
-        <p className="text-xs text-muted-foreground" data-testid="action-outcome">
+        <div className="text-xs text-muted-foreground" data-testid="action-outcome">
           {outcome.kind === 'done' ? 'Done' : 'Dismissed'} by {outcome.by} on {new Date(outcome.at).toLocaleDateString()}
-          {outcome.note === undefined && outcome.reason === undefined ? '' : `: ${outcome.note ?? outcome.reason ?? ''}`}
-        </p>
+          {outcome.note === undefined && outcome.reason === undefined ? null : (
+            <>
+              : <InlineMarkdown text={outcome.note ?? outcome.reason ?? ''} />
+            </>
+          )}
+        </div>
       )}
     </section>
   );

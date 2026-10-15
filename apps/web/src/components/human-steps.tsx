@@ -34,6 +34,8 @@ import { cn } from '@/lib/utils';
 import { HumanIcon } from './actor-icons';
 import { SectionToggle } from './section-toggle';
 import { StepDetail } from './step-detail';
+import { InlineMarkdown, MarkdownView } from './markdown-view';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 
@@ -78,7 +80,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         {work && !predicted && (
           <input
             type='checkbox'
-            aria-label={`Done: ${step.title}`}
+            aria-label={`Done: ${stripMarkdown(step.title)}`}
             data-testid='step-tick'
             checked={step.state === 'done'}
             disabled={busy || !open}
@@ -87,7 +89,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         )}
         <HumanIcon decorative />
         <span className={cn('min-w-0 break-words font-medium [overflow-wrap:anywhere]', (step.state === 'dismissed' || step.state === 'done' || predicted) && 'text-muted-foreground', (step.state === 'dismissed' || step.state === 'done') && 'line-through')} data-testid='step-title'>
-          {predicted ? PREDICTED_ROLLOUT_TEXT : step.title}
+          {predicted ? PREDICTED_ROLLOUT_TEXT : stripMarkdown(step.title)}
         </span>
         <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
         {mine && !predicted && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
@@ -220,21 +222,18 @@ const CopyButton = ({ copyText }: { copyText: () => Promise<string> }) => {
   );
 };
 
-/** A labelled line of plain text: the label quiet, the text as written. */
+/** A labelled field of Markdown text: the label quiet, the text rendered (bold, code, code blocks with copy). */
 const Field = ({ label, text, testId }: { label: string; text: string; testId: string }) => (
-  <p
-    className="min-w-0 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]"
-    data-testid={testId}
-  >
-    <span className="text-muted-foreground">{label}: </span>
-    {text}
-  </p>
+  <div className="min-w-0 break-words text-xs [overflow-wrap:anywhere]" data-testid={testId}>
+    <span className="text-muted-foreground">{label}:</span>
+    <MarkdownView content={text} bare />
+  </div>
 );
 
 /**
- * What a step says, laid out from its fields, plain text, empty fields left out: Why; Before you start (the permissions);
+ * What a step says, laid out from its fields, as Markdown, empty fields left out: Why; Before you start (the permissions);
  * Run (the script's run command once, then each command, every one in its own copyable box); Check it worked. The step's
- * free `detail` (anything the fields don't cover) shows as plain text after Why when `showDetail`.
+ * free `detail` (anything the fields don't cover) shows as Markdown after Why when `showDetail`.
  */
 const StepFields = ({
   glob,
@@ -257,12 +256,7 @@ const StepFields = ({
     <>
       {why !== '' && <Field label="Why" text={why} testId="step-why" />}
       {showDetail && detail !== '' && (
-        <p
-          className="min-w-0 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]"
-          data-testid="step-detail"
-        >
-          {detail}
-        </p>
+        <StepDetail detail={detail} />
       )}
       {permissions !== '' && (
         <Field label="Before you start" text={permissions} testId="step-permissions" />
@@ -311,7 +305,7 @@ const DismissForm = ({ busy, onDismiss, onClose }: { busy: boolean; onDismiss: (
 };
 
 /**
- * A due step as a full card in the top block: title, who, the step's text as plain text (Why / Do this / Permissions / Check it
+ * A due step as a full card in the top block: title, who, the step's text as Markdown (Why / Do this / Permissions / Check it
  * worked), the script's command with a copy button, and Done and Dismiss…. A step slop ticks itself (a capability check) has Done disabled with why.
  */
 const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
@@ -322,7 +316,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
       <div className='flex flex-wrap items-center gap-2'>
         <HumanIcon decorative />
         <span className='min-w-0 break-words font-medium [overflow-wrap:anywhere]' data-testid='step-title'>
-          {step.title}
+          {stripMarkdown(step.title)}
         </span>
         <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
         {mine && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
@@ -379,9 +373,15 @@ const DismissedSteps = ({ steps }: { steps: readonly ListedHumanStep[] }) => {
           {steps.map((s) => (
             <li key={s.id} className='min-w-0 break-words [overflow-wrap:anywhere]' data-testid='dismissed-step'>
               <span className='line-through' data-testid='dismissed-title'>
-                {s.title}
+                {stripMarkdown(s.title)}
               </span>
-              <span data-testid='dismissed-reason'>{s.dismissedReason == null || s.dismissedReason === '' ? '' : `: ${s.dismissedReason}`}</span>
+              <span data-testid='dismissed-reason'>
+                {s.dismissedReason == null || s.dismissedReason === '' ? null : (
+                  <>
+                    : <InlineMarkdown text={s.dismissedReason} />
+                  </>
+                )}
+              </span>
               {dismissalText(s) !== '' && <span data-testid='dismissed-who'> ({dismissalText(s)})</span>}
             </li>
           ))}

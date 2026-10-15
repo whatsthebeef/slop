@@ -11,7 +11,7 @@ import { listOf } from '../domain/matrix.js';
 import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
 import { isCapabilityName } from '../domain/capabilities.js';
 import type { Capabilities } from '../domain/capabilities.js';
-import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
+import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, matchStoredTitles, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
 import type { RolloutAnswer } from '../domain/rollout.js';
 import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
@@ -847,10 +847,11 @@ export class GlobService {
 
   /**
    * An implementation record arrived: its `## Rollout` section becomes the glob's rollout steps. The steps this section
-   * wrote before are matched by title: a still-open one that is gone is dismissed, one that is still there is updated in
-   * place, a done or dismissed one stays as it is, and a new one is added. Real steps replace the investigator's
-   * placeholder. A script step's body is stored as a `rollout_script` artifact (one label per step). Reading the same
-   * record again changes nothing.
+   * wrote before are matched by title, or by the title as the parser writes it now (`matchStoredTitles`: a step stored
+   * as `**Do x**` before titles dropped their emphasis is `Do x`): a still-open one that is gone is dismissed, one that
+   * is still there is updated in place, a done or dismissed one keeps its state and detail (only a changed title is
+   * saved), and a new one is added. Real steps replace the investigator's placeholder. A script step's body is stored as a `rollout_script` artifact (one
+   * label per step). Reading the same record again changes nothing.
    */
   async reconcileRollout(
     email: string,
@@ -870,7 +871,12 @@ export class GlobService {
       const note = (step: StoredHumanStep, change: string) =>
         events.push({ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change } });
       let scripts = false;
-      for (const step of parsed) {
+      const matches = matchStoredTitles(
+        parsed.map((p) => p.title),
+        own.map((s) => s.title),
+      );
+      const matched = new Set<string>();
+      for (const [i, step] of parsed.entries()) {
         let script: HumanStepScript | null = null;
         if (step.scriptPath !== null) {
           script = { path: step.scriptPath };
@@ -884,19 +890,23 @@ export class GlobService {
           }
         }
         const fields = { title: step.title, detail: step.detail, check: step.check, script, why: step.why, permissions: step.permissions, commands: step.commands, verify: step.verify };
-        const existing = own.find((s) => s.title === step.title);
+        const existing = own[matches[i] ?? -1];
         if (existing === undefined) {
           const added = this.rolloutStep(glob, ROLLOUT_SECTION_ORIGIN, email, now, fields);
           save.push(added);
           note(added, 'added');
-        } else if (existing.state === 'open' && JSON.stringify(stepFields(existing)) !== JSON.stringify(stepFields(fields))) {
-          const updated = { ...existing, ...fields };
+          continue;
+        }
+        matched.add(existing.id);
+        const refresh = existing.state === 'open' && JSON.stringify(stepFields(existing)) !== JSON.stringify(stepFields(fields));
+        if (refresh || existing.title !== step.title) {
+          const updated = refresh ? { ...existing, ...fields } : { ...existing, title: step.title };
           save.push(updated);
           note(updated, 'updated');
         }
       }
       for (const step of own) {
-        if (step.state !== 'open' || parsed.some((p) => p.title === step.title)) continue;
+        if (step.state !== 'open' || matched.has(step.id)) continue;
         const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'No longer in the implementation record', doneBy: 'slop', doneAt: now };
         save.push(dismissed);
         note(dismissed, 'dismissed');

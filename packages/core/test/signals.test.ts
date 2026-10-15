@@ -5,16 +5,22 @@ import { addedDependencies, isManifestPath } from '../src/domain/manifests.js';
 import {
   globAgentSetVersion,
   deviationLines,
+  figuresText,
   lineChange,
   measureSignals,
   normaliseFailure,
   perGlob,
+  plainSignal,
+  relevantSignals,
   reviewRounds,
   sameCommit,
+  signalKindOf,
   SIGNALS,
+  SIGNALS_SHOWN,
+  signalUnit,
   supersededCause,
 } from '../src/domain/signals.js';
-import type { ArtifactMeta, BoardActivity, Measurement } from '../src/domain/signals.js';
+import type { ArtifactMeta, BoardActivity, KbSignal, Measurement } from '../src/domain/signals.js';
 import type { ReviewStats } from '../src/domain/knowledge.js';
 import { missingSources } from '../src/domain/chat-feedback.js';
 import type { ChatFeedbackActivity } from '../src/domain/chat-feedback.js';
@@ -887,5 +893,49 @@ describe('mined signals: workstream_pattern (s15f156)', () => {
     ]);
     expect(pattern(a).map((m) => m.crosses)).toEqual([false]);
     expect(pattern(base([]))).toEqual([]);
+  });
+});
+
+describe('plain signal wording and the relevant few (s15t201)', () => {
+  const signal = (key: string, label: string, affected = 9, eligible = 45): KbSignal => ({
+    key,
+    kind: signalKindOf(key) ?? 'failure',
+    agent: null,
+    label,
+    window: { from: '2026-09-01T00:00:00Z', to: '2026-09-29T00:00:00Z' },
+    figures: { affected, eligible, rate: affected / eligible, count: affected },
+    globIds: [],
+    examples: [],
+    measuredAt: '2026-09-29T00:00:00Z',
+  });
+
+  it('says runs or globs as the signal counts them, with no slash figures', () => {
+    expect(plainSignal(signal('failure:no progress for 2 hours', 'no progress for 2 hours'))).toBe('no progress for 2 hours: 9 of 45 runs (20%) in the last 4 weeks');
+    expect(plainSignal(signal('run_superseded', 'routine runs ending in a take-over', 3, 12))).toBe('routine runs ending in a take-over: 3 of 12 runs (25%) in the last 4 weeks');
+    expect(plainSignal(signal('finding:major', 'major findings', 2, 8))).toBe('major findings: 2 of 8 globs (25%) in the last 4 weeks');
+    expect(figuresText('finding:major', { affected: 1, eligible: 3, rate: 1 / 3 })).toBe('1 of 3 globs (33%)');
+    expect(signalUnit('failure:x')).toBe('runs');
+    expect(signalUnit('missing_doc:build')).toBe('globs');
+  });
+
+  describe('relevantSignals', () => {
+    const all = [
+      signal('failure:no progress for 2 hours', 'no progress for 2 hours'),
+      signal('finding:major', 'major review findings'),
+      signal('finding:minor', 'minor review findings'),
+      signal('plan_amended', 'plans amended after the investigator chose'),
+      signal('tester_loops', 'tester failing the first attempt'),
+    ];
+
+    it('puts the recommended one first, then the best matches, at most three in all', () => {
+      const picked = relevantSignals(all, 'Review findings keep recurring in the implementer review', 'tester_loops');
+      expect(picked.map((s) => s.key)).toEqual(['tester_loops', 'finding:major', 'finding:minor']);
+      expect(picked).toHaveLength(SIGNALS_SHOWN);
+    });
+
+    it('never pads with signals that match nothing, and ignores a recommendation that is not listed', () => {
+      expect(relevantSignals(all, 'unrelated words only', null)).toEqual([]);
+      expect(relevantSignals(all, 'tester loops', 'gone:key').map((s) => s.key)).toEqual(['tester_loops']);
+    });
   });
 });

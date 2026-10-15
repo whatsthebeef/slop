@@ -9,6 +9,7 @@ import {
   stuckHint,
   yourTurn,
 } from '@slop/core';
+import { stripMarkdown } from './markdown-text';
 import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
 import { rolloutLine } from './human-steps';
 import type { GlobView } from './api';
@@ -61,7 +62,7 @@ export const isInvestigateRun = (run: { readonly purpose?: string }): boolean =>
 
 /** Cut to one line of at most `max` characters. */
 export const oneLine = (text: string, max = 90): string => {
-  const line = (text.split('\n')[0] ?? '').trim();
+  const line = stripMarkdown(text.split('\n')[0] ?? '');
   return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 };
 

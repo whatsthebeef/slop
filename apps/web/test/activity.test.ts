@@ -72,6 +72,13 @@ describe('activityOf', () => {
     expect(entries.map((e) => e.at)).toEqual([...entries.map((e) => e.at)].sort().reverse());
   });
 
+  it('shows a failure reason as plain text, with no Markdown markers in the line or the tooltip', () => {
+    const entries = activityOf(view({ runs: [run('r1', { outcome: 'failed', failureReason: 'Checks failed on `main`: **lint**\nsee `a.ts`' })] }), 'o/r');
+    const failed = entries.find((e) => e.text.startsWith('Run failed'));
+    expect(failed?.text).toBe('Run failed: Checks failed on main: lint');
+    expect(failed?.title).toBe('Run failed: Checks failed on main: lint\nsee a.ts');
+  });
+
   it('collapses consecutive identical events', () => {
     const entries = activityOf(view({ runs: [run('r1'), run('r2', { queuedAt: T(5), startedAt: T(6), endedAt: T(8) })] }), null);
     const started = entries.filter((e) => e.text === 'Run started');
