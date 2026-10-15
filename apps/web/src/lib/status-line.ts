@@ -12,6 +12,7 @@ import {
 import { stripMarkdown } from './markdown-text';
 import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
 import { rolloutLine } from './human-steps';
+import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
 import type { GlobView } from './api';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
@@ -177,7 +178,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
         kind: 'merging',
         full,
         tone: 'text-muted-foreground',
-        tip: `Merging ${short}: it merges by itself when the checks pass`,
+        tip: `Merging ${short}: slop merges it once the checks pass${hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : ''}`,
       }),
     );
   }

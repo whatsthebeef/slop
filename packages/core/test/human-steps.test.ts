@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, derivedSteps, dueText, humanSteps, isHumanStepDue, isForViewer, stepsForViewer, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
+import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, defaultStepBlocks, derivedSteps, dueText, humanSteps, isHumanStepDue, isForViewer, stepsForViewer, storedBlockProgress, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
+import { armOf, armView, armsStored, rolloutStages } from '../src/domain/rollout-stages.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
-import { NOW, glob, run } from './fixtures.js';
+import { NOW, board, glob, run } from './fixtures.js';
 
 const head = 'a2a88c8aaaa';
 const ready = (patch = {}) =>
@@ -43,6 +44,7 @@ const stored = (patch: Partial<StoredHumanStep> = {}): StoredHumanStep => ({
   doneBy: null,
   doneAt: null,
   dismissedReason: null,
+  dueSince: null,
   ...patch,
 });
 
@@ -240,5 +242,98 @@ describe('upcoming marker and compact form', () => {
       expect(blockProgress(humanSteps(glob(), {}, [placeholder]), 'sign_off')).toEqual({ open: 0, total: 0 });
       expect(blockProgress(humanSteps(glob({ status: 'reviewing' }), {}, [placeholder]), 'sign_off')).toEqual({ open: 1, total: 1 });
     });
+  });
+});
+
+describe('after-deploy steps and the arm stage (s15f176)', () => {
+  const merged = (patch = {}) => glob({ status: 'reviewing', pr: { number: 1, state: 'merged', headSha: head }, ...patch });
+  const stateOfSteps = (g = merged(), rows: StoredHumanStep[] = []) => humanSteps(g, {}, rows).map((s) => [s.title, s.state]);
+  const prod = (patch: Partial<StoredHumanStep> = {}) => stored({ id: 'p', title: 'Prod', due: 'after_deploy:production', blocks: [], ...patch });
+  const stage = (patch: Partial<StoredHumanStep> = {}) => stored({ id: 's', title: 'Stage', due: 'after_deploy:staging', blocks: [], ...patch });
+  const main = (patch: Partial<StoredHumanStep> = {}) => stored({ id: 'm', title: 'Main', due: 'after_merge', blocks: ['sign_off', 'dependants'], ...patch });
+
+  it('an after-deploy step is pending until its dueSince is set, per environment, even on a signed-off glob', () => {
+    const g = merged({ status: 'signed_off' });
+    expect(stateOfSteps(g, [prod(), stage({ dueSince: NOW })])).toEqual([['Stage', 'due'], ['Prod', 'pending']]);
+    expect(stateOfSteps(g, [prod({ dueSince: NOW }), stage()])).toEqual([['Prod', 'due'], ['Stage', 'pending']]);
+    // A deploy cannot make a step due before the glob merged either way: the mark is what counts, so it stays due.
+    expect(stateOfSteps(glob({ status: 'in_progress' }), [prod({ dueSince: NOW })])).toEqual([['Prod', 'due']]);
+  });
+
+  it('a done or dismissed after-deploy step stays done or dismissed whatever its dueSince', () => {
+    expect(stateOfSteps(merged(), [prod({ state: 'done', dueSince: NOW }), stage({ state: 'dismissed', dueSince: NOW })]).map(([, state]) => state)).toEqual(['done', 'dismissed']);
+  });
+
+  it('an after-merge step is due once merged, but not while the glob is in Merging, even with the PR shown as merged', () => {
+    expect(stateOfSteps(merged(), [main()])).toEqual([['Main', 'due']]);
+    expect(stateOfSteps(merged({ status: 'signed_off' }), [main()])).toEqual([['Main', 'due']]);
+    expect(stateOfSteps(merged({ status: 'merging' }), [main()])).toEqual([['Main', 'pending']]);
+    expect(stateOfSteps(glob({ status: 'pr_open' }), [main()])).toEqual([['Main', 'pending']]);
+  });
+
+  it('defaults to no blocks after a deploy and sign-off plus dependants after the merge', () => {
+    expect(defaultStepBlocks('after_deploy:production')).toEqual([]);
+    expect(defaultStepBlocks('after_merge')).toEqual(['sign_off', 'dependants']);
+    expect(defaultStepBlocks('now')).toEqual(['sign_off', 'dependants']);
+  });
+
+  it('gates: an after-deploy step holds sign-off only when it says blocks, and dependants only when blocks includes them', () => {
+    const open = [main({ state: 'done' }), prod(), stage({ blocks: ['sign_off'] }), stored({ id: 'x', title: 'X', due: 'after_deploy:production', blocks: ['dependants'] })];
+    expect(storedBlockProgress(open, 'sign_off')).toEqual({ open: 1, total: 2 });
+    expect(storedBlockProgress(open, 'dependants')).toEqual({ open: 1, total: 2 });
+    expect(storedBlockProgress([prod()], 'sign_off')).toEqual({ open: 0, total: 0 });
+    // A non-blocking step does not keep the glob in Doing; a blocking one does, due or not.
+    expect(blockProgress(humanSteps(merged(), {}, [prod()]), 'sign_off').open).toBe(0);
+    expect(blockProgress(humanSteps(merged(), {}, [stage({ blocks: ['sign_off'] })]), 'sign_off').open).toBe(1);
+  });
+
+  it('stages are after the merge, then the board environments in order', () => {
+    expect(rolloutStages({ environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }] })).toEqual(['after_merge', 'staging', 'production']);
+    expect(rolloutStages({ environments: [] })).toEqual(['after_merge']);
+  });
+
+  const order = ['after_merge', 'staging', 'production'];
+  const arm = (rows: StoredHumanStep[], g = merged({ status: 'signed_off' })) => armOf(humanSteps(g, {}, rows), order);
+
+  it('arms the first stage with an open step: after the merge, then each environment, even after sign-off', () => {
+    const rows = [prod(), stage(), main()];
+    expect(arm(rows)).toEqual({ stage: 'after_merge', title: 'Main' });
+    expect(arm([prod(), stage(), main({ state: 'done' })])).toEqual({ stage: 'staging', title: 'Stage' });
+    expect(arm([prod(), stage({ state: 'dismissed' }), main({ state: 'done' })])).toEqual({ stage: 'production', title: 'Prod' });
+    expect(arm([prod({ state: 'done' }), stage({ state: 'done' }), main({ state: 'done' })])).toBeNull();
+    expect(arm([])).toBeNull();
+  });
+
+  it('arms on a pending step too, not only a due one', () => {
+    expect(arm([prod()], merged({ status: 'merging' }))).toEqual({ stage: 'production', title: 'Prod' });
+  });
+
+  it('skips the predicted placeholder and machine steps', () => {
+    const placeholder = stored({ id: 'ph', title: PREDICTED_ROLLOUT_TITLE, origin: 'investigation', blocks: ['sign_off'] });
+    expect(arm([placeholder])).toBeNull();
+    expect(armOf(derivedSteps(ready()), order)).toBeNull();
+    expect(armsStored(placeholder)).toBe(false);
+    expect(armsStored(prod())).toBe(true);
+    expect(armsStored(prod({ state: 'done' }))).toBe(false);
+  });
+
+  it('puts an environment the board does not list after the listed ones, and a step due now with the after-merge stage', () => {
+    const odd = stored({ id: 'o', title: 'Odd', due: 'after_deploy:eu', blocks: [] });
+    expect(arm([odd, prod()])).toEqual({ stage: 'production', title: 'Prod' });
+    expect(arm([odd])).toEqual({ stage: 'eu', title: 'Odd' });
+    expect(arm([stored({ id: 'n', title: 'Now', due: 'now' }), stage()])).toEqual({ stage: 'after_merge', title: 'Now' });
+  });
+
+  it('names the after-merge stage after the base branch, and keeps environment names', () => {
+    const b = { ...board, baseBranch: 'trunk', environments: [{ name: 'production', allowBranchDeploy: false }] };
+    const steps = (rows: StoredHumanStep[]) => humanSteps(merged(), {}, rows);
+    expect(armView(steps([main(), prod()]), b)).toEqual({ stage: 'trunk', title: 'Main' });
+    expect(armView(steps([main({ state: 'done' }), prod()]), b)).toEqual({ stage: 'production', title: 'Prod' });
+    expect(armView(steps([]), b)).toBeNull();
+  });
+
+  it('keeps the compact due of an after-deploy step', () => {
+    const [step] = humanSteps(merged(), {}, [prod()]);
+    expect(step && compactStep(step)).toMatchObject({ due: 'after_deploy:production', state: 'pending' });
   });
 });

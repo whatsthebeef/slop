@@ -1,4 +1,6 @@
 import { isCapabilityName } from './capabilities.js';
+import { HUMAN_STEP_BLOCKS } from './human-steps.js';
+import type { HumanStepBlock } from './human-steps.js';
 import { matchesGlob } from './sub-gate.js';
 
 /** The artifact kind a script step's body is stored as, one per step label. */
@@ -30,6 +32,10 @@ export interface RolloutStep {
   readonly permissions: string | null;
   readonly commands: readonly string[];
   readonly verify: string | null;
+  /** The environment the step waits for a deploy to (`(env: production)`); null: it is due after the merge. */
+  readonly env: string | null;
+  /** What the step says it holds back (`(blocks: sign_off, dependants)`); null when it doesn't say, so the default for its due applies. */
+  readonly blocks: readonly HumanStepBlock[] | null;
 }
 
 /**
@@ -49,6 +55,11 @@ export interface RolloutStep {
  * - The kind is `script`, `setting` or `manual` (any case); an item without one counts as `manual`.
  * - `(check: name)` or `check: name` at the end of the title names a capability slop can verify and tick the step by
  *   itself once it is on. A name slop doesn't know is dropped and said so in the detail, so the step still shows.
+ * - A parenthesised suffix can carry more, as comma-separated `key: value` pairs in any order:
+ *   `(env: production, blocks: sign_off, dependants, check: fileAttachments)`. `env` names the environment the step waits for
+ *   a deploy to (none: it is due after the merge; a name the board doesn't list is kept). `blocks` lists what an open step holds
+ *   back (`sign_off`, `reviewing`, `dependants`, or `none`); without it a step after the merge holds back sign-off and
+ *   dependants, and a step after a deploy holds back nothing. A key slop doesn't know is dropped and said so in the detail.
  * - A script's body is its first fenced code block; any other fenced block stays in the detail.
  * - A line `script: <repo path>` under a step (a bullet, bold and backticks are fine) points the step at a script committed
  *   in the repo (`scripts/rollout/<glob>-<slug>.sh`). The line is not shown as detail, and the path wins over a fenced body.
@@ -80,6 +91,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
     permissions: string | null;
     commands: string[];
     verify: string | null;
+    env: string | null;
+    blocks: readonly HumanStepBlock[] | null;
   } | null = null;
   const finish = () => {
     if (current === null) return;
@@ -98,6 +111,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
         (c) => current?.scriptPath == null || !isScriptRun(c, current.scriptPath),
       ),
       verify: current.verify,
+      env: current.env,
+      blocks: current.blocks,
     });
     current = null;
   };
@@ -134,9 +149,11 @@ export const parseRollout = (record: string): RolloutStep[] => {
         permissions: null,
         commands: [],
         verify: null,
+        env: parsed.env,
+        blocks: parsed.blocks,
       };
       if (parsed.overflow !== null) current.detail.push(parsed.overflow);
-      if (parsed.unknownCheck !== null) current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
+      for (const note of parsed.notes) current.detail.push(note);
       continue;
     }
     if (current === null) continue;
@@ -199,6 +216,9 @@ const isScriptRun = (command: string, path: string): boolean =>
   command === `bash ${path}` || command === `sh ${path}` || command === `./${path}`;
 const stripTicks = (value: string): string => value.replace(/`/g, '').trim();
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
+const OPTIONS_SUFFIX = /\s*\(([^()]*)\)\s*$/;
+const KNOWN_OPTIONS: readonly string[] = ['env', 'blocks', 'check'];
+const ENV_NAME = /^[\w.-]+$/;
 /** A bold kind: `**manual:** x`, `**manual**: x` (or with `__`). */
 const BOLD_KIND = /^(\*\*|__)(script|setting|manual)(?:\s*:\s*\1|\1\s*:)\s*/i;
 /** Marks that can wrap a whole title, longest first so `**x**` isn't read as `*` around `*x*`. */
@@ -295,16 +315,61 @@ const titleOf = (text: string) => {
   let title = unwrap(prefix === null ? whole : (prefix[2] ?? ''));
   if (NOTHING.test(title) && prefix === null) return null;
   let check: string | null = null;
-  let unknownCheck: string | null = null;
-  const suffix = CHECK_SUFFIX.exec(title);
-  if (suffix?.[1] !== undefined) {
-    title = unwrap(title.slice(0, suffix.index));
-    if (isCapabilityName(suffix[1])) check = suffix[1];
-    else unknownCheck = suffix[1];
+  let env: string | null = null;
+  let blocks: HumanStepBlock[] | null = null;
+  const notes: string[] = [];
+  const capability = (name: string): string | null => {
+    if (isCapabilityName(name)) return name;
+    notes.push(`check: ${name} is not a capability slop knows`);
+    return null;
+  };
+  const options = OPTIONS_SUFFIX.exec(title);
+  const pairs = options?.[1] === undefined ? null : optionPairs(options[1]);
+  if (options !== null && pairs !== null) {
+    title = unwrap(title.slice(0, options.index));
+    for (const [key, value] of pairs) {
+      if (key === 'check') check = capability(value);
+      else if (key === 'env') {
+        if (ENV_NAME.test(value)) env = value;
+        else notes.push(`env: ${value} is not an environment name`);
+      } else if (key === 'blocks') {
+        blocks = [];
+        for (const word of value.split(/[\s,+]+/).filter((w) => w !== '' && w !== 'none')) {
+          if (isBlock(word)) blocks.push(word);
+          else notes.push(`blocks: ${word} is not something a step can hold back`);
+        }
+      } else notes.push(`${key} is not a rollout option slop knows`);
+    }
+    blocks = blocks === null ? null : [...new Set(blocks)];
+  } else {
+    const suffix = CHECK_SUFFIX.exec(title);
+    if (suffix?.[1] !== undefined) {
+      title = unwrap(title.slice(0, suffix.index));
+      check = capability(suffix[1]);
+    }
   }
   if (title === '') title = kind === 'script' ? 'Run the script' : 'Do this by hand';
   const cut = shortTitle(title);
-  return { kind, title: cut.title, check, unknownCheck, overflow: cut.overflow };
+  return { kind, title: cut.title, check, notes, overflow: cut.overflow, env, blocks };
+};
+
+const isBlock = (word: string): word is HumanStepBlock => HUMAN_STEP_BLOCKS.some((b) => b === word);
+
+/**
+ * The `key: value` pairs of a parenthesised suffix, or null when it is not one (no pair uses a key slop knows, so
+ * "(staging: needs approval)" stays part of the title). A segment after a comma with no key continues the previous value
+ * (`blocks: sign_off, dependants`). Keys are lower-cased.
+ */
+const optionPairs = (text: string): [string, string][] | null => {
+  const pairs: [string, string][] = [];
+  for (const segment of text.split(',')) {
+    const keyed = /^\s*([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(segment);
+    const last = pairs[pairs.length - 1];
+    if (keyed?.[1] !== undefined) pairs.push([keyed[1].toLowerCase(), (keyed[2] ?? '').trim()]);
+    else if (last !== undefined) last[1] = `${last[1]}, ${segment.trim()}`;
+    else return null;
+  }
+  return pairs.some(([key]) => KNOWN_OPTIONS.includes(key)) ? pairs : null;
 };
 
 /** Longest step title kept as written, in characters; a longer one is cut and its rest moves into the detail. */
@@ -389,10 +454,11 @@ export const ROLLOUT_SYSTEM = `You decide what a person must do after a change i
 The server image deploys on merge; drizzle migrations run when the server starts; GitHub workflows take effect with the merge.
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
 A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
-Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: 'Why: <one sentence>', 'Permissions: <the exact login and rights, for a step run in a terminal>', one 'Run: <command>' line per command (no backticks, no Markdown), 'Check: <what you should see>'. Anything else a person needs goes in plain lines under the title. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
+Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: 'Why: <one sentence>', 'Permissions: <the exact login and rights, for a step run in a terminal>', one 'Run: <command>' line per command (no backticks, no Markdown), 'Check: <what you should see>'. Anything else a person needs goes in plain lines under the title.
+A step that can only be done after a deploy to another environment (for example production) ends its title with '(env: <environment name>)', using a name the record or diff shows; a step with no env is for right after the merge. Add 'blocks: sign_off' there only when the glob must not be signed off before that step is done; steps after a deploy hold nothing back by default. Add 'check: <capability>' only when told that capability exists. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
-{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Permissions / Run / Check lines indented under it, '(check: <capability>)' at the end of a title only when told that capability exists>"}
+{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Permissions / Run / Check lines indented under it, '(env: <environment>, blocks: sign_off, check: <capability>)' at the end of a title, each part only when it applies>"}
 {"decision":"ask","question":"<one specific question a person can answer, e.g. Does SLOP_X need setting in prod? It has no default>"}
 Prefer "none" when the diff only adds settings with defaults, or only changes code the deploy ships. Use "ask" only when the diff doesn't let you tell. Never invent steps.`;
 
