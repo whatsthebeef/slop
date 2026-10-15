@@ -457,16 +457,12 @@ describe('card interaction', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it('shows a grouped glob as one tag with no separate filter button; a card with a group page opens it', async () => {
-    const user = userEvent.setup();
-    const onFilterGroup = vi.fn();
-    const { onOpen } = renderCard(view({ group: 'glob-groups' }), { onFilterGroup, groupHref: '/boards/1/groups/glob-groups' });
+  it('shows a grouped glob as one tag that filters, never a link to the group page', () => {
+    renderCard(view({ group: 'glob-groups' }), { onFilterGroup: vi.fn() });
     expect(screen.queryByTestId('group-filter')).toBeNull();
     const tag = screen.getByTestId('group-chip');
-    expect(tag.getAttribute('href')).toBe('/boards/1/groups/glob-groups');
-    await user.click(tag);
-    expect(onFilterGroup).not.toHaveBeenCalled();
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(tag.getAttribute('href')).toBeNull();
+    expect(tag.textContent).toBe('glob-groups');
   });
 
   it('has no title edit affordance: the title is plain wrapping text and clicking it opens the glob', async () => {
