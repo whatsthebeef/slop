@@ -120,6 +120,19 @@ describe('shared status line', () => {
     );
   });
 
+  it('says Merge and continue waits for the checks on a same with open rollout steps', () => {
+    const g = prOpen({
+      headChecks: { sha: head, state: 'pending' },
+      allowedActions: [],
+      humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', who: 'admin', due: 'after_merge', blocks: ['sign_off'], state: 'pending' }],
+    });
+    expect(waitingFor(g, [], 'dev')).toMatchObject([
+      { action: 'merge_continue', label: 'Merge and continue', running: true },
+    ]);
+    // Without steps it is still plain Merge.
+    expect(waitingFor({ ...g, humanSteps: [] }, [], 'dev')).toMatchObject([{ action: 'merge', label: 'Merge' }]);
+  });
+
   it('gives QA and PO no wait', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: [] });
     expect(waitingFor(g, [], 'qa')).toEqual([]);

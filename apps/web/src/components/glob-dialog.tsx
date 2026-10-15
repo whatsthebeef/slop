@@ -44,6 +44,7 @@ export const GlobDetail = ({
   onCompleteStep,
   onMarkDeployed,
   onDismissStep,
+  onFailStep,
   onAction,
   onReviewLabel,
   onDismissEdge,
@@ -79,6 +80,8 @@ export const GlobDetail = ({
   onCompleteStep: (stepId: string) => Promise<boolean>;
   onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
+  /** A rollout step failed; the note starts a new run on a fresh branch. Resolves false when the request failed. */
+  onFailStep?: (stepId: string, note: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean, text?: string) => Promise<boolean>;
@@ -178,6 +181,7 @@ export const GlobDetail = ({
     onCompleteStep,
     ...(onMarkDeployed === undefined ? {} : { onMarkDeployed }),
     onDismissStep,
+    ...(onFailStep === undefined ? {} : { onFailStep }),
   };
 
   return (
