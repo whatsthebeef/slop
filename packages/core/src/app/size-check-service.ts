@@ -208,6 +208,8 @@ export class SizeCheckService implements SizeAssessor {
     let proposal = proposed?.proposal ?? null;
     // Say why a flagged plan has no proposal, so the card isn't silent about it.
     if (proposed !== null && proposal === null && proposed.why !== null) evidence.push(`No workstreams were proposed: ${proposed.why}`);
+    // Size alone never flags: without at least 2 usable workstreams there is nothing to work in parallel, so the estimate stays evidence only.
+    if (proposed !== null && proposal === null) reasons = [];
     // Workstreams that would wait on each other in one line gain nothing: the glob is not flagged, and the evidence says why.
     if (proposal?.notes !== undefined) evidence.push(...proposal.notes);
     if (proposal !== null && isChain(proposal)) {
@@ -324,8 +326,8 @@ export class SizeCheckService implements SizeAssessor {
           estimate,
           evidence: [...evidenceOf(estimate), ...(proposed?.notes ?? [])],
           threshold,
-          flagged: reasons.length > 0,
-          reasons,
+          flagged: reasons.length > 0 && (proposed ?? current.proposal) !== null,
+          reasons: (proposed ?? current.proposal) !== null ? reasons : [],
           proposal: proposed === null ? (reasons.length > 0 ? current.proposal : null) : proposed,
           updatedAt: this.deps.clock.now(),
         });

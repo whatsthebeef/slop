@@ -98,7 +98,7 @@ export const OversizedGlob = ({ glob, size }: { glob: GlobView; size: OversizedS
       <p className='font-semibold'>Oversized: this looks like more than one PR's worth of work</p>
       {check !== undefined && (
         <p className='text-muted-foreground'>
-          {check.reasons.join('; ')}. This is advice: {glob.id} can start as it is, and the run works the workstreams in parallel.
+          {check.reasons.join('; ')}. This is advice: {glob.id} can start as it is{proposal !== null && ', and the run works the workstreams in parallel'}.
         </p>
       )}
       {check?.estimate.forecast !== undefined && <SizeForecastView forecast={check.estimate.forecast} />}
