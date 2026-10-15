@@ -56,7 +56,7 @@ export interface DependencyRuleChange {
 }
 export type NewDependencyRuleChange = Omit<DependencyRuleChange, 'id'>;
 
-/** A rule as board settings shows it: the weight in force, the catalog default and whether the board moved it. */
+/** A rule as the Knowledge page's "What slop has learned" shows it: the weight in force, the catalog default and whether the board moved it. */
 export interface DependencyRuleView {
   readonly pattern: string;
   readonly weight: number;

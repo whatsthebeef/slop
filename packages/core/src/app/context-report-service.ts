@@ -19,7 +19,7 @@ const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
 
 /**
  * The board's context report (spec, Context tuning): reads what the stores already hold. Members read it; the settings
- * section comes from the same view the settings page uses.
+ * section comes from the same view the Knowledge page's "What slop has learned" (Context tuning) uses.
  */
 export class ContextReportService {
   constructor(private readonly deps: { store: Store; clock: Clock; tuning: ContextTuningService }) {}

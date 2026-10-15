@@ -480,7 +480,7 @@ export class SizeCheckService implements SizeAssessor {
     }
   }
 
-  /** The board's threshold, its bounds and its history, for members (board settings). */
+  /** The board's threshold, its bounds and its history, for members (the Knowledge page's "What slop has learned"). */
   async view(email: string, boardId: number): Promise<Result<SizeThresholdView>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
@@ -637,7 +637,7 @@ export class SizeCheckService implements SizeAssessor {
     return records === 0 ? null : { records, moves };
   }
 
-  /** The board's calibration (weights, area factors), its defaults and its history, for members (board settings). */
+  /** The board's calibration (weights, area factors), its defaults and its history, for members (the Knowledge page's "What slop has learned"). */
   async calibrationView(email: string, boardId: number): Promise<Result<SizeCalibrationView>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);
