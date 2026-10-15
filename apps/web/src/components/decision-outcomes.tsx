@@ -1,7 +1,7 @@
 import { decisionOf, KNOWLEDGE_KINDS, RULES_MODEL } from '@slop/core';
 import type { DecisionAttributes, DecisionLearning, KbTarget, KnowledgeKind, SuggestionPrefill } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Link } from 'react-router';
@@ -12,10 +12,13 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { Tip } from '@/components/ui/tip';
 import { api } from '@/lib/api';
 import type { BoardView, DecideInput, GlobView } from '@/lib/api';
-import { adminOnlyReason, approveBlockedText, approveLabel, conflictNote, headerMenu, submitLabel, watchMode } from '@/lib/decide-flow';
+import { acceptConfirm, adminOnlyReason, approveBlockedText, approveLabel, conflictNote, headerMenu, submitLabel, watchMode } from '@/lib/decide-flow';
 import type { Choice, FlowMode, MenuEntry, MenuKey } from '@/lib/decide-flow';
 import { globDiffKey } from '@/lib/live';
+import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
+import type { PendingAction } from '@/lib/pending-action';
 import { boardGlobHref } from '@/lib/glob-section';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { applyPrefill, recommendedLabel, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 
 /** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */
@@ -66,7 +69,12 @@ export interface DecideFlow {
   readonly glob: GlobView;
   readonly attributes: DecisionAttributes;
   readonly board: BoardView;
+  /** The action row is busy, or a decision outcome has been sent and the glob has not moved yet. */
   readonly busy: boolean;
+  /** What the main button says while an outcome is in flight or waiting for the glob to move ("Approving…"); null when none is. */
+  readonly working: string | null;
+  /** Marks an outcome sent outside `submit` (Keep as learning) as pending until the glob moves. */
+  readonly sent: (outcome: Choice | 'keep', sending: boolean) => void;
   readonly canDecide: boolean;
   readonly canSuggest: boolean;
   readonly admin: boolean;
@@ -89,6 +97,22 @@ export interface DecideFlow {
   readonly suggest: Suggest;
   readonly formRef: RefObject<HTMLDivElement | null>;
 }
+
+/** The main button's label while an outcome is on its way. */
+const workingText = (outcome: Choice | 'keep'): string => {
+  switch (outcome) {
+    case 'accept':
+    case 'accept_with_edits':
+    case 'keep':
+      return 'Approving…';
+    case 'reject':
+      return 'Rejecting…';
+    case 'retarget':
+      return 'Retargeting…';
+    case 'needs_work':
+      return 'Sending…';
+  }
+};
 
 /** The decide flow for a decision glob (null for any other, and for a replacement card, which has its own Confirm / Dismiss). */
 export const useDecideFlow = ({
@@ -119,6 +143,16 @@ export const useDecideFlow = ({
   const [mode, setMode] = useState<FlowMode | null>(null);
   const [applied, setApplied] = useState<SuggestionPrefill | null>(null);
   const [input, setInput] = useState<DecideInput | null>(null);
+  // An outcome stays pending until the glob has moved (its version changes), like the action row's actions; the ref stops a
+  // second click or Enter in the same tick, before this render has disabled the controls.
+  const [pending, setPending] = useState<{ at: PendingAction; outcome: Choice | 'keep' } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const sending = useRef(false);
+  useEffect(() => {
+    if (pending === null) return undefined;
+    const timer = setTimeout(() => setNow(Date.now()), PENDING_TIMEOUT_MS - (Date.now() - pending.at.at) + 50);
+    return () => clearTimeout(timer);
+  }, [pending]);
   const formRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setMode(null);
@@ -148,14 +182,26 @@ export const useDecideFlow = ({
     setApplied(null);
     setMode(next);
   };
+  const working = pending !== null && isPending(pending.at, glob, Math.max(now, pending.at.at)) ? pending.outcome : null;
   const submit = () => {
-    if (input === null) return;
-    void onDecide(input).then((done) => {
-      if (done) setMode(null);
-    });
+    if (input === null || sending.current || working !== null) return;
+    sending.current = true;
+    const next = { action: 'decide', version: glob.version, at: Date.now() } satisfies PendingAction;
+    const outcome = input.outcome;
+    setPending({ at: next, outcome });
+    void startAction(null, false, next, glob, () => onDecide(input), (value) => setPending(value === null ? null : { at: value, outcome }))
+      .then((done) => {
+        if (done) setMode(null);
+      })
+      .finally(() => {
+        sending.current = false;
+      });
   };
+  const sent = (outcome: Choice | 'keep', sending: boolean) =>
+    setPending(sending ? { at: { action: 'decide', version: glob.version, at: Date.now() }, outcome } : null);
   const asking = suggest.busy || suggest.state === 'working';
   const run = (key: MenuKey) => {
+    if (sending.current || working !== null) return;
     if (key === 'suggest') suggest.ask();
     else if (key === 'accept_with_edits' && canSuggest && suggest.state === 'ready' && suggest.prefill?.outcome === 'accept_with_edits') {
       setApplied(suggest.prefill);
@@ -170,7 +216,9 @@ export const useDecideFlow = ({
     glob,
     attributes,
     board,
-    busy,
+    busy: busy || working !== null,
+    working: working === null ? null : workingText(working),
+    sent,
     canDecide,
     canSuggest,
     admin,
@@ -179,7 +227,7 @@ export const useDecideFlow = ({
     target,
     draftText: diff.data?.draft?.content ?? '',
     waiting: hasItem && !isDocument && learning !== null && inPipeline(learning) && diff.data?.draft == null,
-    approve: { ...text, blocked: approveBlockedText(adminOnly, canDecide), run: () => (mode === 'accept' ? submit() : pick('accept')) },
+    approve: { ...text, blocked: approveBlockedText(adminOnly, canDecide), run: () => (mode === 'accept' ? undefined : pick('accept')) },
     menu,
     mode,
     applied,
@@ -251,13 +299,19 @@ const OutcomeForm = ({ flow, choice }: { flow: DecideFlow; choice: Choice }) => 
       ? "Edited text (the new document's whole body)"
       : "Edited text (a section's new text)";
   const note = conflictNote(attributes.conflictsWith ?? []);
+  const confirm = acceptConfirm({
+    hotspot: attributes.origin.kind === 'hotspot',
+    learning: isLearning(attributes),
+    document: attributes.document !== undefined,
+    target,
+    title: stripMarkdown(flow.glob.title),
+    label: flow.approve.label,
+  });
   return (
     <div className='grid gap-2 rounded border p-3' data-testid={`outcome-form-${choice}`}>
       {choice === 'accept' && (
-        <p className='text-xs text-muted-foreground'>
-          {!isLearning(attributes)
-            ? 'Records the decision as approved; there is no knowledge change to apply.'
-            : 'Applies the proposed change to its target, then moves this decision to Reviewing.'}
+        <p className='text-xs text-muted-foreground' data-testid='accept-confirm-text'>
+          {confirm.text}
         </p>
       )}
       {choice === 'accept_with_edits' && (
@@ -315,6 +369,16 @@ const OutcomeForm = ({ flow, choice }: { flow: DecideFlow; choice: Choice }) => 
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} />
         </Label>
       )}
+      {choice === 'accept' && (
+        <div className='flex gap-2'>
+          <Button size='sm' disabled={flow.busy || flow.input === null || flow.approve.blocked !== null} data-testid='accept-confirm' onClick={flow.submit}>
+            {confirm.button}
+          </Button>
+          <Button size='sm' variant='ghost' data-testid='accept-cancel' onClick={flow.close}>
+            Cancel
+          </Button>
+        </div>
+      )}
       {choice === 'reject' && note !== null && (
         <p className='text-xs text-amber-800 dark:text-amber-200' data-testid='conflict-note-reject'>
           {note}: say why this one should go.
@@ -336,7 +400,12 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
         </p>
       )}
       {suggest.failed && <p className='text-xs text-red'>Could not get a recommendation.</p>}
-      {stored !== undefined && state === 'ready' && (
+      {stored !== undefined && state === 'working' && (
+        <p className='text-xs text-muted-foreground' data-testid='suggest-refreshing'>
+          Getting a fresh recommendation; this one may change.
+        </p>
+      )}
+      {stored !== undefined && (state === 'ready' || state === 'working') && (
         <div className='grid gap-1 text-sm' data-testid='suggestion'>
           <p className='whitespace-pre-wrap break-words'>
             <span className='font-medium'>
@@ -375,10 +444,11 @@ const mainState = (flow: DecideFlow) => {
   // A recommended reject or merge is not an approval: it needs only decide, as in the ▾.
   const blocked = acceptMode && !(recommended && suggest.prefill?.outcome === 'reject') ? approve.blocked : flow.canDecide ? null : "You can't decide this";
   const label = outcomeMode !== null ? submitLabel(outcomeMode, approve.label) : recommended ? recommendedLabel(suggest.stored, approve.label) : approve.label;
-  const off = busy || blocked !== null || (outcomeMode !== null && input === null);
+  // An approval is confirmed in its own form (Confirm / Cancel), so the row's button isn't a second way to confirm it.
+  const off = busy || blocked !== null || outcomeMode === 'accept' || (outcomeMode !== null && input === null);
   const apply = flow.applySuggestion;
   const press = () => (recommended && apply !== null ? apply() : outcomeMode === null || mode === 'keep' ? approve.run() : flow.submit());
-  return { outcomeMode, blocked, label, off, press };
+  return { outcomeMode, blocked, label: flow.working ?? label, off, press: () => (flow.working === null ? press() : undefined) };
 };
 
 const MenuItems = ({ flow, only }: { flow: DecideFlow; only?: MenuKey }) => (
@@ -422,7 +492,8 @@ export const DecisionMainAction = ({ flow, extra }: { flow: DecideFlow; extra?: 
             data-outcome={outcomeMode ?? 'accept'}
             onClick={press}
           >
-            {holding ? WAITING_FOR_DRAFT : keeping ? 'Approving without a document' : label}
+            {flow.working !== null && <Loader2 className='size-3.5 animate-spin' aria-hidden />}
+            {holding ? WAITING_FOR_DRAFT : keeping && flow.working === null ? 'Approving without a document' : label}
           </Button>
         </Tip>
         <DropdownMenu>
@@ -463,7 +534,7 @@ export const OutcomeForms = ({ flow }: { flow: DecideFlow }) => {
   return (
     <div ref={flow.formRef} data-testid='outcome-forms'>
       {mode === 'keep' ? (
-        <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} />
+        <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={(sending) => flow.sent('keep', sending)} />
       ) : (
         <OutcomeForm key={`${mode}-${flow.applied?.outcome === mode ? 'applied' : 'plain'}`} flow={flow} choice={mode} />
       )}
@@ -491,6 +562,7 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
               data-testid={`outcome-${outcomeMode ?? 'accept'}`}
               onClick={press}
             >
+              {flow.working !== null && <Loader2 className='size-3.5 animate-spin' aria-hidden />}
               {mainLabel}
             </Button>
           </Tip>
@@ -524,7 +596,7 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
       {mode !== null && (
         <div ref={flow.formRef}>
           {mode === 'keep' ? (
-            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} />
+            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={(sending) => flow.sent('keep', sending)} />
           ) : (
             <OutcomeForm key={`${mode}-${flow.applied?.outcome === mode ? 'applied' : 'plain'}`} flow={flow} choice={mode} />
           )}

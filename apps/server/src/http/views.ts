@@ -1,5 +1,5 @@
-import type { Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import type { ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
@@ -65,7 +65,7 @@ export const resolveKind = (input: KindInput, create: boolean): KindResolved => 
     return bad('A glob cannot change between machine and human work');
   }
   if (create && category === undefined && (input.fix !== undefined || input.workKind !== undefined) && type !== null) {
-    category = categoryFor(input.fix ?? false, input.workKind ?? 'maintenance');
+    category = categoryFor(input.fix ?? false);
   }
   if (input.actor === 'machine' && category !== undefined && isHumanCategory(category)) return bad(`A machine glob cannot be a ${category}`);
   // Human work is never a fix and has no work kind to choose.
@@ -86,7 +86,7 @@ export interface CreateKindFields {
 /**
  * The stored category, fix flag and work kind for a create that skipped intake's proposal (a titled create, the CLI): what the
  * caller said is a person's choice (an old `category` alias says both); the rest is inferred from the title and plan with `infer`
- * (absent or a super: not a fix, maintenance). A fix is never a super.
+ * (absent or a super: not a fix, maintenance). A fix is never a super. An asked `feature` means R&D and is stored as a task.
  */
 export const createKindFields = async (
   input: { readonly type?: SlopType | null | undefined; readonly category?: Category | undefined; readonly fix?: boolean | undefined; readonly workKind?: WorkKind | undefined },
@@ -100,7 +100,8 @@ export const createKindFields = async (
   const chosenFix = fix ?? (input.type === 'super' ? false : (found?.fix ?? false));
   const chosenKind = workKind ?? found?.workKind ?? 'maintenance';
   return {
-    category: category ?? categoryFor(chosenFix, chosenKind),
+    // An asked `feature` implied R&D above; it is stored as a task.
+    category: category === undefined ? categoryFor(chosenFix) : storedCategory(category),
     fix: chosenFix,
     fixSource: fix === undefined ? 'inferred' : 'person',
     workKind: chosenKind,
@@ -148,11 +149,13 @@ export const globView = (
 });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; handover?: Handover | null; dismissedKeys?: readonly string[] }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null }) =>
   ({
     ...globView(v.glob, v.allowedActions, v.artifacts, v, v.humanSteps ?? null, v.relations, v.holding),
     waitingFor: v.waitingFor,
     waitedOnBy: v.waitedOnBy,
+    // The script an open action runs and whether the base branch has it (null `onBase`: not checked); null for any other glob.
+    script: v.script ?? null,
     // The glob's relations in groups: what holds it back (the same as `holding`), what it holds back, and what no longer holds.
     relations: v.relationGroups,
     // Why a person is needed and what to do first (null when nothing is wrong); the card and `sstor --glob` show it.
@@ -188,14 +191,17 @@ export const globViewFor = (
   holding: readonly Holding[] = [],
   /** The board's open work steps for this glob (the list reads them for the whole board at once). */
   stored: readonly StoredHumanStep[] = [],
-) =>
-  globView(
+  /** An open action's script check, where the list read it. */
+  check?: ScriptCheck,
+) => ({
+  ...globView(
     glob,
     machine.allowedActions(
       glob,
       { email, role },
       {
         recordSha: machine.recordShaOf(artifacts ?? []),
+        ...(check === undefined ? {} : { script: check.script, baseBranch: check.baseBranch }),
         // Without the artifacts loaded the reviews are unknown, so no Retry review is guessed.
         ...(artifacts === null ? {} : { reviews: machine.reviewsOf(artifacts) }),
         ...(relations === undefined ? {} : { relations }),
@@ -206,7 +212,9 @@ export const globViewFor = (
     humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts ?? []) }) }, stored).map(compactStep),
     relations?.relations ?? null,
     holding,
-  );
+  ),
+  ...(check === undefined ? {} : { script: check.script }),
+});
 
 export const statusOf = (error: DomainError): ContentfulStatusCode => {
   switch (error.code) {

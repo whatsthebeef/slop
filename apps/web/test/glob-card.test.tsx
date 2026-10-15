@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
@@ -11,6 +11,8 @@ import type { GlobView } from '../src/lib/api';
 import type { WorkstreamsSummary, WorkstreamState } from '@slop/core';
 import { handoverKey, statusKey } from '../src/lib/dismissals';
 import { cornerStatus } from '../src/lib/card-rows';
+import { CONFIRM_MS } from '../src/lib/chip-actions';
+import { cardMoves } from '../src/lib/card-moves';
 import { statusLine } from '../src/lib/status-line';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
@@ -50,7 +52,7 @@ const waitingOn = () =>
   });
 const move = (action: 'start' | 'pick_up', g: GlobView): CardMove => {
   const { label, tip, icon } = actionPresentation(action, g);
-  return { action, direction: 'right', label: `${label} ▸`, description: `${label} ${g.id}: ${tip}`, icon };
+  return { action, direction: 'right', confirm: false, label: `${label} ▸`, description: `${label} ${g.id}: ${tip}`, icon };
 };
 
 const base = () => ({
@@ -99,6 +101,18 @@ describe('card rows', () => {
       expect(before !== null && before !== undefined && el !== null && el !== undefined && (before.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0, String(i)).toBe(true);
     }
     for (const gone of ['status-line', 'status-line-open', 'waiting-on', 'waiting-on-open']) expect(root.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
+  });
+
+  it('shows "N waiting on this" as the status, with no separate text lower on the card', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={view({ status: 'planning' })} repo='a/b' waitingOnThis={2} />
+      </MemoryRouter>,
+    );
+    const root = dom(html);
+    expect(root.querySelector('[data-testid="card-status"] [data-testid="status-text"]')?.textContent).toBe('2 waiting on this');
+    expect(root.querySelector('[data-testid="waiting-on-this-chip"]')).toBeNull();
+    expect(root.querySelector('[data-testid="card-chips"]')?.textContent ?? '').not.toContain('waiting on this');
   });
 
   it('keeps the one status on a single truncated line that is never centred, with the full text in a tip', () => {
@@ -491,6 +505,67 @@ describe('card interaction', () => {
     expect(onAct).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
     expect(onOpenSection).not.toHaveBeenCalled();
+  });
+
+  describe('Fix conflict button', () => {
+    const fixable = () => prOpen({ type: 'sub', implementer: null, list: 'doing', allowedActions: ['resolve_conflict', 'take_over'], conflict: { base: 'main', files, since: 's1t9', at: NOW } });
+    const withFix = (extra: Partial<Parameters<typeof GlobCard>[0]> = {}) => {
+      const g = fixable();
+      const onMove = vi.fn();
+      const out = renderCard(g, { moves: cardMoves(g).map((m) => m.move), onMove, ...extra });
+      return { ...out, onMove, button: () => screen.getByTestId('move-resolve_conflict') };
+    };
+
+    it('shows a primary Fix conflict on a conflicting glob in Doing, with no arrow', () => {
+      const { button } = withFix();
+      expect(button().textContent).toBe('Fix conflict');
+      expect(button().className).toContain('bg-primary');
+    });
+
+    it('the first click only arms it; the second runs it', async () => {
+      const user = userEvent.setup();
+      const { button, onMove, onOpen } = withFix();
+      await user.click(button());
+      expect(button().textContent).toBe('Confirm fix conflict');
+      expect(button().getAttribute('data-confirming')).toBe('true');
+      expect(onMove).not.toHaveBeenCalled();
+      await user.click(button());
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove.mock.calls[0]?.[0]).toMatchObject({ action: 'resolve_conflict' });
+      expect(onOpen).not.toHaveBeenCalled();
+    });
+
+    it('reverts on Escape and on blur, and runs nothing', async () => {
+      const user = userEvent.setup();
+      const { button, onMove } = withFix();
+      await user.click(button());
+      await user.keyboard('{Escape}');
+      expect(button().textContent).toBe('Fix conflict');
+      await user.click(button());
+      expect(button().textContent).toBe('Confirm fix conflict');
+      await user.tab();
+      expect(button().textContent).toBe('Fix conflict');
+      expect(onMove).not.toHaveBeenCalled();
+    });
+
+    it('reverts after the timeout', () => {
+      vi.useFakeTimers();
+      try {
+        const { button } = withFix();
+        act(() => button().click());
+        expect(button().textContent).toBe('Confirm fix conflict');
+        act(() => void vi.advanceTimersByTime(CONFIRM_MS + 1));
+        expect(button().textContent).toBe('Fix conflict');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shows the pending label while the fix runs', () => {
+      withFix({ pending: 'resolve_conflict' });
+      expect(screen.getByTestId('card-pending').textContent).toBe('Fixing conflict…');
+      expect(screen.getByTestId<HTMLButtonElement>('move-resolve_conflict').disabled).toBe(true);
+    });
   });
 
   it('reverts the corner merge confirm on Esc', async () => {

@@ -21,9 +21,9 @@ When you create a glob you choose who does it (machine or human), then how (the 
 | Machine | sub, same, super |
 | Human | decision (something a person chooses, such as a learning to approve), action (something a person does, then marks done) |
 
-Two things are worked out for you from the request and plan, shown as small chips you can flip. The **fix flag** says the glob fixes something broken: the investigator reproduces it first, finds the root cause and a regression test is expected. A fix glob is never a super. The **work kind** (R&D or maintenance) is only for the time report; an admin can correct it in the glob's details. Your correction sticks when the plan changes later.
+The **fix flag** is worked out for you from the request and plan, shown as a small chip you can flip. It says the glob fixes something broken; it is a hint, and the agents decide from the investigation whether to reproduce first, find the root cause and write a regression test, or to build straight from the plan. A fix glob is never a super. The **work kind** (R&D or maintenance) is worked out silently and is only for the time report; an admin can correct it in the glob's details. Your correction sticks when the plan changes later. Nobody chooses between a feature and a task: all non-fix work is a task.
 
-The ID letter is set at creation and never changes: `s1b3` for machine work with the fix flag, `s1t3` for other maintenance, `s1f3` for other machine work (R&D), `s1k3` for a decision and `s1a3` for an action. Existing IDs keep their letters. The old category and type names still work in the MCP tools and API for one release.
+The ID letter is set at creation and never changes: `s1b3` for machine work with the fix flag, `s1t3` for every other machine glob, `s1k3` for a decision and `s1a3` for an action. Existing IDs keep their letters (old `s1f3` feature IDs stay as they are). The old category and type names still work in the MCP tools and API for one release; `feature` is accepted and stored as a task.
 
 An **action glob** has no branch, pull request or run. It is open until someone finishes it with Done (who and when are kept, with an optional note) or drops it with Dismiss (a reason is needed). A glob that must wait for it can hold on it, and either outcome lets that glob go. Its plan says Why, Do this (the script and the command to run), Permissions and Check it worked.
 
@@ -81,7 +81,7 @@ A decision glob (ID like `s1k4`) is a proposed change to what the project knows,
 
 ## Learnings and the Knowledge page
 
-A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, or a note on how an agent should behave. Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
+A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, a note on how an agent should behave, or a fact (how the system is now, after architecture or operations changed; approving it replaces the outdated description). Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
 
 ## Settings and what slop has learned
 

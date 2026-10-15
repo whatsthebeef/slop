@@ -27,8 +27,16 @@ describe('classifyMergeState', () => {
     expect(classifyMergeState('blocked', [run('completed', 'success')])).toBe('pending');
   });
 
+  it('a behind head is judged by its own check runs, never passed on `behind` alone', () => {
+    expect(classifyMergeState('behind', [])).toBe('pending');
+    expect(classifyMergeState('behind', [run('in_progress', null)])).toBe('pending');
+    expect(classifyMergeState('behind', [run('completed', 'success'), run('in_progress', null)])).toBe('pending');
+    expect(classifyMergeState('behind', [run('completed', 'skipped')])).toBe('pending');
+    expect(classifyMergeState('behind', [run('in_progress', null), run('completed', 'failure')])).toBe('failed');
+    expect(classifyMergeState('behind', [run('completed', 'success')])).toBe('passed');
+  });
+
   it('keeps the other mappings', () => {
-    expect(classifyMergeState('behind', [])).toBe('behind');
     expect(classifyMergeState('dirty', [])).toBe('conflict');
     expect(classifyMergeState('draft', [])).toBe('pending');
     expect(classifyMergeState('unknown', [])).toBe('unknown');

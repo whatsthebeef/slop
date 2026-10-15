@@ -144,11 +144,24 @@ const decidedStatus = (glob: GlobView, decision: DecisionAttributes): CornerStat
 /**
  * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
  * words, the rest go in the tooltip: a stall, an escalation in Planning, your turn, a problem, the machine running, the
- * prerequisites it waits on, any other waiting, standby. A decision glob has one only once decided: its outcome.
+ * prerequisites it waits on, any other waiting, standby, and last the globs in Planning waiting on this one. A decision glob has one only once decided: its outcome.
  */
-export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CornerStatus | null => {
+export const cornerStatus = (
+  glob: GlobView,
+  now: string,
+  viewer?: HumanStepViewer,
+  repo?: string,
+  waitingOnThis = 0,
+): CornerStatus | null => {
   const decision = decisionOf(glob);
   if (decision !== null) return decision.outcome === null ? null : decidedStatus(glob, decision);
+  // An open action's one status is what it waits for (the glob that builds its script); otherwise an action has none.
+  if (glob.category === 'action') {
+    const held = holdLine(glob);
+    return held === null
+      ? null
+      : { kind: 'hold', icon: held.icon, text: held.text, label: held.text, tip: held.tip, tone: 'text-muted-foreground', click: { kind: 'section', target: cardTargets.related() } };
+  }
   if (isHumanCategory(glob.category)) return null;
   // Signed off is the glob's whole state: nothing else shows, and the date lives in the tooltip.
   if (glob.status === 'signed_off') {
@@ -163,6 +176,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   const standby = onStandby(glob);
   const escalation = glob.escalation;
   const escalated = isEscalated(glob);
+  const waitingTip = waitingOnThis > 0 ? `${String(waitingOnThis)} in Planning wait for this glob to merge.` : null;
 
   const make = (kind: string, icon: StatusIcon, text: string, tone: string, click: ChipClick | null, lead: string[]): CornerStatus => {
     const rest = [
@@ -171,9 +185,10 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(kind !== 'needs-human' && escalated && escalation != null ? [`Needs a person: ${escalation.reason}`] : []),
       ...(held === null || kind === 'hold' ? [] : [held.tip]),
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
+      ...(waitingTip === null || kind === 'waiting-on-this' ? [] : [waitingTip]),
     ];
     const hint =
-      click === null || kind === 'needs-human' ? [] : [kind === 'hold' ? "Opens this glob's related globs." : clickTip(click)];
+      click === null || kind === 'needs-human' ? [] : [kind === 'hold' || kind === 'waiting-on-this' ? "Opens this glob's related globs." : clickTip(click)];
     const shown = plainText(text);
     // What the text dropped (a time, a commit) stays in the tooltip.
     const detail = shown === text ? [] : [text];
@@ -262,6 +277,11 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     );
   }
   if (standby !== null) return make('standby', 'machine', 'standby', 'text-muted-foreground', null, [STANDBY_TIP]);
+  if (waitingTip !== null) {
+    return make('waiting-on-this', 'hourglass', `${String(waitingOnThis)} waiting on this`, 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [
+      waitingTip,
+    ]);
+  }
   return null;
 };
 
@@ -280,6 +300,10 @@ export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (isEscalated(glob) || status?.turn === 'decide') return true;
   return status !== null && ['provisioning', 'base-red', 'checks', 'stuck'].includes(status.kind);
 };
+
+/** How many globs wait for this one at the start gate (its open `holdsBack` relations), for the glob view's "N waiting on this"; 0 when the view has none. */
+export const waitingOnOwn = (glob: Pick<GlobView, 'relations'>): number =>
+  new Set((glob.relations?.holdsBack ?? []).filter((h) => h.gate === 'start').map((h) => h.from)).size;
 
 /** How many globs in Planning wait for each glob to merge (their unmet start relations), for the card's "N waiting on this". */
 export const waitingOnCounts = (globs: readonly Pick<GlobView, 'id' | 'status' | 'holding'>[]): ReadonlyMap<string, number> => {

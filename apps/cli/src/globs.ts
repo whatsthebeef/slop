@@ -375,7 +375,7 @@ async function waitForBranch(deps: GlobDeps, first: GlobView): Promise<GlobView>
 }
 
 const TYPE_FLAGS = { '--same': 'same', '--sub': 'sub', '--super': 'super' } as const;
-/** The old category flags, now aliases: what each says about the fix flag and the work kind. */
+/** The old category flags, now aliases: what each says about the fix flag and the work kind. `--feature` stays as a hidden alias (R&D; the glob is stored as a task) and is not in the help. */
 const CATEGORY_FLAGS = { '--feature': 'feature', '--task': 'task', '--bug': 'bug' } as const;
 const CATEGORY_KIND = {
   feature: { fix: false, workKind: 'rnd' },

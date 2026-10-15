@@ -73,10 +73,10 @@ describe('position indicator', () => {
     expect(positionOf(withRun('queued', {}, { status: 'in_progress' }), NOW)?.text).toBe('starting');
   });
 
-  it('says "getting a recommendation" with the spinner while the recommendation job runs', () => {
+  it('says "investigating" with the spinner while the recommendation job runs', () => {
     const g = view({ category: 'decision', status: 'in_progress', implementer: 'a@x.com', machineSteps: [{ id: 'machine:effect:suggest_decision', kind: 'recommendation', state: 'running', startedAt: NOW, lastProgressAt: null, detail: null, holdsBall: true }] });
-    expect(positionOf(g, NOW)).toMatchObject({ holder: 'machine', text: 'getting a recommendation', spinning: true });
-    expect(positionOf(g, NOW)?.tip).toMatch(/picked up and when the draft changes/);
+    expect(positionOf(g, NOW)).toMatchObject({ holder: 'machine', text: 'investigating', spinning: true });
+    expect(positionOf(g, NOW)?.tip).toMatch(/Slop is getting its recommendation/);
   });
 
   it('says how long a run has been queued', () => {

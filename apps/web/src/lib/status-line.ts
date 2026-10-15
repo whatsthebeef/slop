@@ -323,11 +323,27 @@ const failedWhy = (glob: GlobView, head: string): string => {
   return `: checks failed on ${short}${detail}`;
 };
 
+/** What an action's Done waits for: the glob that builds its script, or the script itself not being on the base branch yet. */
+const actionWaiting = (glob: GlobView, actions: readonly Action[]): Waiting[] => {
+  if (glob.status !== 'planning' || actions.includes('complete_action')) return [];
+  const { label, icon } = actionPresentation('complete_action', glob);
+  const first = appliedHolding(glob, glob.holding ?? [])[0];
+  if (first !== undefined) {
+    const tip = scriptHoldTip(glob, first) ?? `Waits for ${named(first)} to merge`;
+    return [{ action: 'complete_action', label, icon, tip, why: `for ${named(first)} to merge` }];
+  }
+  if (glob.script?.onBase !== false) return [];
+  const why = `: script not on main yet: ${glob.script.path}`;
+  return [{ action: 'complete_action', label, icon, tip: `Script not on main yet: ${glob.script.path}`, why }];
+};
+
 /**
  * Actions the glob is heading for but can't take yet: merging waits for the checks on the PR head, and a super's
  * Merge & keep working and Done wait for the latest implementation record at the head.
  */
 export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
+  // Any member may do an action, so its reason is shown whatever the role.
+  if (glob.category === 'action') return actionWaiting(glob, actions);
   // QA and PO can't take these actions at all, so a reason would mislead them.
   if (role === 'qa' || role === 'po') return [];
   const waiting: Waiting[] = [];
@@ -489,7 +505,7 @@ export interface HoldLine {
   readonly text: string;
   /** One line per hold: what it waits for, where that stands and why. */
   readonly tip: string;
-  /** A person must decide when the first hold is a decision glob; otherwise the hourglass. */
+  /** A person must decide when the first hold is a decision glob, or acts once an action is free; otherwise the hourglass. */
   readonly icon: 'human' | 'hourglass';
 }
 
@@ -498,6 +514,17 @@ const GATE_WORDS = {
   merge: { head: 'merge held', tip: 'Merge waits for' },
   sign_off: { head: 'sign-off held', tip: 'Sign-off waits for' },
 } as const;
+
+/**
+ * An action held by the glob that builds its script says so: "Its script scripts/x.sh is written by s1t1, which hasn't merged to
+ * main yet." Null for any other hold.
+ */
+const scriptHoldTip = (glob: GlobView, h: Holding): string | null => {
+  if (glob.category !== 'action' || h.gate !== 'start' || h.toIsDecision || h.toIsAction === true) return null;
+  const script = glob.script?.path;
+  if (script === undefined && h.reason !== 'builds its script') return null;
+  return `Its script${script === undefined ? '' : ` ${script}`} is written by ${h.to}, which hasn't merged to main yet.`;
+};
 
 /**
  * What holds the glob where it stands (a relation to another glob or a decision, at any gate): the corner's words and the
@@ -510,9 +537,10 @@ export const holdLine = (glob: GlobView): HoldLine | null => {
   return {
     text: `${GATE_WORDS[first.gate].head} · ${named(first)}${rest.length > 0 ? ` +${String(rest.length)}` : ''}`,
     tip: held
-      .map((h) => `${GATE_WORDS[h.gate].tip} ${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
+      .map((h) => scriptHoldTip(glob, h) ?? `${GATE_WORDS[h.gate].tip} ${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
       .join('\n'),
-    icon: first.toIsDecision || first.toIsAction === true ? 'human' : 'hourglass',
+    // A person will do an action once it is free, so it reads as theirs even while it waits.
+    icon: first.toIsDecision || first.toIsAction === true || glob.category === 'action' ? 'human' : 'hourglass',
   };
 };
 

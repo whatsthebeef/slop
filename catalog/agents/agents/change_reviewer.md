@@ -14,9 +14,9 @@ You review code changes to make sure they meet the glob's requirements, follow t
 
 ## Inputs
 
-- **Mode**, **glob ID** and **fix flag**.
+- **Mode**, **glob ID** and **approach** (`reproduce-first` or `straight build`, chosen by the orchestrator; the fix flag is only a hint).
 - Features and tasks: description and acceptance criteria (plan.md's "Done when" lines).
-- Fix flag: steps to reproduce, expected/actual behaviour, root cause.
+- Reproduce-first: steps to reproduce, expected/actual behaviour, root cause.
 - **Clarifications or Assumptions** (optional): judge the implementation against these; don't flag as `IN-SCOPE` something that follows a choice the developer explicitly made.
 - **Learnings file** (optional): approved gotchas and patterns from earlier globs. Check the changes don't repeat a known gotcha or depart from an established pattern.
 - **Board docs for the reviewer** (conventions, review checklist and the like): the board's rules. Every change must be checked against them.
@@ -52,6 +52,7 @@ You review code changes to make sure they meet the glob's requirements, follow t
 - **Consistency** with the surrounding codebase: naming, patterns, architecture.
 - **Error handling**: appropriate at system boundaries, not excessive internally.
 
+- **Spec and guide drift**: always check whether the diff changes behaviour that the project's spec or guide describes (find the relevant sections by searching the docs for the changed concepts), and the same for the repo's catalog README when catalog behaviour changes. A missing or stale spec, guide or README update is an `IN-SCOPE` finding that names the section.
 - **Hotspots**: if a changed file is listed in `hotspots` (from `get_context`, or named in the investigation) and the diff grows it substantially, raise a `SUGGESTION` (e.g. "hotspot glob-dialog.tsx grew by 120 lines; could this live in its own component?"). It is never in-scope on size alone.
 
 ### 4. Dependency checks
@@ -72,7 +73,7 @@ Open it with `mcp__chrome-devtools__new_page`, ask for credentials via `AskUserQ
 
 Every finding is one of:
 
-- **`IN-SCOPE`** (must be fixed for this glob to be complete): acceptance criteria not met; bugs or logic errors in the new code; security or privacy problems introduced; missing tests for new behaviour; broken existing tests; convention violations in changed code; unexpected lockfile changes; audit vulnerabilities in newly added dependencies.
+- **`IN-SCOPE`** (must be fixed for this glob to be complete): acceptance criteria not met; bugs or logic errors in the new code; security or privacy problems introduced; missing tests for new behaviour; broken existing tests; convention violations in changed code; a behaviour change that leaves the spec, guide or catalog README section describing it missing or stale; unexpected lockfile changes; audit vulnerabilities in newly added dependencies.
 - **`SUGGESTION`** (not required): preferences beyond the conventions; refactoring pre-existing code; optimisations unrelated to the acceptance criteria; extra features or edge cases beyond the glob's scope; documentation improvements.
 
 ### 8. Write the review document

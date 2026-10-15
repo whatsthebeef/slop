@@ -283,7 +283,7 @@ describe('intake learning through the services', () => {
       source: 'web',
       examples: ['s1t9'],
       backfilled: false,
-      decisions: { type: 'same', category: 'feature', categoryConfidence: 'low', reason: 'Unclear', model: 'haiku', promptVersion: 2 },
+      decisions: { type: 'same', category: 'task', categoryConfidence: 'low', reason: 'Unclear', model: 'haiku', promptVersion: 2 },
       features: { doneWhenLines: 1 },
     });
     expect(store.state.intakeSnapshots[0]?.embedding).toHaveLength(1024);
@@ -307,7 +307,7 @@ describe('intake learning through the services', () => {
     const prompt = prompts[0]?.prompt ?? '';
     expect(prompt).toContain("Examples from this board's history");
     expect(prompt.indexOf(changed.id)).toBeLessThan(prompt.indexOf(plain.id));
-    expect(prompt).toContain('category changed feature -> bug');
+    expect(prompt).toContain('category changed task -> bug');
     expect(proposal.examples.map((e) => e.globId)).toEqual([changed.id, plain.id]);
     expect(proposal).toMatchObject({ model: 'haiku', promptVersion: INTAKE_PROMPT_VERSION });
     // The nearest two disagree on the category, so the card asks for confirmation.
@@ -345,7 +345,7 @@ describe('intake learning through the services', () => {
     const glob = await create('Older work');
     store.state.intakeSnapshots = [];
     expect(await learning.run(boardId, now)).toMatchObject({ backfilled: 1, embedded: 1 });
-    expect(await snapshots()).toMatchObject([{ globId: glob.id, backfilled: true, source: 'backfill', decisions: { type: 'same', category: 'feature', promptVersion: null } }]);
+    expect(await snapshots()).toMatchObject([{ globId: glob.id, backfilled: true, source: 'backfill', decisions: { type: 'same', category: 'task', promptVersion: null } }]);
     expect(await learning.run(boardId, now)).toMatchObject({ backfilled: 0, embedded: 0 });
   });
 

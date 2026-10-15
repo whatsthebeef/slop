@@ -27,6 +27,29 @@ export const approveLabel = (document: boolean, target: KbTarget | null, hotspot
   return { label: APPROVE_CHANGE, tip: 'Approves the proposed change as drafted' };
 };
 
+/** What confirming an approval says it will do, and the label of its Confirm button: one text per kind of decision, never a generic one. */
+export const acceptConfirm = ({
+  hotspot,
+  learning,
+  document,
+  target,
+  title,
+  label,
+}: {
+  hotspot: boolean;
+  learning: boolean;
+  document: boolean;
+  target: KbTarget | null;
+  title: string;
+  label: string;
+}): { text: string; button: string } => {
+  if (hotspot) return { text: `Creates a refactor glob from this proposal (${title}), linked to this decision, and marks the decision approved.`, button: 'Create' };
+  if (!learning) return { text: 'Records this choice; globs it holds back can start.', button: 'Approve' };
+  if (document) return { text: `Creates or updates the proposed document${target === null ? '' : ` ${target.name}`}, then moves this decision to Reviewing.`, button: label };
+  const where = target === null ? 'its target' : target.section === null ? target.name : `${target.name} › ${target.section}`;
+  return { text: `Applies the change to ${where}, then moves this decision to Reviewing.`, button: label };
+};
+
 /** Why a PO may not decide a change to this target (as core refuses it), or null. Agent behaviour and what slop runs or enforces are for admins. */
 export const adminOnlyReason = (kind: KnowledgeKind | undefined): string | null => {
   if (kind === undefined) return null;

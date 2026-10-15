@@ -85,6 +85,20 @@ describe('host-deploy.sh', () => {
     expect(r.calls).toContain(`cdk deploy slop-prod-host ${context} --require-approval never`);
   });
 
+  it('adds a project to the grants read from the stack', () => {
+    const r = run('host-deploy.sh', ['--add-project', 'atf-proj', '--add-project', 'build-a']);
+    expect(r.out).toContain('deployProjects=build-a,build-b,atf-proj');
+    expect(r.calls).toContain(
+      `cdk diff slop-prod-host ${context.replace('build-a,build-b', 'build-a,build-b,atf-proj')}`,
+    );
+  });
+
+  it('refuses an invalid project name before any cdk call', () => {
+    const r = run('host-deploy.sh', ['--add-project', 'bad name', '--yes']);
+    expect(r.code).toBe(2);
+    expect(r.calls.some((c) => c.startsWith('cdk'))).toBe(false);
+  });
+
   it('only reads from aws', () => {
     const r = run('host-deploy.sh', ['--stage', 'dev', '--yes']);
     expect(

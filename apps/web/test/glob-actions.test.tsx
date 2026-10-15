@@ -836,6 +836,21 @@ describe('glob view: split moves in the action ▾', () => {
     });
   });
 
+  describe('the work kind control', () => {
+    it('is not shown to a non-admin, and is a select an admin can use', async () => {
+      const user = userEvent.setup();
+      cleanup();
+      renderGlob(view({ category: 'task', type: 'same' }));
+      expect(screen.queryByTestId('work-kind')).toBeNull();
+      cleanup();
+      const cb = renderGlob(view({ category: 'task', type: 'same' }), { ...board, role: 'admin' });
+      const select = screen.getByTestId<HTMLSelectElement>('work-kind');
+      expect(select.disabled).toBe(false);
+      await user.selectOptions(select, 'rnd');
+      await waitFor(() => expect(cb.onUpdate).toHaveBeenCalledWith({ workKind: 'rnd' }));
+    });
+  });
+
   describe('an action glob (human work with no type)', () => {
     const action = (patch: Partial<GlobView> = {}): GlobView =>
       view({

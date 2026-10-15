@@ -20,8 +20,8 @@ export const repoOf = (board: Board): Repo | null => {
  */
 export const REVIEW_CHECK = 'slop-review';
 
-/** Whether a review's head can merge, in the host's own view (required checks, conflicts, up to date). */
-export type MergeState = 'passed' | 'pending' | 'failed' | 'behind' | 'conflict' | 'unknown';
+/** What a review's head's own checks say, or that it conflicts (`mergeState`); whether it is behind the base is a separate flag. */
+export type MergeState = 'passed' | 'pending' | 'failed' | 'conflict' | 'unknown';
 
 /** A PR as the host reports it: what its webhooks would have said. */
 export interface PrSnapshot {
@@ -38,6 +38,8 @@ export type MergeResult =
   | { readonly outcome: 'conflict' }
   /** GitHub hasn't decided whether the PR can merge (mergeable still null, or a 405 on a PR that looked clean): retry. */
   | { readonly outcome: 'undecided' }
+  /** The head isn't behind the base but its checks aren't green (still running, or failed): slop never merges it. */
+  | { readonly outcome: 'checks_not_green'; readonly state: 'pending' | 'failed' | 'unknown' }
   | { readonly outcome: 'refused'; readonly reason: string };
 
 /**
@@ -158,7 +160,7 @@ export interface CodeHost {
   closePr(repo: Repo, prNumber: number): Promise<void>;
   deleteBranch(repo: Repo, branch: string): Promise<void>;
   reopenPr(repo: Repo, prNumber: number, branch: string): Promise<'reopened' | 'missing'>;
-  mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }>;
+  mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState; behind?: boolean }>;
   /** The PR as the host has it now: open (draft or ready), merged (with its merge commit) or closed, and its head. */
   prState(repo: Repo, prNumber: number): Promise<PrSnapshot>;
   /** The latest completed check run named `name` on commit `sha`, or null if none has completed yet. */
@@ -241,12 +243,11 @@ export interface CodeHost {
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /**
-   * Squash-merges at exactly `sha` as `<id>: <title>`. A branch that is behind is updated instead (the merge resumes
-   * on the new head's checks) while `updates`, the updates already made for this merge request, is 0; after one it is
-   * merged behind (no conflict) so a busy base can't starve it, falling back to one more update if GitHub requires an
-   * up-to-date branch.
+   * Squash-merges at exactly `sha` as `<id>: <title>`. Slop's App bypasses the host's branch rules, so slop enforces them:
+   * it merges only a head that is `sha`, not behind the base and with passed checks. A behind head is updated instead (the
+   * merge resumes on the new head's checks); one whose checks aren't green is not merged (`checks_not_green`).
    */
-  squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string, updates?: number): Promise<MergeResult>;
+  squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
   /**
    * Reverts commit `sha` on the base branch as a new commit `Revert "<subject>"`. `moved` when the base has commits
    * after `sha` (the revert is then left to a person).

@@ -133,6 +133,8 @@ export interface GlobView extends Glob {
   readonly sizeCheck?: SizeCheck;
   /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
   readonly handover?: Handover | null;
+  /** An open action's script (a `script:` line in its plan) and whether the base branch has it (null: could not check); null when it names none; absent on an older API and for other globs on the list. */
+  readonly script?: { readonly path: string; readonly onBase: boolean | null } | null;
   /** The status messages the viewer dismissed on this glob (see `lib/dismissals.ts`); absent on an older API. */
   readonly dismissedKeys?: readonly string[];
   /** The check a sub on the board waits for (the merge policy's `subGateCheck`); absent on an older API, read as `checks`. */

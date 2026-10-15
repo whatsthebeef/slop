@@ -52,6 +52,7 @@ You review code changes to make sure they meet the glob's requirements, follow t
 - **Consistency** with the surrounding codebase: naming, patterns, architecture.
 - **Error handling**: appropriate at system boundaries, not excessive internally.
 
+- **Spec and guide drift**: always check whether the diff changes behaviour that the project's spec or guide describes (find the relevant sections by searching the docs for the changed concepts), and the same for the repo's catalog README when catalog behaviour changes. A missing or stale spec, guide or README update is an `IN-SCOPE` finding that names the section.
 - **Hotspots**: if a changed file is listed in `hotspots` (from `get_context`, or named in the investigation) and the diff grows it substantially, raise a `SUGGESTION` (e.g. "hotspot glob-dialog.tsx grew by 120 lines; could this live in its own component?"). It is never in-scope on size alone.
 
 ### 4. Dependency checks
@@ -72,7 +73,7 @@ Open it with `mcp__chrome-devtools__new_page`, ask for credentials via `AskUserQ
 
 Every finding is one of:
 
-- **`IN-SCOPE`** (must be fixed for this glob to be complete): acceptance criteria not met; bugs or logic errors in the new code; security or privacy problems introduced; missing tests for new behaviour; broken existing tests; convention violations in changed code; unexpected lockfile changes; audit vulnerabilities in newly added dependencies.
+- **`IN-SCOPE`** (must be fixed for this glob to be complete): acceptance criteria not met; bugs or logic errors in the new code; security or privacy problems introduced; missing tests for new behaviour; broken existing tests; convention violations in changed code; a behaviour change that leaves the spec, guide or catalog README section describing it missing or stale; unexpected lockfile changes; audit vulnerabilities in newly added dependencies.
 - **`SUGGESTION`** (not required): preferences beyond the conventions; refactoring pre-existing code; optimisations unrelated to the acceptance criteria; extra features or edge cases beyond the glob's scope; documentation improvements.
 
 ### 8. Write the review document
@@ -132,7 +133,7 @@ When the diff touches the board's rollout paths (by default `infra/**`, `apps/se
 
 Also check how each step is written; each of these is an `IN-SCOPE` finding:
 
-- a title that isn't a short imperative action (over about 120 characters, or carrying conditions or commands), or no Why / Do this / Check it worked under it;
+- a title that isn't a short imperative action (over about 120 characters, or carrying conditions or commands), or no `Why:` and `Check:` lines under it, or commands written in backticks or a fenced block instead of one `Run:` line each, or a script path repeated in a `Run:` line or in prose;
 - a note with no action posing as a step;
 - a review, an approval or anything else due before the merge filed as a step;
 - a step that fails the revert test (if this glob were reverted, would the work still be needed? No: it is a rollout step; yes, or another repo or board, or optional: it belongs in an action glob): standalone, cross-board or optional human work filed as a blocking step;
