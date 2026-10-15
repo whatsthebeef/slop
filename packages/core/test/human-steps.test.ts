@@ -209,6 +209,11 @@ describe('upcoming marker and compact form', () => {
     expect(upcomingSteps(humanSteps(glob(), {}, [stored({ due: 'now' }), stored({ id: 'x', state: 'done', doneBy: 'a', doneAt: NOW })]))).toBeNull();
   });
 
+  it('a compact dismissed step keeps its reason, who and when', () => {
+    const [step] = humanSteps(glob(), {}, [stored({ state: 'dismissed', dismissedReason: 'Wrong', doneBy: 'a@x.com', doneAt: NOW })]);
+    expect(step === undefined ? null : compactStep(step)).toMatchObject({ state: 'dismissed', dismissedReason: 'Wrong', doneBy: 'a@x.com', doneAt: NOW });
+  });
+
   it('compact steps drop the detail, script and check', () => {
     const [step] = humanSteps(glob(), {}, [stored({ detail: 'long text', check: 'fileAttachments', script: { path: 'infra/deploy/host-deploy.sh' } })]);
     expect(step).toBeDefined();

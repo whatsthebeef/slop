@@ -590,7 +590,7 @@ export class GlobService {
       if (found === undefined) return notFound(`No step ${stepId} on ${id}`);
       if (found.state !== 'open') return ok(found);
       const now = this.deps.clock.now();
-      const step: StoredHumanStep = to === 'done' ? { ...found, state: 'done', doneBy: email, doneAt: now } : { ...found, state: 'dismissed', dismissedReason: reason };
+      const step: StoredHumanStep = to === 'done' ? { ...found, state: 'done', doneBy: email, doneAt: now } : { ...found, state: 'dismissed', dismissedReason: reason, doneBy: email, doneAt: now };
       await tx.saveHumanSteps([step]);
       await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: to } }]);
       return ok(step);
@@ -717,7 +717,7 @@ export class GlobService {
       }
       for (const step of own) {
         if (step.state !== 'open' || parsed.some((p) => p.title === step.title)) continue;
-        const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'No longer in the implementation record' };
+        const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'No longer in the implementation record', doneBy: 'slop', doneAt: now };
         save.push(dismissed);
         note(dismissed, 'dismissed');
       }
