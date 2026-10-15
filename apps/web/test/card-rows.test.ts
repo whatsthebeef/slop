@@ -85,6 +85,17 @@ describe('cornerStatus', () => {
     expect(at(view({ status: 'reviewing', labels: { CR: 'approved' } }))?.kind).not.toBe('sign-off');
   });
 
+  it('says "fix feedback" with the open items for the developer, ahead of sign-off, and goes back to sign-off once ticked', () => {
+    const item = (id: string, done = false) => ({ id, text: `do ${id}`, done, addedBy: 'r@x', addedAt: NOW, doneBy: null, doneAt: null });
+    const g = view({ status: 'reviewing', labels: { QA: 'added', CR: 'required' }, checklists: { QA: [item('a'), item('b'), item('c', true)] } });
+    expect(at(g)).toMatchObject({ kind: 'feedback', icon: 'human', text: 'fix feedback · QA 2' });
+    expect(at(g)?.tip).toContain('QA has 2 open items: do a; do b');
+    const ticked = view({ status: 'reviewing', labels: { QA: 'added', CR: 'required' }, checklists: { QA: [item('a', true)] } });
+    expect(at(ticked)).toMatchObject({ kind: 'sign-off', text: 'sign off · CR, QA' });
+    const fixing = view({ ...g, ...live('active') });
+    expect(at(fixing)).toMatchObject({ kind: 'machine', icon: 'machine-spinning', text: 'fixing feedback · QA 2' });
+  });
+
   it('keeps how long a stall has lasted out of the text, in the tooltip', () => {
     const g = view({ status: 'failed', failure: { reason: 'run gave up', at: minutesAgo(18) }, move: { holder: 'stalled', reason: 'run failed', since: minutesAgo(18), minutes: 18 } });
     expect(at(g)?.text).toBe('run failed');
