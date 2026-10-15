@@ -417,7 +417,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, inferred or learned; older rows may say split), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
+        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, inferred or learned; older rows may say split), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. Human steps with state `due` are the checklist a person runs from master after the merge; a step the person ran on the branch or by hand is yours to update with complete_human_step (with a `note`), dismiss_human_step or add_human_step. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
       inputSchema: {
         id: z.string(),
         runId: z.string().optional(),
@@ -677,11 +677,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'merge',
     {
       description:
-        "Merge a same or super whose PR is ready, as the glob's Merge button does. With the required checks passed on the head it merges now; with them still pending it arms \"merge when checks pass\" (slop merges when they pass, and disarms if they fail or the PR conflicts). Merging: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
+        "Merge a same or super whose PR is ready, as the glob's Merge button does. With the required checks passed on the head it merges now; with them still pending it arms \"merge when checks pass\" (slop merges when they pass, and disarms if they fail or the PR conflicts). Merging: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. For a same with open rollout steps, plain merge is refused and `continue: true` is Merge and continue: it merges, keeps the glob open (reviewing) and the steps fall due; the steps are the checklist a person runs from master. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
-        continue: z.boolean().optional().describe('Supers: Merge and continue (a checkpoint merge; the glob stays in Doing)'),
+        continue: z.boolean().optional().describe('Supers: Merge and continue (a checkpoint merge; the glob stays in Doing). A same with rollout steps: Merge and continue (the glob stays open for the steps)'),
       },
     },
     async ({ id, version, continue: continueAfter }) => {
@@ -1283,9 +1283,30 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     {
       description:
         "Tick a step on a glob as done (records who and when). When it was the last one holding back sign-off and the glob's labels are approved, the glob moves to Signed off; globs that waited for its rollout are released. Members only.",
-      inputSchema: { id: z.string(), stepId: z.string(), version: z.number().int().optional() },
+      inputSchema: {
+        id: z.string(),
+        stepId: z.string(),
+        version: z.number().int().optional(),
+        note: z.string().max(OUTCOME_REASON_MAX).optional().describe('What was done, e.g. a step run on the branch or by hand (credentials are masked)'),
+      },
     },
-    async ({ id, stepId, version }) => reply(await globs.completeHumanStep(email, id, stepId, version ?? null), stepView),
+    async ({ id, stepId, version, note }) => reply(await globs.completeHumanStep(email, id, stepId, version ?? null, note), stepView),
+  );
+
+  server.registerTool(
+    'report_step_failed',
+    {
+      description:
+        "Report that a rollout step failed when a person ran it. Pass the failure output as `note`. Strip credentials, tokens and keys before pasting it; slop masks what it recognises, stores the masked note on the glob (as an attachment, not on the board list) and cannot unmask. This starts the glob's next generation: a new run on a fresh branch from master with the failure as in-scope feedback; a done step is reopened and falls due again after the next merge. Members only; pass the glob version you read to have it checked.",
+      inputSchema: { id: z.string(), stepId: z.string(), note: z.string().min(1).max(100_000), version: z.number().int().optional() },
+    },
+    async ({ id, stepId, note, version }) => {
+      const result = await globs.failRolloutStep(email, id, stepId, note, version ?? null);
+      if (!result.ok) return reply(result);
+      // Provisioning and the routine run in the background, as the REST route does.
+      void deps.outbox.drain(id).catch(() => undefined);
+      return reply(await globs.get(email, id), (v) => globView(v.glob, v.allowedActions, v.artifacts));
+    },
   );
 
   server.registerTool(

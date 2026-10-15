@@ -1,5 +1,5 @@
 import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
@@ -209,11 +209,17 @@ export const globViewFor = (
         // Without the artifacts loaded the reviews are unknown, so no Retry review is guessed.
         ...(artifacts === null ? {} : { reviews: machine.reviewsOf(artifacts) }),
         ...(relations === undefined ? {} : { relations }),
+        // Merge and continue instead of Merge for a same with open rollout steps; Pick up on its merged glob.
+        rolloutSteps: openRolloutSteps(stored),
       },
     ),
     artifacts,
     null,
-    humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts ?? []) }) }, stored).map(compactStep),
+    humanSteps(
+      glob,
+      { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts ?? []) }), rolloutSteps: openRolloutSteps(stored) },
+      stored,
+    ).map(compactStep),
     relations?.relations ?? null,
     holding,
   ),
