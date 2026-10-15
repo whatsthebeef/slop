@@ -530,7 +530,7 @@ export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
   const opens = onOpen === undefined ? '' : '. Opens the decision';
   return (
     <>
-      <Tip text={`Applies to ${scopeLabel(attributes.scope)}${opens}`}>
+      <Tip text={`Applies to: ${scopeLabel(attributes.scope)}${opens}`}>
         <ChipButton onOpen={onOpen} className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' testId='scope-chip'>
           {attributes.scope.kind === 'glob' ? attributes.scope.ref : attributes.scope.kind.replace('_', ' ')}
         </ChipButton>

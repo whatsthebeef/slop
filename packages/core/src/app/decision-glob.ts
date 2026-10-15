@@ -15,6 +15,7 @@ import type { DraftPreview } from '../domain/kb.js';
 import type { Provenance } from '../domain/knowledge.js';
 import type { Actor, Glob } from '../domain/types.js';
 import type { Clock, Hint, Tx } from '../ports.js';
+import { RULES_MODEL, readSuggestion, renderSuggestion, rulesSuggestion, SUGGESTION_LABEL } from '../domain/suggestion.js';
 import { addArtifact } from './artifact-service.js';
 
 /** The name slop's own writes carry (mined proposals, assessments, the backfill). */
@@ -122,8 +123,10 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
     by: planBy(input.attributes.channel),
   });
   const hints: Hint[] = [{ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: glob.version }];
-  if (input.assess !== undefined && (await writeAssessment(tx, deps, glob, input.assess.item, null))) {
-    hints.push({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
+  if (input.assess !== undefined) {
+    const assessed = await writeAssessment(tx, deps, glob, input.assess.item, null);
+    const leaned = input.assess.item === null ? false : await writeLeaning(tx, deps, glob, input.assess.item, null, null);
+    if (assessed || leaned) hints.push({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
   }
   return ok({ glob, created: true, hints });
 };
@@ -213,6 +216,42 @@ export const writeAssessment = async (
     kind: 'assessment',
     label: '',
     content: markdown,
+    link: null,
+    commitSha: null,
+    runId: null,
+    agentSetVersion: null,
+    reviewStats: null,
+    by: 'sessionator',
+  });
+  return true;
+};
+
+/**
+ * Writes the rules' recommendation (`rulesSuggestion`) as a new `suggestion` artifact version, unless the latest one is
+ * already current: a model's for this draft, or the rules' own with nothing changed. So the latest recommendation never
+ * predates the draft. False when nothing was written.
+ */
+export const writeLeaning = async (
+  tx: Tx,
+  deps: DecisionDeps,
+  glob: Glob,
+  item: LearningAssessmentFacts | null,
+  preview: DraftPreview | null,
+  draftVersion: number | null,
+): Promise<boolean> => {
+  const attributes = decisionOf(glob);
+  if (attributes === null) return false;
+  const stored = rulesSuggestion({ attributes, item, preview, conflicts: attributes.conflictsWith ?? [] }, draftVersion, deps.clock.now());
+  const latest = (await tx.artifactVersions(glob.id, 'assessment', SUGGESTION_LABEL)).at(-1);
+  const current = latest === undefined ? null : readSuggestion(latest.content);
+  if (current !== null) {
+    if (current.model !== RULES_MODEL && current.stamp.draftVersion === draftVersion) return false;
+    if (current.model === RULES_MODEL && current.stamp.draftVersion === draftVersion && JSON.stringify(current.suggestion) === JSON.stringify(stored.suggestion)) return false;
+  }
+  await addArtifact(tx, deps.clock, glob, DECISION_SYSTEM_ACTOR, {
+    kind: 'assessment',
+    label: SUGGESTION_LABEL,
+    content: renderSuggestion(stored),
     link: null,
     commitSha: null,
     runId: null,

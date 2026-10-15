@@ -338,7 +338,7 @@ describe('decision globs', () => {
       expect((await call(PO, 'POST', `/api/globs/${globId}/suggest`)).status).toBe(202);
       const queued = await database.db.execute(sql`select lane, state from outbox where kind = 'suggest_decision' and glob_id = ${globId}`);
       expect(queued).toEqual([{ lane: 'llm', state: 'pending' }]);
-      expect(await json<{ pending: boolean; suggestion: unknown }>(await call(ADMIN, 'GET', `/api/globs/${globId}/suggestion`))).toMatchObject({ pending: true, suggestion: null });
+      expect(await json<{ pending: boolean; suggestion: unknown }>(await call(ADMIN, 'GET', `/api/globs/${globId}/suggestion`))).toMatchObject({ pending: true, suggestion: { model: 'rules', suggestion: { action: 'approve' } } });
 
       // The job as the outbox runs it: one model call, then the answer is stored as assessment/suggestion.
       suggestAnswer = JSON.stringify({ action: 'reject', reason: 'A later change made it moot.' });
@@ -346,7 +346,8 @@ describe('decision globs', () => {
       if (run === undefined) throw new Error('no executor');
       expect(await run({ kind: 'suggest_decision', globId }, null, { globs }, undefined)).toBe('done');
       const versions = await store.transaction((tx) => tx.artifactVersions(globId, 'assessment', 'suggestion'));
-      expect(versions).toHaveLength(1);
+      // The rules' leaning written at creation, then the model's answer on top of it.
+      expect(versions).toHaveLength(2);
       const read = await json<{ stale: boolean; suggestion: { model: string; suggestion: { action: string; reason: string } } }>(await call(PO, 'GET', `/api/globs/${globId}/suggestion`));
       expect(read).toMatchObject({ stale: false, suggestion: { model: 'test-model', suggestion: { action: 'reject', reason: 'A later change made it moot.' } } });
       // The deterministic assessment keeps its own history.

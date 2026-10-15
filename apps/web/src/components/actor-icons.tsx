@@ -1,4 +1,4 @@
-import { Bot, UserRound } from 'lucide-react';
+import { Binary, Bot, UserRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ActorIconProps {
@@ -26,6 +26,15 @@ export const HumanIcon = ({ className, decorative = false }: ActorIconProps) => 
     className={cn(SIZE, className)}
     strokeWidth={2}
     {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'human', role: 'img' })}
+  />
+);
+
+/** The Matrix: patterns slop mines from the board's own activity (lucide Binary). */
+export const MatrixIcon = ({ className, decorative = false }: ActorIconProps) => (
+  <Binary
+    className={cn(SIZE, className)}
+    strokeWidth={2}
+    {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'the Matrix', role: 'img' })}
   />
 );
 

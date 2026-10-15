@@ -1,4 +1,4 @@
-import { decisionOf, labelsWaiting, signOffText } from '@slop/core';
+import { decisionOf, feedbackText, labelsWaiting, openFeedback, signOffText } from '@slop/core';
 import type { HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
@@ -104,6 +104,12 @@ const signOffTip = (labels: GlobView['labels']): string => {
   return `Merged; ${names === '' ? 'the labels are' : `${names} ${waiting.length === 1 ? 'is' : 'are'}`} waiting for a person to approve ${waiting.length === 1 ? 'it' : 'them'}.`;
 };
 
+/** "Merged; QA has 2 open items: first; second" for a merged glob whose labels have feedback to fix. */
+const feedbackTip = (glob: GlobView): string =>
+  `Merged; ${openFeedback(glob)
+    .map((f) => `${f.label} has ${String(f.items.length)} open item${f.items.length === 1 ? '' : 's'}: ${f.items.map((item) => item.text).join('; ')}`)
+    .join('. ')}.`;
+
 /**
  * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
  * sign-off, an escalation in Planning). A decision glob has no corner status, so its turn is the status line's.
@@ -195,6 +201,14 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   if (status !== null) {
     const icon = status.kind === 'base-red' || status.kind === 'merge-waits' || status.kind === 'start-queued' ? 'hourglass' : status.kind === 'rollout' ? 'human' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
+  }
+  // Open feedback on a label is the developer's turn (a run fixing it shows as the machine), and outranks sign-off.
+  if (glob.status === 'reviewing' && openFeedback(glob).length > 0 && (position === null || position.holder === 'machine')) {
+    const target = { kind: 'section', target: cardTargets.label() } as const;
+    if (position?.holder === 'machine') {
+      return make('machine', position.spinning ? 'machine-spinning' : 'machine', feedbackText(glob, 'fixing feedback'), position.tone, target, [feedbackTip(glob)]);
+    }
+    return make('feedback', 'human', feedbackText(glob), 'text-signal-strong', target, [feedbackTip(glob)]);
   }
   if (awaitingSignOff(glob) && position === null) {
     return make('sign-off', 'human', signOffText(glob.labels), 'text-signal-strong', { kind: 'section', target: cardTargets.label() }, [

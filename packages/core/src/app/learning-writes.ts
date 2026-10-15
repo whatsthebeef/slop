@@ -65,6 +65,7 @@ import {
   DECISION_SYSTEM_ACTOR,
   decisionContext,
   writeAssessment,
+  writeLeaning,
 } from './decision-glob.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
 
@@ -170,10 +171,13 @@ export const assessLearning = async (
   facts: LearningAssessmentFacts,
   preview: DraftPreview | null,
   due: boolean,
+  draftVersion: number | null = null,
 ): Promise<void> => {
   if (facts.status !== 'open' || !due) return;
-  if (await writeAssessment(tx, { clock: ctx.clock }, glob, facts, preview))
-    ctx.raise?.({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
+  const written = await writeAssessment(tx, { clock: ctx.clock }, glob, facts, preview);
+  // The recommendation is refreshed with it, so the latest never predates the draft.
+  const leaned = await writeLeaning(tx, { clock: ctx.clock }, glob, facts, preview, draftVersion);
+  if (written || leaned) ctx.raise?.({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
 };
 
 /** Who submitted a learning and when: what its first payload version records. */
@@ -382,6 +386,9 @@ export interface AssessmentChange {
   readonly draftAfter: KbDraft | null;
   readonly conflictsBefore: readonly string[];
   readonly conflictsAfter: readonly string[];
+  /** The routed target before and after: routing a learning makes a fresh recommendation due. */
+  readonly targetBefore?: KbTarget | null;
+  readonly targetAfter?: KbTarget | null;
 }
 
 /**
@@ -392,6 +399,7 @@ export const assessmentDue = (change: AssessmentChange): boolean =>
   change.statusAfter === 'open' &&
   (!same(change.draftBefore, change.draftAfter) ||
     !same(change.conflictsBefore, change.conflictsAfter) ||
+    !same(change.targetBefore ?? null, change.targetAfter ?? null) ||
     change.statusBefore !== 'open');
 
 /** A write that approves a learning refreshes the conflict flags of the open learnings that contradict it. */
@@ -665,6 +673,8 @@ const editLearning = async (
     statusAfter: status,
     draftBefore: stateBefore.draft,
     draftAfter: stateAfter.draft,
+    targetBefore: stateBefore.target,
+    targetAfter: stateAfter.target,
     conflictsBefore: decisionOf(glob)?.conflictsWith ?? [],
     conflictsAfter: changed.conflictsWith ?? [],
   });
@@ -672,7 +682,15 @@ const editLearning = async (
     // Read back with the step just queued, so the assessment sees the pipeline state the write left.
     const after = await readLearning(tx, id);
     if (after !== null)
-      await assessLearning(tx, ctx, next, learningAssessmentFacts(after), edit.draft?.preview ?? null, true);
+      await assessLearning(
+        tx,
+        ctx,
+        next,
+        learningAssessmentFacts(after),
+        edit.draft?.preview ?? null,
+        true,
+        after.artifacts.draft?.version ?? null,
+      );
   }
   ctx.raise?.({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: next.version });
   if (wrote) ctx.raise?.({ kind: 'glob.artifacts', boardId: glob.boardId, globId: id });
