@@ -46,6 +46,7 @@
 # Safe to re-run: entries are de-duplicated and hooks are replaced, not added twice. Restart Claude Code afterwards.
 set -euo pipefail
 
+[ -n "${HOME:-}" ] || { echo "error: HOME is not set." >&2; exit 1; }
 ASSUME_YES=0
 DRY_RUN=0
 UNINSTALL=0
@@ -77,7 +78,6 @@ if [ ${#PROJECT_GLOBS[@]} -eq 0 ]; then
 fi
 
 # ---- preflight -------------------------------------------------------------------------------------------------------
-[ -n "$HOME" ] || die "HOME is not set."
 command -v jq >/dev/null || die "jq is not installed."
 if [ "$UNINSTALL" = 0 ]; then
   command -v aws >/dev/null || die "the aws CLI is not installed."
@@ -201,7 +201,7 @@ mkdir -p "$SESSIONS_DIR" && chmod 700 "$SESSIONS_DIR"
 cat > "$HOOK_PATH" <<'HOOK'
 #!/usr/bin/env bash
 # Claude Code SessionStart/SessionEnd hook for per-session AWS credentials (installed by claude-aws-session's install.sh).
-# SessionStart: sweeps expired credential files and adds a line to CLAUDE_ENV_FILE that loads this session's file
+# SessionStart: sweeps expired credential files and stray temp files and adds a line to CLAUDE_ENV_FILE that loads this session's file
 # (if present and unexpired) before each Bash command. SessionEnd: deletes this session's file.
 set -u
 dir="$HOME/.claude-aws-sessions"
@@ -219,6 +219,8 @@ case "$event" in
       case "$exp" in '' | *[!0-9]*) rm -f -- "$f"; continue ;; esac
       if [ "$exp" -le "$now" ]; then rm -f -- "$f"; fi
     done
+    # Temp files a helper left behind when it was killed between mktemp and mv.
+    find "$dir" -maxdepth 1 -type f \( -name '.tmp.*' -o -name '*.tmp.*' \) -mmin +5 -exec rm -f -- {} + 2>/dev/null || true
     if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
       # The session ID is read when each Bash command runs, so /clear's new ID is used.
       printf '%s\n' "f=\"$dir/\${CLAUDE_CODE_SESSION_ID:-none}.env\"; if [ -r \"\$f\" ]; then . \"\$f\"; fi; unset f" >> "$CLAUDE_ENV_FILE"
@@ -248,8 +250,14 @@ cat > "$HELPER_PATH" <<'HELPER'
 # role and expiry: never the credentials, because ! output goes into the conversation.
 set -euo pipefail
 
-# A refresh may run with an earlier grant's variables loaded (AWS_CONFIG_FILE=/dev/null would hide the profile).
-unset AWS_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+# A refresh may run with an earlier grant's variables loaded (AWS_CONFIG_FILE=/dev/null would hide the profile), so drop
+# those. A caller's own AWS_CONFIG_FILE / AWS_SHARED_CREDENTIALS_FILE (a custom location) is kept for the calls below;
+# only the session's env file, written further down, never carries them.
+unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+[ "${AWS_CONFIG_FILE:-}" != /dev/null ] || unset AWS_CONFIG_FILE
+[ "${AWS_SHARED_CREDENTIALS_FILE:-}" != /dev/null ] || unset AWS_SHARED_CREDENTIALS_FILE
+
+[ -n "${HOME:-}" ] || { echo "claude-aws-session: HOME is not set." >&2; exit 1; }
 
 dir="$HOME/.claude-aws-sessions"
 profile=""
@@ -309,7 +317,9 @@ key="$(jq -r '.AccessKeyId // empty' <<<"$creds")"
 secret="$(jq -r '.SecretAccessKey // empty' <<<"$creds")"
 token="$(jq -r '.SessionToken // empty' <<<"$creds")"
 expiration="$(jq -r '.Expiration // empty' <<<"$creds")"
-[ -n "$key" ] && [ -n "$secret" ] && [ -n "$token" ] || die "$profile didn't give temporary role credentials (no session token); use an SSO or role profile."
+if [ -z "$key" ] || [ -z "$secret" ] || [ -z "$token" ]; then
+  die "$profile didn't give temporary role credentials (no session token); use an SSO or role profile."
+fi
 
 expires=""
 if [ -n "$expiration" ]; then expires="$(iso_to_epoch "$expiration")"; fi

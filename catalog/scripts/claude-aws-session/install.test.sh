@@ -20,18 +20,30 @@ check() { # check <name> <command...>
   if "$@" >/dev/null 2>&1; then pass=$((pass + 1)); else echo "FAIL: $name" >&2; exit 1; fi
 }
 inst() { env -u CLAUDE_CODE_SESSION_ID bash "$installer" "$@"; }
+check_fails() { # check_fails <name> <error text> <command...>: the command must fail and say the text
+  local name="$1" text="$2" out; shift 2
+  if out="$("$@" 2>&1)"; then echo "FAIL: $name (succeeded)" >&2; exit 1; fi
+  if grep -qF -- "$text" <<<"$out"; then pass=$((pass + 1)); else echo "FAIL: $name (output: $out)" >&2; exit 1; fi
+}
 
 # Stub aws: v2, a fixed identity, credentials with awkward characters, an expiry an hour ahead.
+# STUB_STS_FAIL_ONCE=<file>: the first sts call fails (no valid SSO session) and creates the file; 'sso login' is logged to
+# STUB_LOG. STUB_NO_TOKEN=1: credentials without a session token. STUB_LOG also records AWS_CONFIG_FILE for each call.
 SECRET='s3cr$t "q" '"'"'x'"'"' `id` \ end'
 export STUB_SECRET="$SECRET"
 cat > "$work/bin/aws" <<'STUB'
 #!/usr/bin/env bash
+[ -z "${STUB_LOG:-}" ] || echo "$1 ${2:-} cfg=${AWS_CONFIG_FILE-unset} creds=${AWS_SHARED_CREDENTIALS_FILE-unset}" >> "$STUB_LOG"
 case "$1 ${2:-}" in
   "--version "*) echo "aws-cli/2.15.0 Python/3.11 Linux" ;;
-  "sts get-caller-identity") echo '{"Account":"123456789012","Arn":"arn:aws:sts::123456789012:assumed-role/Dev/me"}' ;;
+  "sso login") echo "stub: signed in" ;;
+  "sts get-caller-identity")
+    if [ -n "${STUB_STS_FAIL_ONCE:-}" ] && [ ! -e "$STUB_STS_FAIL_ONCE" ]; then : > "$STUB_STS_FAIL_ONCE"; exit 255; fi
+    echo '{"Account":"123456789012","Arn":"arn:aws:sts::123456789012:assumed-role/Dev/me"}' ;;
   "configure export-credentials")
     exp="${STUB_EXPIRATION:-$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')}"
-    jq -n --arg s "$STUB_SECRET" --arg e "$exp" '{Version:1, AccessKeyId:"AKIATESTKEY", SecretAccessKey:$s, SessionToken:"tok/en+==", Expiration:$e}' ;;
+    jq -n --arg s "$STUB_SECRET" --arg e "$exp" --arg t "$([ -n "${STUB_NO_TOKEN:-}" ] || echo 'tok/en+==')" \
+      '{Version:1, AccessKeyId:"AKIATESTKEY", SecretAccessKey:$s, Expiration:$e} + (if $t == "" then {} else {SessionToken:$t} end)' ;;
   "configure get") echo "eu-west-1" ;;
   *) echo "stub aws: unexpected $*" >&2; exit 1 ;;
 esac
@@ -62,9 +74,10 @@ check "dry run installs nothing" test ! -e "$HOME/.local/bin/claude-aws-session"
 check "n answer changes nothing" bash -c "echo n | env -u CLAUDE_CODE_SESSION_ID bash '$installer' && cmp '$HOME/.claude/settings.json' '$HOME/.claude/pre-install.json'"
 
 # ---- refuses inside a session, and an unknown flag ------------------------------------------------------------------
-check "refuses inside a Claude session" bash -c "! CLAUDE_CODE_SESSION_ID=abc bash '$installer' --yes"
-check "rejects unknown flags" bash -c "! bash '$installer' --nope"
-check "--restore-allow-write needs --uninstall" bash -c "! bash '$installer' --restore-allow-write --yes"
+check_fails "refuses inside a Claude session" "running inside a Claude Code session" env CLAUDE_CODE_SESSION_ID=abc bash "$installer" --yes
+check_fails "rejects unknown flags" "unknown argument: --nope" bash "$installer" --nope
+check_fails "--restore-allow-write needs --uninstall" "--restore-allow-write only works with --uninstall" bash "$installer" --restore-allow-write --yes
+check_fails "installer says when HOME is unset" "HOME is not set" env -u HOME bash "$installer" --yes
 
 # ---- install ----------------------------------------------------------------------------------------------------------
 inst --yes >"$work/install.out"
@@ -112,13 +125,43 @@ check "helper prints no secrets" bash -c "! grep -q -e AKIATESTKEY -e 'tok/en' -
 check "session file is mode 600" bash -c "[ \"\$(stat -c %a '$sess/sidA.env' 2>/dev/null || stat -f %Lp '$sess/sidA.env')\" = 600 ]"
 check "session file header has an expiry" grep -Eq '^# expires=[0-9]+$' "$sess/sidA.env"
 check "region comes from the profile" grep -q 'eu-west-1' "$sess/sidA.env"
-check "helper rejects a bad session ID" bash -c "! '$helper' dev --session '../evil' 2>/dev/null"
-check "helper rejects a session ID with a space" bash -c "! '$helper' dev --session 'a b' 2>/dev/null"
-check "helper needs a session ID" bash -c "! env -u CLAUDE_CODE_SESSION_ID '$helper' dev 2>/dev/null"
+check_fails "helper rejects a bad session ID" "doesn't look like a session ID" "$helper" dev --session '../evil'
+check_fails "helper rejects a session ID with a space" "doesn't look like a session ID" "$helper" dev --session 'a b'
+check_fails "helper needs a session ID" "no Claude session ID" env -u CLAUDE_CODE_SESSION_ID "$helper" dev
+check_fails "helper says when HOME is unset" "HOME is not set" env -u HOME CLAUDE_CODE_SESSION_ID=sidH "$helper" dev
 check "no file written for a bad ID" bash -c "[ \"\$(ls '$sess' | wc -l)\" -eq 1 ]"
 "$helper" dev --session sidC --region ap-south-1 >/dev/null
 check "--region wins" grep -q 'ap-south-1' "$sess/sidC.env"
 rm -f "${sess:?}/sidC.env"
+
+# sign-in branch: the first sts call fails, so the helper runs 'aws sso login' and carries on
+stublog="$work/stub.log"
+: > "$stublog"
+rm -f "$work/sts-failed"
+env CLAUDE_CODE_SESSION_ID=sidL STUB_LOG="$stublog" STUB_STS_FAIL_ONCE="$work/sts-failed" "$helper" dev >"$work/login.out"
+check "helper signs in when sts fails" grep -q '^sso login ' "$stublog"
+check "helper says it is signing in" grep -q 'Signing in to dev' "$work/login.out"
+check "helper writes the file after signing in" test -e "$sess/sidL.env"
+: > "$stublog"
+env CLAUDE_CODE_SESSION_ID=sidL STUB_LOG="$stublog" "$helper" dev >/dev/null
+check "helper does not sign in when sts works" bash -c "! grep -q '^sso login ' '$stublog'"
+rm -f "${sess:?}/sidL.env"
+
+# no session token: refused, nothing written
+check_fails "helper refuses credentials without a session token" "no session token" env CLAUDE_CODE_SESSION_ID=sidN STUB_NO_TOKEN=1 "$helper" dev
+check "no file written without a session token" test ! -e "$sess/sidN.env"
+
+# a caller's own config locations reach the aws calls; the session's env file still points them at /dev/null
+: > "$stublog"
+env CLAUDE_CODE_SESSION_ID=sidK STUB_LOG="$stublog" AWS_CONFIG_FILE=/custom/config AWS_SHARED_CREDENTIALS_FILE=/custom/creds "$helper" dev >/dev/null
+check "helper keeps a custom AWS_CONFIG_FILE for its aws calls" bash -c "grep -v '^--version' '$stublog' | grep -q . && ! grep -v 'cfg=/custom/config' '$stublog'"
+check "helper keeps a custom AWS_SHARED_CREDENTIALS_FILE for its aws calls" bash -c "! grep -v 'creds=/custom/creds' '$stublog'"
+check "custom locations don't reach the session file" bash -c "! grep -q '/custom/' '$sess/sidK.env'"
+check "session file still points at /dev/null" grep -q 'AWS_CONFIG_FILE=/dev/null' "$sess/sidK.env"
+: > "$stublog"
+env CLAUDE_CODE_SESSION_ID=sidK STUB_LOG="$stublog" AWS_CONFIG_FILE=/dev/null "$helper" dev >/dev/null
+check "helper drops an inherited /dev/null config" bash -c "! grep -q 'cfg=/dev/null' '$stublog'"
+rm -f "${sess:?}/sidK.env"
 
 # ---- the loader: the hook's SessionStart line --------------------------------------------------------------------------
 envfile="$work/claude-env"
@@ -146,6 +189,15 @@ printf '{"hook_event_name":"SessionStart","session_id":"sidA"}' | env CLAUDE_ENV
 check "SessionStart sweeps the expired file" test ! -e "$sess/sidOld.env"
 check "SessionStart sweeps a file with no expiry" test ! -e "$sess/noexpiry.env"
 check "SessionStart keeps a live file" test -e "$sess/sidA.env"
+
+# stray temp files from a helper that died before its mv: old ones are swept, a fresh one is kept
+touch "$sess/.tmp.fresh" "$sess/.tmp.stale" "$sess/x.tmp.stale"
+touch -d '1 hour ago' "$sess/.tmp.stale" "$sess/x.tmp.stale" 2>/dev/null || touch -t "$(date -v-1H +%Y%m%d%H%M)" "$sess/.tmp.stale" "$sess/x.tmp.stale"
+printf '{"hook_event_name":"SessionStart","session_id":"sidA"}' | env CLAUDE_ENV_FILE="$work/env2" bash "$hook"
+check "SessionStart sweeps an old temp file" test ! -e "$sess/.tmp.stale"
+check "SessionStart sweeps an old *.tmp.* file" test ! -e "$sess/x.tmp.stale"
+check "SessionStart keeps a fresh temp file" test -e "$sess/.tmp.fresh"
+rm -f "${sess:?}/.tmp.fresh"
 
 # ---- SessionEnd and --revoke delete -------------------------------------------------------------------------------------------
 "$helper" dev --session sidB >/dev/null
@@ -184,6 +236,37 @@ printf '{"sandbox": {"filesystem": {"allowWrite": ["~/.aws", "%s/.aws/sso", "/tm
 HOME="$spaced" inst --yes >/dev/null
 check "HOME with spaces: project allowWrite entries removed" jq -e '.sandbox.filesystem.allowWrite == ["/tmp/x"]' "$spaced/dev/app/.claude/settings.json"
 check "refresh works with AWS_CONFIG_FILE=/dev/null inherited" env HOME="$spaced" CLAUDE_CODE_SESSION_ID=sidR AWS_CONFIG_FILE=/dev/null AWS_PROFILE=x "$spaced/.local/bin/claude-aws-session" dev
-check "settings symlink is kept" bash -c "ln -sf '$spaced/.claude/settings.json' '$work/link.json' && HOME='$spaced' CLAUDE_CODE_SESSION_ID= true && [ -L '$work/link.json' ]"
+
+# ---- a symlinked settings.json stays a symlink, with the merged content -----------------------------------------------------
+linkhome="$work/linkhome"
+mkdir -p "$linkhome/.claude" "$work/dotfiles"
+echo '{"model": "linked"}' > "$work/dotfiles/settings.json"
+ln -s "$work/dotfiles/settings.json" "$linkhome/.claude/settings.json"
+HOME="$linkhome" inst --yes >/dev/null
+check "symlinked settings.json is still a symlink" test -L "$linkhome/.claude/settings.json"
+check "symlink still points at the dotfile" test "$(readlink "$linkhome/.claude/settings.json")" = "$work/dotfiles/settings.json"
+check "merged content landed in the symlink's target" jq -e '.model == "linked" and (.sandbox.filesystem.denyRead | index("~/.aws"))' "$work/dotfiles/settings.json"
+
+# ---- --uninstall --dry-run changes nothing -----------------------------------------------------------------------------------
+snapshot() { (cd "$1" && find . | sort && find . -type f -exec cksum {} + | sort); }
+snapshot "$linkhome" > "$work/before.snap"
+HOME="$linkhome" inst --uninstall --restore-allow-write --dry-run >"$work/dry.out"
+snapshot "$linkhome" > "$work/after.snap"
+check "uninstall dry run says nothing changed" grep -q 'Dry run: nothing changed' "$work/dry.out"
+check "uninstall dry run changes nothing" cmp "$work/before.snap" "$work/after.snap"
+check "uninstall dry run keeps the helper and hook" test -x "$linkhome/.local/bin/claude-aws-session" -a -x "$linkhome/.claude/hooks/aws-session-hook.sh"
+
+# ---- --restore-allow-write uses the oldest backup that has the entries --------------------------------------------------------
+mbhome="$work/mbhome"
+mkdir -p "$mbhome/.claude" "$mbhome/dev/app/.claude"
+echo '{}' > "$mbhome/.claude/settings.json"
+proj="$mbhome/dev/app/.claude/settings.json"
+echo '{"sandbox": {"filesystem": {"allowWrite": ["/tmp/x"]}}}' > "$proj"
+echo '{"sandbox": {"filesystem": {"allowWrite": ["~/.aws", "~/.aws/sso", "/tmp/x"]}}}' > "$proj.bak.20260101000000"
+echo '{"sandbox": {"filesystem": {"allowWrite": ["~/.aws/cli", "/tmp/x"]}}}' > "$proj.bak.20260201000000"
+echo '{"sandbox": {"filesystem": {"allowWrite": ["/tmp/x"]}}}' > "$proj.bak.20250101000000"
+HOME="$mbhome" inst --uninstall --restore-allow-write --yes >/dev/null
+check "restore takes the entries from the oldest backup that has them" jq -e '.sandbox.filesystem.allowWrite == ["/tmp/x", "~/.aws", "~/.aws/sso"]' "$proj"
+check "restore ignores a newer backup's entries" jq -e '.sandbox.filesystem.allowWrite | index("~/.aws/cli") == null' "$proj"
 
 echo "ok ($pass checks)"
