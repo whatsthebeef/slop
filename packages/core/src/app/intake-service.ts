@@ -23,10 +23,6 @@ import type { LlmSpendTag } from '../domain/spend.js';
 import { INTAKE_GROUP_SCHEMA, INTAKE_SCHEMA } from './llm-schemas.js';
 
 /**
- * The LLM port: a single completion. The adapter chooses the model (Haiku for intake). An adapter
- * must give up when `signal` aborts (a caller's deadline), rejecting the call.
- */
-/**
  * A JSON Schema the model's answer must follow (structured outputs). A plain object, so core needs no schema library:
  * `additionalProperties: false` and a `required` list on every object, as the model API demands.
  */
@@ -36,6 +32,10 @@ export interface LlmSchema {
   readonly schema: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * The LLM port: a single completion. The adapter chooses the model (Haiku for intake). An adapter
+ * must give up when `signal` aborts (a caller's deadline), rejecting the call.
+ */
 export interface LlmRequest {
   readonly system: string;
   readonly prompt: string;

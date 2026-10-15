@@ -172,6 +172,8 @@ export class BedrockLlm implements Llm {
   private readonly site: CallSite;
 
   private readonly modelId: string;
+  /** Set once Bedrock says this model takes no structured outputs, so later calls skip the failed request. */
+  private noStructuredOutputs = false;
 
   constructor(
     model: BedrockModel,
@@ -186,7 +188,7 @@ export class BedrockLlm implements Llm {
   }
 
   async complete(request: LlmRequest): Promise<string> {
-    let schema = request.schema;
+    let schema = this.noStructuredOutputs ? undefined : request.schema;
     let maxTokens = request.maxTokens;
     for (;;) {
       let response;
@@ -195,7 +197,8 @@ export class BedrockLlm implements Llm {
       } catch (error) {
         if (schema !== undefined && STRUCTURED_OUTPUT_UNSUPPORTED.test(messageOf(error)) && nameOf(error) === 'ValidationException') {
           // This model or region takes no structured outputs: ask in free text, which the caller's `parseJson` reads.
-          console.warn(`[llm] ${this.modelId} doesn't support structured outputs (${schema.name}); falling back to free-text JSON`);
+          console.warn(`[llm] ${this.modelId} doesn't support structured outputs (${schema.name}); using free-text JSON for this model from now on`);
+          this.noStructuredOutputs = true;
           schema = undefined;
           continue;
         }

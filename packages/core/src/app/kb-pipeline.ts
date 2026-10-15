@@ -130,7 +130,7 @@ Rules:
 - For the merge policy, write its whole new value: content is the JSON object written as text {"exclusivePaths"?: string[], "sizeIgnoredPaths"?: string[], "rolloutPaths"?: string[], "subGateCheck"?: string} and nothing else (path globs relative to the repo root, such as "apps/server/drizzle/**"; exclusivePaths are paths only one open glob may change at a time, sizeIgnoredPaths are not counted when a sub's size is measured, rolloutPaths are paths whose merge needs a rollout step when the implementation record has no Rollout section, subGateCheck is the one check run name a sub waits for before it merges, default "checks"), and section is null. Keep the entries the current value has unless the learning changes them.
 
 Respond with one JSON object and nothing else:
-{"section": string | null, "content": string | object, "rationale": string}
+{"section": string | null, "content": string, "rationale": string}
 - section: the existing heading (its text, without "#") whose section content replaces, or null to add content as a new section. Always null for a new document.
 - content: the full new text of that section, from its heading line through to the end of the section, including any subsections it keeps; for a new section, its heading line and body; for a new document, the whole body; for the local-run spec, the JSON object.
 - rationale: one line saying what the change does and why.`;
