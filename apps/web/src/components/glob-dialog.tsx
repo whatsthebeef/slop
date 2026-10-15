@@ -1,3 +1,4 @@
+import { decisionOf } from '@slop/core';
 import type { Action, EditFailure, LabelName } from '@slop/core';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -7,14 +8,14 @@ import type { GlobSection } from '@/lib/glob-section';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import type { ArtifactRef } from './artifacts';
 import type { ReviewLabel } from './labels';
-import { useDecideFlow } from './decision-outcomes';
+import { isLearning, useDecideFlow } from './decision-outcomes';
 import { GlobReset, useGlobActions } from './glob-view/actions';
 import type { GlobViewContext } from './glob-view/context';
 import { useGlobEdits } from './glob-view/edit-fields';
 import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
-import { DECISION_VIEW_SECTIONS, GLOB_VIEW_SECTIONS } from './glob-view/sections';
+import { DECISION_VIEW_SECTIONS, GLOB_VIEW_SECTIONS, LEARNING_VIEW_SECTIONS } from './glob-view/sections';
 import { useNowState } from './glob-view/status';
 import { GlobTitle } from './glob-title';
 import { isOversized, useOversized } from './oversized-glob';
@@ -100,6 +101,9 @@ export const GlobDetail = ({
   });
   const { decision, busy, disabled } = actionState;
   const decide = useDecideFlow({ board, glob, busy, onDecide });
+  // A learning has its own, shorter view (see LEARNING_VIEW_SECTIONS).
+  const attributes = decisionOf(glob);
+  const learning = attributes !== null && isLearning(attributes);
   const nowState = useNowState(glob, decision, disabled, actionState);
   const edits = useGlobEdits(glob.id);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
@@ -184,12 +188,13 @@ export const GlobDetail = ({
           onReload={onReload}
         />
         <GlobChips ctx={ctx} />
-        {(decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS).map((name) => (
+        {(learning ? LEARNING_VIEW_SECTIONS : decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS).map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>
-            {AFTER_SECTION[name]?.(sectionProps)}
+            {learning && name === 'actions' ? null : AFTER_SECTION[name]?.(sectionProps)}
           </Fragment>
         ))}
+        {learning && AFTER_SECTION.actions?.(sectionProps)}
         <GlobMeta ctx={ctx} />
         <GlobReset ctx={ctx} state={actionState} onDelete={onDelete} />
       </div>

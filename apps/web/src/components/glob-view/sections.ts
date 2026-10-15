@@ -45,3 +45,20 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
   'findings',
   'human-steps',
 ];
+
+/**
+ * A learning's order: the action row (its outcome is the main button) first, then the decision block, which holds all of
+ * its content. The work-glob sections (Plan, Artifacts, Deploys, Environments, Tests, Findings, Size) have nothing to show
+ * for a learning. The Activity log and edit fields that follow the actions come last (see `GlobDetail`).
+ */
+export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
+  'actions',
+  'decision',
+  'conflict',
+  'escalation',
+  'labels',
+  'related',
+  'choices',
+  'assessment',
+  'human-steps',
+];
