@@ -1,24 +1,18 @@
 import { decisionOf } from '@slop/core';
 import { useState } from 'react';
-import type { AddRelationInput, DecideInput } from '@/lib/api';
+import type { AddRelationInput } from '@/lib/api';
 import { DecisionAssessment, DecisionSection as DecisionBody } from '../decision-section';
 import type { GlobViewContext } from './context';
 import { AddRelationForm, RelationsHeader, relatedGroups, Row } from './related';
 
 /** The decision section: only a decision glob has one. */
-export const DecisionPanel = ({
-  ctx,
-  onDecide,
-}: {
-  ctx: GlobViewContext;
-  onDecide: (input: DecideInput) => Promise<boolean>;
-}) =>
+export const DecisionPanel = ({ ctx }: { ctx: GlobViewContext }) =>
   decisionOf(ctx.glob) === null ? null : (
     <DecisionBody
       board={ctx.board}
       glob={ctx.glob}
       busy={ctx.busy}
-      onDecide={onDecide}
+      decide={ctx.decide ?? null}
       onUpdate={ctx.onUpdate}
     />
   );

@@ -1,6 +1,6 @@
 import type { LabelName } from '@slop/core';
 import type { ReactNode } from 'react';
-import type { AddRelationInput, DecideInput } from '@/lib/api';
+import type { AddRelationInput } from '@/lib/api';
 import type { GlobSection } from '@/lib/glob-section';
 import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
@@ -48,7 +48,6 @@ export interface SectionProps {
   onReviewLabel: ReviewLabel;
   onDismissEdge: (relationId: string) => Promise<boolean>;
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
-  onDecide: (input: DecideInput) => Promise<boolean>;
   onAddStep: (step: {
     title: string;
     detail?: string;
@@ -92,7 +91,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     <GlobActions ctx={ctx} state={actions} onSplitting={onSplitting} />
   ),
   plan: ({ ctx }) => <PlanSection ctx={ctx} />,
-  decision: ({ ctx, onDecide }) => <DecisionPanel ctx={ctx} onDecide={onDecide} />,
+  decision: ({ ctx }) => <DecisionPanel ctx={ctx} />,
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
   environments: ({ ctx }) => <EnvironmentsPanel ctx={ctx} />,
   tests: ({ ctx }) => <TestsPanel ctx={ctx} />,
