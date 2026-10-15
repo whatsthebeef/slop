@@ -120,6 +120,7 @@ describe('whoseMove: priority', () => {
       doneBy: null,
       doneAt: null,
       dismissedReason: null,
+      dueSince: null,
     };
     const g = glob({ status: 'pr_open', type: 'sub', runs: [], pr: { number: 1, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' } });
     expect(move(g, {}, { stored: [rollout] })).toMatchObject({ holder: 'waiting', reason: 'waiting for Deploy the host stack' });
@@ -149,6 +150,7 @@ describe('whoseMove: priority', () => {
       doneBy: null,
       doneAt: null,
       dismissedReason: null,
+      dueSince: null,
     };
     const g = glob({ status: 'planning', type: 'same', runs: [run({ state: 'ended', outcome: 'completed' })] });
     expect(move(g, {}, { stored: [placeholder] }).holder).toBe('idle');

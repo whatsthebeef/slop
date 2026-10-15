@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -16,7 +16,7 @@ import { addRelationSchema, relationInput, relationInputs, relationListSchema } 
 import { requestTiming } from '../request-metrics.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
-import { createKindFields, errorBody, globView, globViewFor, globViewOf, resolveKind, statusOf } from './views.js';
+import { armField, createKindFields, errorBody, globView, globViewFor, globViewOf, resolveKind, statusOf } from './views.js';
 
 export interface AppDeps {
   readonly auth: Auth;
@@ -538,7 +538,10 @@ export const createApp = (deps: AppDeps) => {
     // Decisions share the board with work; a rejected or closed one is archived and not shown.
     const signedOff = await globs.list(email, boardId, { status: ['signed_off'], include: 'all' });
     if (!signedOff.ok) return send(c, signedOff);
-    const kept = new Set(latestSignedOff(signedOff.value.filter(shown)).map((g) => g.id));
+    const steps = await globs.humanStepsOf(boardId);
+    // A signed-off glob with an open rollout step stays on the board, whatever the cap: its Arm system label is still to act on.
+    const armed = signedOff.value.filter((g) => shown(g) && (steps.get(g.id) ?? []).some(armsStored)).map((g) => g.id);
+    const kept = new Set([...latestSignedOff(signedOff.value.filter(shown)).map((g) => g.id), ...armed]);
     const result = await globs.listWithArtifacts(
       email,
       boardId,
@@ -548,7 +551,6 @@ export const createApp = (deps: AppDeps) => {
     const splits = await globs.splitsOf(boardId);
     const workstreams = await globs.workstreamsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
-    const steps = await globs.humanStepsOf(boardId);
     const dismissed = await globs.dismissedKeysOf(email, boardId);
     const gateCheck = await globs.gateCheckOf(boardId);
     const now = new Date().toISOString();
@@ -569,6 +571,7 @@ export const createApp = (deps: AppDeps) => {
           // A stalled glob also hands a step to its implementer (or planner).
           humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
+          ...armField(armView(human, membership.value.board)),
           dismissedKeys: dismissed.get(glob.id) ?? [],
           gateCheck,
           machineSteps: facts,
@@ -816,6 +819,13 @@ export const createApp = (deps: AppDeps) => {
       return result.ok ? send(c, await globs.get(c.get('email'), result.value.globId), globViewOf) : send(c, result);
     });
   }
+
+  app.post('/api/globs/:id/environments/:env/deployed', async (c) => {
+    const email = c.get('email');
+    const id = c.req.param('id');
+    const marked = await globs.markEnvironmentDeployed(email, id, c.req.param('env'));
+    return marked.ok ? send(c, await globs.get(email, id), globViewOf) : send(c, marked);
+  });
 
   // Human steps (the glob view's Human steps section; MCP's add/complete/dismiss_human_step). Each answers with the glob's
   // view, steps included, so the page replaces its state. A step change leaves the glob's version alone, so it is optional.

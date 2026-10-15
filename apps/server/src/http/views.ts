@@ -1,4 +1,4 @@
-import type { Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import type { Arm, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
 import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -147,12 +147,16 @@ export const globView = (
   ...(holding === null ? {} : { holding }),
 });
 
+/** The Arm system stage on a view: the environment (or base branch) whose rollout step is next, and that step's title. Absent when no step is open. */
+export const armField = (arm: Arm | null) => (arm === null ? {} : { arm });
+
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; handover?: Handover | null; dismissedKeys?: readonly string[] }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[] }) =>
   ({
     ...globView(v.glob, v.allowedActions, v.artifacts, v, v.humanSteps ?? null, v.relations, v.holding),
     waitingFor: v.waitingFor,
     waitedOnBy: v.waitedOnBy,
+    ...armField(v.arm ?? null),
     // The glob's relations in groups: what holds it back (the same as `holding`), what it holds back, and what no longer holds.
     relations: v.relationGroups,
     // Why a person is needed and what to do first (null when nothing is wrong); the card and `sstor --glob` show it.

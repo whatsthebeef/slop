@@ -314,6 +314,7 @@ describe('a startable same in Planning', () => {
     doneBy: null,
     doneAt: null,
     dismissedReason: null,
+    dueSince: null,
   };
   const withPlaceholder = (): Partial<GlobView> => {
     const g = glob({ status: 'planning', type: 'same' });

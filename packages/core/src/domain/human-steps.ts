@@ -30,7 +30,7 @@ export type HumanStepKind = (typeof HUMAN_STEP_KINDS)[number];
 export const HUMAN_STEP_ROLES = ['implementer', 'admin', 'po', 'qa', 'anyone'] as const;
 export type HumanStepWho = string;
 
-/** When a step falls due. `after_deploy:<env>` is modelled only: nothing makes it due yet, so it stays pending. */
+/** When a step falls due. `after_deploy:<env>` falls due once the step's `dueSince` is set: a recorded deploy of the glob's merge to <env>, or a person's mark. */
 export type HumanStepDue = 'now' | 'after_merge' | `after_deploy:${string}`;
 
 export const isHumanStepDue = (value: string): value is HumanStepDue =>
@@ -115,6 +115,8 @@ export interface StoredHumanStep {
   readonly doneBy: string | null;
   readonly doneAt: string | null;
   readonly dismissedReason: string | null;
+  /** When an `after_deploy:<env>` step fell due (the environment held the glob, or a person marked it deployed); null until then. Sticky: a rollback never clears it. */
+  readonly dueSince: string | null;
 }
 
 /** What `derivedSteps` can't read from the glob itself. */
@@ -145,7 +147,7 @@ export const canMerge = (glob: Glob): boolean =>
   glob.headChecks.state === 'passed';
 
 /** Whether the glob's change is on the base branch: its PR merged, or it moved on to review. */
-export const isMerged = (glob: Glob): boolean =>
+export const isMerged = (glob: Pick<Glob, 'pr' | 'status'>): boolean =>
   glob.pr?.state === 'merged' || glob.status === 'reviewing' || glob.status === 'signed_off';
 
 const derived = (
@@ -217,12 +219,21 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   return steps;
 };
 
-const stateOf = (glob: Glob, step: StoredHumanStep): HumanStepState => {
+/**
+ * What a stored step is for this glob. After the merge: due once the glob is merged, but not while it is still in Merging
+ * (the code host may show the PR merged before slop has moved the glob on). After a deploy: due once `dueSince` is set.
+ */
+export const stateOf = (glob: Pick<Glob, 'pr' | 'status'>, step: Pick<StoredHumanStep, 'state' | 'due' | 'dueSince'>): HumanStepState => {
   if (step.state === 'done') return 'done';
   if (step.state === 'dismissed') return 'dismissed';
   if (step.due === 'now') return 'due';
-  return step.due === 'after_merge' && isMerged(glob) ? 'due' : 'pending';
+  if (step.due === 'after_merge') return isMerged(glob) && glob.status !== 'merging' ? 'due' : 'pending';
+  return step.dueSince !== null ? 'due' : 'pending';
 };
+
+/** What a rollout step holds back by default: after the merge, sign-off and dependants; after a deploy, nothing (a step that says `blocks` keeps it). */
+export const defaultStepBlocks = (due: HumanStepDue): readonly HumanStepBlock[] =>
+  due.startsWith('after_deploy:') ? [] : ['sign_off', 'dependants'];
 
 const fromStored = (glob: Glob, s: StoredHumanStep): HumanStep => ({
   id: s.id,
