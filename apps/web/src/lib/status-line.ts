@@ -14,7 +14,7 @@ import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction 
 import { rolloutLine } from './human-steps';
 import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
 import type { GlobView } from './api';
-import { mergingChecksText } from './check-wording';
+import { checksInFlightWhileMerging, mergingChecksText } from './check-wording';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
@@ -88,7 +88,7 @@ const ALSO = {
 } as const;
 
 /** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
-export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer): StatusLine | null => {
+export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer, base?: string): StatusLine | null => {
   const hint = stuckHint(glob, now, glob.gateCheck);
   const checks = checksExplanation(glob);
   const merging = glob.status === 'merging';
@@ -164,10 +164,9 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   }
   if (merging) {
     const sha = glob.pr?.headSha ?? null;
-    const recorded = glob.headChecks;
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
     // Checks in flight read the shared merging wording ("merging when checks pass", or "merging from <base>" while catching up).
-    const full = (sha !== null && recorded != null && recorded.sha !== sha) || recorded == null || recorded.state === 'pending' ? mergingChecksText(glob) : 'merging';
+    const full = checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging';
     candidates.push(
       make({
         kind: 'merging',
@@ -413,8 +412,9 @@ export const viewStatusLine = (
   glob: GlobView,
   now: string,
   waiting: readonly Waiting[],
+  baseBranch?: string,
 ): StatusLine | null => {
-  const base = statusLine(glob, now);
+  const base = statusLine(glob, now, undefined, baseBranch);
   // Checks still running are shown by the activity label.
   const stopped = waiting.filter((w) => w.running !== true);
   if (stopped.length === 0) return base;

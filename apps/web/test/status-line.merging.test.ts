@@ -22,7 +22,7 @@ describe('merging status line', () => {
 
   it('says it is merging from the base when the head is newer than the recorded checks', () => {
     const g = merging({ headChecks: { sha: 'aaaaaaa1111', state: 'passed' } });
-    expect(statusLine(g, NOW)).toMatchObject({
+    expect(statusLine(g, NOW, undefined, 'main')).toMatchObject({
       kind: 'merging',
       full: 'merging from main',
     });
