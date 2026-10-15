@@ -369,6 +369,8 @@ export const humanSteps = pgTable(
     doneBy: text('done_by'),
     doneAt: timestamp('done_at', { withTimezone: true }),
     dismissedReason: text('dismissed_reason'),
+    /** When an `after_deploy:<env>` step fell due (sticky); null until a deploy check or a person's mark. */
+    dueSince: timestamp('due_since', { withTimezone: true }),
   },
   (t) => [index('human_steps_glob_idx').on(t.globId), index('human_steps_board_idx').on(t.boardId, t.state)],
 );

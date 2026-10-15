@@ -1,15 +1,18 @@
-import { decisionOf, fixOf, isHumanCategory, modeOf } from '@slop/core';
+import { decisionOf, isHumanCategory, modeOf } from '@slop/core';
 import type { Action, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { Bug, Loader2, Rocket, Scale, UserRound } from 'lucide-react';
+import { Bug, ListChecks, Loader2, Rocket, Scale } from 'lucide-react';
 import type { ComponentType } from 'react';
-import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
+import { ActorIcon, HumanIcon, MachineIcon, PersonRunning } from '@/components/actor-icons';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { AtfRun, GlobView, ListedHumanStep } from '@/lib/api';
+import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
+import { kindOf } from '@/lib/board-filters';
+import type { Kind } from '@/lib/board-filters';
 import { cornerStatus, hasBlocker } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
-import { needsRelease } from '@/lib/human-steps';
+import { armLabel } from '@/lib/rollout-stages';
+import type { ArmLabel } from '@/lib/rollout-stages';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { mainAction } from '@/lib/main-action';
@@ -34,38 +37,22 @@ export const DotSeparator = ({ testId }: { testId?: string }) => (
 /** A small icon in the card's corner. */
 type MarkerGlyph = ComponentType<{ className?: string; 'aria-label'?: string; role?: 'img' }>;
 
-/** An action is a person's to do: the same person icon as the human actor (lucide spreads the Tip's props onto its svg). */
-const ActionGlyph: MarkerGlyph = UserRound;
-
-/** The icons of the human modes, which the board filter also uses. */
-export const HUMAN_MODE_ICON: Record<'decision' | 'action', { icon: MarkerGlyph; className: string }> = {
-  decision: { icon: Scale, className: 'text-muted-foreground' },
-  action: { icon: ActionGlyph, className: 'text-muted-foreground' },
+/** The icon of each kind: the card's corner shows it, and so does the board's filter chip. */
+export const KIND_ICON: Record<Kind, { icon: MarkerGlyph; className: string; label: string }> = {
+  task: { icon: ListChecks, className: 'text-muted-foreground', label: 'Task' },
+  bug: { icon: Bug, className: 'text-red', label: 'Bug' },
+  // A running person, not the person icon of the human actor and "Picked up", which in the corner would read as a status.
+  action: { icon: PersonRunning, className: 'text-muted-foreground', label: 'Action' },
+  decision: { icon: Scale, className: 'text-muted-foreground', label: 'Decision' },
 };
 
-/** The fix marker: work that repairs something broken. */
-export const FIX_ICON = { icon: Bug as MarkerGlyph, className: 'text-red' };
-
-/**
- * The corner marker of a glob: the red bug of a fix, or the person icon of a human mode. Machine work that is not a fix has
- * none (its mode is written beside the ID).
- */
-export const hasKindMarker = (glob: Pick<GlobView, 'category' | 'type' | 'fix'>): boolean => isHumanCategory(glob.category) || fixOf(glob);
-
+/** The corner marker of every glob: the icon of its kind, named by its tooltip. */
 export const KindMarker = ({ glob }: { glob: Pick<GlobView, 'category' | 'type' | 'fix'> }) => {
-  const mode = modeOf(glob);
-  if (mode === 'decision' || mode === 'action') {
-    const { icon: Icon, className } = HUMAN_MODE_ICON[mode];
-    return (
-      <Tip text={`Human: ${mode}`}>
-        <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={mode} role='img' />
-      </Tip>
-    );
-  }
-  if (!fixOf(glob)) return null;
+  const kind = kindOf(glob);
+  const { icon: Icon, className, label } = KIND_ICON[kind];
   return (
-    <Tip text='Fix: repairs something broken'>
-      <FIX_ICON.icon className={cn('h-3.5 w-3.5 shrink-0', FIX_ICON.className)} aria-label='fix' role='img' />
+    <Tip text={label}>
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={kind} role='img' />
     </Tip>
   );
 };
@@ -531,15 +518,15 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
 };
 
 /**
- * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge). Rocket and text in the
+ * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge), named by its stage. Rocket and text in the
  * primary action's colour (not red, which means broken), normal weight. `onOpen` opens the glob at its Human steps; without it the
  * label is plain.
  */
-export const ArmSystemLabel = ({ step, onOpen }: { step: Pick<ListedHumanStep, 'title'>; onOpen?: () => void }) => (
-  <Tip text={`A person has a step at release: ${step.title}`}>
+export const ArmSystemLabel = ({ label, onOpen }: { label: ArmLabel; onOpen?: () => void }) => (
+  <Tip text={label.tip}>
     <ChipButton onOpen={onOpen} className='inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] text-primary' testId='arm-system-label'>
       <Rocket className='h-3 w-3 shrink-0' aria-hidden />
-      Arm system
+      {label.text}
     </ChipButton>
   </Tip>
 );
@@ -649,7 +636,7 @@ export const GlobCard = ({
   const human = isHumanCategory(glob.category);
   const status = cornerStatus(glob, now, viewer, repo, waitingOnThis);
   const blocked = hasBlocker(glob, now, viewer);
-  const armStep = human ? null : needsRelease(glob.humanSteps ?? []);
+  const arming = human ? null : armLabel(glob);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
   // A blocker hides the moves, but not one that runs in place: Fix conflict is the answer to a conflict, which is itself a blocker.
   const shown = blocked ? moves.filter((m) => m.direction === 'none') : moves;
@@ -703,13 +690,13 @@ export const GlobCard = ({
           {tag !== undefined && (
             <>
               <MoveTagView tag={tag} />
-              {hasKindMarker(glob) && <DotSeparator testId='card-corner-separator' />}
+              <DotSeparator testId='card-corner-separator' />
             </>
           )}
           {tag === undefined && status !== null && (
             <>
               <CornerStatusView status={status} pending={pending} onAct={onAct} onOpenSection={onOpenSection} />
-              {hasKindMarker(glob) && <DotSeparator testId='card-corner-separator' />}
+              <DotSeparator testId='card-corner-separator' />
             </>
           )}
           <KindMarker glob={glob} />
@@ -772,9 +759,9 @@ export const GlobCard = ({
           )}
         </div>
         <div className='flex shrink-0 items-center gap-1.5'>
-          {armStep !== null && (
+          {arming !== null && (
             <>
-              <ArmSystemLabel step={armStep} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
+              <ArmSystemLabel label={arming} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
               <DotSeparator testId='card-arm-separator' />
             </>
           )}

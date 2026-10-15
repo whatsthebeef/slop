@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EnvironmentService } from '../src/app/environment-service.js';
+import { GlobService } from '../src/app/glob-service.js';
+import { humanSteps } from '../src/domain/human-steps.js';
+import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import type { ReportedDeploy } from '../src/app/environment-service.js';
 import * as environments from '../src/domain/environments.js';
 import type { GlobPresence } from '../src/domain/environments.js';
@@ -244,5 +247,141 @@ describe('EnvironmentService', () => {
       ['prod', null, 'd1'],
     ]);
     expect((await service.forGlob('stranger@example.com', 's1t1')).ok).toBe(false);
+  });
+});
+
+describe('after-deploy steps fall due (s15f176)', () => {
+  let store: MemoryStore;
+  let notifier: RecordingNotifier;
+  let service: EnvironmentService;
+  let globs: GlobService;
+  const DEV = 'dev@example.com';
+
+  const step = (id: string, globId: string, patch: Partial<StoredHumanStep> = {}): StoredHumanStep => ({
+    id,
+    boardId: board.id,
+    globId,
+    kind: 'rollout',
+    title: `Step ${id}`,
+    detail: null,
+    who: 'anyone',
+    due: 'after_deploy:prod',
+    state: 'open',
+    blocks: [],
+    check: null,
+    script: null,
+    why: null,
+    permissions: null,
+    commands: [],
+    verify: null,
+    origin: 'rollout-section',
+    createdBy: DEV,
+    createdAt: NOW,
+    doneBy: null,
+    doneAt: null,
+    dismissedReason: null,
+    dueSince: null,
+    ...patch,
+  });
+  const read = (id: string) => store.transaction(async (tx) => (await tx.listHumanSteps(board.id, ['s1t1', 's1t2'])).find((s) => s.id === id) as StoredHumanStep);
+  const contained = (globId: string, value: boolean) => [{ globId, mergeSha: 'm1', contained: value }];
+  const deploy = async (sha: string, eventId: string) =>
+    service.recordDeploy({ repo: 'Acme/App', environment: 'prod', sha, ref: null, succeeded: true, url: null, at: null, eventId });
+
+  beforeEach(async () => {
+    store = new MemoryStore();
+    notifier = new RecordingNotifier();
+    let n = 0;
+    service = new EnvironmentService({ store, notifier, clock: { now: () => NOW } });
+    globs = new GlobService({ store, notifier, clock: { now: () => NOW }, ids: { runId: () => `r${++n}` }, routines: { hasRoutine: () => Promise.resolve(true) } });
+    await store.transaction(async (tx) => {
+      await tx.insertBoard({ ...board, environments: [...board.environments], sensitivePaths: [] });
+      await tx.upsertUser({ email: DEV, name: DEV, active: true });
+      await tx.upsertMember({ boardId: board.id, email: DEV, role: 'dev' });
+      for (const id of ['s1t1', 's1t2']) await tx.insertGlob(glob({ id, status: 'reviewing' }), null);
+      await tx.saveHumanSteps([
+        step('a', 's1t1'),
+        step('b', 's1t1', { due: 'after_deploy:staging' }),
+        step('c', 's1t1', { due: 'after_merge' }),
+        step('d', 's1t2'),
+      ]);
+    });
+  });
+
+  it('a containment check marks only the steps of globs that newly enter that environment, for that environment', async () => {
+    await deploy('d1', 'e1');
+    await service.recordContainment(board.id, 'prod', 'd1', contained('s1t1', true));
+    expect((await read('a')).dueSince).toBe(NOW);
+    expect((await read('b')).dueSince).toBeNull();
+    expect((await read('c')).dueSince).toBeNull();
+    expect((await read('d')).dueSince).toBeNull();
+    expect(notifier.hints).toContainEqual(expect.objectContaining({ kind: 'glob.changed', globId: 's1t1' }));
+    const [g] = await store.transaction((tx) => tx.getGlobs(['s1t1']));
+    expect(humanSteps(g as never, {}, [await read('a'), await read('b')]).map((s) => [s.title, s.state])).toEqual([['Step a', 'due'], ['Step b', 'pending']]);
+  });
+
+  it('is idempotent: a repeat check, or one that finds the glob already there, keeps the first moment', async () => {
+    await deploy('d1', 'e1');
+    await service.recordContainment(board.id, 'prod', 'd1', contained('s1t1', true));
+    notifier.hints.length = 0;
+    await deploy('d2', 'e2');
+    await store.transaction((tx) => tx.saveHumanSteps([step('a', 's1t1', { dueSince: '2026-10-01T00:00:00.000Z' })]));
+    await service.recordContainment(board.id, 'prod', 'd2', contained('s1t1', true));
+    expect((await read('a')).dueSince).toBe('2026-10-01T00:00:00.000Z');
+    expect(notifier.hints).toEqual([]);
+  });
+
+  it('a stale check marks nothing', async () => {
+    await deploy('d1', 'e1');
+    await deploy('d2', 'e2');
+    expect(await service.recordContainment(board.id, 'prod', 'd1', contained('s1t1', true))).toBe('stale');
+    expect((await read('a')).dueSince).toBeNull();
+  });
+
+  it('a rollback keeps the step due', async () => {
+    await deploy('d1', 'e1');
+    await service.recordContainment(board.id, 'prod', 'd1', contained('s1t1', true));
+    await deploy('d0', 'e2');
+    await service.recordContainment(board.id, 'prod', 'd0', contained('s1t1', false));
+    expect(store.state.events.map((e) => e.type)).toEqual(['Deployed', 'DeployRolledBack']);
+    expect((await read('a')).dueSince).toBe(NOW);
+  });
+
+  it('markEnvironmentDeployed makes the glob\'s steps for that environment due, once, and logs EnvironmentMarkedDeployed', async () => {
+    const before = (await store.transaction((tx) => tx.getGlob('s1t1')))?.version;
+    expect(await globs.markEnvironmentDeployed(DEV, 's1t1', 'prod')).toEqual({ ok: true, value: { marked: 1 } });
+    expect((await read('a')).dueSince).toBe(NOW);
+    expect((await read('b')).dueSince).toBeNull();
+    expect((await read('d')).dueSince).toBeNull();
+    expect(store.state.events.filter((e) => e.type === 'EnvironmentMarkedDeployed').map((e) => [e.globId, e.actor, e.data])).toEqual([['s1t1', DEV, { environment: 'prod', steps: 1 }]]);
+    // It is not a deploy: no Deployed event, no presence, and the glob's version stays.
+    expect(store.state.events.some((e) => e.type === 'Deployed')).toBe(false);
+    expect(store.state.globPresence.size).toBe(0);
+    expect((await store.transaction((tx) => tx.getGlob('s1t1')))?.version).toBe(before);
+    // Again: nothing changes and nothing more is logged.
+    expect(await globs.markEnvironmentDeployed(DEV, 's1t1', 'prod')).toEqual({ ok: true, value: { marked: 0 } });
+    expect(store.state.events.filter((e) => e.type === 'EnvironmentMarkedDeployed')).toHaveLength(1);
+  });
+
+  it('markEnvironmentDeployed refuses an unknown environment, a stranger and an unknown glob', async () => {
+    const unknown = await globs.markEnvironmentDeployed(DEV, 's1t1', 'nowhere');
+    expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
+    const stranger = await globs.markEnvironmentDeployed('stranger@example.com', 's1t1', 'prod');
+    expect(!stranger.ok && stranger.error.code).toBe('forbidden');
+    const missing = await globs.markEnvironmentDeployed(DEV, 's1t99', 'prod');
+    expect(!missing.ok && missing.error.code).toBe('not_found');
+    expect(store.state.events.filter((e) => e.type === 'EnvironmentMarkedDeployed')).toEqual([]);
+  });
+
+  it('a step added after a mark is due at once; a mark with no steps yet is remembered', async () => {
+    await globs.markEnvironmentDeployed(DEV, 's1t2', 'staging');
+    const added = await globs.addHumanStep(DEV, 's1t2', null, { title: 'Later', due: 'after_deploy:staging' });
+    expect(added.ok && added.value.dueSince).toBe(NOW);
+    const other = await globs.addHumanStep(DEV, 's1t2', null, { title: 'Other env', due: 'after_deploy:prod' });
+    expect(other.ok && other.value.dueSince).toBeNull();
+    // A step added by hand for an after-deploy env holds nothing back by default.
+    expect(added.ok && added.value.blocks).toEqual([]);
+    const merge = await globs.addHumanStep(DEV, 's1t2', null, { title: 'Now' });
+    expect(merge.ok && merge.value.blocks).toEqual(['sign_off', 'dependants']);
   });
 });

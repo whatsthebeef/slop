@@ -86,6 +86,7 @@ import type {
   TargetChange,
   WorkstreamsSummary,
   Handoff,
+  Arm,
 } from '@slop/core';
 import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
@@ -141,6 +142,8 @@ export interface GlobView extends Glob {
   readonly gateCheck?: string;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly ListedHumanStep[];
+  /** The "Arm system" label: the first stage with an open rollout step (an environment, or the base branch for after-merge) and that step's title; absent when no step is open or on an older API. */
+  readonly arm?: Arm;
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
   readonly move?: Move;
   /** What slop is doing for the glob (board list and glob read; absent on an older API). */
@@ -843,6 +846,9 @@ export const api = {
       `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`,
       {},
     ),
+  /** A person's mark that the glob's change is deployed to the environment: its after-deploy steps fall due. */
+  markEnvironmentDeployed: (id: string, env: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/environments/${encodeURIComponent(env)}/deployed`, {}),
   dismissHumanStep: (id: string, stepId: string, reason: string) =>
     request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/dismiss`, { reason }),
   /** A script artifact's text, or null when there is none (the kind is served from a later part). */

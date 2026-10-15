@@ -1,0 +1,1 @@
+ALTER TABLE "human_steps" ADD COLUMN IF NOT EXISTS "due_since" timestamp with time zone;
