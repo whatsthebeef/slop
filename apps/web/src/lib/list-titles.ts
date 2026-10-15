@@ -1,6 +1,6 @@
 import type { List } from '@slop/core';
 
-/** The board's names for its lists: column headings, and the glob view header's label beside the ID. */
+/** The board's list names, as the columns and the glob view's top bar show them. */
 export const LIST_TITLES: Record<List, string> = {
   planning: 'Planning',
   doing: 'Doing',

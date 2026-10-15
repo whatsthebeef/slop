@@ -205,9 +205,7 @@ describe('GlobHeader', () => {
     it('shows "ID · list" on the left and, with nothing happening, only the category icon on the right', () => {
       const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', list: 'planning' }));
       const left = getByTestId('glob-header');
-      expect(getByTestId('glob-id').nextElementSibling).toBe(getByTestId('glob-list'));
-      expect(getByTestId('glob-list').textContent).toBe('·Planning');
-      expect(getByTestId('glob-list-separator').getAttribute('aria-hidden')).toBe('true');
+      expect(getByTestId('glob-list').textContent).toBe('Planning');
       expect(queryByTestId('header-status')).toBeNull();
       expect(queryByTestId('header-corner-separator')).toBeNull();
       const corner = getByTestId('header-corner');

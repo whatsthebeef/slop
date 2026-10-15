@@ -172,7 +172,7 @@ export const GlobDetail = ({
 
   return (
     <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
-      <GlobHeader ctx={ctx} onClose={onClose} state={nowState} />
+      <GlobHeader ctx={ctx} onClose={onClose} state={nowState} actions={actionState} />
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
         <GlobTitle
           id={glob.id}
@@ -181,7 +181,7 @@ export const GlobDetail = ({
           onUpdate={onUpdate}
           onReload={onReload}
         />
-        <GlobChips ctx={ctx} actions={actionState} />
+        <GlobChips ctx={ctx} />
         {(decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS).map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>

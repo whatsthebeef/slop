@@ -28,3 +28,29 @@ data_disk_guard() {
     return 1
   fi
 }
+
+# images_to_remove <keep-ref>...: reads image refs (repo:tag), one per line, on stdin and prints those not listed as
+# arguments. Empty arguments are ignored, so an unknown previous release keeps nothing extra. The caller passes the
+# release now running, the one before it (kept for rollback) and any image a running container uses.
+images_to_remove() {
+  local ref keep k
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    keep=0
+    for k in "$@"; do
+      if [ -n "$k" ] && [ "$ref" = "$k" ]; then keep=1; break; fi
+    done
+    [ "$keep" = 1 ] || printf '%s\n' "$ref"
+  done
+}
+
+# has_enough_disk <free-mb> <image-mb> <margin-mb>: true when the free space covers the image plus the margin.
+# An unknown image size (empty) counts as 0, so only the margin is required.
+has_enough_disk() {
+  [ -n "${1:-}" ] && [ "$1" -ge $(( ${2:-0} + ${3:-0} )) ]
+}
+
+# disk_full_message <free-mb> <need-mb>: the failure text for a disk too full to pull the image.
+disk_full_message() {
+  echo "instance disk full: $(( $1 / 1024 )) GB free, need $(( ($2 + 1023) / 1024 )) GB; prune images or grow the root volume"
+}
