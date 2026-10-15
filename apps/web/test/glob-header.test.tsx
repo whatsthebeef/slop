@@ -16,11 +16,11 @@ afterEach(() => {
 });
 
 describe('GlobHeader', () => {
-  const renderBar = (g: GlobView, setup?: () => void, viewer?: { email: string; role: 'admin' }) => {
+  const renderBar = (g: GlobView, setup?: () => void, viewer?: { email: string; role: 'admin' }, base?: string) => {
     setup?.();
     const ctx = { glob: g, onUpdate: () => Promise.resolve(null) } as unknown as GlobViewContext;
     const Bar = () => {
-      const state = useNowState(g, false, [], { viewer } as unknown as GlobActionsState);
+      const state = useNowState(g, false, [], { viewer, base } as unknown as GlobActionsState);
       return <GlobHeader ctx={ctx} onClose={() => undefined} state={state} />;
     };
     return render(
@@ -123,6 +123,9 @@ describe('GlobHeader', () => {
       ['a merged glob whose deploy is still running', () => view({ status: 'reviewing', labels: { QA: 'required' }, pr: { number: 7, state: 'merged', headSha: head }, machineSteps: [{ id: 'm1', kind: 'deploy', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: 'prod', holdsBall: false }], humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] }] })],
       ['a merge hold', () => view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [{ relationId: 'rel_1', to: 's1k1', toTitle: null, toIsDecision: true, gate: 'merge', until: 'decided', state: 'planning', reason: null, source: 'person' }] })],
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
+      ['checks running on a ready sub', () => prOpen({ type: 'sub', headChecks: { sha: head, state: 'pending' } })],
+      ['checks running on a same awaiting merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: ['merge'] })],
+      ['checks running on a draft', () => prOpen({ pr: { number: 289, state: 'draft', headSha: head }, headChecks: { sha: head, state: 'pending' } })],
       ['a problem', () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } })],
     ];
     it('orders the header corner: text, then the status icon, then the kind marker, and lets the text truncate', () => {
@@ -204,6 +207,39 @@ describe('GlobHeader', () => {
         expect(status?.querySelector('.truncate')?.textContent).toBe(text);
         cleanup();
       }
+    });
+
+    // Slop merges these once the checks pass; the board's base here is `develop`, and `behind` is cleared after a base merge.
+    const moved = { sha: 'aaaaaaa1111', state: 'pending' as const };
+    const merging: readonly [string, () => GlobView, string][] = [
+      ['status merging, checks pending', () => view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'pending' } }), 'merging when checks pass'],
+      ['an armed merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] }), 'merging when checks pass'],
+      ['status merging, head moved after a base merge', () => view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, headChecks: moved, behind: null }), 'merging from develop'],
+      ['an armed merge, head moved after a base merge', () => prOpen({ headChecks: moved, behind: null, mergeMode: 'when_green', allowedActions: ['cancel_merge'] }), 'merging from develop'],
+    ];
+    it.each(merging)('%s: the card and the header both read the merging words', (_name, make, text) => {
+      const g = make();
+      const { getByTestId } = renderBar(g, undefined, undefined, 'develop');
+      const header = getByTestId('header-status').textContent;
+      cleanup();
+      const { container } = render(
+        <MemoryRouter>
+          <GlobCard
+            glob={g}
+            onOpen={() => undefined}
+            onOpenSection={() => undefined}
+            onReviewLabel={() => Promise.resolve(true)}
+            moves={[]}
+            previewing={null}
+            onPreview={() => undefined}
+            onMove={() => undefined}
+            onArrow={() => undefined}
+            base='develop'
+          />
+        </MemoryRouter>,
+      );
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe(text);
+      expect(header).toBe(text);
     });
 
     it.each(cases)('%s: the card status and the header status say the same words', (_name, make) => {

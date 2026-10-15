@@ -66,10 +66,18 @@ describe('cornerStatus', () => {
     expect(at(failed)?.tip).toContain('A very long reason');
   });
 
+  it.each([
+    ['a ready sub', () => prOpen({ type: 'sub', headChecks: { sha: head, state: 'pending' } })],
+    ['a same awaiting a person\'s merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: ['merge'] })],
+    ['a draft', () => prOpen({ pr: { number: 289, state: 'draft', headSha: head }, headChecks: { sha: head, state: 'pending' } })],
+  ])('reads bare "checks running" in the corner for %s, with the head in the tooltip', (_name, make) => {
+    const status = cornerStatus(make(), NOW, { email: 'dev@example.com', role: 'dev' });
+    expect(status?.text).toBe('checks running');
+    expect(status?.tip).toContain(`Checks are running on ${head.slice(0, 7)}.`);
+  });
+
   it('has no minutes or commit SHAs in the text, whatever the state', () => {
     const g = view({ status: 'pr_open', pr: { number: 1, state: 'ready', headSha: 'd16d563aaaa' }, headChecks: { sha: 'd16d563aaaa', state: 'pending' } });
-    expect(plainText('checks running on d16d563')).toBe('checks running');
-    expect(plainText('merging when checks pass · d16d563')).toBe('merging when checks pass');
     expect(plainText('queued 3 min')).toBe('queued');
     expect(plainText('queued · 3 min')).toBe('queued');
     expect(at(g)?.text ?? '').not.toMatch(/\bmin\b|\b[0-9a-f]{7}\b/);

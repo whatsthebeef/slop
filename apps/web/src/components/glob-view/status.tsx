@@ -69,9 +69,10 @@ export const ACTIVITY_ID = 'glob-activity';
 /** Everything the header status and the Activity log's pinned entries are worked out from, once. */
 export const useNowState = (glob: GlobView, decision: boolean, disabled: readonly Waiting[], actions: GlobActionsState) => {
   const now = new Date().toISOString();
-  const position = decision ? null : positionOf(glob, now);
+  const { base } = actions;
+  const position = decision ? null : positionOf(glob, now, undefined, base);
   const move = decision ? null : moveOf(glob, now);
-  const status = viewStatusLine(glob, now, disabled);
+  const status = viewStatusLine(glob, now, disabled, base);
   const steps = decision ? [] : stepsOf(glob).filter((s) => s.state !== 'done');
   const turn = move?.holder === 'you' ? move : null;
   const yours = turn !== null;
@@ -82,7 +83,7 @@ export const useNowState = (glob: GlobView, decision: boolean, disabled: readonl
   // Dismissed (per person), the long text collapses to the short label; the main action is untouched.
   const seen = problem === null ? null : collapsed(glob, problem);
   const turnDismissed = turn !== null && turn.reason !== '' && isDismissed(glob, turnKey(turn));
-  return { now, viewer: actions.viewer, position, move, turn, steps, yours, brief, problem, seen, turnDismissed };
+  return { now, viewer: actions.viewer, base, position, move, turn, steps, yours, brief, problem, seen, turnDismissed };
 };
 
 export type NowState = ReturnType<typeof useNowState>;
@@ -93,8 +94,8 @@ export type NowState = ReturnType<typeof useNowState>;
  * (it sits by the ID). Clicking the status opens a live run's session, else scrolls to the Activity log.
  */
 export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decision: boolean; state: NowState }) => {
-  const { position, now, viewer } = state;
-  const corner = decision ? null : cornerStatus(glob, now, viewer, undefined, waitingOnOwn(glob));
+  const { position, now, viewer, base } = state;
+  const corner = decision ? null : cornerStatus(glob, now, viewer, undefined, waitingOnOwn(glob), base);
   // A live run's status opens that run's session; the activity log has no session link of its own beyond its run entries.
   const live = position?.holder === 'machine' ? position.sessionUrl : null;
   return (
