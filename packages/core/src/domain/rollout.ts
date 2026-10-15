@@ -51,7 +51,14 @@ export const parseRollout = (record: string): RolloutStep[] => {
   const lines = sectionOf(record);
   const steps: RolloutStep[] = [];
   let topIndent: number | null = null;
-  let current: { kind: RolloutStepKind; title: string; check: string | null; detail: string[]; script: string[] | null; fence: Fence | null } | null = null;
+  let current: {
+    kind: RolloutStepKind;
+    title: string;
+    check: string | null;
+    detail: string[];
+    script: string[] | null;
+    fence: Fence | null;
+  } | null = null;
   const finish = () => {
     if (current === null) return;
     const detail = trimBlank(current.detail).join('\n');
@@ -60,7 +67,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
       title: current.title,
       detail: detail === '' ? null : detail,
       check: current.check,
-      script: current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
+      script:
+        current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
     });
     current = null;
   };
@@ -69,7 +77,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
       const { fence } = current;
       if (isFenceClose(line, fence)) {
         current.fence = null;
-        if (fence.target === 'detail') current.detail.push(line.trim() === '' ? '' : dedent(line, fence.indent));
+        if (fence.target === 'detail')
+          current.detail.push(line.trim() === '' ? '' : dedent(line, fence.indent));
         continue;
       }
       const text = dedent(line, fence.indent);
@@ -85,8 +94,17 @@ export const parseRollout = (record: string): RolloutStep[] => {
       finish();
       const parsed = titleOf(item[2] ?? '');
       if (parsed === null) continue;
-      current = { kind: parsed.kind, title: parsed.title, check: parsed.check, detail: [], script: null, fence: null };
-      if (parsed.unknownCheck !== null) current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
+      current = {
+        kind: parsed.kind,
+        title: parsed.title,
+        check: parsed.check,
+        detail: [],
+        script: null,
+        fence: null,
+      };
+      if (parsed.overflow !== null) current.detail.push(parsed.overflow);
+      if (parsed.unknownCheck !== null)
+        current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
       continue;
     }
     if (current === null) continue;
@@ -94,7 +112,12 @@ export const parseRollout = (record: string): RolloutStep[] => {
     if (open !== null && open[2] !== undefined) {
       const marker = open[2];
       const first = current.kind === 'script' && current.script === null;
-      current.fence = { char: marker.charAt(0), length: marker.length, indent: (open[1] ?? '').length, target: first ? 'script' : 'detail' };
+      current.fence = {
+        char: marker.charAt(0),
+        length: marker.length,
+        indent: (open[1] ?? '').length,
+        target: first ? 'script' : 'detail',
+      };
       if (first) current.script = [];
       else current.detail.push(line.trim());
       continue;
@@ -123,7 +146,12 @@ const CHECK_SUFFIX = /\s*\(?\bcheck\s*:\s*([A-Za-z][\w-]*)\)?\s*$/i;
 const isFenceClose = (line: string, fence: Fence): boolean => {
   const m = FENCE_OPEN.exec(line);
   const marker = m?.[2];
-  return marker !== undefined && marker.charAt(0) === fence.char && marker.length >= fence.length && line.trim() === marker;
+  return (
+    marker !== undefined &&
+    marker.charAt(0) === fence.char &&
+    marker.length >= fence.length &&
+    line.trim() === marker
+  );
 };
 
 const dedent = (line: string, indent: number): string => {
@@ -155,7 +183,23 @@ const titleOf = (text: string) => {
     else unknownCheck = suffix[1];
   }
   if (title === '') title = kind === 'script' ? 'Run the script' : 'Do this by hand';
-  return { kind, title, check, unknownCheck };
+  const cut = shortTitle(title);
+  return { kind, title: cut.title, check, unknownCheck, overflow: cut.overflow };
+};
+
+/** Longest step title kept as written, in characters; a longer one is cut and its rest moves into the detail. */
+export const ROLLOUT_TITLE_MAX = 120;
+
+/** A title over the limit is cut at its first sentence (or, with none that short, at a word) and the rest becomes detail. */
+const shortTitle = (title: string): { title: string; overflow: string | null } => {
+  if (title.length <= ROLLOUT_TITLE_MAX) return { title, overflow: null };
+  const sentence = /^(.+?)[.!?]\s+(?=\S)/.exec(title);
+  if (sentence?.[1] !== undefined && sentence[1].length <= ROLLOUT_TITLE_MAX) {
+    return { title: sentence[1], overflow: title.slice(sentence[0].length).trim() };
+  }
+  const space = title.lastIndexOf(' ', ROLLOUT_TITLE_MAX - 1);
+  const end = space > 0 ? space : ROLLOUT_TITLE_MAX - 1;
+  return { title: `${title.slice(0, end).trimEnd()}…`, overflow: title };
 };
 
 /** The lines of the Rollout section: after its heading, up to the next heading of the same or a higher level. */
@@ -167,7 +211,13 @@ const sectionOf = (record: string): string[] => {
   for (const line of lines) {
     const open = FENCE_OPEN.exec(line);
     if (fence !== null) {
-      if (open?.[2] !== undefined && open[2].charAt(0) === fence.char && open[2].length >= fence.length && line.trim() === open[2]) fence = null;
+      if (
+        open?.[2] !== undefined &&
+        open[2].charAt(0) === fence.char &&
+        open[2].length >= fence.length &&
+        line.trim() === open[2]
+      )
+        fence = null;
     } else if (open?.[2] !== undefined) {
       fence = { char: open[2].charAt(0), length: open[2].length };
     } else {
@@ -224,9 +274,11 @@ export const ROLLOUT_TEXT_MAX = 300;
 export const ROLLOUT_SYSTEM = `You decide what a person must do after a change is merged and deployed, beyond the deploy itself.
 The server image deploys on merge; drizzle migrations run when the server starts; GitHub workflows take effect with the merge.
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
+A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
+Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: '**Why:** <one sentence>', '**Do this:** <where, then the exact command in a fenced block or the exact clicks>', '**Check it worked:** <what you should see>'.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
-{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <title>' item per step, detail indented under it, a script's command in a fenced block, '(check: <capability>)' at the end of a title only when told that capability exists>"}
+{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Do this / Check it worked bullets indented under it, a script's command in a fenced block, '(check: <capability>)' at the end of a title only when told that capability exists>"}
 {"decision":"ask","question":"<one specific question a person can answer, e.g. Does SLOP_X need setting in prod? It has no default>"}
 Prefer "none" when the diff only adds settings with defaults, or only changes code the deploy ships. Use "ask" only when the diff doesn't let you tell. Never invent steps.`;
 
@@ -243,7 +295,8 @@ export interface RolloutInputs {
 export const ROLLOUT_RECORD_MAX = 6_000;
 export const ROLLOUT_PATCH_MAX = 6_000;
 
-const cutText = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}\n… (cut)` : text);
+const cutText = (text: string, max: number): string =>
+  text.length > max ? `${text.slice(0, max)}\n… (cut)` : text;
 
 export const rolloutPrompt = (inputs: RolloutInputs): string =>
   [
@@ -252,8 +305,15 @@ export const rolloutPrompt = (inputs: RolloutInputs): string =>
     ...inputs.files.slice(0, 80).map((f) => `- ${f}`),
     '',
     'Diffs of the files that triggered this check:',
-    ...Object.entries(inputs.patches).flatMap(([file, patch]) => [`### ${file}`, '```diff', cutText(patch, ROLLOUT_PATCH_MAX), '```']),
-    Object.keys(inputs.patches).length === 0 ? '(the code host gave no diff; judge from the file names and the record)' : '',
+    ...Object.entries(inputs.patches).flatMap(([file, patch]) => [
+      `### ${file}`,
+      '```diff',
+      cutText(patch, ROLLOUT_PATCH_MAX),
+      '```',
+    ]),
+    Object.keys(inputs.patches).length === 0
+      ? '(the code host gave no diff; judge from the file names and the record)'
+      : '',
     '',
     'Implementation record:',
     cutText(inputs.record, ROLLOUT_RECORD_MAX),
@@ -268,21 +328,35 @@ const oneLine = (value: unknown): string | null => {
 };
 
 /** The model's answer, checked: an object with a known decision and its text; `steps` needs at least one parsed step. */
-export const checkRolloutAnswer = (answer: unknown): { readonly ok: true; readonly value: RolloutAnswer } | { readonly ok: false; readonly error: string } => {
-  if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) return { ok: false, error: 'not an object' };
+export const checkRolloutAnswer = (
+  answer: unknown,
+):
+  | { readonly ok: true; readonly value: RolloutAnswer }
+  | { readonly ok: false; readonly error: string } => {
+  if (typeof answer !== 'object' || answer === null || Array.isArray(answer))
+    return { ok: false, error: 'not an object' };
   const record = answer as Record<string, unknown>;
   if (record.decision === 'none') {
     const reason = oneLine(record.reason);
-    return reason === null ? { ok: false, error: 'none without a reason' } : { ok: true, value: { decision: 'none', reason: reason.replace(/^no rollout needed:?\s*/i, '') } };
+    return reason === null
+      ? { ok: false, error: 'none without a reason' }
+      : {
+          ok: true,
+          value: { decision: 'none', reason: reason.replace(/^no rollout needed:?\s*/i, '') },
+        };
   }
   if (record.decision === 'ask') {
     const question = oneLine(record.question);
-    return question === null ? { ok: false, error: 'ask without a question' } : { ok: true, value: { decision: 'ask', question } };
+    return question === null
+      ? { ok: false, error: 'ask without a question' }
+      : { ok: true, value: { decision: 'ask', question } };
   }
   if (record.decision === 'steps') {
     const rollout = typeof record.rollout === 'string' ? record.rollout : '';
     const steps = parseRollout(`## Rollout\n${rollout}`);
-    return steps.length === 0 ? { ok: false, error: 'steps without a step' } : { ok: true, value: { decision: 'steps', steps } };
+    return steps.length === 0
+      ? { ok: false, error: 'steps without a step' }
+      : { ok: true, value: { decision: 'steps', steps } };
   }
   return { ok: false, error: 'unknown decision' };
 };
