@@ -3,7 +3,7 @@
 # account-specific lives in the repo. A person runs this: it changes paid infrastructure and IAM (see README.md).
 #
 #   infra/deploy/host-deploy.sh [--stage prod] [--add-project <name>]... [--remove-project <name>]... [--yes]
-#                               [--data-volume <vol-id>] [--hand-over-volume]
+#                               [--data-volume <vol-id>] [--hand-over-volume] [--allow-replace]
 #
 # Read-only lookups (needs an AWS session for the account): the deploy connection, the CloudFront domain and certificate,
 # the alert email, the CodeBuild projects the instance role may start (--add-project / --remove-project change that
@@ -16,12 +16,19 @@
 # attached", so the script stops and prints the handover (infra/deploy/HOST.md). --hand-over-volume runs it: after the
 # diff and your confirmation it snapshots the volume, stops the app and Postgres, unmounts and detaches the volume,
 # deploys, then lets the stack attach it, mounts it and starts everything again; a failed deploy re-attaches it at /dev/sdf.
+#
+# The script creates the CloudFormation change set itself (cdk deploy --no-execute), reads it, and executes that same
+# change set after your confirmation. It refuses a change set that replaces the instance or adds a data volume in prod;
+# --allow-replace overrides that for the "Changing the AMI" procedure in HOST.md (detach the volume first). It asks again
+# when the change stops and starts the instance. After a deploy that replaced or restarted the instance it starts the
+# deploy project, waits for it and checks <PublicUrl>/auth/config, so slop is back without a manual step.
 set -euo pipefail
 
 STAGE=prod
 YES=0
 DATA_VOLUME=""
 HAND_OVER=0
+ALLOW_REPLACE=0
 ADD_PROJECTS=""
 REMOVE_PROJECTS=""
 while [ $# -gt 0 ]; do
@@ -31,8 +38,9 @@ while [ $# -gt 0 ]; do
     --remove-project) REMOVE_PROJECTS="${REMOVE_PROJECTS:+$REMOVE_PROJECTS,}${2:?--remove-project needs a name}"; shift 2 ;;
     --data-volume) DATA_VOLUME="${2:?--data-volume needs a volume id}"; shift 2 ;;
     --hand-over-volume) HAND_OVER=1; shift ;;
+    --allow-replace) ALLOW_REPLACE=1; shift ;;
     --yes) YES=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -175,7 +183,34 @@ fi
 
 "${CDK[@]}" diff "$STACK" "${ARGS[@]}" || true
 echo
-echo "Check the diff: the Host instance must not be replaced and no data volume added (infra/deploy/HOST.md)."
+
+# The change set is what gets executed: read it here rather than trusting a person to read the diff.
+CHANGE_SET="host-deploy-$(date -u +%Y%m%dT%H%M%SZ)"
+"${CDK[@]}" deploy "$STACK" "${ARGS[@]}" --no-execute --change-set-name "$CHANGE_SET" --require-approval never
+CHANGES="$(aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$CHANGE_SET" \
+  --query 'Changes[].ResourceChange.[Action,LogicalResourceId,ResourceType,Replacement,join(`,`,not_null(Details[].Target.Name,`[]`))]' --output text 2>/dev/null || true)"
+CHANGES="$(set_or_empty "$CHANGES")"
+if [ -z "$CHANGES" ]; then
+  echo "No changes to deploy."
+  exit 0
+fi
+REFUSALS="$(change_set_refusals "$STAGE" <<<"$CHANGES")"
+if [ -n "$REFUSALS" ] && [ "$ALLOW_REPLACE" != 1 ]; then
+  {
+    echo "ERROR: change set $CHANGE_SET of $STAGE must not be executed:"
+    sed 's/^/  - /' <<<"$REFUSALS"
+    echo "A replaced instance comes up with no containers and, if the volume is still attached to the old one, no data."
+    echo "Nothing was deployed. If this is the deliberate replacement, follow \"Changing the AMI\" in infra/deploy/HOST.md"
+    echo "(snapshot, stop, detach the data volume first) and run this script again with --allow-replace."
+  } >&2
+  exit 4
+fi
+if [ -n "$REFUSALS" ]; then
+  echo "WARNING: --allow-replace: executing a change set that" >&2
+  sed 's/^/  - /' <<<"$REFUSALS" >&2
+  echo "The data volume must be detached (infra/deploy/HOST.md, \"Changing the AMI\")." >&2
+fi
+RESTARTS="$(change_set_restarts <<<"$CHANGES")"
 
 if [ "$YES" != 1 ]; then
   if [ ! -t 0 ]; then
@@ -184,10 +219,66 @@ if [ "$YES" != 1 ]; then
   fi
   read -rp "Deploy $STACK? [y/N] " OK
   [ "$OK" = y ] || { echo "Not deployed."; exit 1; }
+  if [ -n "$RESTARTS" ] && [ -z "$REFUSALS" ]; then
+    echo "WARNING: $RESTARTS. slop is down until it is redeployed; this script does that afterwards (about 10 minutes)."
+    read -rp "Stop and start the instance? [y/N] " OK
+    [ "$OK" = y ] || { echo "Not deployed."; exit 1; }
+  fi
 fi
 
+BEFORE_ID=""
+BEFORE_LAUNCH=""
+if [ -n "$INSTANCE" ]; then
+  BEFORE_ID="$INSTANCE"
+  BEFORE_LAUNCH="$(set_or_empty "$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].LaunchTime' --output text)")"
+fi
+
+# execute_change_set: runs the reviewed change set (no re-planning) and waits for the stack.
+execute_change_set() {
+  aws cloudformation execute-change-set --stack-name "$STACK" --change-set-name "$CHANGE_SET"
+  aws cloudformation wait stack-update-complete --stack-name "$STACK"
+}
+
+# redeploy_if_restarted: after the deploy, if the instance was replaced or restarted, starts the deploy project (the app
+# is not running on it), waits for the build and checks the public URL.
+redeploy_if_restarted() {
+  local id launch build status waited=0 url group stream
+  id="$(set_or_empty "$(out InstanceId)")"
+  [ -n "$id" ] || return 0
+  launch="$(set_or_empty "$(aws ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].LaunchTime' --output text)")"
+  if ! instance_restarted "$BEFORE_ID" "$BEFORE_LAUNCH" "$id" "$launch"; then return 0; fi
+  echo "The instance was replaced or restarted ($BEFORE_ID $BEFORE_LAUNCH -> $id $launch): redeploying slop with $PROJECT"
+  INSTANCE="$id"
+  aws ec2 wait instance-status-ok --instance-ids "$id"
+  build="$(aws codebuild start-build --project-name "$PROJECT" --query build.id --output text)"
+  echo "Started build $build; waiting"
+  while :; do
+    status="$(aws codebuild batch-get-builds --ids "$build" --query 'builds[0].buildStatus' --output text)"
+    [ "$status" != IN_PROGRESS ] && break
+    [ "$waited" -lt "${HOST_DEPLOY_WAIT_SECONDS:-2400}" ] || { echo "ERROR: build $build still running; gave up waiting" >&2; return 1; }
+    sleep "${HOST_DEPLOY_POLL_SECONDS:-15}"
+    waited=$((waited + ${HOST_DEPLOY_POLL_SECONDS:-15}))
+  done
+  echo "Build $build: $status"
+  if [ "$status" != SUCCEEDED ]; then
+    group="$(aws codebuild batch-get-builds --ids "$build" --query 'builds[0].logs.groupName' --output text || true)"
+    stream="$(aws codebuild batch-get-builds --ids "$build" --query 'builds[0].logs.streamName' --output text || true)"
+    echo "Last log lines of the build:" >&2
+    aws logs get-log-events --log-group-name "$group" --log-stream-name "$stream" --limit 30 --query 'events[].message' --output text >&2 || true
+    return 1
+  fi
+  url="$(set_or_empty "$(out PublicUrl)")"
+  for _ in $(seq 1 30); do
+    if curl -fsS -m 10 "${url%/}/auth/config" >/dev/null; then echo "$url answers"; return 0; fi
+    sleep "${HOST_DEPLOY_POLL_SECONDS:-15}"
+  done
+  echo "ERROR: ${url%/}/auth/config does not answer after the redeploy" >&2
+  return 1
+}
+
 if [ "$HAND_OVER" != 1 ]; then
-  "${CDK[@]}" deploy "$STACK" "${ARGS[@]}" --require-approval never
+  execute_change_set
+  redeploy_if_restarted
   exit 0
 fi
 
@@ -227,10 +318,11 @@ on_instance "handover: stop and unmount" 600 \
 aws ec2 detach-volume --volume-id "$VOLUME" >/dev/null
 wait_volume available
 
-"${CDK[@]}" deploy "$STACK" "${ARGS[@]}" --require-approval never
+execute_change_set
 
 wait_volume in-use
 on_instance "handover: mount and start" 600 "mount -a" "$START_APP" "$RELEASE_LOCK" "$CHECK_APP"
 HANDOVER_STARTED=0
 trap - ERR EXIT
+redeploy_if_restarted
 echo "Handover complete: $VOLUME is attached by $STACK. Check the next weekly snapshot, and see HOST.md."
