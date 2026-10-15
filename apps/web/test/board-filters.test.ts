@@ -79,6 +79,12 @@ describe('board filters', () => {
     expect(parse('fix=0')).toEqual(defaultFilters());
   });
 
+  it('ignores a legacy category value in the URL: there is no category filter', () => {
+    expect(parse('category=feature')).toEqual(defaultFilters());
+    expect(parse('category=task')).toEqual(defaultFilters());
+    expect(parse('category=feature&fix=1')).toEqual({ ...defaultFilters(), fix: '1' });
+  });
+
   it('matches IDs by case-insensitive substring', () => {
     expect(matchesFilters(view({ id: 's15f4' }), parse('id=F4'))).toBe(true);
     expect(matchesFilters(view({ id: 's15f40' }), parse('id=f4'))).toBe(true);

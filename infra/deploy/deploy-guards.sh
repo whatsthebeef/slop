@@ -54,3 +54,20 @@ has_enough_disk() {
 disk_full_message() {
   echo "instance disk full: $(( $1 / 1024 )) GB free, need $(( ($2 + 1023) / 1024 )) GB; prune images or grow the root volume"
 }
+
+# merge_projects <existing> <add> <remove>: comma-separated CodeBuild project names in, one comma-separated list out:
+# the existing names in order, then the added ones, without duplicates and without the removed ones. An added name that
+# is not a valid CodeBuild project name ([A-Za-z0-9][A-Za-z0-9_-]{1,254}) fails, saying which, and prints nothing.
+merge_projects() {
+  local name out=() removed=",${3:-},"
+  local IFS=,
+  for name in ${2:-}; do
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{1,254}$ ]] || { echo "ERROR: not a CodeBuild project name: $name" >&2; return 1; }
+  done
+  for name in ${1:-} ${2:-}; do
+    [ -n "$name" ] || continue
+    case "$removed" in *",$name,"*) continue ;; esac
+    case ",${out[*]:-}," in *",$name,"*) ;; *) out+=("$name") ;; esac
+  done
+  echo "${out[*]:-}"
+}

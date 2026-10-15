@@ -76,5 +76,6 @@ describe('KindMarker', () => {
     expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'bug', type: 'sub' } }))).toContain('aria-label="fix"');
     expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'bug', type: 'sub', fix: false } }))).toBe('');
     expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'feature', type: 'same' } }))).toBe('');
+    expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'task', type: 'same' } }))).toBe('');
   });
 });

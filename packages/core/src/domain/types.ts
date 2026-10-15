@@ -45,7 +45,14 @@ export const modeOf = (g: { readonly category: Category; readonly type: SlopType
 
 /** The fix flag of a glob without one stored (a record from before it existed): bugs fix something. */
 export const defaultFix = (category: Category): boolean => category === 'bug';
-/** The work kind of a glob without one stored: features are R&D, everything else is maintenance. */
+/**
+ * The category a new or changed glob is stored under: `feature` is still accepted as input (and read on old globs) but nobody
+ * sees or chooses it, so it is stored as `task`. The R&D work kind it implies must be read from the asked category first.
+ */
+export const storedCategory = <C extends Category>(category: C): Exclude<C, 'feature'> | 'task' =>
+  (category === 'feature' ? 'task' : category) as Exclude<C, 'feature'> | 'task';
+
+/** The work kind of a glob without one stored: features (old globs, or an asked `feature`) are R&D, everything else is maintenance. */
 export const defaultWorkKind = (category: Category): WorkKind => (category === 'feature' ? 'rnd' : 'maintenance');
 
 /** The fix flag, reading a legacy record by its category. Human work is never a fix. */

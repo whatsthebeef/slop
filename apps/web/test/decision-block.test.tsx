@@ -172,7 +172,7 @@ describe('the Decide block', () => {
 });
 
 describe('the proposal block of a learning', () => {
-  it('reads why, then the change named by its target, then the recommendation and where it came from, under the action row', async () => {
+  it('reads why, then the change named by its target, then the recommendation and where it came from, above the action row', async () => {
     vi.spyOn(api, 'plan').mockResolvedValue(planOf('Tests next to the code keep them found and kept up to date.'));
     vi.spyOn(api, 'globDiff').mockResolvedValue(
       diffOf({
@@ -190,7 +190,7 @@ describe('the proposal block of a learning', () => {
     expect(await within(why).findByText(/keep them found/)).toBeTruthy();
     expect(heading.textContent).toBe('Addition to architecture › apps/web');
     const follows = (a: Element, b: Element) => expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    follows(row, why);
+    follows(why, row);
     follows(why, heading);
     follows(heading, recommendation);
     follows(recommendation, source);

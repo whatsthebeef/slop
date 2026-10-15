@@ -331,7 +331,7 @@ export interface ReportRow {
   readonly maintenanceMs: number;
 }
 
-/** Each developer's RnD (features) and maintenance (tasks, bugs) hours in `period`, by local date; zero-hour developers left out. */
+/** Each developer's RnD (work kind R&D: new capability) and maintenance (repairs, upkeep) hours in `period`, by local date; zero-hour developers left out. */
 export const reportRows = (segments: readonly Segment[], period: Period, zone: string): ReportRow[] => {
   const bounds = periodBounds(period, zone);
   const prefix = `${period.key}-`;

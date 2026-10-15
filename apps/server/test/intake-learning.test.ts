@@ -72,7 +72,7 @@ describe('Learned task categorisation in Postgres', () => {
       version: 1,
       request: 'export the board as csv',
       source: 'mcp',
-      decisions: { type: 'same', category: 'feature', categoryConfidence: 'medium', reason: 'New capability', model: 'haiku', promptVersion: 2 },
+      decisions: { type: 'same', category: 'task', categoryConfidence: 'medium', reason: 'New capability', model: 'haiku', promptVersion: 2 },
       features: { doneWhenLines: 1 },
       backfilled: false,
     });
@@ -93,7 +93,7 @@ describe('Learned task categorisation in Postgres', () => {
     expect(await learning.run(boardId, now)).toMatchObject({ recorded: 2, refreshed: 0 });
     const first = await outcomes();
     expect(first.find((o) => o.globId === glob.id)).toMatchObject({ final: false, corrections: { category: null } });
-    expect(first.find((o) => o.globId === changed.id)).toMatchObject({ corrections: { category: { from: 'feature', to: 'bug', by: DEV } } });
+    expect(first.find((o) => o.globId === changed.id)).toMatchObject({ corrections: { category: { from: 'task', to: 'bug', by: DEV } } });
     expect(await learning.run(boardId, at(5 * DAY))).toMatchObject({ recorded: 0, refreshed: 0 });
     now = at(16 * DAY);
     expect(await learning.run(boardId, now)).toMatchObject({ recorded: 0, refreshed: 2 });
@@ -108,7 +108,7 @@ describe('Learned task categorisation in Postgres', () => {
     expect(near.map((n) => n.distance)).toEqual([...near.map((n) => n.distance)].sort((a, b) => a - b));
     const examples = await store.transaction((tx) => nearestExamples(tx, boardId, vector));
     // The guest-login glob a person recategorised comes first although the other one is nearer.
-    expect(examples[0]).toMatchObject({ corrected: true, category: 'bug', note: 'category changed feature -> bug' });
+    expect(examples[0]).toMatchObject({ corrected: true, category: 'bug', note: 'category changed task -> bug' });
     expect(examples.slice(1).every((e) => !e.corrected)).toBe(true);
   });
 
@@ -118,7 +118,7 @@ describe('Learned task categorisation in Postgres', () => {
     const run = await learning.run(boardId, now);
     expect(run).toMatchObject({ backfilled: 1, embedded: 1 });
     const stored = (await store.transaction((tx) => tx.listLatestIntakeSnapshots(boardId))).find((s) => s.globId === glob.id);
-    expect(stored).toMatchObject({ backfilled: true, source: 'backfill', decisions: { type: 'same', category: 'feature', promptVersion: null } });
+    expect(stored).toMatchObject({ backfilled: true, source: 'backfill', decisions: { type: 'same', category: 'task', promptVersion: null } });
     expect(await learning.run(boardId, now)).toMatchObject({ backfilled: 0, embedded: 0 });
   });
 
