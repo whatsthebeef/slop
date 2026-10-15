@@ -75,10 +75,25 @@ export const statusClick = (status: StatusLine): ChipClick => {
   return { kind: 'section', target: cardTargets.actions() };
 };
 
+/** A tooltip line as a sentence: it ends in a full stop unless it already ends in `.`, `!`, `?`, `…` or `:`; a blank line is dropped. */
+export const sentence = (line: string): string => {
+  const text = line.trimEnd();
+  if (text === '') return '';
+  return /[.!?…:]$/.test(text) ? text : `${text}.`;
+};
+
+/** Tooltip lines joined by newlines, each a sentence, so one line never runs into the next. */
+export const tipLines = (lines: readonly string[]): string =>
+  lines
+    .flatMap((l) => l.split('\n'))
+    .map(sentence)
+    .filter((l) => l !== '')
+    .join('\n');
+
 /** The line a chip's tooltip ends with, saying what the click does. */
 export const clickTip = (click: ChipClick, confirming = false): string => {
-  if (click.kind === 'act') return confirming ? 'Click again to merge' : click.confirm ? 'Asks you to confirm' : 'Runs it';
-  return click.kind === 'link' ? 'Opens it in a new tab' : 'Opens the glob';
+  if (click.kind === 'act') return confirming ? 'Click again to merge.' : click.confirm ? 'Asks you to confirm.' : 'Runs it.';
+  return click.kind === 'link' ? 'Opens it in a new tab.' : 'Opens the glob.';
 };
 
 /** What a click on the Your turn chip does now: ask for the second click, or run the click. */

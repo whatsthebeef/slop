@@ -226,6 +226,23 @@ describe('hasBlocker', () => {
   });
 });
 
+describe('cornerStatus tooltip lines are sentences', () => {
+  const cases: [string, () => GlobView][] = [
+    ['machine running', () => view({ status: 'in_progress', ...live('active') })],
+    ['open conflict', openConflict],
+    ['waiting on prerequisites', () => ahead(['s1t1', 's1t2'])],
+    ['escalated', escalated],
+    ['your turn', () => prOpen({ allowedActions: ['merge'] })],
+    ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' } })],
+    ['merging', () => prOpen({ mergeMode: 'when_green' })],
+  ];
+  it.each(cases)('%s', (_name, make) => {
+    const tip = cornerStatus(make(), NOW)?.tip ?? '';
+    expect(tip).not.toBe('');
+    for (const line of tip.split('\n')) expect(line).toMatch(/[.!?…:]$/);
+  });
+});
+
 describe('cornerStatus text stays a word or two', () => {
   const situations: readonly [string, () => GlobView, string][] = [
     ['machine running', () => view({ status: 'in_progress', ...live('active') }), 'implementing'],

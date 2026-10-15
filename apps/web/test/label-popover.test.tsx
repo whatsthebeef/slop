@@ -77,6 +77,22 @@ describe('card label popover width', () => {
   });
 });
 
+describe('label popover reserved width without items', () => {
+  it('reserves only what each label can show: nothing wider than "Approved" when it has no items', async () => {
+    const item = { id: 'a', text: 'a', done: true, addedBy: 'x', doneBy: 'y' };
+    const g = {
+      ...glob(),
+      labels: { CR: 'approved', FR: 'approved', QA: 'approved' },
+      checklists: { CR: [], FR: [], QA: [item] },
+    } as unknown as GlobView;
+    render(<LabelPopover glob={g} onReview={vi.fn()} onOpenReview={vi.fn()} />);
+    await userEvent.setup().click(screen.getByLabelText('Sign-off labels'));
+    const reserved = [...document.querySelectorAll('[data-reserved-state]')].map((e) => e.textContent);
+    expect(reserved).toEqual(['Approved', 'Approved', 'Resubmitted · 1 of 1 done', 'Items added · 1 of 1 done', 'Approved']);
+    expect(reserved.join()).not.toContain('0 of 0');
+  });
+});
+
 describe('outstanding label chips', () => {
   const item = (id: string, done: boolean) => ({
     id,

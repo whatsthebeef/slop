@@ -93,7 +93,7 @@ const stateText = (state: LabelState, items: readonly ChecklistItem[]): string =
     : `Resubmitted · ${done} of ${items.length} done`;
 };
 
-/** Every state a label's text can take in the popover, so its column can reserve room for the widest. */
+/** Every state a label's text can take in the popover, so its column can reserve room for the widest. Without items only "Approved" has text, so nothing wider is reserved. */
 const RESERVED_STATES: readonly LabelState[] = ['required', 'added', 'approved'];
 
 const CHIP_TIPS: Record<LabelState, string> = {
@@ -200,7 +200,7 @@ export const LabelPopover = ({
                     <span className="font-semibold">{name}</span>
                     {/* Every state's text shares one cell, so the column is as wide as the widest and approving doesn't resize the popover. */}
                     <span className="grid text-xs text-muted-foreground">
-                      {RESERVED_STATES.filter((s) => s !== 'required' || items.length > 0).map(
+                      {RESERVED_STATES.filter((s) => s === 'approved' || items.length > 0).map(
                         (s) => (
                           <span
                             key={s}
