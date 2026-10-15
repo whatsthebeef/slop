@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
-const agent = (name: string): Promise<string> => readFile(new URL(`../../../catalog/agents/agents/${name}.md`, import.meta.url), 'utf8');
+const agent = (name: string): Promise<string> =>
+  readFile(new URL(`../../../catalog/agents/agents/${name}.md`, import.meta.url), 'utf8');
 
 describe('catalog agents: test plan', () => {
   it('has the investigator read or draft the test plan and push v1', async () => {
@@ -35,6 +36,8 @@ describe('catalog agents: test plan', () => {
     expect(text).toContain('### 11. Check the test plan');
     expect(text).toContain('Every `new` or `adjusted` row has a matching spec change in the diff');
     expect(text).toContain('exists at head');
+    expect(text).toContain('`specs: []`');
+    expect(text).toContain('must give a reason that fits the diff');
     expect(text).toMatch(/missing from the diff[\s\S]*`IN-SCOPE`/);
   });
 
@@ -51,5 +54,14 @@ describe('catalog agents: test plan', () => {
     expect(text).toContain('`## Test plan`');
     expect(text).toContain('for all four agents');
     expect(text).toContain('Your final report lists the test plan');
+  });
+
+  it('has the orchestrator draft a test plan itself when it skips the investigator', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('A test plan is left on every run, skipped investigator or not');
+    expect(text).toContain('draft one yourself before Phase 3');
+    expect(text).toContain('save_test_plan(id, content, version: 0, runId)');
+    expect(text).toContain('`specs: []`');
+    expect(text).toContain('The change_reviewer checks that it is justified');
   });
 });

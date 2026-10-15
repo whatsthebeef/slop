@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { parseTestPlan } from '@slop/core';
+import type { List } from '@slop/core';
 import type { ReactNode } from 'react';
 import { isValidElement, useMemo } from 'react';
 import type { Components } from 'react-markdown';
@@ -173,43 +174,60 @@ export const TestPlanPreview = ({
 
 /** Before the first test plan: write it, or have the investigator draft it where the glob allows. */
 export const TestPlanEmpty = ({
+  list,
   onWrite,
   canInvestigate,
   busy,
   onInvestigate,
 }: {
+  list: List;
   onWrite: () => void;
   canInvestigate: boolean;
   busy: boolean;
   onInvestigate: () => void;
-}): ReactNode => (
-  <div
-    className="grid justify-items-start gap-2 rounded bg-muted p-3 text-sm"
-    data-testid="test-plan-empty"
-  >
-    <p className="flex items-center gap-1.5 font-semibold">
-      <ClipboardCheck aria-hidden className="h-4 w-4" />
-      No test plan yet
-    </p>
-    <p className="text-xs text-muted-foreground">
-      The test plan lists the end-to-end specs this glob adds, adjusts or relies on, so they run
-      once it is deployed.
-    </p>
-    <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" onClick={onWrite}>
-        Write one
-      </Button>
-      {canInvestigate ? (
-        <Button variant="outline" size="sm" disabled={busy} onClick={onInvestigate}>
-          <MachineIcon decorative />
-          Let the investigator draft it
-        </Button>
-      ) : (
-        <span className="text-xs text-muted-foreground" data-testid="test-plan-investigate-hint">
-          The investigator drafts it when it investigates the glob (Planning, before it starts), or
-          ask your agent to save one with save_test_plan.
-        </span>
-      )}
+}): ReactNode => {
+  const merged = list === 'reviewing' || list === 'signed_off';
+  return (
+    <div
+      className="grid justify-items-start gap-2 rounded bg-muted p-3 text-sm"
+      data-testid="test-plan-empty"
+    >
+      <p className="flex items-center gap-1.5 font-semibold">
+        <ClipboardCheck aria-hidden className="h-4 w-4" />
+        {list === 'planning'
+          ? 'No test plan yet'
+          : merged
+            ? 'No test plan was saved'
+            : 'No test plan was saved for this run'}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        The test plan lists the end-to-end specs this glob adds, adjusts or relies on, so they run
+        once it is deployed.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {merged ? (
+          <span className="text-xs text-muted-foreground" data-testid="test-plan-merged-hint">
+            The glob is merged, so there is nothing left to run. A test plan is saved before the
+            work is built.
+          </span>
+        ) : (
+          <Button size="sm" onClick={onWrite}>
+            Write one
+          </Button>
+        )}
+        {merged ? null : canInvestigate ? (
+          <Button variant="outline" size="sm" disabled={busy} onClick={onInvestigate}>
+            <MachineIcon decorative />
+            Let the investigator draft it
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground" data-testid="test-plan-investigate-hint">
+            {list === 'planning'
+              ? 'The investigator drafts it when it investigates the glob (Planning, before it starts), or ask your agent to save one with save_test_plan.'
+              : 'Ask your agent to save one with save_test_plan.'}
+          </span>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};

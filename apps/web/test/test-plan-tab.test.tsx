@@ -216,6 +216,28 @@ describe('test plan: empty state', () => {
     expect(screen.queryByRole('button', { name: /Let the investigator draft it/ })).toBeNull();
   });
 
+  it('stops promising a Planning draft once the glob has started', async () => {
+    install(newServer());
+    const user = userEvent.setup();
+    renderPlan(view({ list: 'doing', allowedActions: ['start'] }));
+    await openTestPlan(user);
+    expect(await screen.findByText('No test plan was saved for this run')).toBeTruthy();
+    expect((await screen.findByTestId('test-plan-investigate-hint')).textContent).not.toContain(
+      'Planning',
+    );
+    expect(screen.getByRole('button', { name: 'Write one' })).toBeTruthy();
+  });
+
+  it('after the merge, reads as read-only with no Write one', async () => {
+    install(newServer());
+    const user = userEvent.setup();
+    renderPlan(view({ list: 'reviewing', allowedActions: [] }));
+    await openTestPlan(user);
+    expect(await screen.findByText('No test plan was saved', { exact: true })).toBeTruthy();
+    expect(screen.getByTestId('test-plan-merged-hint')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Write one' })).toBeNull();
+  });
+
   it('writes one from the template and saves it as the first version', async () => {
     const server = newServer();
     install(server);
@@ -300,7 +322,11 @@ describe('test plan: saved', () => {
     expect(server.puts[0]?.version).toBe(1);
     expect(server.puts[0]?.content.endsWith(' more')).toBe(true);
     // Back to the preview, now at version 2.
-    await waitFor(() => expect(within(screen.getByRole('tabpanel')).getByTestId('plan-version').textContent).toContain('v2'));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('tabpanel')).getByTestId('plan-version').textContent,
+      ).toContain('v2'),
+    );
   });
 
   it('keeps an unsaved draft when switching tabs and back', async () => {
@@ -313,7 +339,9 @@ describe('test plan: saved', () => {
     await user.type(await screen.findByRole<HTMLTextAreaElement>('textbox'), ' kept');
     await user.click(screen.getByRole('tab', { name: /plan\.md/ }));
     await openTestPlan(user);
-    expect((await screen.findByRole<HTMLTextAreaElement>('textbox')).value.endsWith(' kept')).toBe(true);
+    expect((await screen.findByRole<HTMLTextAreaElement>('textbox')).value.endsWith(' kept')).toBe(
+      true,
+    );
   });
 
   it('switches the preview between versions from the dropdown', async () => {
