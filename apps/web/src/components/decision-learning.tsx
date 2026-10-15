@@ -351,8 +351,8 @@ export const KeepAsLearning = ({
   learning: DecisionLearning | null;
   busy: boolean;
   onClose: () => void;
-  /** The learning was kept: the controls stay pending until the glob moves. */
-  onSent?: () => void;
+  /** The request is on its way (true: the controls stay pending until the glob moves) or failed (false). */
+  onSent?: (sending: boolean) => void;
 }) => {
   const client = useQueryClient();
   const toast = useToast();
@@ -361,13 +361,16 @@ export const KeepAsLearning = ({
   const mode = watchMode(learning, attributes);
   const keep = useMutation({
     mutationFn: () => api.keepAsLearning(glob.id, glob.version, statement, watch === '' ? undefined : watch),
+    onMutate: () => onSent?.(true),
     onSuccess: () => {
       toast(`${glob.id} kept as a learning`);
-      onSent?.();
       onClose();
       refreshGlob(client, glob);
     },
-    onError: (e) => reportError(client, glob, toast, e),
+    onError: (e) => {
+      onSent?.(false);
+      reportError(client, glob, toast, e);
+    },
   });
   return (
     <form

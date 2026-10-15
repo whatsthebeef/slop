@@ -680,4 +680,18 @@ describe('a pressed outcome stays pending until the glob moves (s15b139)', () =>
     expect(onDecide).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
   });
+
+  it('holds Keep as learning pending while it is sent, and frees the controls when it fails', async () => {
+    const user = userEvent.setup();
+    let fail: (e: Error) => void = () => undefined;
+    vi.spyOn(api, 'keepAsLearning').mockImplementation(() => new Promise((_, reject) => (fail = reject)));
+    renderGlob(decision());
+    const menu = await openMenu(user);
+    await user.click(within(menu).getByText('Approve without changing a document'));
+    await user.click(await screen.findByTestId('keep-submit'));
+    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true));
+    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
+    fail(new Error('nope'));
+    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
+  });
 });

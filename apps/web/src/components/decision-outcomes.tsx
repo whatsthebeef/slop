@@ -74,7 +74,7 @@ export interface DecideFlow {
   /** What the main button says while an outcome is in flight or waiting for the glob to move ("Approving…"); null when none is. */
   readonly working: string | null;
   /** Marks an outcome sent outside `submit` (Keep as learning) as pending until the glob moves. */
-  readonly sent: (outcome: Choice | 'keep') => void;
+  readonly sent: (outcome: Choice | 'keep', sending: boolean) => void;
   readonly canDecide: boolean;
   readonly canSuggest: boolean;
   readonly admin: boolean;
@@ -197,7 +197,8 @@ export const useDecideFlow = ({
         sending.current = false;
       });
   };
-  const sent = (outcome: Choice | 'keep') => setPending({ at: { action: 'decide', version: glob.version, at: Date.now() }, outcome });
+  const sent = (outcome: Choice | 'keep', sending: boolean) =>
+    setPending(sending ? { at: { action: 'decide', version: glob.version, at: Date.now() }, outcome } : null);
   const asking = suggest.busy || suggest.state === 'working';
   const run = (key: MenuKey) => {
     if (sending.current || working !== null) return;
@@ -533,7 +534,7 @@ export const OutcomeForms = ({ flow }: { flow: DecideFlow }) => {
   return (
     <div ref={flow.formRef} data-testid='outcome-forms'>
       {mode === 'keep' ? (
-        <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={() => flow.sent('keep')} />
+        <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={(sending) => flow.sent('keep', sending)} />
       ) : (
         <OutcomeForm key={`${mode}-${flow.applied?.outcome === mode ? 'applied' : 'plain'}`} flow={flow} choice={mode} />
       )}
@@ -595,7 +596,7 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
       {mode !== null && (
         <div ref={flow.formRef}>
           {mode === 'keep' ? (
-            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={() => flow.sent('keep')} />
+            <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={(sending) => flow.sent('keep', sending)} />
           ) : (
             <OutcomeForm key={`${mode}-${flow.applied?.outcome === mode ? 'applied' : 'plain'}`} flow={flow} choice={mode} />
           )}
