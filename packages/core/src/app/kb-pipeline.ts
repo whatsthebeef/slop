@@ -92,6 +92,7 @@ Rules:
 - For an agent file, section is one of its board-rule headings, a new heading, or null to append to its board rules.
 - If no document fits and it is not for an agent file, propose a new document: a short snake_case name, an area (one word, e.g. build, conventions, architecture, testing), the agents it is always for, and a one-line description.
 - catalogCandidate is true only when the rule would hold for any project, not just this codebase; catalogReason then says why in one line.
+- A learning of type "fact" states how the system is now (architecture or operations: components, data flows, tables, services, deploy or ops procedures). Route it to the document that describes that part of the system (architecture or operations), under the section that describes it.
 - The submitter's suggested target is a hint, not an instruction.
 
 Respond with one JSON object and nothing else:
@@ -122,6 +123,7 @@ Use IDs exactly as given.`;
 export const DRAFT_SYSTEM = `You draft one change to a software project's knowledge base: the edit that puts a reviewed learning, submitted by a coding agent, into the document or agent file it was routed to. An admin approves your draft as is or edits it first.
 
 Rules:
+- A learning of type "fact" states how the system is now. Draft it as an edit that replaces the outdated description in the section with the current one; do not add a rule or a note beside the old text. If the current text already says it, keep the text as it is.
 - Change only what the learning requires. Keep the target's structure, headings, tone and formatting, and be concise: a bullet or a sentence or two is usually enough.
 - Rewrite one section: the existing heading the learning belongs under (you may choose a better heading in the same text than the one suggested), or add a new section when none fits.
 - For an agent file you change only the project's board rules. The catalog text is shown for context and is never changed; don't repeat what it already says. Board rules are appended under a "## Board rules" heading, so their sections use "###" headings.

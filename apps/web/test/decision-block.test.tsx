@@ -527,7 +527,7 @@ describe('the watch signal step', () => {
       await user.click(await within(outcomes).findByRole('button', { name: 'Approve change' }));
       const select = await screen.findByTestId('watch-signal');
       await waitFor(() => expect(select).toHaveProperty('value', 'failure:no progress'));
-      await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
+      await user.click(screen.getByTestId('accept-confirm'));
       expect(onDecide).toHaveBeenLastCalledWith({ outcome: 'accept', watchSignal: 'failure:no progress' });
     });
 
@@ -556,7 +556,25 @@ describe('the watch signal step', () => {
     const { onDecide } = renderGlob(decision());
     const outcomes = await actionRow();
     await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
-    await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
+    expect(within(outcomes).getByRole('button', { name: 'Approve change' })).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('accept-confirm-text').textContent).toBe('Applies the change to its target, then moves this decision to Reviewing.');
+    await user.click(screen.getByTestId('accept-confirm'));
+    expect(onDecide).toHaveBeenCalledWith({ outcome: 'accept' });
+  });
+
+  it('confirms a hotspot\'s refactor glob in its own form, with its own text, and creates it on Create', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'plan').mockResolvedValue({
+      current: { content: 'Refactor the file.', version: 1, provenance: { actor: 'slop', by: 'sessionator' }, createdAt: '2026-10-08T00:00:00Z' },
+      versions: [{ version: 1 }],
+    } as unknown as Awaited<ReturnType<typeof api.plan>>);
+    const { onDecide } = renderGlob(decision({ origin: { kind: 'hotspot', path: 'src/a.ts' }, channel: 'mined' }));
+    await user.click(await screen.findByRole('button', { name: 'Create refactor glob' }));
+    const text = (await screen.findByTestId('accept-confirm-text')).textContent;
+    expect(text).toContain('Creates a refactor glob from this proposal (Tests live next to the code they cover)');
+    expect(text).not.toContain('no knowledge change');
+    expect(onDecide).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('accept-confirm'));
     expect(onDecide).toHaveBeenCalledWith({ outcome: 'accept' });
   });
 

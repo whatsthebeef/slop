@@ -282,11 +282,12 @@ export const RelatedSection = ({
   const boardId = glob.boardId;
   const splitFrom = glob.split !== undefined && glob.split.part > 0 ? glob.split.source : null;
   const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length;
+  const decision = isHumanCategory(glob.category);
   const count = groups === null ? 0 : holding + groups.holdsBack.length + groups.done.length;
   // Starts open while something holds the glob back, until the viewer toggles it.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const [adding, setAdding] = useState(false);
-  const open = toggled ?? holding > 0;
+  const open = toggled ?? (holding > 0 || (decision && groups !== null && groups.holdsBack.length > 0));
   return (
     <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-sm" aria-label="Related" data-testid="related">
       <RelationsHeader
@@ -295,7 +296,7 @@ export const RelatedSection = ({
         title="Related"
         count={count}
         holding={holding}
-        addLabel="Add relation"
+        addLabel={decision ? 'Holds back' : 'Add relation'}
         onAdd={() => {
           setAdding(!(adding && open));
           setToggled(true);
@@ -340,7 +341,7 @@ export const RelatedSection = ({
           </ul>
         </details>
       )}
-          {adding && <AddRelationForm ctx={ctx} gates={['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={() => setAdding(false)} />}
+          {adding && <AddRelationForm ctx={ctx} gates={decision ? ['start', 'merge'] : ['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={() => setAdding(false)} />}
         </>
       )}
     </section>
