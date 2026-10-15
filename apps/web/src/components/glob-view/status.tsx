@@ -11,6 +11,13 @@ import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
 import type { GlobActionsState } from './actions';
 
+/** The dot between the top bar's parts. */
+export const Dot = () => (
+  <span aria-hidden className="-mx-1 shrink-0 text-muted-foreground" data-testid="header-dot">
+    ·
+  </span>
+);
+
 /** The escalation's own words ("Needs a human: <reason>") are the header chip's job, never the headline's. */
 export const headlineReason = (reason: string): string =>
   /^Needs a human\b/.test(reason) ? 'Needs a person' : reason;
@@ -143,6 +150,7 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
         </span>
         {icon !== null && <StatusIconView icon={icon} />}
       </button>
+      {text !== '' && <Dot />}
       <CategoryIcon category={glob.category} />
     </span>
   );
