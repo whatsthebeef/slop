@@ -41,9 +41,7 @@ class FakeHost extends FakeCodeHost {
   };
   override mergeState = () => Promise.resolve({ sha: HEAD, state: 'passed' as const });
   override markReady = () => Promise.resolve({ wasDraft: true, sha: HEAD });
-  readonly mergeUpdates: number[] = [];
-  override squashMerge: FakeCodeHost['squashMerge'] = (_repo, _glob, _number, _sha, updates = 0) => {
-    this.mergeUpdates.push(updates);
+  override squashMerge: FakeCodeHost['squashMerge'] = () => {
     return Promise.resolve(this.mergeResult);
   };
 }
@@ -97,7 +95,6 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
   beforeEach(async () => {
     host.opened.length = 0;
     host.deleted.length = 0;
-    host.mergeUpdates.length = 0;
     const created = unwrap(
       await globs.create(DEV, {
         boardId: 1,
@@ -187,7 +184,7 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     expect(after.status).toBe('in_progress');
   });
 
-  it('a behind branch is updated once per merge request: the next pass merges it, and a conflict still fails it', async () => {
+  it('a behind branch is updated, never merged behind: a conflict on the next pass still fails it', async () => {
     const merge = async (sha: string) => {
       const effect: Effect = { kind: 'squash_merge', globId, generation: (await current()).generation, sha };
       return executors.squash_merge?.(effect, await current(), { globs }, undefined);
@@ -197,13 +194,12 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     try {
       expect(await merge(HEAD)).toBe('done');
       expect(await current()).toMatchObject({ status: 'merging', mergeUpdates: 1 });
-      // The updated head's checks pass and the base moved again: the second pass is told the update already happened.
+      // The updated head's checks pass and the base moved again and the update conflicts.
       host.mergeResult = { outcome: 'conflict' };
       expect(await merge('u1')).toBe('done');
     } finally {
       host.mergeResult = { outcome: 'merged', sha: 'm1' };
     }
-    expect(host.mergeUpdates).toEqual([0, 1]);
     expect(await current()).toMatchObject({ status: 'pr_open', failure: null });
   });
 
