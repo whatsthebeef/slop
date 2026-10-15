@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
 import { ArmSystemLabel } from '../glob-card';
 import { Tip } from '../ui/tip';
-import { needsRelease } from '@/lib/human-steps';
+import { armLabel } from '@/lib/rollout-stages';
 import { findSection } from '@/lib/glob-scroll';
 import { LIST_TITLES } from '@/lib/list-titles';
 import type { GlobViewContext } from './context';
@@ -33,7 +33,7 @@ export const GlobHeader = ({
   const { glob } = ctx;
   // Human work (a decision, an action) has no type to change, no deploy to arm and no machine status.
   const human = isHumanCategory(glob.category);
-  const armStep = human ? null : needsRelease(glob.humanSteps ?? []);
+  const arming = human ? null : armLabel(glob);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -104,8 +104,8 @@ export const GlobHeader = ({
         <span className="hidden min-w-0 truncate text-sm text-muted-foreground sm:inline" data-testid="glob-list">
           {LIST_TITLES[glob.list]}
         </span>
-        {armStep !== null && (
-          <ArmSystemLabel step={armStep} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
+        {arming !== null && (
+          <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
         )}
         <HeaderStatus glob={glob} decision={human} state={state} />
       </div>

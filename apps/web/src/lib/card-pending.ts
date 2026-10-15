@@ -1,4 +1,6 @@
 import type { Action } from '@slop/core';
+import type { ListedHumanStep } from './api';
+import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
 
 /** How long a card shows its move as working before it gives up and says so. */
 export const CARD_PENDING_MS = 20_000;
@@ -30,13 +32,14 @@ export const workingLabel = (action: Action): string => WORKING[action] ?? 'Work
 /** What a merge action did, as a toast: merged, armed to merge when the checks pass, cancelled, or why it can't. Null for other actions. */
 export const mergeOutcomeText = (
   action: Action,
-  glob: { status: string; mergeMode?: string | null; failure?: { reason: string } | null },
+  glob: { status: string; mergeMode?: string | null; failure?: { reason: string } | null; humanSteps?: readonly ListedHumanStep[] },
 ): string | null => {
   if (action === 'cancel_merge') return 'Merge cancelled';
   if (action !== 'merge' && action !== 'merge_continue' && action !== 'retry_merge') return null;
-  if (glob.mergeMode === 'when_green' && glob.status === 'pr_open') return 'Will merge when checks pass';
+  const after = hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : '';
+  if (glob.mergeMode === 'when_green' && glob.status === 'pr_open') return `Will merge when checks pass${after}`;
   if (glob.status === 'failed') return `Can't merge: ${glob.failure?.reason ?? 'the merge failed'}`;
-  return glob.status === 'reviewing' ? 'Merged' : 'Merging…';
+  return glob.status === 'reviewing' ? 'Merged' : `Merging…${after}`;
 };
 
 /** Pick up (take_over included, both labelled "Pick up" on the card): once it succeeds, the glob's view opens. */
