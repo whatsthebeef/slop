@@ -208,6 +208,12 @@ describe('investigate (row 5a)', () => {
     expect(t.events.map((e) => e.type)).toEqual(['HoldOverridden', 'StartQueued']);
   });
 
+  it('Start on a glob a person picked up records the hand-over to the machine, naming who had it', () => {
+    const t = value(m.startAnyway(glob({ status: 'in_progress', implementer: other.email }), ctx()));
+    expect(t.glob.implementer).toBeNull();
+    expect(t.events.find((e) => e.type === 'HandedToMachine')).toMatchObject({ data: { from: other.email } });
+  });
+
   it('the queued start is released when the investigation is stored, and its run starts for whoever pressed Start', () => {
     const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
     const t = value(m.investigationPushed(queued, 'run-9', ctx(null)));
@@ -1659,6 +1665,23 @@ describe('conflicts flagged after a merge', () => {
     expect(by({ state: 'watching' })).toMatchObject({ by: 'run' });
     expect(by({ state: 'ended', outcome: 'completed' })).toMatchObject({ by: 'run' });
     expect(by({ state: 'ended', outcome: 'superseded' })).toMatchObject({ by: 'human' });
+  });
+
+  it('clears the failure of a failed conflict-fix run when the conflict clears, and keeps failures of other kinds', () => {
+    const failed = (failure: Record<string, unknown>) => {
+      const g = glob({
+        status: 'pr_open',
+        pr,
+        conflict: { ...found, at: NOW },
+        failure: failure as never,
+        runs: [run({ purpose: 'resolve_conflict', state: 'ended', outcome: 'failed' })],
+      });
+      return value(m.conflictCleared(g, ctx(null))).glob;
+    };
+    expect(failed({ reason: 'Merge of origin/main conflicts in the same logic', at: NOW }).failure).toBeNull();
+    expect(failed({ reason: 'x', at: NOW, kind: 'needs_pairing' }).failure).not.toBeNull();
+    expect(failed({ reason: 'x', at: NOW, kind: 'merge' }).failure).not.toBeNull();
+    expect(failed({ reason: 'x', at: NOW, kind: 'provisioning' }).failure).not.toBeNull();
   });
 
   it('a push rechecks a flagged conflict; merging clears it', () => {

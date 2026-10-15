@@ -93,9 +93,13 @@ const initials = (email: string): string => {
 };
 
 /** The implementer, or the planner (dashed) while no person implements; slop as planner shows the robot head. */
+/** True for slop itself, an agent or a bot account rather than a person. */
+export const isMachineActor = (who: string): boolean =>
+  !who.includes('@') || /(^|[._-])(bot|agent)([._-]|@|$)|\[bot\]/i.test(who);
+
 const Avatar = ({ email, planner }: { email: string; planner: boolean }) =>
-  planner && email === 'slop' ? (
-    <Tip text='Planner: slop (machine)'>
+  isMachineActor(email) ? (
+    <Tip text={`${planner ? 'Planner' : 'Implementer'}: ${email} (machine)`}>
       <span className='inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground'>
         <MachineIcon />
       </span>

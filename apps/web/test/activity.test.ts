@@ -28,6 +28,25 @@ describe('activityOf', () => {
     const created = activityOf(view({ planner: 'p@b.c', creator: 'c@b.c' }), 'o/r').find((e) => e.id === 'created');
     expect(created?.text).toBe(`Planned by p@b.c · ${new Date(T(0)).toLocaleString()}`);
   });
+  it('lists who picked it up, took it over and handed it to the machine, with when', () => {
+    const entries = activityOf(
+      view({
+        handoffs: [
+          { kind: 'picked_up', by: 'john.bower@x.com', at: T(5) },
+          { kind: 'took_over', by: 'ana.silva@x.com', at: T(10) },
+          { kind: 'handed_back', by: 'ana.silva@x.com', at: T(15) },
+        ],
+      }),
+      'o/r',
+    );
+    const handoffs = entries.filter((e) => e.id.startsWith('handoff:'));
+    expect(handoffs.map((e) => [e.text, e.at, e.actor])).toEqual([
+      ['Ana handed it to the machine', T(15), 'human'],
+      ['Ana took it over from the routine run', T(10), 'human'],
+      ['John picked it up', T(5), 'human'],
+    ]);
+    expect(handoffs[2]?.title).toBe('John picked it up (john.bower@x.com)');
+  });
   it('lists runs, the PR, checks and a conflict newest first, each with its link', () => {
     const entries = activityOf(
       view({

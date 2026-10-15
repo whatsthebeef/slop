@@ -80,6 +80,7 @@ import type {
   RelationsView,
   TargetChange,
   WorkstreamsSummary,
+  Handoff,
 } from '@slop/core';
 import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
@@ -121,6 +122,8 @@ export interface GlobView extends Glob {
   readonly move?: Move;
   /** What slop is doing for the glob (board list and glob read; absent on an older API). */
   readonly machineSteps?: readonly MachineStep[];
+  /** Who picked the glob up, took it over or handed it to the machine, oldest first (single-glob reads only; absent on an older API). */
+  readonly handoffs?: readonly Handoff[];
 }
 
 export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;

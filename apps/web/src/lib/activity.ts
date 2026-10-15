@@ -1,5 +1,6 @@
 import type { MachineStep } from '@slop/core';
 import type { GlobView } from './api';
+import { firstNameOf } from './person';
 import { stepLabel } from './position';
 
 /** Who or what an activity entry is about, which picks its icon. */
@@ -167,6 +168,17 @@ export const activityOf = (glob: GlobView, repo: string | null, steps: readonly 
       ),
     );
   }
+
+  (glob.handoffs ?? []).forEach((h, i) => {
+    const name = h.by === null ? 'Someone' : firstNameOf(h.by);
+    const text =
+      h.kind === 'took_over'
+        ? `${name} took it over from the routine run`
+        : h.kind === 'handed_back'
+          ? `${name} handed it to the machine`
+          : `${name} picked it up`;
+    out.push(entry(`handoff:${String(i)}:${h.kind}:${h.at}`, 'human', text, h.at, null, 'open', h.by === null ? text : `${text} (${h.by})`));
+  });
 
   if (glob.signedOffAt !== null) out.push(entry('signed-off', 'human', 'Signed off', glob.signedOffAt));
   out.push(entry('created', 'human', `Planned by ${glob.planner} · ${new Date(glob.createdAt).toLocaleString()}`, glob.createdAt));

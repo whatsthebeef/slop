@@ -299,6 +299,13 @@ export interface SplitInfo {
   readonly parts: readonly string[];
 }
 
+/** A person taking a glob, or giving it back, for the activity log: who (null for slop) and when. */
+export interface Handoff {
+  readonly kind: 'picked_up' | 'took_over' | 'handed_back';
+  readonly by: string | null;
+  readonly at: string;
+}
+
 /** What a client may change on a glob: the fields, and the globs it starts after (a list that replaces the person-set ones). */
 export type GlobChanges = Omit<FieldChanges, 'after' | 'impliedAfter'> & {
   readonly after?: readonly string[];
@@ -529,6 +536,18 @@ export class GlobService {
     const found = new Map<string, WorkstreamsSummary>();
     for (const [id, summary] of latest) if (summary !== null) found.set(id, summary);
     return found;
+  }
+
+  /** Who picked the glob up, took it over or handed it back to the machine, and when, oldest first, for the glob view's activity log. */
+  async handoffsOf(boardId: number, globId: string): Promise<Handoff[]> {
+    const events = await this.deps.store.transaction((tx) =>
+      tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['PickedUp', 'HandedToMachine'], [globId]),
+    );
+    return events.map((e) => ({
+      kind: e.type === 'HandedToMachine' ? 'handed_back' : e.data.takeOver === true ? 'took_over' : 'picked_up',
+      by: e.actor,
+      at: e.at,
+    }));
   }
 
   /** A board's open work steps by glob ID, for the board list's human-step summaries. */

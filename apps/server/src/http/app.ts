@@ -654,7 +654,8 @@ export const createApp = (deps: AppDeps) => {
     const workstreams = (await globs.workstreamsOf(view.value.glob.boardId)).get(view.value.glob.id);
     // The same machine steps as the board list, so the glob view's header and the card agree (e.g. a deploy still running).
     const gateCheck = await globs.gateCheckOf(view.value.glob.boardId);
-    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob), ...splitField(split), ...workstreamsField(workstreams) }));
+    const handoffs = await globs.handoffsOf(view.value.glob.boardId, view.value.glob.id);
+    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob), handoffs, ...splitField(split), ...workstreamsField(workstreams) }));
   });
 
   app.patch('/api/globs/:id', async (c) => {
