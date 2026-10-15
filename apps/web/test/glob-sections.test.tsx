@@ -356,7 +356,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Glob or decision').value).toBe('s1t9');
   });
 
-  it('a decision glob has a Holds back list instead of Related, and adds a glob it holds back', async () => {
+  it('a decision glob shows Holds back inside Related, and adds a glob it holds back', async () => {
     const cb = renderGlob(
       view({
         category: 'decision',
@@ -366,16 +366,31 @@ describe('glob view: escalation, dependencies and edit fields', () => {
         relations: related({ holdsBack: [{ relationId: 'rel_h', from: 's1t8', fromTitle: 'Later work', gate: 'start', until: 'decided', reason: 'waits on the choice', source: 'person' }] }),
       }),
     );
-    expect(screen.queryByTestId('related')).toBeNull();
+    expect(screen.queryByTestId('holds-back')).toBeNull();
     expect(screen.getByTestId('add-relation').textContent).toBe('Holds back');
-    expect(screen.getByTestId('holds-back-toggle').textContent).toBe('Holds back (1)');
-    expect(screen.getByTestId('holds-back').textContent).toContain("can't start until this is decided");
-    expect(screen.getByTestId('holds-back').textContent).toContain('waits on the choice');
+    expect(screen.getByTestId('related-toggle').textContent).toBe('Related (1)');
+    expect(screen.getByTestId('related-holds-back').textContent).toContain("can't start until this is decided");
+    expect(screen.getByTestId('related-holds-back').textContent).toContain('waits on the choice');
     await userEvent.click(screen.getByTestId('add-relation'));
     await userEvent.type(screen.getByLabelText('Glob it holds back'), 's1t3');
     await userEvent.selectOptions(screen.getByLabelText('Gate'), 'merge');
     await userEvent.click(screen.getByTestId('add-relation-submit'));
     expect(cb.onAddRelation).toHaveBeenCalledWith({ gate: 'merge', holdsBack: 's1t3' });
+  });
+
+  it('a decision glob with nothing it holds back has no Holds back group, only the add action in Related', () => {
+    renderGlob(
+      view({
+        category: 'decision',
+        status: 'in_progress',
+        allowedActions: ['decide'],
+        attributes: { scope: { kind: 'project', ref: null }, origin: { kind: 'submitted' }, channel: 'human', outcome: null },
+        relations: related({}),
+      }),
+    );
+    expect(screen.queryByTestId('holds-back')).toBeNull();
+    expect(screen.queryByTestId('related-holds-back')).toBeNull();
+    expect(screen.getByTestId('add-relation').textContent).toBe('Holds back');
   });
 
   it('offers Save and Discard once the group is edited, and Discard clears them', async () => {

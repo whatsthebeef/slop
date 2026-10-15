@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approveBlockedText, approveLabel, changeHeading, changeKindOf, headerMenu, scopeMatters, submitLabel } from '../src/lib/decide-flow';
+import { acceptConfirm, approveBlockedText, approveLabel, changeHeading, changeKindOf, headerMenu, scopeMatters, submitLabel } from '../src/lib/decide-flow';
 
 const menu = (patch: Partial<Parameters<typeof headerMenu>[0]> = {}) =>
   headerMenu({ canDecide: true, canSuggest: true, canKeep: true, hasItem: true, adminOnly: null, ...patch });
@@ -11,6 +11,20 @@ describe('what approving is called', () => {
     expect(approveLabel(false, { kind: 'merge_policy', name: 'm', section: null, newDocument: null }).label).toBe('Approve merge policy');
     expect(approveLabel(false, { kind: 'local_run', name: 'l', section: null, newDocument: null }).label).toBe('Approve local-run spec');
     expect(approveLabel(false, null, true).label).toBe('Create refactor glob');
+  });
+});
+
+describe('what confirming an approval says', () => {
+  const base = { hotspot: false, learning: true, document: false, target: null, title: 'src/a.ts', label: 'Approve change' };
+  it('says a hotspot creates a refactor glob from the proposal', () => {
+    const c = acceptConfirm({ ...base, hotspot: true, learning: false });
+    expect(c.text).toBe('Creates a refactor glob from this proposal (src/a.ts), linked to this decision, and marks the decision approved.');
+    expect(c.button).toBe('Create');
+  });
+  it('names the target of a learning and records a plain decision', () => {
+    expect(acceptConfirm({ ...base, target: { kind: 'doc', name: 'conventions', section: 'Code', newDocument: null } }).text).toContain('Applies the change to conventions › Code');
+    expect(acceptConfirm({ ...base, learning: false }).text).toBe('Records this choice; globs it holds back can start.');
+    expect(acceptConfirm(base).text).not.toContain('no knowledge change');
   });
 });
 
