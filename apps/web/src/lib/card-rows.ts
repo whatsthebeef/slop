@@ -2,7 +2,7 @@ import { decisionOf } from '@slop/core';
 import type { HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
-import { clickTip, positionClick, statusClick, yourTurnClick } from './chip-actions';
+import { clickTip, positionClick, sentence, statusClick, tipLines, yourTurnClick } from './chip-actions';
 import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
 import type { Position } from './position';
@@ -137,11 +137,11 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
       ...(standby === null || kind === 'standby' ? [] : [STANDBY_TIP]),
     ];
     const hint =
-      click === null || kind === 'needs-human' ? [] : [kind === 'hold' ? "Opens this glob's related globs" : clickTip(click)];
+      click === null || kind === 'needs-human' ? [] : [kind === 'hold' ? "Opens this glob's related globs." : clickTip(click)];
     const shown = plainText(text);
     // What the text dropped (a time, a commit) stays in the tooltip.
     const detail = shown === text ? [] : [text];
-    const tip = [...new Set([...lead, ...detail, ...rest, ...hint].filter((t) => t !== ''))].join('\n');
+    const tip = tipLines([...new Set([...lead, ...detail, ...rest, ...hint].filter((t) => t !== ''))]);
     return { kind, icon, text: shown, label: kind === 'needs-human' ? 'Needs a person' : shown, tip, tone, click };
   };
 
@@ -166,7 +166,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   }
   if (escalated && escalation != null) {
     return make('needs-human', 'needs-human', 'needs a', 'text-required', { kind: 'section', target: cardTargets.escalation() }, [
-      `Needs a person: ${escalation.reason}. Opens the reason`,
+      `Needs a person: ${sentence(escalation.reason)} Opens the reason`,
     ]);
   }
   if (glob.provisioning === 'failed') {

@@ -16,7 +16,7 @@ import { cn, groupSticker } from '@/lib/utils';
 import { OUTCOME_TEXT } from './decision-section';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
-import { CONFIRM_MS, clickTip, prUrl, turnStep } from '@/lib/chip-actions';
+import { CONFIRM_MS, clickTip, prUrl, tipLines, turnStep } from '@/lib/chip-actions';
 import type { ChipClick } from '@/lib/chip-actions';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
@@ -187,7 +187,7 @@ const CornerStatusView = ({
   if (status.kind === 'ready' && click?.kind === 'act') {
     const busy = pending !== undefined;
     const label = busy ? workingLabel(pending) : confirming ? 'confirm merge' : status.text;
-    const tip = [...status.tip.split('\n').filter((line) => line !== clickTip(click)), clickTip(click, confirming)].join('\n');
+    const tip = tipLines([...status.tip.split('\n').filter((line) => line !== clickTip(click)), clickTip(click, confirming)]);
     return (
       <span className='inline-flex min-w-0 shrink justify-end' data-testid='card-status' data-kind={status.kind} data-icon={status.icon}>
         <Tip text={tip}>
