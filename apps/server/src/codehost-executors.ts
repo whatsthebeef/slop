@@ -1,7 +1,7 @@
 import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { isRepoAccessFailure, isSetupFailure, machine, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
+import { isRepoAccessFailure, isSetupFailure, machine, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -42,6 +42,8 @@ export const codeHostExecutors = (
   pendingFiles: ((globId: string) => Promise<number>) | null = null,
   /** The board's merge policy's `subGateCheck` (undefined: none set, so the default applies). */
   subGateCheck: (boardId: number) => Promise<string | undefined> = () => Promise.resolve(undefined),
+  /** The board's merge policy's `rolloutPaths` and `riskPaths` (undefined: none set); the built-in risk paths always apply. */
+  riskPolicy: (boardId: number) => Promise<{ readonly rolloutPaths?: readonly string[]; readonly riskPaths?: readonly string[] }> = () => Promise.resolve({}),
 ): Partial<Record<EffectKind, Executor>> => {
   const repoFor = async (boardId: number) => {
     const board = await boardOf(boardId);
@@ -498,7 +500,7 @@ export const codeHostExecutors = (
       if (board === null || repo === null) return 'dropped';
       // The board was read just now, so the verdict uses the learned limit as it is at this decision.
       const ignored = sizeIgnoredPathsOf({ sizeIgnoredPaths: await sizeIgnoredPaths(board.id) });
-      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board, ignored);
+      const verdict = subGatePolicy(await host.diffSummary(repo, effect.sha), board, ignored, riskPathsOf(await riskPolicy(board.id)));
       const limit = board.subMaxChangedLines;
       await globs.applyEvent(glob.id, (g, ctx, facts) => machine.subGateCompleted(g, { sha: effect.sha, ...verdict, limit }, ctx, facts.relations), { relations: true });
       return 'done';

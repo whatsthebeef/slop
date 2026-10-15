@@ -8,7 +8,10 @@ import type { Store } from '../ports.js';
 import { CONFIDENCES, INTAKE_PROMPT_VERSION, examplesBlock, needsConfirmation } from '../domain/intake-learning.js';
 import type { Confidence, IntakeExample } from '../domain/intake-learning.js';
 import { SUB_LIMIT_DEFAULT } from '../domain/sub-limit.js';
+import { riskPathsOf } from '../domain/merge-policy.js';
+import { parseRollout } from '../domain/rollout.js';
 import { estimateFromText, oversizedReasons } from '../domain/size-check.js';
+import { touchRiskPaths } from '../domain/sub-gate.js';
 import type { SizeThreshold } from '../domain/size-check.js';
 import type { Embedder } from '../ports.js';
 import { defaultAreas, riskAreaLine } from '../domain/risk-area.js';
@@ -16,6 +19,7 @@ import type { RiskArea } from '../domain/risk-area.js';
 import { normaliseGroup } from '../domain/group.js';
 import { typeLearningBlock } from '../domain/type-learning.js';
 import { memberOf } from './access.js';
+import { readMergePolicy } from './knowledge-service.js';
 import { recentTypeCorrections } from './type-learning-service.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
@@ -218,7 +222,7 @@ Respond with one JSON object and nothing else:
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
 - type: choose by WHEN A PERSON IS NEEDED, not by how big the work is.
   - "sub" (the default; be optimistic): the plan is settled and has no open questions. One routine can implement it and merge it; a person at most spot-checks it afterwards. Whatever its area, and whether or not it overlaps work in progress (merge order is handled elsewhere).
-  - "same": the plan is settled, but a person must review the result afterwards: the work matches one of the board's risk areas (listed after the request; the path patterns are matched against your "files"), it is user-facing or sensitive, or the request asks for a review.
+  - "same": the plan is settled, but a person must review the result afterwards: the work matches one of the board's risk areas (listed after the request; the path patterns are matched against your "files"), it is user-facing or sensitive, or the request asks for a review. Work on infrastructure, IAM, builds, stacks, properties files, workflows or rollout scripts, or whose plan has rollout steps, is always "same" (slop applies this rule itself).
   - "super": the plan still has decisions only a person can make during the work: a design to agree, options to choose between, "discuss with…", open questions, or a decisions section with no tasks. Claude would otherwise have to guess. Do not choose "super" just because the work is big or the request says "design" about something already decided.
   - Size is separate: big settled work stays one glob, sized for one review; the agents divide it into workstreams in the run, so do not split it or choose "super" for it. A "super" is for unsettled work that needs a person to pair on it.
   - When unsure, choose "sub" rather than "same". Choose "super" only on real evidence of an open decision.
@@ -323,12 +327,13 @@ export class IntakeService {
         threshold: await tx.getSizeThreshold(boardId),
         subMaxChangedLines: board?.subMaxChangedLines ?? SUB_LIMIT_DEFAULT,
         areas: await riskAreasOf(),
+        riskPaths: riskPathsOf(await readMergePolicy(tx, boardId)),
         corrections: await recentTypeCorrections(tx, boardId),
         open: new Set(globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off').map((g) => g.id)),
       });
     });
     if (!known.ok) return known;
-    const { groups, environments, open, threshold, areas, subMaxChangedLines, corrections } = known.value;
+    const { groups, environments, open, threshold, areas, riskPaths, subMaxChangedLines, corrections } = known.value;
 
     const examples = await this.examplesFor(boardId, input.text);
     const block = examplesBlock(examples);
@@ -356,7 +361,7 @@ export class IntakeService {
       if (error instanceof LlmUnavailable) return llmUnavailable(error.reason, error.fix);
       throw error;
     }
-    return ok(this.validate(parseJson(completion), input, groups, environments, open, examples, threshold));
+    return ok(this.validate(parseJson(completion), input, groups, environments, open, examples, threshold, riskPaths));
   }
 
   /**
@@ -448,6 +453,7 @@ export class IntakeService {
     open: ReadonlySet<string>,
     examples: readonly IntakeExample[],
     threshold: SizeThreshold,
+    riskPaths: readonly string[],
   ): IntakeProposal {
     const request = input.text.trim();
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
@@ -486,6 +492,17 @@ export class IntakeService {
         type = 'sub';
       }
     }
+    // A rule, not a judgement: work on risk paths or with rollout steps is never a sub. A person's explicit type stands, and
+    // a super (open decisions) is already a person's.
+    const files = pathList(field(answer, 'files'));
+    const risky = touchRiskPaths(files, riskPaths);
+    const rolloutSteps = parseRollout(plan).length;
+    let forcedReason: string | null = null;
+    if (type === 'sub' && input.explicit.type === undefined && (risky.length > 0 || rolloutSteps > 0)) {
+      type = 'same';
+      forcedReason =
+        risky.length > 0 ? `Touches risk paths: ${risky.slice(0, 3).join(', ')}` : 'The plan has rollout steps a person carries out after the merge';
+    }
     const category = categoryFor(fix);
 
     const proposedGroup = input.explicit.group ?? text(field(answer, 'group'));
@@ -504,7 +521,8 @@ export class IntakeService {
 
     const explicitCategory = explicitFix !== undefined && explicitKind !== undefined;
     const confidence = explicitCategory ? 'high' : (oneOf(CONFIDENCES, field(answer, 'confidence')) ?? oneOf(CONFIDENCES, field(answer, 'categoryConfidence')));
-    const typeReason = input.explicit.type !== undefined ? null : (text(field(answer, 'typeReason'))?.trim().slice(0, 300) || null);
+    const typeReason =
+      input.explicit.type !== undefined ? null : (forcedReason ?? (text(field(answer, 'typeReason'))?.trim().slice(0, 300) || null));
 
     return {
       title: title.slice(0, 120),
@@ -522,7 +540,7 @@ export class IntakeService {
       environment: input.explicit.environment ?? environmentNamedIn(request, environments),
       autoTrigger,
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
-      files: pathList(field(answer, 'files')),
+      files,
       suggestedAfter: waitedForIn(request, open),
       categoryConfidence: confidence,
       categoryReason: explicitCategory ? null : (fixReason ?? workKindReason),

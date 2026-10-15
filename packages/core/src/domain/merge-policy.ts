@@ -10,6 +10,8 @@ import type { Result } from './errors.js';
  * - `sizeIgnoredPaths`: path globs left out when a sub's size is measured (read by the sub gate, not here).
  * - `rolloutPaths`: path globs whose change usually needs a person after the merge (infrastructure, server settings):
  *   a merge touching one with no `## Rollout` in its implementation record is flagged (`rolloutPathsOf` has the defaults).
+ * - `riskPaths`: path globs a board adds to the built-in risk paths (`riskPathsOf`): a change touching one is always a
+ *   same, never a sub (infrastructure, IAM, builds, rollout scripts, a board's own agent settings).
  * - `subGateCheck`: the name of the check run a sub waits for before slop applies the policy and merges it
  *   (`subGateCheckOf` has the default). A board whose repo still reports a differently named gate sets it here.
  *
@@ -19,6 +21,7 @@ export interface MergePolicy {
   readonly exclusivePaths?: readonly string[];
   readonly sizeIgnoredPaths?: readonly string[];
   readonly rolloutPaths?: readonly string[];
+  readonly riskPaths?: readonly string[];
   readonly subGateCheck?: string;
 }
 
@@ -41,6 +44,25 @@ export const DEFAULT_ROLLOUT_PATHS: readonly string[] = ['infra/**', 'apps/serve
 export const rolloutPathsOf = (policy: { readonly rolloutPaths?: readonly string[] } | null | undefined): readonly string[] =>
   policy?.rolloutPaths !== undefined && policy.rolloutPaths.length > 0 ? policy.rolloutPaths : DEFAULT_ROLLOUT_PATHS;
 
+/**
+ * The paths a board always gets as risk paths: a change here is infrastructure, IAM, a build or a rollout script, so it
+ * is a same (a person reviews it) and usually needs steps after the merge. A board adds its own with `riskPaths`
+ * (e.g. its agent settings); `rolloutPaths` count as risk paths too.
+ */
+export const DEFAULT_RISK_PATHS: readonly string[] = [
+  '**/stacks/**',
+  '**/*.properties',
+  'buildspec*.yml',
+  'infra/iam/**',
+  'scripts/rollout/**',
+  '.github/workflows/**',
+];
+
+/** The risk path globs: the defaults, the policy's `rolloutPaths` and its `riskPaths`, without repeats. */
+export const riskPathsOf = (
+  policy: { readonly rolloutPaths?: readonly string[]; readonly riskPaths?: readonly string[] } | null | undefined,
+): readonly string[] => [...new Set([...DEFAULT_RISK_PATHS, ...(policy?.rolloutPaths ?? []), ...(policy?.riskPaths ?? [])])];
+
 /** Where the workflow reporting `check` lives by convention (`checks` in `checks.yml`); the default's file for a name that isn't a plain file name. */
 export const subGateWorkflowPath = (check: string): string =>
   `.github/workflows/${/^[\w.-]+$/.test(check) ? check : DEFAULT_SUB_GATE_CHECK}.yml`;
@@ -54,7 +76,7 @@ export const MERGE_POLICY_PATHS_MAX = 50;
 /** Longest gate check name, in characters. */
 export const MERGE_POLICY_CHECK_MAX = 100;
 
-const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths', 'subGateCheck'] as const;
+const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths', 'riskPaths', 'subGateCheck'] as const;
 type PolicyKey = (typeof KEYS)[number];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -102,12 +124,15 @@ export const checkMergePolicy = (value: unknown): Result<MergePolicy> => {
   if (!ignored.ok) return ignored;
   const rollout = pathList(value, 'rolloutPaths');
   if (!rollout.ok) return rollout;
+  const risk = pathList(value, 'riskPaths');
+  if (!risk.ok) return risk;
   const gate = checkName(value);
   if (!gate.ok) return gate;
   return ok({
     ...(exclusive.value === undefined ? {} : { exclusivePaths: exclusive.value }),
     ...(ignored.value === undefined ? {} : { sizeIgnoredPaths: ignored.value }),
     ...(rollout.value === undefined ? {} : { rolloutPaths: rollout.value }),
+    ...(risk.value === undefined ? {} : { riskPaths: risk.value }),
     ...(gate.value === undefined ? {} : { subGateCheck: gate.value }),
   });
 };
@@ -130,6 +155,7 @@ export const renderMergePolicy = (policy: MergePolicy): string =>
       ...(policy.exclusivePaths === undefined ? {} : { exclusivePaths: policy.exclusivePaths }),
       ...(policy.sizeIgnoredPaths === undefined ? {} : { sizeIgnoredPaths: policy.sizeIgnoredPaths }),
       ...(policy.rolloutPaths === undefined ? {} : { rolloutPaths: policy.rolloutPaths }),
+      ...(policy.riskPaths === undefined ? {} : { riskPaths: policy.riskPaths }),
       ...(policy.subGateCheck === undefined ? {} : { subGateCheck: policy.subGateCheck }),
     },
     null,

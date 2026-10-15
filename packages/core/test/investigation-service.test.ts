@@ -136,6 +136,26 @@ describe('acting on an investigation', () => {
     expect((await get(risky.id)).escalation?.reason).toContain('auth');
   });
 
+  it('escalates a sub whose files touch a risk path, as a slop rule with criterion risk_path', async () => {
+    const sub = await create('sub');
+    await submit(sub, { ...BLOCK, files: [{ path: 'services/app/stacks/app.dev.properties', change: 'modify' }] });
+    const after = await get(sub.id);
+    expect(after.type).toBe('same');
+    expect(after.escalation).toMatchObject({ criterion: 'risk_path', reason: 'Touches risk paths: services/app/stacks/app.dev.properties' });
+  });
+
+  it('escalates a sub that needs rollout, and reads the board policy for the paths', async () => {
+    const rollout = await create('sub');
+    await submit(rollout, { ...BLOCK, needsRollout: true });
+    expect((await get(rollout.id)).escalation).toMatchObject({ criterion: 'risk_path', reason: 'Needs rollout steps after the merge' });
+    await store.transaction((tx) =>
+      tx.saveKnowledge({ boardId, kind: 'merge_policy', name: 'merge-policy', area: null, audience: [], description: '', content: '{"riskPaths": [".sstor/**"]}', layer: 'file', version: 1, source: 'edit', updatedBy: ADMIN, updatedAt: '2026-10-11T12:00:00.000Z' }),
+    );
+    const own = await create('sub');
+    await submit(own, { ...BLOCK, files: [{ path: '.sstor/x.json', change: 'modify' }] });
+    expect((await get(own.id)).escalation?.criterion).toBe('risk_path');
+  });
+
   it('does not touch a same, and does not act on a block that fails validation', async () => {
     const same = await create('same');
     await submit(same, { ...BLOCK, needsHuman: { needed: true, reason: 'x' } });

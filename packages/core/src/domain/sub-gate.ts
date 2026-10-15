@@ -1,3 +1,4 @@
+import { DEFAULT_RISK_PATHS } from './merge-policy.js';
 import type { SubGateCause } from './sub-limit.js';
 import type { Board } from './types.js';
 
@@ -38,6 +39,11 @@ export const globRegExp = (glob: string): RegExp => {
 /** Matches a path against a glob (see `globRegExp`). */
 export const matchesGlob = (path: string, glob: string): boolean => globRegExp(glob).test(path);
 
+/** The files (in order, without repeats) matching any of the risk path globs (`riskPathsOf` in the merge policy). */
+export const touchRiskPaths = (files: readonly string[], riskPaths: readonly string[]): string[] => [
+  ...new Set(files.filter((f) => riskPaths.some((g) => g.trim() !== '' && matchesGlob(f, g)))),
+];
+
 /** The path globs left out of the size: the policy's own list, or the defaults when it has none. */
 export const sizeIgnoredPathsOf = (policy: { readonly sizeIgnoredPaths?: readonly string[] } | null | undefined): readonly string[] =>
   policy?.sizeIgnoredPaths !== undefined && policy.sizeIgnoredPaths.length > 0 ? policy.sizeIgnoredPaths : DEFAULT_SIZE_IGNORED_PATHS;
@@ -65,19 +71,25 @@ export interface SubGateVerdict {
 
 /**
  * The board's sub-gate policy, applied once the repo's own checks pass: a sub that changes
- * too much or touches a sensitive path is flagged and becomes a same (row 13). The limit is the board's learned one
+ * too much, touches a sensitive path or touches a risk path is flagged and becomes a same (row 13). The limit is the board's learned one
  * as read for this decision (`sub-limit.ts`).
  */
 export const subGatePolicy = (
   diff: DiffSummary,
   board: Pick<Board, 'subMaxChangedLines' | 'sensitivePaths'>,
   sizeIgnoredPaths: readonly string[] = DEFAULT_SIZE_IGNORED_PATHS,
+  riskPaths: readonly string[] = DEFAULT_RISK_PATHS,
 ): SubGateVerdict => {
   // The sensitive-path check sees every file; only the size leaves generated ones out.
   const { changedLines, ignoredLines } = countedLines(diff, sizeIgnoredPaths);
   const sensitive = diff.files.filter((f) => board.sensitivePaths.some((g) => g.trim() !== '' && matchesGlob(f, g)));
   if (sensitive.length > 0) {
     return { passed: false, reason: `Touches sensitive paths: ${sensitive.slice(0, 5).join(', ')}`, cause: 'sensitive', changedLines, ignoredLines };
+  }
+  // Risk paths (infrastructure, IAM, builds, rollout scripts) are never a sub, however small the diff.
+  const risky = touchRiskPaths(diff.files, riskPaths);
+  if (risky.length > 0) {
+    return { passed: false, reason: `Touches risk paths: ${risky.slice(0, 5).join(', ')}`, cause: 'risk_path', changedLines, ignoredLines };
   }
   if (changedLines > board.subMaxChangedLines) {
     return {

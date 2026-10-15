@@ -1,7 +1,9 @@
 import type { Result } from '../domain/errors.js';
 import { escalationOf, oversizeOf, parseInvestigation } from '../domain/investigation.js';
+import { riskPathsOf } from '../domain/merge-policy.js';
 import { evidenceOf } from '../domain/size-check.js';
 import type { Clock, Notifier, Store } from '../ports.js';
+import { readMergePolicy } from './knowledge-service.js';
 import { checkFrom } from './size-check-service.js';
 import { hash } from './text-hash.js';
 
@@ -24,7 +26,7 @@ export class InvestigationService implements InvestigationReactor {
       clock: Clock;
       notifier: Notifier;
       /** `GlobService.escalateToSame`; the machine ignores a stale run and a same. */
-      escalate: (email: string, globId: string, input: { reason: string; evidence: string; runId: string | null }) => Promise<Result<unknown>>;
+      escalate: (email: string, globId: string, input: { reason: string; evidence: string; criterion?: string; runId: string | null }) => Promise<Result<unknown>>;
       /** `GlobService.predictRollout`: leaves the placeholder step when the investigator predicts a rollout. */
       predictRollout?: (globId: string) => Promise<void>;
     },
@@ -39,12 +41,12 @@ export class InvestigationService implements InvestigationReactor {
         const glob = await tx.getGlob(globId);
         if (glob === null) return null;
         const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
-        return { glob, plan, threshold: await tx.getSizeThreshold(glob.boardId), check: await tx.getSizeCheck(globId) };
+        return { glob, plan, threshold: await tx.getSizeThreshold(glob.boardId), check: await tx.getSizeCheck(globId), riskPaths: riskPathsOf(await readMergePolicy(tx, glob.boardId)) };
       });
       if (read === null) return;
       const { glob } = read;
 
-      const escalation = glob.type === 'sub' ? escalationOf(investigation) : null;
+      const escalation = glob.type === 'sub' ? escalationOf(investigation, read.riskPaths) : null;
       if (escalation !== null) await this.deps.escalate(email, globId, { ...escalation, runId });
       if (investigation.needsRollout === true) await this.deps.predictRollout?.(globId);
 

@@ -6,6 +6,8 @@
 import { RISK_TIERS } from './knowledge.js';
 import type { RiskTier } from './knowledge.js';
 import { contextSectionList } from './intake-learning.js';
+import { DEFAULT_RISK_PATHS } from './merge-policy.js';
+import { touchRiskPaths } from './sub-gate.js';
 import { RELATION_GATES, RELATION_UNTILS } from './types.js';
 import type { RelationGate, RelationUntil } from './types.js';
 import { MAX_PROPOSED_PARTS, applyOwnership, goalOf } from './size-check.js';
@@ -261,11 +263,25 @@ export const validationNote = (errors: readonly string[]): string =>
 // ---------------------------------------------------------------------------
 // What slop does on receipt (spec, Investigation as data)
 
-/** Why a human should check the glob, from the investigation; null when nothing in it asks for one. */
+/**
+ * Why a human should check the glob, from the investigation; null when nothing in it asks for one. Files touching a risk
+ * path, or a predicted rollout, are a slop rule (not a judgement): the escalation then carries criterion `risk_path`, which
+ * the escalation learning leaves alone. Without `riskPaths` the built-in ones apply.
+ */
 export const escalationOf = (
   investigation: Investigation,
-): { reason: string; evidence: string } | null => {
+  riskPaths: readonly string[] = DEFAULT_RISK_PATHS,
+): { reason: string; evidence: string; criterion?: 'risk_path' } | null => {
+  const risky = touchRiskPaths(
+    investigation.files.map((f) => f.path),
+    riskPaths,
+  );
+  const rule = [
+    ...(risky.length > 0 ? [`Touches risk paths: ${risky.slice(0, 5).join(', ')}`] : []),
+    ...(investigation.needsRollout === true ? ['Needs rollout steps after the merge'] : []),
+  ];
   const reasons = [
+    ...rule,
     ...(investigation.needsHuman.needed ? [investigation.needsHuman.reason?.trim() ?? ''] : []),
     ...(investigation.riskAreas.length > 0
       ? [`Touches the board's risk areas: ${investigation.riskAreas.join(', ')}`]
@@ -275,6 +291,7 @@ export const escalationOf = (
   return {
     reason: reasons.join('. '),
     evidence: `Investigation: risk tier ${investigation.riskTier}, ${String(investigation.files.length)} files, confidence ${investigation.confidence}`,
+    ...(rule.length > 0 ? { criterion: 'risk_path' as const } : {}),
   };
 };
 
