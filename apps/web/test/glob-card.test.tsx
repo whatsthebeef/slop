@@ -685,17 +685,27 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(start).toContain('bg-primary');
   });
 
-  it('clicking the Arm system label applies its filter without opening the card', async () => {
+  it('the Arm system label has a dot before it, in normal weight, and only with the label', () => {
+    const arm = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-arm-separator"]');
+    const withStep = dom(markup(view({ status: 'planning', humanSteps: [step()] })));
+    const label = withStep.querySelector('[data-testid="arm-system-label"]');
+    expect(label?.className).not.toContain('font-semibold');
+    const dot = withStep.querySelector('[data-testid="card-arm-separator"]');
+    expect(dot?.nextElementSibling?.contains(label ?? null)).toBe(true);
+    expect(arm(view({ status: 'planning', humanSteps: [] }))).toBeNull();
+  });
+
+  it('clicking the Arm system label opens the glob at Human steps without opening the card or filtering', async () => {
     const user = userEvent.setup();
-    const onFilterArmSystem = vi.fn();
+    const onOpenSection = vi.fn();
     const onOpen = vi.fn();
     render(
       <MemoryRouter>
-        <GlobCard {...base()} onOpen={onOpen} onFilterArmSystem={onFilterArmSystem} glob={view({ status: 'planning', humanSteps: [step()] })} repo='a/b' />
+        <GlobCard {...base()} onOpen={onOpen} onOpenSection={onOpenSection} glob={view({ status: 'planning', humanSteps: [step()] })} repo='a/b' />
       </MemoryRouter>,
     );
     await user.click(screen.getByTestId('arm-system-label'));
-    expect(onFilterArmSystem).toHaveBeenCalledTimes(1);
+    expect(onOpenSection).toHaveBeenCalledWith({ section: 'human-steps' });
     expect(onOpen).not.toHaveBeenCalled();
   });
 });

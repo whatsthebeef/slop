@@ -123,7 +123,9 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
           <Dot />
         </>
       )}
-      <CategoryIcon category={glob.category} />
+      <span className="ml-1.5 inline-flex">
+        <CategoryIcon category={glob.category} />
+      </span>
     </span>
   );
 };

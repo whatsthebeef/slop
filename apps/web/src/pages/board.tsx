@@ -500,10 +500,6 @@ export const BoardPage = () => {
                       glob={glob}
                       onOpen={() => openGlob(glob.id)}
                       onOpenSection={(target) => openGlob(glob.id, target)}
-                      onFilterArmSystem={() => {
-                        setFilters({ ...filters, arm: '1' });
-                        setFilterOpen(true);
-                      }}
                       onFilterGroup={(name) => {
                         setFilters({ ...filters, group: name });
                         setFilterOpen(true);
