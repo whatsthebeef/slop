@@ -39,7 +39,7 @@ export class RunWatch {
       return found;
     });
     for (const { id, runId, reason } of due) {
-      await this.globs.applyEvent(id, (g, ctx) => machine.reportFailure(g, { reason: /^(Routine run never started|The run's session never reached slop|Auto-fix didn't respond)/.test(reason) ? reason : `Run timed out: ${reason}`, runId }, ctx));
+      await this.globs.applyEvent(id, (g, ctx, facts) => machine.reportFailure(g, { reason: /^(Routine run never started|The run's session never reached slop|Auto-fix didn't respond)/.test(reason) ? reason : `Run timed out: ${reason}`, runId }, ctx, facts.relations), { relations: true });
     }
     return due.length;
   }

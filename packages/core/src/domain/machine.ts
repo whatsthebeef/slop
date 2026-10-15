@@ -331,9 +331,17 @@ class Builder {
    * the glob starts as Start would have, and its run reuses the investigation if one was stored. Call it right after the
    * investigate run's `endRun`.
    */
-  startAfterInvestigation(ended: Run): this {
+  startAfterInvestigation(ended: Run, relations: RelationFacts = NO_RELATIONS): this {
     const queued = this.glob.waiting?.investigation;
     if (queued === undefined || queued.runId !== ended.id || this.glob.status !== 'planning') return this;
+    // A start relation added since Start was pressed still holds: the glob goes back to waiting (the merge of what it waits for
+    // releases it), never straight into a run.
+    const awaited = awaitedOf(relations);
+    if (awaited.length > 0)
+      return this.set({ waiting: { since: this.glob.waiting?.since ?? this.ctx.now } }).event('Waiting', {
+        for: awaited.map((a) => a.id),
+        note: waitSummary(awaited),
+      });
     return this.set({ waiting: null })
       .event('Released', { investigation: ended.id })
       .status('implementing')
@@ -710,11 +718,12 @@ export const investigationPushed = (
   glob: Glob,
   runId: string,
   ctx: Context,
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const run = currentRun(glob);
   if (run === null || run.id !== runId || run.state === 'ended' || run.purpose !== 'investigate')
     return unchanged(glob);
-  return new Builder(glob, ctx).endRun('completed').startAfterInvestigation(run).done();
+  return new Builder(glob, ctx).endRun('completed').startAfterInvestigation(run, relations).done();
 };
 
 /**
@@ -2896,6 +2905,7 @@ export const reportFailure = (
     decision?: string | null;
   },
   ctx: Context,
+  relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   // Every failure report records the agent-set version it ran with (spec: provenance).
   const agentSetVersion = report.agentSetVersion ?? null;
@@ -2944,7 +2954,7 @@ export const reportFailure = (
     // An investigate-only run failed: the glob stays in Planning (nothing was started) and the run's history says why.
     return new Builder(glob, ctx)
       .endRun('failed', report.reason, { agentSetVersion })
-      .startAfterInvestigation(run)
+      .startAfterInvestigation(run, relations)
       .done();
   }
   if (glob.status === 'implementing') {

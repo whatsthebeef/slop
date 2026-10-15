@@ -121,7 +121,7 @@ export const mountArtifactUploads = (app: Hono<Env>, deps: ArtifactUploadDeps) =
     // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
     if (!('ignored' in a) && parsed.kind === 'investigation' && parsed.runId !== null && a.provenance.validation === undefined) {
       const runId = parsed.runId;
-      await deps.globs.applyEvent(parsed.id, (g, ctx) => machine.investigationPushed(g, runId, ctx));
+      await deps.globs.applyEvent(parsed.id, (g, ctx, facts) => machine.investigationPushed(g, runId, ctx, facts.relations), { relations: true });
     }
     return c.json(
       'ignored' in a
