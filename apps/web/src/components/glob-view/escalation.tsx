@@ -1,4 +1,6 @@
 import { HumanIcon } from '@/components/actor-icons';
+import { MarkdownView } from '../markdown-view';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from '../ui/tip';
 import { Block } from './block';
 import type { GlobViewContext } from './context';
@@ -51,11 +53,11 @@ export const EscalationSection = ({
       tone="info"
       actor="human"
       testId="escalation-note"
-      title={`Changed from sub to same because ${inSentence(escalation.reason)}.`}
+      title={stripMarkdown(`Changed from sub to same because ${inSentence(escalation.reason)}.`)}
       why={<span className="text-xs text-muted-foreground">By {escalation.by}, {escalation.at.slice(0, 10)}</span>}
       fold={{ label: 'Details', open: startOpen }}
     >
-      {evidence !== null && <p className="whitespace-pre-line text-xs text-muted-foreground">{evidence}</p>}
+      {evidence !== null && <MarkdownView content={evidence} bare />}
     </Block>
   );
 };
