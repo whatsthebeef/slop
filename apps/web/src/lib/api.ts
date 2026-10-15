@@ -81,7 +81,7 @@ import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
 
 /** A step on the board list is compact; a single-glob read adds the rest (read each with `?.`). */
-export type ListedHumanStep = CompactHumanStep & Partial<Pick<HumanStep, 'detail' | 'script' | 'check' | 'source' | 'doneBy' | 'doneAt'>>;
+export type ListedHumanStep = CompactHumanStep & Partial<Pick<HumanStep, 'detail' | 'script' | 'check' | 'source' | 'doneBy' | 'doneAt' | 'dismissedReason'>>;
 
 export interface GlobView extends Glob {
   readonly list: List;

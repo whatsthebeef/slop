@@ -166,3 +166,10 @@ export const stepInput = (draft: StepDraft): { title: string; detail?: string; w
 
 /** A dismissal needs a reason; null while it is blank. */
 export const dismissReason = (text: string): string | null => (text.trim() === '' ? null : text.trim());
+
+/** Steps a person dismissed: kept in the data, listed apart from the live ones, and never counted. */
+export const isDismissedStep = (step: Pick<ListedHumanStep, 'state'>): boolean => step.state === 'dismissed';
+
+/** Who dismissed a step and when, in words: "by ann@x.com on 2026-10-15"; empty when the step predates the record. */
+export const dismissalText = (step: Pick<ListedHumanStep, 'doneBy' | 'doneAt'>): string =>
+  `${step.doneBy == null ? '' : `by ${step.doneBy}`}${step.doneAt == null ? '' : `${step.doneBy == null ? '' : ' '}on ${step.doneAt.slice(0, 10)}`}`;

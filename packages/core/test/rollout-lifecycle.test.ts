@@ -203,7 +203,8 @@ describe('work steps through the service', () => {
     const step = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Wrong step' }));
     expect((await globs.dismissHumanStep(DEV, g.id, step.id, ' ', null)).ok).toBe(false);
     const dismissed = unwrap(await globs.dismissHumanStep(DEV, g.id, step.id, 'Not needed', null));
-    expect(dismissed).toMatchObject({ state: 'dismissed', dismissedReason: 'Not needed' });
+    expect(dismissed).toMatchObject({ state: 'dismissed', dismissedReason: 'Not needed', doneBy: DEV });
+    expect(dismissed.doneAt).not.toBeNull();
     expect((await peek(g.id)).status).toBe('signed_off');
     expect((await globs.completeHumanStep(DEV, g.id, 'nope', null)).ok).toBe(false);
   });
