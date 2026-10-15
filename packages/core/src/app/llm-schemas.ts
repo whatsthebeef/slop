@@ -202,6 +202,8 @@ export const SUGGESTION_SCHEMA = named(
     editedDraft: nullable(str),
     mergeInto: nullable(str),
     mergedText: nullable(str),
+    checkSignal: nullable(str),
+    checkReason: nullable(str),
   }),
 );
 

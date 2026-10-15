@@ -13,6 +13,7 @@ import type { LearningAssessmentFacts } from '../src/domain/decision-glob.js';
 import { SuggestService } from '../src/app/suggest-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { suggestEffect } from '../src/domain/events.js';
+import type { KbSignal } from '../src/domain/signals.js';
 import type { Glob } from '../src/domain/types.js';
 import {
   checkSuggestion,
@@ -28,6 +29,7 @@ import {
   SUGGEST_SIBLINGS_MAX,
   SUGGESTION_LABEL,
   suggestionStale,
+  suggestPrompt,
 } from '../src/domain/suggestion.js';
 import type { StoredSuggestion, Suggestion } from '../src/domain/suggestion.js';
 import type { Catalog } from '../src/ports.js';
@@ -85,6 +87,57 @@ describe('checkSuggestion', () => {
     const plain = { siblingIds: [], learning: false };
     expect(checkSuggestion({ action: 'reject', reason: 'r' }, plain).ok).toBe(true);
     expect(checkSuggestion({ action: 'approve_with_edit', reason: 'r', editedDraft: 'x' }, plain).ok).toBe(false);
+  });
+});
+
+describe('the recommended check (s15t201)', () => {
+  const withSignals = { siblingIds: [], learning: true, signalKeys: ['failure:no progress', 'finding:major'] };
+  const base = { action: 'approve', reason: 'Sound.' };
+
+  it('keeps a check that names a listed signal and gives a reason', () => {
+    const checked = checkSuggestion({ ...base, checkSignal: 'failure:no progress', checkReason: ' Runs failing with "no progress" should drop. ' }, withSignals);
+    expect(checked).toMatchObject({ ok: true, value: { check: { signalKey: 'failure:no progress', reason: 'Runs failing with "no progress" should drop.' } } });
+  });
+
+  it('drops the check, not the recommendation, when the key is unknown, the reason is missing, or the action is reject', () => {
+    for (const raw of [
+      { ...base, checkSignal: 'made:up', checkReason: 'r' },
+      { ...base, checkSignal: 'finding:major', checkReason: ' ' },
+      { ...base, checkSignal: null, checkReason: 'r' },
+      { action: 'reject', reason: 'Moot.', checkSignal: 'finding:major', checkReason: 'r' },
+    ]) {
+      const checked = checkSuggestion(raw, withSignals);
+      expect(checked.ok).toBe(true);
+      expect(checked.ok && 'check' in checked.value).toBe(false);
+    }
+    expect(checkSuggestion({ ...base, checkSignal: 'finding:major', checkReason: 'r' }, { siblingIds: [], learning: true })).toMatchObject({ ok: true });
+  });
+
+  it('round-trips through the artifact text and still reads a suggestion stored without one', () => {
+    const value: StoredSuggestion = {
+      suggestion: suggestion({ check: { signalKey: 'finding:major', reason: 'Major findings should drop.' } }),
+      model: 'm',
+      at: START,
+      stamp: { draftVersion: 1, targetVersion: 1, promptVersion: SUGGEST_PROMPT_VERSION },
+    };
+    const text = renderSuggestion(value);
+    expect(text).toContain('Check it worked: finding:major');
+    expect(readSuggestion(text)).toEqual(value);
+    expect(readSuggestion(renderSuggestion({ ...value, suggestion: suggestion() }))?.suggestion.check).toBeUndefined();
+  });
+
+  it('lists the signals in plain words in the prompt, only when there are some', () => {
+    const inputs = {
+      glob: { id: 's1k1', title: 't' },
+      learning: null,
+      siblings: [],
+      merges: [],
+      outcomes: [],
+      flags: { suggestedOutcome: null, flags: [] },
+      signals: [{ key: 'failure:no progress', text: 'no progress: 9 of 45 runs (20%) in the last 4 weeks' }],
+    };
+    expect(suggestPrompt(inputs)).toContain('- failure:no progress: no progress: 9 of 45 runs (20%) in the last 4 weeks');
+    expect(suggestPrompt({ ...inputs, signals: [] })).not.toContain('Signals the board measures');
   });
 });
 
@@ -340,6 +393,74 @@ describe('suggest', () => {
       // Approving the rival moves the target's version and drafts this one again: the model's answer no longer matches, so the rules' recommendation for the new draft replaces it as the latest.
       unwrap(await knowledge.approve(ADMIN, rival.id, (await item(rival.id)).version, { as: 'draft' }));
       expect(unwrap(await suggest.view(ADMIN, made.id))).toMatchObject({ stale: false, suggestion: { model: RULES_MODEL } });
+    });
+
+    it('offers the board\'s signals in plain words and stores the check the model picks (s15t201)', async () => {
+      const measured: KbSignal = {
+        key: 'failure:no progress for 2 hours',
+        kind: 'failure',
+        agent: null,
+        label: 'no progress for 2 hours',
+        window: { from: START, to: START },
+        figures: { affected: 9, eligible: 45, rate: 0.2, count: 9 },
+        globIds: [],
+        examples: [],
+        measuredAt: START,
+      };
+      const withSignals = new SuggestService({
+        store,
+        clock,
+        notifier,
+        knowledge: new KnowledgeService({ store, clock, catalog, notifier, signals: { measure: () => Promise.resolve([measured]) } }),
+        llm,
+        model: 'test-model',
+      });
+      const made = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
+      answer({ action: 'approve', reason: 'Sound.', checkSignal: measured.key, checkReason: 'Runs failing with "no progress" should drop.' });
+      expect(await withSignals.run(made.id)).toBe('done');
+      expect(llm.requests[0]?.prompt).toContain(`- ${measured.key}: no progress for 2 hours: 9 of 45 runs (20%) in the last 4 weeks`);
+      const viewed = unwrap(await withSignals.view(ADMIN, made.id));
+      expect(viewed.suggestion?.suggestion.check).toEqual({ signalKey: measured.key, reason: 'Runs failing with "no progress" should drop.' });
+    });
+
+    it('offers no signals to a learning that has its own, or to a document proposal', async () => {
+      const measured: KbSignal = {
+        key: 'finding:major',
+        kind: 'finding',
+        agent: null,
+        label: 'major findings',
+        window: { from: START, to: START },
+        figures: { affected: 2, eligible: 8, rate: 0.25, count: 2 },
+        globIds: [],
+        examples: [],
+        measuredAt: START,
+      };
+      const withSignals = new SuggestService({
+        store,
+        clock,
+        notifier,
+        knowledge: new KnowledgeService({ store, clock, catalog, notifier, signals: { measure: () => Promise.resolve([measured]) } }),
+        llm,
+        model: 'test-model',
+      });
+      const mined = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
+      const seeded = await item(mined.id);
+      expect(await store.transaction((tx) => learningSeed(tx, { clock }).updateSeeded({ ...seeded, signal: measured }, seeded.version))).toBe(true);
+      const proposal = unwrap(
+        await knowledge.submitLearning(DEV, boardId, {
+          sourceGlobId: null,
+          type: 'pattern',
+          statement: 'How the code is laid out',
+          evidence: 'Whole document',
+          document: { name: 'architecture', area: 'architecture', audience: ['implementer'], description: 'How the code is laid out', content: '# Architecture\n' },
+        }),
+      );
+      for (const id of [mined.id, proposal.id]) {
+        answer({ action: 'approve', reason: 'Sound.', checkSignal: measured.key, checkReason: 'r' });
+        expect(await withSignals.run(id)).toBe('done');
+        expect(llm.requests.at(-1)?.prompt).not.toContain('Signals the board measures');
+        expect(unwrap(await withSignals.view(ADMIN, id)).suggestion?.suggestion.check).toBeUndefined();
+      }
     });
 
     it('does not store an answer that merges into an unknown learning: the attempt fails', async () => {

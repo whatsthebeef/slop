@@ -274,7 +274,14 @@ const OutcomeForm = ({ flow, choice }: { flow: DecideFlow; choice: Choice }) => 
         </Label>
       )}
       {(choice === 'accept' || choice === 'accept_with_edits') && watchStep !== null && (
-        <WatchSignal boardId={flow.glob.boardId} value={watch} onChange={setWatch} own={attributes.signal} />
+        <WatchSignal
+          boardId={flow.glob.boardId}
+          value={watch}
+          onChange={setWatch}
+          own={attributes.signal}
+          recommended={flow.suggest.stored?.check}
+          learningText={`${flow.glob.title} ${target?.name ?? ''} ${target?.section ?? ''}`}
+        />
       )}
       {choice === 'retarget' && (
         <div className='grid grid-cols-3 gap-2'>
