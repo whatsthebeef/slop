@@ -1308,6 +1308,12 @@ export interface MergeOptions {
 /** "Merge when checks pass" is armed: the human step is done and slop merges once the head's checks pass. */
 export const isMergeArmed = (glob: Glob): boolean => glob.status === 'pr_open' && glob.mergeMode === 'when_green';
 
+/** The merge is in the code host's merge queue: the host tests it with the PRs ahead of it and merges it in order. */
+export const isMergeQueued = (glob: Glob): boolean => glob.status === 'merging' && glob.mergeQueue != null;
+
+/** Leaves the merge queue state off the glob it no longer applies to (a patch for `set`; nothing when it isn't set). */
+const leavesQueue = (glob: Glob): Partial<Glob> => (glob.mergeQueue == null ? {} : { mergeQueue: null });
+
 const headChecksPassed = (glob: Glob): boolean =>
   glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state === 'passed';
 
@@ -1371,15 +1377,26 @@ export const requestMerge = (
     return b.done();
   }
   return new Builder(glob, ctx)
-    .set({ mergeMode: options.continue ? 'continue' : null, mergeUpdates: 0 })
+    .set({ mergeMode: options.continue ? 'continue' : null, mergeUpdates: 0, ...leavesQueue(glob) })
     .status('merging', options.continue ? { mode: 'continue' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
     .done();
 };
 
-/** Cancel merge: disarms "merge when checks pass". */
+/**
+ * Cancel merge: disarms "merge when checks pass", or (row 14c) takes a PR out of the code host's merge queue and back to
+ * pr_open. A merge slop is carrying out directly (not queued) can't be cancelled.
+ */
 export const cancelMerge = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
+  if (isMergeQueued(glob)) {
+    return new Builder(glob, ctx)
+      .set({ mergeMode: null, mergeQueue: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
+      .event('MergeDisarmed', { reason: 'cancelled' })
+      .status('pr_open')
+      .effect({ kind: 'dequeue_merge', globId: glob.id, generation: glob.generation })
+      .done();
+  }
   if (!isMergeArmed(glob)) return invalidTransition(glob, actor, 'Merge is not waiting for checks');
   return new Builder(glob, ctx)
     .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
@@ -1419,7 +1436,7 @@ export const retryMerge = (glob: Glob, ctx: Context, relations?: RelationFacts):
   const held = mergeGate(relations);
   if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
   return new Builder(glob, ctx)
-    .set({ failure: null, mergeMode: null, mergeUpdates: 0 })
+    .set({ failure: null, mergeMode: null, mergeUpdates: 0, ...leavesQueue(glob) })
     .status('merging', { retry: true })
     .effect({
       kind: 'squash_merge',
@@ -2024,6 +2041,8 @@ export const commitPushed = (
 ): Result<Transition> => {
   const b = new Builder(glob, ctx);
   if (glob.pr !== null) b.set({ pr: { ...glob.pr, headSha: push.sha } });
+  // A new head: the host drops the old one from its merge queue, and the merge starts over on the new head's checks.
+  if (glob.mergeQueue != null) b.set({ mergeQueue: null });
   // Row 16a: a push after slop's own merge failed (usually the base merged in, conflict resolved) puts a same or super
   // back in review with its implementer; no run is queued and Merge is offered again once the new head's checks pass.
   const recovers =
@@ -2545,7 +2564,7 @@ export const checksCompleted = (
     if (checks.conflict !== undefined) {
       // An ordinary "merge the base into the branch" job, not a failure: back to pr_open with the conflict recorded.
       const reason = conflictReason(checks.conflict);
-      return withConflict(b.set({ mergeMode: null }).status('pr_open'), checks.conflict, ctx)
+      return withConflict(b.set({ mergeMode: null, ...leavesQueue(glob) }).status('pr_open'), checks.conflict, ctx)
         .event('MergeFailed', { reason, conflict: true })
         .done();
     }
@@ -2554,17 +2573,19 @@ export const checksCompleted = (
       const mergeFailure: Failure = { reason, at: ctx.now, kind: 'merge' };
       return b
         .endRunsOnFailure(reason, mergeFailure)
-        .set({ failure: mergeFailure, mergeMode: null })
+        .set({ failure: mergeFailure, mergeMode: null, ...leavesQueue(glob) })
         .event('MergeFailed', { reason: 'checks failed after update' })
         .status('failed')
         .done();
     }
-    b.effect({
-      kind: 'squash_merge',
-      globId: glob.id,
-      generation: glob.generation,
-      sha: checks.sha,
-    });
+    // Queued: the host merges it in order, so another enqueue for every check event would only churn the queue.
+    if (glob.mergeQueue == null)
+      b.effect({
+        kind: 'squash_merge',
+        globId: glob.id,
+        generation: glob.generation,
+        sha: checks.sha,
+      });
   }
   return (conflictOnly ? withConflict(b, checks.conflict, ctx) : b).done();
 };
@@ -2936,6 +2957,7 @@ export const merged = (
         headChecks: null,
         mergeMode: null,
         ...(glob.mergeHold == null ? {} : { mergeHold: null }),
+        ...leavesQueue(glob),
         failure: null,
         ...(glob.conflict == null ? {} : { conflict: null }),
       })
@@ -2956,6 +2978,7 @@ export const merged = (
       failure: null,
       mergeMode: null,
       ...(glob.mergeHold == null ? {} : { mergeHold: null }),
+      ...leavesQueue(glob),
       pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
       ...(glob.conflict == null ? {} : { conflict: null }),
     })
@@ -2991,15 +3014,94 @@ export const mergeFailed = (
 ): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
   if (conflict !== undefined) {
-    return withConflict(new Builder(glob, ctx).set({ mergeMode: null }).status('pr_open'), conflict, ctx)
+    return withConflict(new Builder(glob, ctx).set({ mergeMode: null, ...leavesQueue(glob) }).status('pr_open'), conflict, ctx)
       .event('MergeFailed', { reason, conflict: true })
       .done();
   }
   const failure: Failure = { reason, at: ctx.now, kind: 'merge' };
   return new Builder(glob, ctx)
     .endRunsOnFailure(reason, failure)
-    .set({ failure, mergeMode: null })
+    .set({ failure, mergeMode: null, ...leavesQueue(glob) })
     .event('MergeFailed', { reason })
+    .status('failed')
+    .done();
+};
+
+/**
+ * The code host's merge queue took the PR, or its place changed (the executor read it from the host). Only the merging
+ * glob's enqueued head counts: another head's entry is not this merge. Nothing changed: no event.
+ */
+export const mergeQueued = (
+  glob: Glob,
+  entry: { sha: string; position: number | null; state: 'queued' | 'merging' },
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.status !== 'merging' || glob.pr?.headSha !== entry.sha) return unchanged(glob);
+  const before = glob.mergeQueue;
+  if (before != null && before.position === entry.position && before.state === entry.state && before.sha === entry.sha) return unchanged(glob);
+  return new Builder(glob, ctx)
+    .set({
+      mergeQueue: {
+        since: before?.since ?? ctx.now,
+        sha: entry.sha,
+        position: entry.position,
+        state: entry.state,
+        ...(before?.failedSha === undefined ? {} : { failedSha: before.failedSha }),
+      },
+    })
+    .event('MergeQueued', { sha: entry.sha, position: entry.position, state: entry.state })
+    .done();
+};
+
+/** What a merge queue webhook (or the reconcile sweep) said happened; it is only a hint, the truth is re-read. */
+export interface MergeQueueHint {
+  readonly kind: 'enqueued' | 'dequeued' | 'group' | 'reconcile' | 'checks_failed';
+  /** The dequeue reason the host gave (`MERGE_CONFLICT`, `CI_FAILURE`, ...). */
+  readonly reason?: string;
+  /** The merge group commit the event named; for `checks_failed`, the commit whose check failed. */
+  readonly groupSha?: string;
+}
+
+/**
+ * A merge queue webhook or reconcile for a merging glob: queue a re-read of its queue entry. `checks_failed` also records
+ * the failing merge group commit, so a dequeue that follows can say which check failed. Ignored when the glob isn't merging
+ * (a person who queued the PR in the host's own UI is left to the merged path).
+ */
+export const mergeQueueEvent = (glob: Glob, hint: MergeQueueHint, ctx: Context): Result<Transition> => {
+  if (glob.status !== 'merging') return unchanged(glob);
+  const b = new Builder(glob, ctx);
+  if (hint.kind === 'checks_failed' && glob.mergeQueue != null && hint.groupSha !== undefined && glob.mergeQueue.failedSha !== hint.groupSha) {
+    b.set({ mergeQueue: { ...glob.mergeQueue, failedSha: hint.groupSha } });
+  }
+  return b
+    .effect({
+      kind: 'read_merge_queue',
+      globId: glob.id,
+      generation: glob.generation,
+      ...(hint.reason !== undefined && { reason: hint.reason }),
+      ...(hint.groupSha !== undefined && { groupSha: hint.groupSha }),
+    })
+    .done();
+};
+
+/**
+ * Row 16: the host's merge queue removed the PR. A conflict is the ordinary "merge the base into the branch" job (back to
+ * pr_open, the conflict flagged); anything else fails the glob with the queue's reason and, for failed checks, the failing
+ * check's lines. Retry merge enqueues it again.
+ */
+export const mergeQueueDequeued = (
+  glob: Glob,
+  removed: { reason: string; checks?: CheckFailure; conflict?: MergeConflict },
+  ctx: Context,
+): Result<Transition> => {
+  if (glob.status !== 'merging') return unchanged(glob);
+  if (removed.conflict !== undefined) return mergeFailed(glob, removed.reason, ctx, removed.conflict);
+  const reason = removed.checks === undefined ? removed.reason : `${removed.reason}: ${failureSummary(removed.checks)}`;
+  const failure: Failure = { reason, at: ctx.now, kind: 'merge', ...(removed.checks !== undefined && { checks: removed.checks }) };
+  return new Builder(glob, ctx)
+    .endRunsOnFailure(reason, failure)
+    .set({ failure, mergeMode: null, mergeQueue: null })
+    .event('MergeFailed', { reason, queue: true })
     .status('failed')
     .done();
 };
@@ -3176,6 +3278,7 @@ export const reportFailure = (
 export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
   const b = new Builder(glob, ctx);
   if (glob.pr !== null) b.set({ pr: { ...glob.pr, state: 'closed' } });
+  if (glob.mergeQueue != null) b.set({ mergeQueue: null });
   b.event('PRClosed', {});
   if (glob.status !== 'pr_open') return b.done();
   return b
@@ -3249,7 +3352,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
   if (!restricted && canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (!restricted && glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
-  if (isMergeArmed(glob)) {
+  if (isMergeArmed(glob) || isMergeQueued(glob)) {
     if (!restricted) actions.push('cancel_merge');
   } else if (mergeBlocker(glob, facts.relations) === null) {
     actions.push('merge');
@@ -3292,7 +3395,7 @@ const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
     glob.pr?.state === 'draft'
   )
     actions.push('mark_ready');
-  if (isMergeArmed(glob)) {
+  if (isMergeArmed(glob) || isMergeQueued(glob)) {
     if (!restricted) actions.push('cancel_merge');
   } else if (mergeBlocker(glob) === null) {
     actions.push('merge');

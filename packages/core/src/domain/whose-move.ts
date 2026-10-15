@@ -124,6 +124,15 @@ export const CHECKS_RUNNING_TEXT = 'checks running';
 export const MERGING_WHEN_CHECKS_PASS_TEXT = 'merging when checks pass';
 export const mergingFromBaseText = (base: string): string => `merging from ${base}`;
 
+/**
+ * The one wording for a PR in the code host's merge queue: "in merge queue · N ahead" (N is the PRs ahead of it), plain
+ * "in merge queue" when the position is unknown, and "merging" once its group is being merged.
+ */
+export const MERGE_QUEUE_TEXT = 'in merge queue';
+export const MERGE_QUEUE_TIP = 'GitHub tests it with the PRs ahead of it and merges it in order.';
+export const mergeQueueText = (position: number | null, state: 'queued' | 'merging'): string =>
+  state === 'merging' ? 'merging' : position === null ? MERGE_QUEUE_TEXT : `${MERGE_QUEUE_TEXT} · ${String(Math.max(0, position - 1))} ahead`;
+
 /** The `human` move's reasons when a person holds a glob: picked up (no machine run), or pairing on a super. */
 export const PICKED_UP_REASON = 'Picked up';
 export const PAIRING_REASON = 'Pairing';
