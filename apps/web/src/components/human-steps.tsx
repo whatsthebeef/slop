@@ -16,6 +16,8 @@ import {
   readStepsOpen,
   scriptArtifactPath,
   scriptCopyText,
+  scriptRunCommand,
+  scriptSourceUrl,
   stateText,
   stepInput,
   whoText,
@@ -30,6 +32,12 @@ import { StepDetail } from './step-detail';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 
+/** Where a repo script lives on GitHub: the board's repo and base branch. */
+interface ScriptSource {
+  readonly repo: string | null;
+  readonly baseBranch: string | null;
+}
+
 interface StepActions {
   /** Each resolves false when the request failed (the page says why). */
   readonly onAdd: (step: { title: string; detail?: string; who?: string; due?: string }) => Promise<boolean>;
@@ -37,7 +45,7 @@ interface StepActions {
   readonly onDismiss: (stepId: string, reason: string) => Promise<boolean>;
 }
 
-const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions }) => {
+const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
   const [dismissing, setDismissing] = useState(false);
   const [reason, setReason] = useState('');
   const [copied, setCopied] = useState(false);
@@ -49,6 +57,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
     const text = await scriptCopyText(glob.boardId, glob.id, script ?? { path: '' }, api.rolloutScript, window.location.origin);
     setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
   };
+  const sourceUrl = script !== null && 'path' in script ? scriptSourceUrl(source.repo, script.path, glob.pr?.state === 'merged' ? source.baseBranch : (glob.pr?.headSha ?? glob.id)) : null;
   const reasonText = dismissReason(reason);
   return (
     <li
@@ -85,9 +94,12 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
       {script !== null && (
         <div className='flex flex-wrap items-center gap-2 text-[11px]'>
           {'path' in script ? (
-            <code className='break-all font-mono' data-testid='step-script-path'>
-              {script.path}
-            </code>
+            <>
+              <span className='text-muted-foreground'>Run:</span>
+              <code className='break-all font-mono' data-testid='step-script-path'>
+                {scriptRunCommand(script.path)}
+              </code>
+            </>
           ) : (
             <Link className='min-w-0 break-words underline [overflow-wrap:anywhere]' to={scriptArtifactPath(glob.boardId, glob.id, script)} data-testid='step-script-link'>
               Rollout script: {script.artifact}
@@ -96,6 +108,11 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
           <Button size='sm' variant='outline' data-testid='step-copy' onClick={() => void copy()}>
             {copied ? 'Copied' : 'Copy'}
           </Button>
+          {'path' in script && sourceUrl !== null && (
+            <a className='underline' href={sourceUrl} target='_blank' rel='noreferrer' data-testid='step-script-source'>
+              View script
+            </a>
+          )}
         </div>
       )}
       {work && open && !dismissing && (
@@ -217,6 +234,8 @@ export const HumanSteps = ({
   glob,
   viewer,
   canAdd,
+  repo = null,
+  baseBranch = null,
   startOpen = false,
   openSignal = 0,
   collapsed = false,
@@ -225,6 +244,9 @@ export const HumanSteps = ({
   glob: GlobView;
   viewer?: HumanStepViewer;
   canAdd: boolean;
+  /** The board's repo and base branch, for a script step's link to its file on GitHub. */
+  repo?: string | null;
+  baseBranch?: string | null;
   /** A `section=human-steps` link opens it. */
   startOpen?: boolean;
   /** Bumped by the main button: opens the section again if the viewer collapsed it. */
@@ -294,6 +316,7 @@ export const HumanSteps = ({
                 <Step
                   key={s.id}
                   glob={glob}
+                  source={{ repo, baseBranch }}
                   step={s}
                   mine={viewer !== undefined && isForViewer(s, glob, viewer)}
                   busy={busy}

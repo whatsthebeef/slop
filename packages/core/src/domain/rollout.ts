@@ -23,6 +23,8 @@ export interface RolloutStep {
   readonly check: string | null;
   /** A `script` step's body: its first fenced code block, without the fences; null for other steps or when absent. */
   readonly script: string | null;
+  /** A script in the repo the step points at (`script: scripts/rollout/<glob>-<slug>.sh` under the title); null when none. It wins over a fenced body. */
+  readonly scriptPath: string | null;
 }
 
 /**
@@ -43,6 +45,8 @@ export interface RolloutStep {
  * - `(check: name)` or `check: name` at the end of the title names a capability slop can verify and tick the step by
  *   itself once it is on. A name slop doesn't know is dropped and said so in the detail, so the step still shows.
  * - A script's body is its first fenced code block; any other fenced block stays in the detail.
+ * - A line `script: <repo path>` under a step (a bullet, bold and backticks are fine) points the step at a script committed
+ *   in the repo (`scripts/rollout/<glob>-<slug>.sh`). The line is not shown as detail, and the path wins over a fenced body.
  * - The section runs to the next heading of the same or a higher level (headings inside code fences don't count).
  *   "None", "n/a", "nothing" or an empty section, or one with no list items, has no steps.
  * - Titles are made unique (`Title (2)`), because a re-read of the record matches steps by title.
@@ -51,7 +55,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
   const lines = sectionOf(record);
   const steps: RolloutStep[] = [];
   let topIndent: number | null = null;
-  let current: { kind: RolloutStepKind; title: string; check: string | null; detail: string[]; script: string[] | null; fence: Fence | null } | null = null;
+  let current: { kind: RolloutStepKind; title: string; check: string | null; detail: string[]; script: string[] | null; scriptPath: string | null; fence: Fence | null } | null = null;
   const finish = () => {
     if (current === null) return;
     const detail = trimBlank(current.detail).join('\n');
@@ -60,7 +64,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
       title: current.title,
       detail: detail === '' ? null : detail,
       check: current.check,
-      script: current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
+      script: current.scriptPath === null && current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
+      scriptPath: current.scriptPath,
     });
     current = null;
   };
@@ -85,12 +90,17 @@ export const parseRollout = (record: string): RolloutStep[] => {
       finish();
       const parsed = titleOf(item[2] ?? '');
       if (parsed === null) continue;
-      current = { kind: parsed.kind, title: parsed.title, check: parsed.check, detail: [], script: null, fence: null };
+      current = { kind: parsed.kind, title: parsed.title, check: parsed.check, detail: [], script: null, scriptPath: null, fence: null };
       if (parsed.overflow !== null) current.detail.push(parsed.overflow);
       if (parsed.unknownCheck !== null) current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
       continue;
     }
     if (current === null) continue;
+    const path = SCRIPT_LINE.exec(line);
+    if (path?.[1] !== undefined && current.scriptPath === null && isRepoPath(path[1])) {
+      current.scriptPath = path[1];
+      continue;
+    }
     const open = FENCE_OPEN.exec(line);
     if (open !== null && open[2] !== undefined) {
       const marker = open[2];
@@ -118,8 +128,13 @@ const ITEM = /^( *)(?:[-*+]|\d+[.)])\s+(.*)$/;
 const FENCE_OPEN = /^( *)(`{3,}|~{3,})/;
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const NOTHING = /^(none|n\/a|na|nothing|no rollout|not needed|no)[.!]?$/i;
+/** `script: path`, as a bullet or not, with the label bold and the path in backticks or not. */
+const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)`?\s*$/i;
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
 const CHECK_SUFFIX = /\s*\(?\bcheck\s*:\s*([A-Za-z][\w-]*)\)?\s*$/i;
+
+/** A relative path inside the repo: no leading slash, no `..`, no spaces. */
+export const isRepoPath = (path: string): boolean => !path.startsWith('/') && !path.split('/').includes('..') && /^[\w.@+-]+(?:\/[\w.@+-]+)*$/.test(path);
 
 const isFenceClose = (line: string, fence: Fence): boolean => {
   const m = FENCE_OPEN.exec(line);
@@ -242,7 +257,7 @@ export const ROLLOUT_SYSTEM = `You decide what a person must do after a change i
 The server image deploys on merge; drizzle migrations run when the server starts; GitHub workflows take effect with the merge.
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
 A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
-Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: '**Why:** <one sentence>', '**Do this:** <where, then the exact command in a fenced block or the exact clicks>', '**Check it worked:** <what you should see>'.
+Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: '**Why:** <one sentence>', '**Permissions:** <the exact login and rights, for a step run in a terminal>', '**Do this:** <where, then the exact command in a fenced block or the exact clicks>', '**Check it worked:** <what you should see>'. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title; never invent one.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
 {"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Do this / Check it worked bullets indented under it, a script's command in a fenced block, '(check: <capability>)' at the end of a title only when told that capability exists>"}
