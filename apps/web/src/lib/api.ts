@@ -397,8 +397,11 @@ export interface NewGlob {
   title: string;
   /** plan.md v1 (intake's write-up of the request); without it the glob's plan starts as its title. */
   plan?: string;
-  type: SlopType;
+  /** Null for an action (human work has no type). */
+  type: SlopType | null;
   category: Category;
+  /** Actions only: who is meant to do it. */
+  assignee?: string | null;
   /** Omitted: slop chooses one from the title and plan; null: none. */
   group?: string | null;
   environment: string | null;
@@ -425,7 +428,9 @@ export interface NewGlob {
 }
 
 /** Intake's answer: the form's fields, plus how sure it is and the past globs it was shown. */
-export type IntakeProposalView = Omit<NewGlob, 'group'> & {
+export type IntakeProposalView = Omit<NewGlob, 'group' | 'type'> & {
+  /** Intake only proposes code work, so always a type. */
+  type: SlopType;
   group: string | null;
   plan: string;
   autoTriggerReason: string | null;
@@ -457,8 +462,8 @@ export type AddRelationInput = {
 } & ({ readonly to: string; readonly version: number } | { readonly holdsBack: string });
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'group' | 'environment'>> & {
-  /** A decision's scope, the only attribute a person edits. */
-  attributes?: { scope: DecisionScope };
+  /** A decision's scope or an action's assignee, the only attributes a person edits. */
+  attributes?: { scope: DecisionScope } | { assignee: string | null };
 };
 
 /** What a person chooses for a decision in Doing (`POST /api/globs/:id/decision`). */
@@ -494,7 +499,9 @@ export type ActionPath =
   | 'merge-continue'
   | 'mark-ready'
   | 'sign-off'
-  | 'reopen';
+  | 'reopen'
+  | 'done'
+  | 'dismiss';
 
 /** What the board's banner shows: each integration that needs a person, and the in-app AWS sign-in (local development only). */
 export interface IntegrationHealthView {
@@ -723,6 +730,12 @@ export const api = {
   rolloutScript: (id: string, label: string) =>
     request<ArtifactView[]>('GET', `/api/globs/${id}/artifacts/rollout_script?label=${encodeURIComponent(label)}`).then((v) => v.at(-1)?.content ?? null),
   deleteGlob: (id: string, version: number) => request<object>('DELETE', `/api/globs/${id}`, { version }),
+  /** An action glob: a person did it (the note says what they checked, optional). */
+  completeAction: (id: string, version: number, note?: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/actions/done`, note === undefined || note.trim() === '' ? { version } : { version, note: note.trim() }),
+  /** An action glob that is not needed after all (the reason is required). */
+  dismissAction: (id: string, version: number, reason: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/actions/dismiss`, { version, reason: reason.trim() }),
   action: (id: string, action: ActionPath, version: number, anyway?: boolean) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, anyway === true ? { version, anyway } : { version }),
   intake: (boardId: number, text: string) =>
@@ -933,5 +946,8 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   decide: null,
   sign_off: 'sign-off',
   reopen: 'reopen',
+  // Done takes an optional note and Dismiss a reason: each has its own confirm and call (api.completeAction, api.dismissAction).
+  complete_action: null,
+  dismiss_action: null,
   delete: null,
 };

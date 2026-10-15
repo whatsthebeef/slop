@@ -93,7 +93,10 @@ export const GlobPage = () => {
       section={target.section}
       openLabel={labelToOpen(target)}
       onClose={toBoard}
-      onAction={(action: Action, anyway?: boolean) => {
+      onAction={(action: Action, anyway?: boolean, text?: string) => {
+        // An action glob's Done and Dismiss carry what the person typed: a note, or the reason.
+        if (action === 'complete_action') return change(() => api.completeAction(open.id, open.version, text));
+        if (action === 'dismiss_action') return change(() => api.dismissAction(open.id, open.version, text ?? ''));
         const path = ACTION_PATHS[action];
         if (path === null) return Promise.resolve(false);
         // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.

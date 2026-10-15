@@ -7,18 +7,19 @@ import type { GlobView, SplitPartInput } from '@/lib/api';
 import { GroupInput } from '@/components/group-input';
 import { planText } from '@/lib/plan-text';
 import { groupFromTitle } from '@slop/core';
+import type { SlopType } from '@slop/core';
 
 interface Draft {
   title: string;
   plan: string;
-  type: GlobView['type'];
+  type: SlopType;
   /** Indexes of earlier parts, as chosen in the "waits for" picker; none runs in parallel. */
   after: number[];
 }
 
 /** Can a glob be split: in Planning, not started, no run and no PR. */
 export const canSplit = (glob: GlobView): boolean =>
-  glob.status === 'planning' && glob.provisioning === 'none' && glob.runs.length === 0 && glob.pr === null && glob.type !== 'super';
+  glob.status === 'planning' && glob.provisioning === 'none' && glob.runs.length === 0 && glob.pr === null && glob.type !== null && glob.type !== 'super';
 
 /**
  * A manual scope cut: a glob in Planning becomes independent globs. Part 1 stays this glob with its plan to edit down; the
@@ -47,8 +48,8 @@ export const SplitGlob = ({
   const [error, setError] = useState<string | null>(null);
   if (plan.isPending) return <p className='text-xs text-muted-foreground'>Loading plan.md…</p>;
   const shown: Draft[] = parts ?? [
-    { title: glob.title, plan: original, type: glob.type, after: [] },
-    { title: '', plan: '', type: glob.type, after: [0] },
+    { title: glob.title, plan: original, type: glob.type ?? 'same', after: [] },
+    { title: '', plan: '', type: glob.type ?? 'same', after: [0] },
   ];
   const edit = (index: number, changes: Partial<Draft>) => setParts(shown.map((p, i) => (i === index ? { ...p, ...changes } : p)));
   const remove = (index: number) =>
@@ -139,7 +140,7 @@ export const SplitGlob = ({
           <Button
             size='sm'
             variant='outline'
-            onClick={() => setParts([...shown, { title: '', plan: '', type: glob.type, after: [shown.length - 1] }])}
+            onClick={() => setParts([...shown, { title: '', plan: '', type: glob.type ?? 'same', after: [shown.length - 1] }])}
           >
             Add a part
           </Button>

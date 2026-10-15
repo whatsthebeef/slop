@@ -1,4 +1,5 @@
-import { normaliseGroup } from '@slop/core';
+import { isHumanCategory, normaliseGroup } from '@slop/core';
+import type { Category } from '@slop/core';
 import type { GroupGlobRow, GroupSummary, RegroupResult } from '@slop/core';
 
 /** Where a group's page lives; the name is a path segment, so it is encoded. */
@@ -17,9 +18,9 @@ export const cardProgress = (groups: readonly GroupSummary[] | undefined, name: 
 };
 
 /** Globs a person can move into the group: work globs of the board that aren't in it, newest id last. */
-export const movableIn = <G extends { id: string; group: string | null; category: string; list: string }>(globs: readonly G[], name: string): G[] =>
+export const movableIn = <G extends { id: string; group: string | null; category: Category; list: string }>(globs: readonly G[], name: string): G[] =>
   globs
-    .filter((g) => g.category !== 'decision' && g.list !== 'signed_off' && (g.group === null || normaliseGroup(g.group) !== normaliseGroup(name)))
+    .filter((g) => !isHumanCategory(g.category) && g.list !== 'signed_off' && (g.group === null || normaliseGroup(g.group) !== normaliseGroup(name)))
     .sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
 
 /** One line for a rename or merge: the globs that kept their old name come back to try again. */

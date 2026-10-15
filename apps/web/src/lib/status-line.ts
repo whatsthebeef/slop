@@ -410,8 +410,9 @@ const SHOWN_AHEAD = 2;
 const startHolds = (glob: GlobView): readonly Holding[] =>
   glob.status === 'planning' || glob.status === 'failed' ? (glob.holding ?? []).filter((h) => h.gate === 'start') : [];
 
-/** What a holding names: the glob ID, or "decision s15k190" for a decision glob. */
-const named = (h: Pick<Holding, 'to' | 'toIsDecision'>): string => (h.toIsDecision ? `decision ${h.to}` : h.to);
+/** What a holding names: the glob ID, or "decision s15k190" / "action s15a3" for human work. */
+const named = (h: Pick<Holding, 'to' | 'toIsDecision' | 'toIsAction'>): string =>
+  h.toIsDecision ? `decision ${h.to}` : h.toIsAction === true ? `action ${h.to}` : h.to;
 
 export interface BlockedParts {
   /** The names to say: glob IDs, and "decision <id>" for a decision. */
@@ -440,6 +441,8 @@ const holdState = (state: Holding['state']): string => {
       return 'rollout open';
     case 'decided':
       return 'decided';
+    case 'done':
+      return 'done';
     case 'merged':
       return 'merged';
     case 'signed_off':
@@ -483,7 +486,7 @@ export const holdLine = (glob: GlobView): HoldLine | null => {
     tip: held
       .map((h) => `${GATE_WORDS[h.gate].tip} ${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
       .join('\n'),
-    icon: first.toIsDecision ? 'human' : 'hourglass',
+    icon: first.toIsDecision || first.toIsAction === true ? 'human' : 'hourglass',
   };
 };
 

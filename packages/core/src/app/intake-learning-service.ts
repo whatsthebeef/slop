@@ -13,7 +13,8 @@ import type { ExampleCandidate, IntakeAccuracy, IntakeExample, IntakeRecord, Int
 import type { ReviewStats } from '../domain/knowledge.js';
 import type { BoardJobResult } from '../domain/signals.js';
 import type { RiskOutcome } from '../domain/risk-area.js';
-import type { Glob } from '../domain/types.js';
+import { isCodeGlob } from '../domain/types.js';
+import type { CodeGlob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import type { EscalationLearningService } from './escalation-learning-service.js';
@@ -45,7 +46,7 @@ export const embedRequest = async (embedder: Embedder | undefined, request: stri
 
 /** The frozen record of what intake saw and decided for a glob just created (pure). */
 export const snapshotOf = (
-  glob: Glob,
+  glob: CodeGlob,
   plan: string,
   intake: IntakeRecord | null,
   source: SnapshotSource,
@@ -150,6 +151,8 @@ export class IntakeLearningService {
       const created = new Map<string, DomainEvent>();
       for (const e of await tx.listBoardEvents(boardId, EPOCH, ['GlobCreated'])) created.set(e.globId, e);
       for (const glob of missing) {
+        // Intake only ever saw code work.
+        if (!isCodeGlob(glob)) continue;
         const plans = await tx.artifactVersions(glob.id, 'plan', '');
         const plan = plans.find((a) => a.version === 1)?.content ?? '';
         const data = created.get(glob.id)?.data;

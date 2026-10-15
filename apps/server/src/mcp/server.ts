@@ -1,6 +1,6 @@
 import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, StoredHumanStep } from '@slop/core';
 import { cleanFileName, invalidInput, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ARTIFACT_KINDS, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, OUTCOME_REASON_MAX, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -125,7 +125,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `type` always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: category `action`, a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `type` always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -136,7 +136,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .optional()
           .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the title'),
         type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing). Sub and super are for board admins only; everyone else creates a same'),
-        category: z.enum(WORK_CATEGORIES).optional(),
+        category: z.enum([...WORK_CATEGORIES, 'action']).optional().describe('feature, task or bug (code work), or action (something a person does: no type)'),
+        assignee: z.string().min(1).max(200).optional().describe('Action only: the email of the person meant to do it (default: anyone on the board)'),
         group: z.string().nullable().optional().describe('The glob\'s group; omit it to let slop choose one from the title and plan, pass null or an empty string for none'),
         environment: z
           .string()
@@ -187,6 +188,40 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       },
     },
     async (input) => {
+      if (input.category === 'action') {
+        const refused = (message: string) => ({ ...json({ code: 'invalid_input', message }), isError: true });
+        if (input.title === undefined || input.title.trim() === '') return refused('An action needs a title');
+        if (input.type !== undefined) return refused('An action has no type');
+        if (input.environment !== undefined || input.start !== undefined || input.autoTrigger === true) return refused('An action has no environment, start or autoTrigger: nothing runs for it');
+        if ((input.files ?? []).length > 0 || input.inboxItem !== undefined) return refused('An action takes no files or inbox item: put them in the plan or attach them afterwards');
+        const made = await globs.create(email, {
+          boardId: input.board,
+          title: input.title,
+          type: null,
+          category: 'action',
+          group: input.group === undefined || input.group === null || input.group.trim() === '' ? null : input.group.trim(),
+          environment: null,
+          autoTrigger: false,
+          ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+          ...(input.plan === undefined ? {} : { plan: input.plan }),
+          planBy: 'sessionator',
+          source: 'mcp',
+          idempotencyKey: input.idempotencyKey,
+          ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
+          ...(input.relations === undefined ? {} : { relations: relationInputs(input.relations) }),
+          relationsBy: 'agent' as const,
+        });
+        if (!made.ok) return reply(made);
+        return reply(await globs.get(email, made.value.id), ({ glob }) => ({
+          id: glob.id,
+          version: glob.version,
+          status: glob.status,
+          type: null,
+          category: glob.category,
+          group: glob.group,
+          assignee: made.value.attributes !== undefined && 'assignee' in made.value.attributes ? made.value.attributes.assignee : null,
+        }));
+      }
       if (input.files !== undefined && input.files.length > 0) {
         if (deps.attachments === undefined) return { ...json({ code: 'invalid_input', message: 'File attachments are not set up on this slop' }), isError: true };
         for (const f of input.files) {
@@ -380,17 +415,20 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'list_globs',
     {
-      description: 'Globs on a board (ID, title, status), optionally filtered.',
+      description:
+        'Globs on a board (ID, title, status), optionally filtered. Without `category` it lists code work (features, tasks, bugs); pass `action` or `decision` to list human work (an action is open while its status is planning; `type` is null for both).',
       inputSchema: {
         board: z.number().int(),
         status: z.array(z.enum(STATUSES)).optional(),
         type: z.enum(SLOP_TYPES).optional(),
+        category: z.enum(CATEGORIES).optional().describe('One category: feature, task, bug, decision or action'),
         group: z.string().optional(),
         person: z.string().optional().describe('Planner or implementer email'),
       },
     },
-    async ({ board, status, type, group, person }) => {
+    async ({ board, status, type, category, group, person }) => {
       const result = await globs.list(email, board, {
+        include: category === 'action' ? 'actions' : category === 'decision' ? 'decisions' : 'work',
         ...(status === undefined ? {} : { status }),
         ...(type === undefined ? {} : { type }),
         ...(group === undefined ? {} : { group }),
@@ -399,7 +437,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const now = Date.now();
       return reply(result, (list) =>
         list
-          .filter((g) => onBoard(g, now))
+          .filter((g) => onBoard(g, now) && (category === undefined || g.category === category))
           .map((g) => ({
             id: g.id,
             title: g.title,
@@ -661,6 +699,34 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         await globs.reportFailure(email, id, reason, runId ?? null, agentSetVersion ?? null, kind === undefined ? undefined : { kind, decision: decision ?? null }),
         (g) => globView(g),
       ),
+  );
+
+  server.registerTool(
+    'complete_action',
+    {
+      description:
+        "Mark an action glob done: a person did the work. Optionally note what was checked. Anyone on the board may do it; it records who and when, and globs waiting for the action are released. A repeat on a done action changes nothing. Only call it for work the person has actually done or confirmed. Pass the version you read.",
+      inputSchema: { id: z.string(), version: z.number().int(), note: z.string().max(OUTCOME_REASON_MAX).optional().describe('What was checked (optional)') },
+    },
+    async ({ id, version, note }) => {
+      const done = await globs.completeAction(email, id, version, note);
+      if (done.ok) await deps.outbox.drain(id);
+      return reply(done, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'dismiss_action',
+    {
+      description:
+        'Dismiss an action glob as not needed, with the reason. It ends the action like done does, so globs waiting for it are released: say why in the reason. Pass the version you read.',
+      inputSchema: { id: z.string(), version: z.number().int(), reason: z.string().min(1).max(OUTCOME_REASON_MAX) },
+    },
+    async ({ id, version, reason }) => {
+      const dismissed = await globs.dismissAction(email, id, version, reason);
+      if (dismissed.ok) await deps.outbox.drain(id);
+      return reply(dismissed, (g) => globView(g));
+    },
   );
 
   server.registerTool(

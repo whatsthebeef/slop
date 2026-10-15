@@ -1,4 +1,4 @@
-import { decisionOf } from '@slop/core';
+import { isHumanCategory } from '@slop/core';
 import type { Category, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { needsPerson } from './card-rows';
@@ -56,7 +56,7 @@ export type BoardFilter = ChipsFilter | TextFilter | TagFilter | ToggleFilter;
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
 
-const CATEGORIES: Category[] = ['feature', 'task', 'bug', 'decision'];
+const CATEGORIES: Category[] = ['feature', 'task', 'bug', 'action', 'decision'];
 
 /** The board's filters. Adding one is one entry here: the pane renders this list and the board applies it. */
 export const BOARD_FILTERS: BoardFilter[] = [
@@ -64,7 +64,7 @@ export const BOARD_FILTERS: BoardFilter[] = [
     key: 'category',
     label: 'Category',
     hideLabel: true,
-    defaultValue: 'feature,task,bug',
+    defaultValue: 'feature,task,bug,action',
     control: 'chips',
     options: CATEGORIES.map((value) => ({ value, label: value })),
     // Kept in the options' order and without repeats, so equal selections give equal URLs.
@@ -110,8 +110,8 @@ export const BOARD_FILTERS: BoardFilter[] = [
     label: 'Arm system',
     control: 'toggle',
     normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
-    // Globs with a step a person must do at release (the card's "Arm system" label); a decision glob has none.
-    matches: (glob) => decisionOf(glob) === null && needsRelease(glob.humanSteps ?? []) !== null,
+    // Globs with a step a person must do at release (the card's "Arm system" label); human work has none.
+    matches: (glob) => !isHumanCategory(glob.category) && needsRelease(glob.humanSteps ?? []) !== null,
   },
 ];
 

@@ -27,12 +27,14 @@ import type { DependencyInferenceService, InferredEdge } from './dependency-infe
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
-import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, pickUpWarning, startIds, toState } from '../domain/relations.js';
-import type { AwaitedDependency, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, ToState } from '../domain/relations.js';
+import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, pickUpWarning, startIds, toState } from '../domain/relations.js';
+import type { AwaitedDependency, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, TitleInfo, ToState } from '../domain/relations.js';
 import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
+import { ACTION_PLAN_TEMPLATE } from '../domain/action-glob.js';
+import { isCodeGlob, isHumanCategory } from '../domain/types.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { readMergePolicy } from './knowledge-service.js';
 import { subGateCheckOf } from '../domain/merge-policy.js';
@@ -98,10 +100,14 @@ export const MAX_RELATION_REASON = 300;
 /** Who stated the relations of a request: the source they are recorded with. */
 export type RelationsBy = 'person' | 'agent';
 
+/** A code work create: the type is chosen. */
+type CodeCreateInput = Omit<CreateGlobInput, 'type'> & { readonly type: SlopType };
+
 export interface CreateGlobInput {
   readonly boardId: number;
   readonly title: string;
-  readonly type: SlopType;
+  /** Null for an action (human work has no type); code work needs one. */
+  readonly type: SlopType | null;
   /**
    * False when the caller didn't choose the type (a default, or intake's proposal): a member who may only create sames then
    * gets a same. An explicit sub or super from them is refused (default true).
@@ -110,6 +116,8 @@ export interface CreateGlobInput {
   readonly category: Category;
   readonly group: string | null;
   readonly environment: string | null;
+  /** Actions: who is meant to do it (default: anyone). */
+  readonly assignee?: string | null;
   readonly autoTrigger: boolean;
   /** Super only: `false` parks it in Planning until a person picks it up to pair; otherwise it starts in Doing with its creator. */
   readonly start?: boolean;
@@ -314,9 +322,9 @@ export interface GlobView {
   readonly dismissedKeys: readonly string[];
 }
 
-/** The title of each glob and whether it is a decision, for the holdings that name them. */
-const titlesOf = (globs: ReadonlyMap<string, Glob>): Map<string, { title: string; decision: boolean }> =>
-  new Map([...globs].map(([id, g]) => [id, { title: g.title, decision: g.category === 'decision' }]));
+/** The title of each glob and whether it is a decision or an action, for the holdings that name them. */
+const titlesOf = (globs: ReadonlyMap<string, Glob>): Map<string, TitleInfo> =>
+  new Map([...globs].map(([id, g]) => [id, { title: g.title, decision: g.category === 'decision', action: g.category === 'action' }]));
 
 /** A dismissal key is opaque to the server; the web builds it from the situation (see `lib/dismissals.ts`). */
 const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
@@ -357,7 +365,7 @@ interface CommandOptions {
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
   readonly triggeredByCreator?: boolean;
   /** Which globs the step applies to: work globs (the default), decision globs only, or either (pick-up, field edits). */
-  readonly applies?: 'work' | 'decision' | 'any';
+  readonly applies?: 'work' | 'decision' | 'action' | 'any';
   /** Runs in the transaction after the glob was updated, only when the step changed it: `before` is the glob as it was. */
   readonly record?: (tx: Tx, before: Glob, next: Glob, actor: Actor | null) => Promise<void>;
 }
@@ -972,9 +980,13 @@ export class GlobService {
   // -------------------------------------------------------------------------
   // Commands from people (each carries the version the client read)
 
-  async create(email: string, wanted: CreateGlobInput): Promise<Result<Glob>> {
+  async create(email: string, given: CreateGlobInput): Promise<Result<Glob>> {
+    if (given.category === 'action') return this.createAction(email, given);
+    if (given.category === 'decision') return invalidInput('A decision glob is created from a knowledge proposal or an inbox item, not directly');
+    if (given.type === null) return invalidInput(`A ${given.category} needs a type`);
+    const wanted: CodeCreateInput = { ...given, type: given.type };
     // A glob created in a group gets the group-wide decisions still open on it, so a sub can't start before they are decided.
-    const inherited = wanted.group === null || wanted.category === 'decision' ? [] : await this.groupRelationsFor(wanted.boardId, wanted.group);
+    const inherited = wanted.group === null ? [] : await this.groupRelationsFor(wanted.boardId, wanted.group);
     const input = inherited.length === 0 ? wanted : { ...wanted, relations: [...inherited, ...(wanted.relations ?? [])] };
     try {
       return await this.createWithItem(email, input);
@@ -988,8 +1000,8 @@ export class GlobService {
    * Only board admins choose sub or super (access.ts). A type nobody chose becomes a same for anyone else; a chosen one is
    * refused. Non-members and unknown boards fall through to the checks in the transaction.
    */
-  private async resolveType(email: string, input: CreateGlobInput): Promise<Result<CreateGlobInput>> {
-    if (input.type === 'same' || input.category === 'decision') return ok(input);
+  private async resolveType(email: string, input: CodeCreateInput): Promise<Result<CodeCreateInput>> {
+    if (input.type === 'same') return ok(input);
     const actor = await this.deps.store.transaction((tx) => this.actorFor(tx, email, input.boardId));
     if (!actor.ok || canChooseType(actor.value.role, input.type)) return ok(input);
     if (input.typeChosen === false) return ok({ ...input, type: 'same' });
@@ -1006,12 +1018,78 @@ export class GlobService {
     return actor === null || !actor.ok || canChooseType(actor.value.role, to) ? null : forbidden(CHOOSE_TYPE_REFUSAL);
   }
 
-  private async createWithItem(email: string, wanted: CreateGlobInput): Promise<Result<Glob>> {
+  /**
+   * An action glob: something a person does, then marks done. No type, intake, size check, branch or relations (nothing holds an
+   * action back); plan.md v1 is the caller's, else the action template.
+   */
+  private async createAction(email: string, input: CreateGlobInput): Promise<Result<Glob>> {
+    if (input.type !== null) return invalidInput('An action has no type');
+    if (input.environment !== null) return invalidInput('An action has no environment');
+    if ((input.after ?? []).length > 0 || (input.relations ?? []).length > 0) return invalidInput('An action is never held back: it takes no relations');
+    // `files` is an agent's advisory guess for exclusive paths; an action has no paths. (`inboxItem` and `intake` come from the web
+    // form's own flow, so they are not refused here: the MCP tool refuses `inboxItem` on its own.)
+    if ((input.files ?? []).length > 0) return invalidInput('An action takes no files: put them in the plan or attach them afterwards');
+    const plan = input.plan?.trim() ? input.plan : ACTION_PLAN_TEMPLATE.replace('<What a person needs to do>', input.title.trim());
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
+      const board = await tx.getBoard(input.boardId);
+      if (board === null) return notFound(`No board ${input.boardId}`);
+      const actor = await this.actorFor(tx, email, board.id);
+      if (!actor.ok) return actor;
+      if (input.idempotencyKey !== null) {
+        const existing = await tx.findGlobByCreationKey(board.id, input.idempotencyKey);
+        if (existing !== null) return ok({ glob: existing, changed: false, events: [], effects: [] });
+      }
+      const n = await tx.nextNumber(board.id, letterOf('action'));
+      const ctx = await this.context(actor.value, board);
+      const created = machine.create(
+        {
+          id: formatId(board.id, letterOf('action'), n),
+          boardId: board.id,
+          title: input.title,
+          type: null,
+          category: 'action',
+          attributes: { assignee: input.assignee ?? null, outcome: null },
+          group: input.group,
+          environment: null,
+          autoTrigger: false,
+        },
+        board,
+        ctx,
+      );
+      if (!created.ok) return created;
+      const glob = { ...created.value.glob, version: 1 };
+      if (!(await tx.insertGlob(glob, input.idempotencyKey))) throw new Error(`Glob ID collision for ${glob.id}`);
+      await tx.appendEvents(created.value.events);
+      const artifact = await tx.insertArtifact({
+        globId: glob.id,
+        kind: 'plan',
+        label: '',
+        content: plan,
+        link: null,
+        commitSha: null,
+        provenance: { by: input.planBy ?? 'human', actor: email, runId: null, agentSetVersion: null },
+        createdAt: ctx.now,
+      });
+      await tx.appendEvents([
+        {
+          type: 'ArtifactAdded',
+          globId: glob.id,
+          actor: email,
+          at: ctx.now,
+          data: { kind: 'plan', label: '', version: artifact.version, commitSha: null, runId: null, agentSetVersion: null },
+        },
+      ]);
+      return ok({ ...created.value, glob, changed: true });
+    });
+    if (!result.ok) return result;
+    if (result.value.changed) this.publish(result.value.glob);
+    return ok(result.value.glob);
+  }
+
+  private async createWithItem(email: string, wanted: CodeCreateInput): Promise<Result<Glob>> {
     const resolved = await this.resolveType(email, wanted);
     if (!resolved.ok) return resolved;
     const input = resolved.value;
-    // Decisions come from knowledge proposals, the inbox and the backfill: never through the work form.
-    if (input.category === 'decision') return invalidInput('A decision glob is created from a knowledge proposal or an inbox item, not directly');
     // A glob about to start waits for open globs that may change the same exclusive paths (read before the transaction:
     // it asks the code host).
     let holds: readonly ImpliedAfter[] = [];
@@ -1068,11 +1146,21 @@ export class GlobService {
         if (known.get(a)?.boardId !== board.id) return invalidInput(`No glob ${a} on this board`);
       }
       if (wanted.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
+      // A need waits for what its target ends in: a merge, a decision's outcome or an action being done or dismissed.
+      const wantedUntil = new Map<string, RelationUntil>();
+      for (const to of wanted) {
+        const target = known.get(to);
+        if (target === undefined) continue;
+        const until = defaultUntil(target);
+        const shape = checkRelationShape({ id, category: input.category }, { to, until }, target);
+        if (!shape.ok) return shape;
+        wantedUntil.set(to, until);
+      }
       const explicit: NewRelation[] = [];
       for (const r of stated) {
         const target = known.get(r.to);
         if (target === undefined) continue;
-        const until = r.until ?? (target.category === 'decision' ? 'decided' : 'merged');
+        const until = r.until ?? (defaultUntil(target));
         const shape = checkRelationShape({ id, category: input.category }, { to: r.to, until }, target);
         if (!shape.ok) return shape;
         const reason = (r.reason ?? '').trim();
@@ -1080,16 +1168,17 @@ export class GlobService {
         explicit.push({ to: r.to, gate: r.gate ?? 'start', until, reason: reason === '' ? null : reason, evidence: [], source: by, group: r.group ?? null });
       }
       const needs: NewRelation[] = [
-        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: by })),
+        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: wantedUntil.get(to) ?? 'merged', reason: null, evidence: [], source: by })),
         ...explicit,
         ...inferredNeeds.slice(0, Math.max(0, MAX_RELATIONS - wanted.length - explicit.filter((r) => r.gate === 'start').length)).map((i): NewRelation => ({ to: i.id, gate: 'start', until: i.kind === 'decision' ? 'decided' : 'merged', reason: i.reason, evidence: i.files, source: 'inferred' })),
       ].filter((r) => {
         const target = known.get(r.to);
         if (target === undefined || target.boardId !== board.id) return false;
         // An inferred edge must match what it points at: a decision for a decision glob, a need for work.
-        if (r.source === 'inferred' && (r.until === 'decided') !== (target.category === 'decision')) return false;
+        if (r.source === 'inferred' && (target.category === 'action' || (r.until === 'decided') !== (target.category === 'decision'))) return false;
         // A start relation to a glob that merged already holds nothing and is not recorded; the other gates are kept.
-        return !(r.gate === 'start' && r.until === 'merged' && hasMerged(target));
+        // (An action that is done or dismissed already is the same: its gate is open.)
+        return !(r.gate === 'start' && ((r.until === 'merged' && hasMerged(target)) || (r.until === 'done' && toState(target) === 'done')));
       });
       const perGate = (gate: RelationGate): number => needs.filter((r) => r.gate === gate).length;
       if (perGate('start') > MAX_RELATIONS || perGate('merge') > MAX_RELATIONS || perGate('sign_off') > MAX_RELATIONS) {
@@ -1120,7 +1209,7 @@ export class GlobService {
       await this.writeNew(tx, glob, created.inserted, ctx.actor?.email ?? null, ctx.now);
       await tx.enqueueEffects(transition.value.effects);
       // The frozen record of what intake saw and decided (spec, Intake): written with the glob, never edited.
-      await tx.insertIntakeSnapshot(snapshotOf(glob, planText, input.intake ?? null, input.source ?? 'api'), embedding);
+      if (isCodeGlob(glob)) await tx.insertIntakeSnapshot(snapshotOf(glob, planText, input.intake ?? null, input.source ?? 'api'), embedding);
       if (size !== null) await tx.upsertSizeCheck(checkFrom(glob.id, board.id, size, null, this.deps.clock.now()));
       const artifact = await tx.insertArtifact({
         globId: glob.id,
@@ -1214,6 +1303,7 @@ export class GlobService {
       for (const n of part.after ?? []) {
         if (!Number.isInteger(n) || n < 0 || n >= index) return invalidInput(`Part ${index} can only start after earlier parts, not ${n}`);
       }
+      if (part.category !== undefined && isHumanCategory(part.category)) return invalidInput('A split makes code work: decisions and actions are created on their own');
       if (index === 0 && (part.after ?? []).length > 0) return invalidInput('Part 0 is the original glob and starts after nothing new');
     }
     const result = await this.deps.store.transaction(async (tx): Promise<Result<{ globs: Glob[]; added: readonly string[]; fresh: boolean }>> => {
@@ -1236,6 +1326,7 @@ export class GlobService {
       if (original.version !== version) {
         return err({ code: 'version_conflict', message: 'The glob has changed', current: original });
       }
+      if (original.type === null) return invalidInput(`${id} is ${original.category === 'action' ? 'an action' : 'a decision'}: human work is not split`);
       // Only the current generation counts: Discard & back to Planning starts a new one, so earlier runs and PRs are history.
       const startedBy: string[] = [];
       if (original.status !== 'planning') startedBy.push(`it is ${original.status}`);
@@ -1326,6 +1417,11 @@ export class GlobService {
         const target = inheritedFound.get(to);
         return target !== undefined && !hasMerged(target);
       });
+      // What a part waits for: the sibling parts merge, an inherited action is done (defaultUntil of what each points at).
+      const untilOf = (to: string): RelationUntil => {
+        const target = inheritedFound.get(to);
+        return target === undefined ? 'merged' : defaultUntil(target);
+      };
       const globs: Glob[] = [updated];
       const needsBy = input.planBy === 'human' || input.planBy === undefined ? 'person' : 'agent';
       const withArtifacts = [original.id];
@@ -1337,7 +1433,7 @@ export class GlobService {
         const awaitedIds = [...new Set([...inherited, ...earlier])];
         if (awaitedIds.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
         // A need the part names is an ordinary relation (a person's or an agent's); what the original waited for stays a person's.
-        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: earlier.includes(to) ? needsBy : 'person' }));
+        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: untilOf(to), reason: null, evidence: [], source: earlier.includes(to) ? needsBy : 'person' }));
         const startRelations = applyWrite([], { add: startWrite, update: [], remove: [] }, { boardId: board.id, from: partId, now: ctx.now, newId: () => this.relationId() });
         const created = machine.create(
           {
@@ -1430,7 +1526,7 @@ export class GlobService {
         const scope = decision === null ? null : validateScopeEdit(decision.category, changes.attributes);
         if (decision === null || scope === null || !scope.ok || scope.value.kind !== 'glob') return ok(null);
         const governed = await tx.getGlob(scope.value.ref);
-        return governed?.boardId !== decision.boardId || governed.category === 'decision'
+        return governed?.boardId !== decision.boardId || isHumanCategory(governed.category)
           ? invalidInput(`No work glob ${scope.value.ref} on board ${String(decision.boardId)}`)
           : ok(null);
       });
@@ -1441,7 +1537,7 @@ export class GlobService {
     let stated = statedHere;
     if (changes.group !== undefined && changes.group !== null) {
       const now = await this.peek(id);
-      if (now !== null && now.category !== 'decision' && !inGroup(now, changes.group)) {
+      if (now !== null && !isHumanCategory(now.category) && !inGroup(now, changes.group)) {
         const inherited = await this.groupRelationsFor(now.boardId, changes.group, now);
         if (inherited.length > 0) stated = [...inherited, ...(statedHere ?? [])];
       }
@@ -1517,7 +1613,7 @@ export class GlobService {
       const target = found.get(w.to);
       if (target?.boardId !== glob.boardId) return invalidInput(`No glob ${w.to} on this board`);
       const gate = w.gate ?? 'start';
-      const until = w.until ?? (target.category === 'decision' ? 'decided' : 'merged');
+      const until = w.until ?? (defaultUntil(target));
       const shape = checkRelationShape(glob, { to: w.to, until }, target);
       if (!shape.ok) return shape;
       const reason = (w.reason ?? '').trim();
@@ -1575,7 +1671,13 @@ export class GlobService {
     const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
     const adds: NewRelation[] = [];
     for (const to of add) {
-      const draft: NewRelation = { to, gate: 'start', until: 'merged', reason: null, evidence: [], source: 'person' };
+      const target = found.get(to);
+      const until = target === undefined ? 'merged' : defaultUntil(target);
+      if (target !== undefined) {
+        const shape = checkRelationShape(glob, { to, until }, target);
+        if (!shape.ok) return shape;
+      }
+      const draft: NewRelation = { to, gate: 'start', until, reason: null, evidence: [], source: 'person' };
       const checked = checkRelation(draftOf(glob.boardId, glob.id, draft), glob.boardId, growing, (gid) => found.get(gid));
       if (!checked.ok) return checked;
       growing.push(draftOf(glob.boardId, glob.id, draft));
@@ -1586,6 +1688,7 @@ export class GlobService {
 
   /** A person's retype teaches the board's intake (spec, Intake); recording never fails the change. */
   private recordRetype(glob: Glob, from: SlopType, actor: string): Promise<void> {
+    if (glob.type === null) return Promise.resolve();
     return recordTypeCorrection(this.deps.store, this.deps.clock, { boardId: glob.boardId, globId: glob.id, from, to: glob.type, actor }, this.deps.log);
   }
 
@@ -1669,7 +1772,7 @@ export class GlobService {
     if (source === null) return notFound(`No glob ${id}`);
     const actor = await this.deps.store.transaction((tx) => this.actorFor(tx, email, source.boardId));
     if (!actor.ok) return actor;
-    const members = (await this.peekAll(source.boardId, {})).filter((g) => inGroup(g, group) && g.category !== 'decision' && g.id !== id);
+    const members = (await this.peekAll(source.boardId, {})).filter((g) => inGroup(g, group) && !isHumanCategory(g.category) && g.id !== id);
     if (members.length === 0) return notFound(`No group ${group} on board ${source.boardId}`);
     const gate = input.gate ?? 'start';
     const name = members[0]?.group ?? group;
@@ -1822,6 +1925,18 @@ export class GlobService {
   /** Decision globs: take an accepted decision back to Doing, its outcome cleared. */
   reopenDecision(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.reopenDecision(glob, ctx), { applies: 'decision' });
+  }
+
+  /** Action globs: a person did the work (optionally noting what they checked); what waited for it is released. */
+  completeAction(email: string, id: string, version: number | null, note?: string) {
+    return this.command(email, id, version, (glob, ctx) => machine.completeAction(glob, note === undefined ? {} : { note }, ctx), {
+      applies: 'action',
+    });
+  }
+
+  /** Action globs: the work is not needed; the reason is required, and what waited for it is released. */
+  dismissAction(email: string, id: string, version: number | null, reason: string) {
+    return this.command(email, id, version, (glob, ctx) => machine.dismissAction(glob, { reason }, ctx), { applies: 'action' });
   }
 
   /** `mark_ready`: ask slop to mark the glob's draft PR ready for review. */
@@ -2002,7 +2117,9 @@ export class GlobService {
    */
   async releaseDependents(mergedId: string, boardId: number): Promise<string[]> {
     // The merge is also an outcome for the board's dependency rules (its overlaps went cleanly or not); it never blocks the release.
-    await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
+    // Human work (a decision or an action) has no overlaps to learn from.
+    const source = await this.deps.store.transaction((tx) => tx.getGlob(mergedId));
+    if (source === null || !isHumanCategory(source.category)) await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
     const dependants = await this.deps.store.transaction(async (tx) => {
       const rows = (await tx.listRelationsTo([mergedId])).filter((r) => isActive(r) && r.boardId === boardId);
       const from = [...new Set(rows.map((r) => r.from))];
@@ -2190,6 +2307,8 @@ export class GlobService {
             // that has been decided holds nothing either. The kind must match what it points at.
             const target = known.get(edge.id);
             if (target === undefined || target.boardId !== glob.boardId) continue;
+            // Actions are never inferred: only a person or an agent relates to one.
+            if (target.category === 'action') continue;
             const decision = edge.kind === 'decision';
             if (decision !== (target.category === 'decision')) continue;
             if (decision ? toState(target) !== 'planning' && toState(target) !== 'open' : hasMerged(target)) continue;
@@ -2358,12 +2477,14 @@ export class GlobService {
       }
       const board = await tx.getBoard(glob.boardId);
       if (board === null) return notFound(`No board ${glob.boardId}`);
-      // No work command (start, merge, labels, retrigger...) may run on a decision, and no decision step on work.
+      // No work command (start, merge, labels, retrigger...) may run on human work, and no decision or action step on anything else.
       const applies = options.applies ?? 'work';
-      if (applies !== 'any' && (glob.category === 'decision') !== (applies === 'decision')) {
+      if (applies !== 'any' && (applies === 'work' ? isHumanCategory(glob.category) : glob.category !== applies)) {
         return err({
           code: 'invalid_transition',
-          message: glob.category === 'decision' ? 'A decision glob has no such action' : 'Only a decision glob can do this',
+          message: isHumanCategory(glob.category)
+            ? `${glob.category === 'action' ? 'An action' : 'A decision'} glob has no such action`
+            : `Only ${applies === 'action' ? 'an action' : 'a decision'} glob can do this`,
           status: glob.status,
           allowedActions: actor === null ? [] : machine.allowedActions(glob, actor),
         });
@@ -2427,7 +2548,7 @@ export class GlobService {
       const moved =
         changed && (transition.value.glob.status !== glob.status || events.some((e) => e.type === 'CommitPushed' || e.type === 'Merged'));
       // A work glob signed off is a recent change on the board's knowledge page (decisions queue their own).
-      const signedOff = changed && glob.category !== 'decision' && glob.status !== 'signed_off' && transition.value.glob.status === 'signed_off';
+      const signedOff = changed && !isHumanCategory(glob.category) && glob.status !== 'signed_off' && transition.value.glob.status === 'signed_off';
       const effects = [...transition.value.effects, ...(moved ? [recheckOverlapsEffect(glob.boardId)] : []), ...(signedOff ? [knowledgePageEffect(glob.boardId)] : [])];
       if (!changed) {
         await tx.appendEvents(events);

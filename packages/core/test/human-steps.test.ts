@@ -18,7 +18,7 @@ const attributes = (outcome: DecisionAttributes['outcome']): DecisionAttributes 
   channel: 'agent',
   outcome,
 });
-const decision = (patch = {}) => glob({ category: 'decision', type: 'same', attributes: attributes(null), ...patch });
+const decision = (patch = {}) => glob({ category: 'decision', type: null, attributes: attributes(null), ...patch });
 
 const stored = (patch: Partial<StoredHumanStep> = {}): StoredHumanStep => ({
   id: 'hs-1',

@@ -69,6 +69,8 @@ const blockerFor = (glob: GlobView, role: Role, to: SlopType): string => {
  * old type implied (deescalate, make_super).
  */
 export const typeOptions = (glob: GlobView, role: Role): TypeOption[] => {
+  // Human work (decision, action) has no type to choose.
+  if (glob.type === null) return [];
   const allowed = machine.allowedTypeChanges(glob, role).map((c) => c.to).filter((to) => canChooseType(role, to));
   const actions = glob.allowedActions ?? [];
   return SLOP_TYPES.map((to): TypeOption => {
@@ -90,7 +92,7 @@ export const typeOptions = (glob: GlobView, role: Role): TypeOption[] => {
 };
 
 /** The categories the glob's type allows. */
-export const categoryOptions = (type: SlopType): Category[] => WORK_CATEGORIES.filter((c) => isValidCombination(type, c));
+export const categoryOptions = (type: SlopType | null): Category[] => (type === null ? [] : WORK_CATEGORIES.filter((c) => isValidCombination(type, c)));
 
 export type CategorySave =
   | { readonly saved: true; readonly undo: Category }

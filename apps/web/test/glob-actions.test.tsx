@@ -25,7 +25,7 @@ const callbacks = () => ({
   onClose: vi.fn(),
   onUpdate: vi.fn(() => Promise.resolve(null)),
   onReload: vi.fn(() => Promise.resolve()),
-  onAction: vi.fn<(action: Action, anyway?: boolean) => Promise<boolean>>(() =>
+  onAction: vi.fn<(action: Action, anyway?: boolean, text?: string) => Promise<boolean>>(() =>
     Promise.resolve(true),
   ),
   onReviewLabel: vi.fn(),
@@ -830,6 +830,98 @@ describe('glob view: split moves in the action ▾', () => {
       expect(row.lastElementChild?.contains(within(row).getByTestId('group-chip'))).toBe(true);
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
+    });
+  });
+
+  describe('an action glob (human work with no type)', () => {
+    const action = (patch: Partial<GlobView> = {}): GlobView =>
+      view({
+        id: 's1a1',
+        category: 'action',
+        type: null,
+        pr: null,
+        provisioning: 'none',
+        attributes: { assignee: null, outcome: null },
+        allowedActions: ['complete_action', 'dismiss_action', 'delete'],
+        ...patch,
+      });
+
+    it('shows no type control and no category or environment fields, only the category word in the bar', () => {
+      renderGlob(action());
+      const type = screen.getByTestId('glob-type');
+      expect(type.textContent).toBe('action');
+      expect(screen.queryByTestId('type-popover')).toBeNull();
+      expect(screen.queryByTestId('category')).toBeNull();
+    });
+
+    it('leads with Done and the human icon, and keeps Dismiss… in the menu', async () => {
+      const user = userEvent.setup();
+      renderGlob(action());
+      const main = mainButton();
+      expect(main?.textContent).toBe('Done');
+      expect(main?.querySelector('svg.lucide-user-round')).not.toBeNull();
+      await user.click(screen.getByTestId('more-actions'));
+      const menu = within(screen.getByTestId('more-menu'));
+      expect(menu.getByTestId('more-dismiss_action').textContent).toContain('Dismiss…');
+      expect(menu.queryByTestId('more-complete_action')).toBeNull();
+    });
+
+    it('asks for an optional note before Done, then sends it', async () => {
+      const user = userEvent.setup();
+      const cb = renderGlob(action());
+      await user.click(mainButton() as HTMLElement);
+      expect(cb.onAction).not.toHaveBeenCalled();
+      const confirm = within(screen.getByTestId('done-action-confirmation'));
+      await user.type(confirm.getByTestId('action-note'), 'checked the settings page');
+      await user.click(confirm.getByTestId('confirm-finish-action'));
+      await waitFor(() => expect(cb.onAction).toHaveBeenCalledWith('complete_action', undefined, 'checked the settings page'));
+    });
+
+    it('lets Done go with no note, and Cancel sends nothing', async () => {
+      const user = userEvent.setup();
+      const cb = renderGlob(action());
+      await user.click(mainButton() as HTMLElement);
+      await user.click(within(screen.getByTestId('done-action-confirmation')).getByText('Cancel'));
+      expect(screen.queryByTestId('done-action-confirmation')).toBeNull();
+      expect(cb.onAction).not.toHaveBeenCalled();
+      await user.click(mainButton() as HTMLElement);
+      await user.click(screen.getByTestId('confirm-finish-action'));
+      await waitFor(() => expect(cb.onAction).toHaveBeenCalledWith('complete_action', undefined, ''));
+    });
+
+    it('needs a reason to Dismiss', async () => {
+      const user = userEvent.setup();
+      const cb = renderGlob(action());
+      await user.click(screen.getByTestId('more-actions'));
+      await user.click(screen.getByTestId('more-dismiss_action'));
+      const confirm = within(screen.getByTestId('dismiss-action-confirmation'));
+      expect((confirm.getByTestId<HTMLButtonElement>('confirm-finish-action')).disabled).toBe(true);
+      await user.type(confirm.getByTestId('action-note'), 'no longer needed');
+      await user.click(confirm.getByTestId('confirm-finish-action'));
+      await waitFor(() => expect(cb.onAction).toHaveBeenCalledWith('dismiss_action', undefined, 'no longer needed'));
+    });
+
+    it('shows who is meant to do it, then who finished it and what they noted', () => {
+      renderGlob(action({ attributes: { assignee: 'sam@example.com', outcome: null } }));
+      expect(screen.getByTestId('action-assignee').textContent).toContain('sam@example.com');
+      cleanup();
+      renderGlob(
+        action({
+          status: 'signed_off',
+          allowedActions: ['delete'],
+          attributes: { assignee: null, outcome: { kind: 'done', by: 'lee@example.com', at: '2026-10-15T10:00:00.000Z', note: 'all green' } },
+        }),
+      );
+      expect(screen.getByTestId('action-outcome').textContent).toContain('lee@example.com');
+      expect(screen.getByTestId('action-outcome').textContent).toContain('all green');
+      expect(mainButton()).toBeNull();
+    });
+
+    it('hides the code-work sections: labels, size, deploys and tests', () => {
+      renderGlob(action());
+      for (const name of ['labels', 'size', 'deploys', 'tests', 'environments']) {
+        expect(document.querySelector(`[data-section="${name}"]`)?.textContent ?? '').toBe('');
+      }
     });
   });
 });

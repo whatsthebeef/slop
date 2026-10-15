@@ -709,3 +709,29 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
+
+describe('an action glob card', () => {
+  const action = (patch: Partial<GlobView> = {}): GlobView =>
+    view({ id: 's1a1', category: 'action', type: null, pr: null, attributes: { assignee: null, outcome: null }, ...patch });
+
+  it('shows the human icon, the category word instead of a type, and who is meant to do it', () => {
+    const root = dom(markup(action({ attributes: { assignee: 'sam@example.com', outcome: null } })));
+    expect(root.querySelector('[data-testid="card-type"]')?.textContent).toBe('action');
+    expect(root.querySelector('[data-testid="card-corner"] svg.lucide-user-round')).not.toBeNull();
+    expect(root.querySelector('[data-testid="action-chip"]')?.textContent).toBe('sam@example.com');
+    expect(root.querySelector('[data-testid="card-corner-separator"]')).toBeNull();
+  });
+
+  it('says anyone for an unassigned action and how a finished one ended', () => {
+    expect(dom(markup(action())).querySelector('[data-testid="action-chip"]')?.textContent).toBe('anyone');
+    const done = action({ status: 'signed_off', attributes: { assignee: null, outcome: { kind: 'done', by: 'a@b.c', at: NOW } } });
+    expect(dom(markup(done)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('done');
+    const dismissed = action({ status: 'signed_off', attributes: { assignee: null, outcome: { kind: 'dismissed', by: 'a@b.c', at: NOW, reason: 'moved' } } });
+    expect(dom(markup(dismissed)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('dismissed');
+  });
+
+  it('shows a decision with its category word, not a type', () => {
+    const decision = view({ id: 's1k1', category: 'decision', type: null, pr: null });
+    expect(dom(markup(decision)).querySelector('[data-testid="card-type"]')?.textContent).toBe('decision');
+  });
+});

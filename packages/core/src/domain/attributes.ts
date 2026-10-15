@@ -120,10 +120,34 @@ export interface DecisionAttributes {
 
 /** Work globs have no attributes yet. */
 export type WorkAttributes = Readonly<Record<string, never>>;
-export type GlobAttributes = DecisionAttributes | WorkAttributes;
+
+/** How an action glob ended: a person did it, or dismissed it as not needed (with a reason). */
+export const ACTION_OUTCOME_KINDS = ['done', 'dismissed'] as const;
+export type ActionOutcomeKind = (typeof ACTION_OUTCOME_KINDS)[number];
+
+export interface ActionOutcome {
+  readonly kind: ActionOutcomeKind;
+  readonly by: string;
+  readonly at: string;
+  /** Done: what the person checked (optional). */
+  readonly note?: string;
+  /** Dismissed: why it is not needed. */
+  readonly reason?: string;
+}
+
+/** An action glob: who is meant to do it (null: anyone) and how it ended (null while open). */
+export interface ActionAttributes {
+  readonly assignee: string | null;
+  readonly outcome: ActionOutcome | null;
+}
+
+export type GlobAttributes = DecisionAttributes | ActionAttributes | WorkAttributes;
 
 export const isDecisionAttributes = (value: GlobAttributes | undefined): value is DecisionAttributes =>
   value !== undefined && 'scope' in value;
+
+export const isActionAttributes = (value: GlobAttributes | undefined): value is ActionAttributes =>
+  value !== undefined && 'assignee' in value;
 
 /** Longest ref, ID or name in an attribute, in characters. */
 export const ATTRIBUTE_TEXT_MAX = 200;
@@ -425,9 +449,50 @@ const validateDecision = (value: unknown): Result<DecisionAttributes> => {
   });
 };
 
+const validateActionOutcome = (value: unknown): Result<ActionOutcome | null> => {
+  if (value === null || value === undefined) return ok(null);
+  if (!isRecord(value)) return invalidInput('outcome must be an object or null');
+  const keys = unknownKeys(value, ['kind', 'by', 'at', 'note', 'reason'], 'outcome');
+  if (!keys.ok) return keys;
+  const kind = ACTION_OUTCOME_KINDS.find((k) => k === value['kind']);
+  if (kind === undefined) return invalidInput(`outcome.kind must be one of ${ACTION_OUTCOME_KINDS.join(', ')}`);
+  const by = oneLine(value['by'], 'outcome.by');
+  if (!by.ok) return by;
+  const at = oneLine(value['at'], 'outcome.at');
+  if (!at.ok) return at;
+  const text: { note?: string; reason?: string } = {};
+  for (const name of ['note', 'reason'] as const) {
+    const raw = value[name];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string' || raw.length > OUTCOME_REASON_MAX) {
+      return invalidInput(`outcome.${name} must be text of at most ${OUTCOME_REASON_MAX} characters`);
+    }
+    text[name] = raw;
+  }
+  return ok({ kind, by: by.value, at: at.value, ...text });
+};
+
+/** An action's attributes in full; a new action has no outcome (the transitions set it). */
+const validateAction = (value: unknown): Result<ActionAttributes> => {
+  if (!isRecord(value)) return invalidInput('An action needs attributes');
+  const keys = unknownKeys(value, ['assignee', 'outcome'], 'attributes');
+  if (!keys.ok) return keys;
+  const raw = value['assignee'];
+  let assignee: string | null = null;
+  if (raw !== undefined && raw !== null) {
+    const one = oneLine(raw, 'assignee');
+    if (!one.ok) return one;
+    assignee = one.value;
+  }
+  const outcome = validateActionOutcome(value['outcome']);
+  if (!outcome.ok) return outcome;
+  return ok({ assignee, outcome: outcome.value });
+};
+
 /** Checks a glob's attributes against its category's schema; unknown keys are refused. Absent work attributes are `{}`. */
 export const validateAttributes = (category: Category, value: unknown): Result<GlobAttributes> => {
   if (category === 'decision') return validateDecision(value);
+  if (category === 'action') return validateAction(value ?? {});
   if (value === undefined || value === null) return ok({});
   if (!isRecord(value)) return invalidInput('attributes must be an object');
   const keys = unknownKeys(value, [], `A ${category}'s attributes`);
@@ -438,6 +503,16 @@ export const validateAttributes = (category: Category, value: unknown): Result<G
  * What a client may send in an `attributes` PATCH: only `scope` (everything else is set by transitions and
  * services), and only on a decision.
  */
+/** What a client may send in an `attributes` PATCH on an action: only the assignee (null clears it). */
+export const validateActionEdit = (value: unknown): Result<string | null> => {
+  if (!isRecord(value)) return invalidInput('attributes must be an object');
+  const keys = unknownKeys(value, ['assignee'], 'attributes');
+  if (!keys.ok) return keys;
+  const raw = value['assignee'];
+  if (raw === null) return ok(null);
+  return oneLine(raw, 'assignee');
+};
+
 export const validateScopeEdit = (category: Category, value: unknown): Result<DecisionScope> => {
   if (category !== 'decision') return invalidInput(`A ${category} has no editable attributes`);
   if (!isRecord(value)) return invalidInput('attributes must be an object');

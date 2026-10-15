@@ -1,7 +1,7 @@
-import { decisionOf } from '@slop/core';
+import { isHumanCategory } from '@slop/core';
 import { EnvironmentsSection } from '../deploys';
 import type { GlobViewContext } from './context';
 
-/** The environments section; a decision glob has none. */
+/** The environments section; human work (a decision, an action) has none. */
 export const EnvironmentsPanel = ({ ctx }: { ctx: GlobViewContext }) =>
-  decisionOf(ctx.glob) === null ? <EnvironmentsSection board={ctx.board} glob={ctx.glob} /> : null;
+  !isHumanCategory(ctx.glob.category) ? <EnvironmentsSection board={ctx.board} glob={ctx.glob} /> : null;
