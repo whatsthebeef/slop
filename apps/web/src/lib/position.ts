@@ -39,6 +39,7 @@ const DOING: Readonly<Record<MachineStepKind, string>> = {
   review_code: 'reviewing the code',
   size_check: 'checking the size',
   learning_pipeline: 'processing the learning',
+  recommendation: 'getting a recommendation',
   merge: 'merging',
   deploy: 'deploying',
   agent_set_commit: 'committing the agent set',
@@ -151,7 +152,9 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       const lead = leadStep(steps, now);
       const text = lead === undefined ? move.reason : machineText(lead, now);
       const tip =
-        lead?.state === 'queued'
+        lead?.kind === 'recommendation'
+          ? ['Slop gets its recommendation automatically when the learning is picked up and when the draft changes']
+          : lead?.state === 'queued'
           ? [`Machine run queued: ${session === null ? 'no session yet' : 'open the session'}`, ...runDetail(glob)]
           : ['The machine is working on it', ...runDetail(glob)];
       return {

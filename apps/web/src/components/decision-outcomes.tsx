@@ -47,9 +47,9 @@ const useSuggest = (glob: GlobView, canSuggest: boolean) => {
       .finally(() => setBusy(false));
   };
   const made = suggestion.data?.suggestion ?? null;
-  // A recommendation the rules wrote (no model call) reads as a leaning; with no draft behind it, it is waiting for one.
-  const leaning = made?.model === RULES_MODEL ? { waiting: made.stamp.draftVersion === null } : null;
-  return { state, stored: made?.suggestion, leaning, prefill: applyPrefill(suggestion.data), error: suggestion.data?.error ?? null, busy, failed, ask };
+  // A recommendation the rules wrote (no model call) is a filler, not a judgement: it counts as none until the model answers.
+  const real = made !== null && made.model !== RULES_MODEL ? made : null;
+  return { state, stored: real?.suggestion, prefill: applyPrefill(suggestion.data), error: suggestion.data?.error ?? null, busy, failed, ask };
 };
 
 type Suggest = ReturnType<typeof useSuggest>;
@@ -323,19 +323,17 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
   const text = stored?.editedDraft ?? stored?.mergedText ?? null;
   return (
     <div className='grid gap-1' data-testid='recommendation'>
-      {state === 'working' && (
-        <p className='text-xs text-muted-foreground' data-testid='suggest-working'>
-          {suggest.error === null ? 'Getting a recommendation…' : suggest.error}
+      {suggest.error !== null && state !== 'ready' && (
+        <p className='text-xs text-muted-foreground' data-testid='suggest-error'>
+          {suggest.error}
         </p>
       )}
       {suggest.failed && <p className='text-xs text-red'>Could not get a recommendation.</p>}
-      {stored !== undefined && (
+      {stored !== undefined && state === 'ready' && (
         <div className='grid gap-1 text-sm' data-testid='suggestion'>
           <p className='whitespace-pre-wrap break-words'>
             <span className='font-medium'>
-              {suggest.leaning === null
-                ? `Recommends: ${SUGGESTION_ACTION_TEXT[stored.action]}.`
-                : `Leaning: ${SUGGESTION_ACTION_TEXT[stored.action]}${suggest.leaning.waiting ? ', waiting for the draft' : ''}.`}
+              {`Recommends: ${SUGGESTION_ACTION_TEXT[stored.action]}.`}
             </span>{' '}
             {stored.reason}
             {stored.mergeInto !== null && (
@@ -347,11 +345,6 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
               </>
             )}
           </p>
-          {state === 'stale' && (
-            <span className='w-fit rounded bg-amber-500/15 px-1.5 text-xs text-amber-800 dark:text-amber-200' data-testid='suggestion-stale'>
-              Stale: the draft or its target changed since; get a new recommendation
-            </span>
-          )}
           {text !== null && (
             <details className='text-xs'>
               <summary className='cursor-pointer text-muted-foreground'>{stored.action === 'merge_into' ? 'Combined text for the other learning' : 'Suggested wording'}</summary>

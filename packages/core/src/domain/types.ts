@@ -411,6 +411,8 @@ export interface Glob {
   readonly prs: readonly MergedPr[];
   /** Set while a Merge and continue is merging; null otherwise. */
   readonly mergeMode: MergeMode | null;
+  /** Times slop updated a behind branch for the current merge request; a new Merge press starts it again at 0. */
+  readonly mergeUpdates?: number;
   readonly headChecks: HeadChecks | null;
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
