@@ -132,7 +132,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       candidates.push(
         make({
           kind: 'base-red',
-          full: `⏳ waiting · ${base} is red`,
+          full: `${base} is red`,
           tone: 'text-required',
           tip: [`Waiting: ${base} is red, not this glob's change`, ...details].join('\n'),
           url: checks.url,
