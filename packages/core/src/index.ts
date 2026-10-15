@@ -94,6 +94,7 @@ export * from './app/kb-pipeline.js';
 export * from './app/knowledge-page-service.js';
 export * from './app/kb-consolidation.js';
 export * from './app/llm-call.js';
+export * from './app/llm-schemas.js';
 export * from './app/findings-pipeline.js';
 export * from './app/findings-service.js';
 export * from './app/mining-service.js';

@@ -15,6 +15,7 @@ import { verifiedQuote } from './kb-dedupe.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
+import { FINDINGS_SPLIT_SCHEMA, findingClassSchema } from './llm-schemas.js';
 
 /** Haiku answers a classification in seconds; a stalled call fails the attempt well inside the lease. */
 export const FINDINGS_LLM_TIMEOUT_MS = 30_000;
@@ -243,6 +244,7 @@ export class FindingsPipeline {
         this.deps.llm,
         {
           system: SPLIT_SYSTEM,
+          schema: FINDINGS_SPLIT_SCHEMA,
           prompt: `Review:\n<<<\n${shown}\n>>>`,
           maxTokens: SPLIT_MAX_TOKENS,
           spend: { boardId: source.boardId, source: 'findings', globId: source.globId },
@@ -265,6 +267,7 @@ export class FindingsPipeline {
           this.deps.llm,
           {
             system: CLASSIFY_SYSTEM,
+            schema: findingClassSchema(FINDING_CLASSES),
             prompt: classifyPrompt(finding),
             maxTokens: 200,
             spend: { boardId: finding.boardId, source: 'findings', globId: finding.globId },

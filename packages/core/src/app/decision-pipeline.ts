@@ -26,6 +26,7 @@ import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
+import { DECISION_EXTRACT_SCHEMA, DECISION_SUPERSEDE_SCHEMA } from './llm-schemas.js';
 
 /** Haiku answers in seconds; a stalled call fails the attempt well inside the lease. */
 export const DECISIONS_LLM_TIMEOUT_MS = 60_000;
@@ -457,6 +458,7 @@ export class DecisionPipeline {
         this.deps.llm,
         {
           system: EXTRACT_SYSTEM,
+          schema: DECISION_EXTRACT_SCHEMA,
           prompt: `Document: ${source.label === '' ? source.ref : source.label}\n<<<\n${source.text}\n>>>`,
           maxTokens: EXTRACT_MAX_TOKENS,
           spend: { boardId, source: 'decisions', globId: source.globId },
@@ -614,6 +616,7 @@ export class DecisionPipeline {
           this.deps.llm,
           {
             system: SUPERSEDE_SYSTEM,
+            schema: DECISION_SUPERSEDE_SCHEMA,
             prompt: checkPrompt(next, candidates),
             maxTokens: CHECK_MAX_TOKENS,
             spend: { boardId: next.boardId, source: 'decisions', globId: next.globId },

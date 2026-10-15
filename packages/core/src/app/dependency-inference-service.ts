@@ -10,6 +10,7 @@ import type { Llm } from './intake-service.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
+import { DEPENDENCY_EDGES_SCHEMA } from './llm-schemas.js';
 
 /** The model gets this long: creating a glob must not wait on a slow one. */
 export const INFERENCE_LLM_TIMEOUT_MS = 15_000;
@@ -330,6 +331,7 @@ export class DependencyInferenceService {
       this.deps.llm,
       {
         system: SYSTEM,
+        schema: DEPENDENCY_EDGES_SCHEMA,
         prompt: `This glob:\n${mine}\n\nOther open globs and decisions:\n${others}`,
         maxTokens: 1500,
         spend: {
