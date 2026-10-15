@@ -31,9 +31,14 @@ const throwing: FilterStore = {
 
 describe('board filter memory', () => {
   it('keeps only the filters of a query', () => {
-    expect(filterParams(new URLSearchParams('mode=sub&glob=s1&id=s2')).toString()).toBe(
-      'mode=sub&id=s2',
+    expect(filterParams(new URLSearchParams('kind=bug&glob=s1&id=s2')).toString()).toBe(
+      'kind=bug&id=s2',
     );
+  });
+
+  it('keeps the old mode and fix parameters, which the board still reads', () => {
+    expect(filterParams(new URLSearchParams('mode=sub&fix=1&glob=s1')).toString()).toBe('mode=sub&fix=1');
+    expect(hasFilterParams(new URLSearchParams('fix=1'))).toBe(true);
     expect(hasFilterParams(new URLSearchParams('glob=s1'))).toBe(false);
     expect(hasFilterParams(new URLSearchParams('mode=all'))).toBe(true);
   });

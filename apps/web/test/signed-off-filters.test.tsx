@@ -46,12 +46,12 @@ describe('Signed Off view filters', () => {
     renderPage('/boards/1/signed-off');
     expect(await screen.findByTestId('signed-off-s1f1')).toBeTruthy();
     expect(screen.getByTestId('filter-pane')).toBeTruthy();
-    expect(screen.getByTestId('filter-fix')).toBeTruthy();
+    expect(screen.getByTestId('filter-kind-bug')).toBeTruthy();
     expect(screen.getByTestId('filter-id')).toBeTruthy();
     expect(screen.getByTestId('filter-human').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('filters by fix and by ID or name', async () => {
+  it('filters by kind (an old fix link too) and by ID or name', async () => {
     renderPage('/boards/1/signed-off?fix=1');
     expect(await screen.findByTestId('signed-off-s1b2')).toBeTruthy();
     expect(screen.queryByTestId('signed-off-s1f1')).toBeNull();
@@ -67,7 +67,7 @@ describe('Signed Off view filters', () => {
     expect(await screen.findByTestId('signed-off-s1b2')).toBeTruthy();
     expect(screen.queryByTestId('signed-off-s1f1')).toBeNull();
     expect(screen.getByTestId('filter-human').getAttribute('aria-pressed')).toBe('true');
-    await userEvent.setup().click(screen.getByTestId('filter-mode-same'));
+    await userEvent.setup().click(screen.getByTestId('filter-kind-bug'));
     expect(await screen.findByTestId('no-match')).toBeTruthy();
   });
 });
