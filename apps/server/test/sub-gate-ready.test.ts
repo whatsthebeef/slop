@@ -210,6 +210,32 @@ describe('a sub whose PR is ready', () => {
     expect(glob.status).toBe('pr_open');
   });
 
+  it('a sub touching a risk path (`**/stacks/**`) converts to a same at ready, however small, with cause risk_path', async () => {
+    host.diff = { changedLines: 4, files: ['src/a.ts', 'services/app/stacks/app.yaml'] };
+    await handle(readyForReview());
+    await run('evaluate_sub_gate');
+    const glob = await current();
+    expect(glob.type).toBe('same');
+    expect(glob.status).toBe('pr_open');
+    const verdicts = await store.transaction((tx) => tx.listBoardEvents(1, '2000-01-01T00:00:00.000Z', ['SubReviewCompleted']));
+    expect(verdicts.filter((e) => e.globId === globId).at(-1)?.data).toMatchObject({
+      passed: false,
+      reason: 'Touches risk paths: services/app/stacks/app.yaml',
+      cause: 'risk_path',
+      changedLines: 4,
+    });
+  });
+
+  it("a path the board's merge policy lists as a risk path converts a sub too", async () => {
+    const own = codeHostExecutors(host, (id) => store.transaction((tx) => tx.getBoard(id)), new FileRoutines('/nonexistent/routines.json'), new BoardService({ store, notifier: { publish: () => undefined } }), undefined, null, null, undefined, undefined, null, null, undefined, () => Promise.resolve({ riskPaths: ['.sstor/**'] }));
+    host.diff = { changedLines: 4, files: ['.sstor/config.json'] };
+    await handle(readyForReview());
+    const row = (await pending('evaluate_sub_gate'))[0];
+    if (row === undefined) throw new Error('No pending evaluate_sub_gate');
+    await own.evaluate_sub_gate?.(row.effect, await current(), { globs });
+    expect((await current()).type).toBe('same');
+  });
+
   it("generated files (the defaults without a merge policy) don't count toward the size, and the verdict says how many", async () => {
     await store.transaction((tx) => tx.setSubLimit(1, 5000, 200));
     try {

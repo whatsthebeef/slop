@@ -41,8 +41,11 @@ export const SUB_LIMIT_WINDOW_DAYS = 14;
 export const SUB_LIMIT_OUTCOMES = ['merged_unchanged', 'needed_fixes'] as const;
 export type SubLimitOutcome = (typeof SUB_LIMIT_OUTCOMES)[number];
 
-/** Why the gate converted a sub: its size, or a sensitive path. Null when it passed. */
-export type SubGateCause = 'size' | 'sensitive';
+/**
+ * Why the gate converted a sub: its size, a sensitive path or a risk path. Null when it passed. Only `size` says anything
+ * about the limit: the other two are rules about the paths, whatever the size.
+ */
+export type SubGateCause = 'size' | 'sensitive' | 'risk_path';
 
 /** One outcome the learning recorded, with the limit before and after it (equal when the rule left it). */
 export interface SubLimitChange {
@@ -200,7 +203,7 @@ export const gateVerdictOf = (event: DomainEvent): GateVerdict => {
   const reason = stringOf(data.reason);
   const sized = reason === null ? null : SIZE_REASON.exec(reason);
   const cause: SubGateCause | null =
-    data.cause === 'size' || data.cause === 'sensitive'
+    data.cause === 'size' || data.cause === 'sensitive' || data.cause === 'risk_path'
       ? data.cause
       : passed
         ? null
