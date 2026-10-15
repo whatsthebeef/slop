@@ -1,4 +1,4 @@
-import { decisionOf, isHumanCategory, scopeLabel } from '@slop/core';
+import { decisionOf, isHumanCategory } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
 import { Bug, ListChecks, Loader2, Rocket, Scale, Sparkles, UserRound } from 'lucide-react';
 import type { ComponentType } from 'react';
@@ -13,7 +13,6 @@ import type { CornerStatus } from '@/lib/card-rows';
 import { needsRelease } from '@/lib/human-steps';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
-import { OUTCOME_TEXT } from './decision-section';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
 import { CONFIRM_MS, clickTip, prUrl, tipLines, turnStep } from '@/lib/chip-actions';
@@ -546,41 +545,6 @@ export const ActionChips = ({ glob }: { glob: GlobView }) => {
   );
 };
 
-/**
- * A decision glob's chips: what it applies to, what was decided (the outcome so far) and, when it contradicts a decision of
- * broader scope, which one. Nothing for a work glob.
- */
-export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
-  const attributes = decisionOf(glob);
-  if (attributes === null) return null;
-  const { outcome } = attributes;
-  const conflicts = attributes.conflictsWith ?? [];
-  const opens = onOpen === undefined ? '' : '. Opens the decision';
-  return (
-    <>
-      <Tip text={`Applies to: ${scopeLabel(attributes.scope)}${opens}`}>
-        <ChipButton onOpen={onOpen} className='rounded-sm border px-1.5 font-mono text-[10px] text-muted-foreground' testId='scope-chip'>
-          {attributes.scope.kind === 'glob' ? attributes.scope.ref : attributes.scope.kind.replace('_', ' ')}
-        </ChipButton>
-      </Tip>
-      {outcome !== null && (
-        <Tip text={`${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}${opens}`}>
-          <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-signal-strong' testId='outcome-chip'>
-            {OUTCOME_TEXT[outcome.kind].toLowerCase()}
-          </ChipButton>
-        </Tip>
-      )}
-      {conflicts.length > 0 && (
-        <Tip text={`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree${opens}`}>
-          <ChipButton onOpen={onOpen} className='font-mono text-[11px] text-required' testId='conflict-chip'>
-            conflicts with {conflicts.join(', ')}
-          </ChipButton>
-        </Tip>
-      )}
-    </>
-  );
-};
-
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -665,7 +629,7 @@ export const GlobCard = ({
   const age = aging(glob);
   const now = new Date().toISOString();
   const preview = moves.find((m) => m.action === previewing);
-  // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status; neither do actions.
+  // Decision globs have their own look (an accent edge, the outcome in the corner) and no labels, branch or routine status; neither do actions.
   const decision = decisionOf(glob) !== null;
   const human = isHumanCategory(glob.category);
   const status = cornerStatus(glob, now, viewer, repo);
@@ -742,9 +706,7 @@ export const GlobCard = ({
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
           <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
             {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} to={groupHref} progress={groupProgress} />}
-            {decision ? (
-              <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
-            ) : human ? (
+            {decision ? null : human ? (
               <ActionChips glob={glob} />
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
