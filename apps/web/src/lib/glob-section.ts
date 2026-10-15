@@ -21,6 +21,7 @@ export const GLOB_SECTIONS = [
   'actions',
   'action',
   'human-steps',
+  'due-steps',
 ] as const;
 
 export type GlobSection = (typeof GLOB_SECTIONS)[number];

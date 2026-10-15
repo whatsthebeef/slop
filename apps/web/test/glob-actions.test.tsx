@@ -657,7 +657,8 @@ describe('a due rollout step is the main action, never a scroll-only button', ()
     const cb = renderMerged(dueStep({ kind: 'rollout', detail: 'Set it in prod' }));
     const main = screen.getByTestId('main-action');
     expect(main.textContent).toContain('Mark done');
-    expect(screen.getByTestId('main-action-note').textContent).toContain('Set it in prod');
+    expect(screen.getByTestId('main-action-note').textContent).toBe('Add SLOP_X to the server env');
+    expect(screen.getByTestId('main-action-note').textContent).not.toContain('Set it in prod');
     await user.click(main);
     expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');
   });
