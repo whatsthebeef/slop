@@ -57,7 +57,7 @@ describe('filter pane Arm system toggle', () => {
 });
 
 describe('filter pane text filter', () => {
-  const show = () => render(<FilterPane open values={{ category: 'feature,task,bug' }} onChange={vi.fn()} onClose={vi.fn()} />);
+  const show = () => render(<FilterPane open values={{ category: 'feature,task,bug,action' }} onChange={vi.fn()} onClose={vi.fn()} />);
 
   it('is the last control in the pane and wide enough for its placeholder', () => {
     show();
