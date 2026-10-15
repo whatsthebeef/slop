@@ -132,7 +132,7 @@ const renderPlan = (glob: GlobView = view({ allowedActions: ['investigate'] })) 
 };
 
 const openTestPlan = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByRole('tab', { name: /Test plan/ }));
+  await user.click(screen.getByRole('tab', { name: /Test Plan/ }));
 };
 
 beforeAll(() => {
@@ -167,17 +167,17 @@ afterEach(() => {
 });
 
 describe('plan section tabs', () => {
-  it('opens on plan.md and switches to the test plan', async () => {
+  it('opens on Plan and switches to the test plan', async () => {
     install(newServer());
     const user = userEvent.setup();
     renderPlan();
     expect(await screen.findByText('plan.md', { selector: 'span' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /plan\.md/ }).getAttribute('aria-selected')).toBe(
+    expect(screen.getByRole('tab', { name: /^Plan/ }).getAttribute('aria-selected')).toBe(
       'true',
     );
     await openTestPlan(user);
     expect(await screen.findByText('No test plan yet')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Test plan/ }).getAttribute('aria-selected')).toBe(
+    expect(screen.getByRole('tab', { name: /Test Plan/ }).getAttribute('aria-selected')).toBe(
       'true',
     );
   });
@@ -337,7 +337,7 @@ describe('test plan: saved', () => {
     await screen.findByRole('table');
     await user.click(screen.getByRole('button', { name: 'Edit' }));
     await user.type(await screen.findByRole<HTMLTextAreaElement>('textbox'), ' kept');
-    await user.click(screen.getByRole('tab', { name: /plan\.md/ }));
+    await user.click(screen.getByRole('tab', { name: /^Plan/ }));
     await openTestPlan(user);
     expect((await screen.findByRole<HTMLTextAreaElement>('textbox')).value.endsWith(' kept')).toBe(
       true,
