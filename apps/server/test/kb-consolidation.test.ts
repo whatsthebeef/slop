@@ -285,18 +285,24 @@ describe('Weekly consolidation in Postgres', () => {
       notifier,
       llm: bySystem({
         [PAIRS_SYSTEM]: () => Promise.resolve(PAIR(survivor.id, loser.id)),
-        [VERIFY_SYSTEM]: () => {
+        [VERIFY_SYSTEM]: async () => {
           // Another writer updates the loser and holds its transaction open: the merge reads the committed
           // version (unchanged), writes the survivor, then waits on the loser's row.
+          let updated = (): void => undefined;
+          const hasLock = new Promise<void>((resolve) => (updated = resolve));
           concurrent = store.transaction(async (tx) => {
             const wrote = await learningSeed(tx, KB_WRITES).updateSeeded(
               { ...loser, evidence: 'Edited meanwhile', version: loser.version + 1 },
               loser.version,
             );
+            updated();
             await gate;
             return wrote;
           });
-          return Promise.resolve(SAME);
+          // Answer only once that update holds the row's lock: under load the merge could otherwise write the
+          // loser first, and the other writer would be the one to lose.
+          await hasLock;
+          return SAME;
         },
       }),
     }).consolidate(boardId);
