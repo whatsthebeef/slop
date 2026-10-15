@@ -778,6 +778,24 @@ describe('steps that tick themselves', () => {
     expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(1);
   });
 
+  it('ticks an after-deploy step with a check only once its environment deploy is recorded (s15f176)', async () => {
+    const g = await create(merged);
+    unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Turn on file attachments', check: 'fileAttachments', due: 'after_deploy:production' }));
+    expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(0);
+    expect(step(g.id)?.state).toBe('open');
+    const pending = step(g.id) as NonNullable<ReturnType<typeof step>>;
+    await store.transaction((tx) => tx.saveHumanSteps([{ ...pending, dueSince: '2026-10-13T11:00:00.000Z' }]));
+    expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(1);
+    expect(step(g.id)?.state).toBe('done');
+  });
+
+  it('does not tick an after-merge step while the glob is in Merging (s15f176)', async () => {
+    const g = await create({ ...merged, status: 'merging' });
+    unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Turn on file attachments', check: 'fileAttachments', due: 'after_merge' }));
+    expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(0);
+    expect(step(g.id)?.state).toBe('open');
+  });
+
   it('is idempotent and leaves steps without a check, with another capability, or already closed alone', async () => {
     const g = await create(merged);
     unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'By hand' }));
