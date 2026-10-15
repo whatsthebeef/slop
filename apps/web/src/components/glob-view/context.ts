@@ -11,8 +11,8 @@ export interface GlobViewContext {
   groups: readonly string[];
   /** An action or save is running, or the glob has not moved since one was sent. */
   busy: boolean;
-  /** Resolves false when the action failed. `anyway` goes ahead of unmerged prerequisites (Retry). */
-  onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
+  /** Resolves false when the action failed. `anyway` goes ahead of unmerged prerequisites (Retry); `text` is the note of Done or the reason of Dismiss on an action glob. */
+  onAction: (action: Action, anyway?: boolean, text?: string) => Promise<boolean>;
   /** Saves the edits; resolves null when saved, or why the server refused them. */
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
   /** Scrolls to a section (or opens an artifact in it). */

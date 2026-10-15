@@ -1,3 +1,4 @@
+import { isHumanCategory } from '../domain/types.js';
 import { listOf } from '../domain/matrix.js';
 import { isDecisionAttributes } from '../domain/attributes.js';
 import { parseInvestigation } from '../domain/investigation.js';
@@ -257,7 +258,7 @@ export class DependencyInferenceService {
   private async candidates(boardId: number, selfId: string | null, recorded: ReadonlySet<string> = new Set()): Promise<Candidate[]> {
     return this.deps.store.transaction(async (tx) => {
       const all = (await tx.listGlobs(boardId, { include: 'all' })).filter((g) => g.id !== selfId).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-      const openWork = all.filter((g) => g.category !== 'decision' && !hasMerged(g) && g.status !== 'failed');
+      const openWork = all.filter((g) => !isHumanCategory(g.category) && !hasMerged(g) && g.status !== 'failed');
       const openDecisions = all.filter((g) => isOpenDecision(g) && isHoldableDecision(g) && governs(g, selfId));
       const work = [...openWork.slice(0, MAX_CANDIDATES), ...openWork.slice(MAX_CANDIDATES).filter((g) => recorded.has(g.id))];
       const decisions = [...openDecisions.slice(0, MAX_DECISION_CANDIDATES), ...openDecisions.slice(MAX_DECISION_CANDIDATES).filter((g) => recorded.has(g.id))];
@@ -373,7 +374,7 @@ export class DependencyInferenceService {
   private async refreshOnce(globId: string): Promise<void> {
     const read = await this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(globId);
-      if (glob === null || glob.type === 'super' || glob.category === 'decision') return null;
+      if (glob === null || glob.type === 'super' || isHumanCategory(glob.category)) return null;
       if (listOf(glob.status) !== 'planning' && listOf(glob.status) !== 'doing') return null;
       const plan = (await tx.artifactVersions(globId, 'plan', '')).at(-1)?.content ?? '';
       const { files, findings } = readInvestigation((await tx.artifactVersions(globId, 'investigation', '')).at(-1)?.content);

@@ -119,7 +119,7 @@ describe('intake', () => {
 
   it('never suggests waiting on a decision glob: only work globs can be waited for', async () => {
     answer = JSON.stringify({ title: 'T', summary: 'S' });
-    const decision = glob({ id: `s${String(boardId)}k3`, boardId, category: 'decision', status: 'planning', type: 'same' });
+    const decision = glob({ id: `s${String(boardId)}k3`, boardId, category: 'decision', status: 'planning', type: null });
     await store.transaction((tx) => tx.insertGlob(decision, null));
     expect((await propose(`Start once ${decision.id} is accepted, and after s${String(boardId)}t1.`)).suggestedAfter).toEqual([`s${String(boardId)}t1`]);
   });

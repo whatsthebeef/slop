@@ -13,12 +13,16 @@ import type { SubGateCause } from './sub-limit.js';
 import { failureSummary, inheritedFailure } from './checks.js';
 import { isValidCombination, listOf } from './matrix.js';
 import {
+  isActionAttributes,
   isDecisionAttributes,
   sameScope,
+  validateActionEdit,
   validateAttributes,
   validateScopeEdit,
 } from './attributes.js';
 import type {
+  ActionAttributes,
+  ActionOutcome,
   DecisionAttributes,
   DecisionClosedAs,
   DecisionOutcome,
@@ -27,7 +31,7 @@ import type {
   GlobAttributes,
 } from './attributes.js';
 import { isAgentSetGlob } from './agent-set.js';
-import { CLOSING_EDGE_KINDS, SLOP_TYPES } from './types.js';
+import { CLOSING_EDGE_KINDS, isHumanCategory, SLOP_TYPES } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
@@ -121,6 +125,10 @@ export type Action =
   | 'sign_off'
   /** Decision globs: take an accepted decision back to Doing to choose again. */
   | 'reopen'
+  /** Action globs: a person did it; marks the action done. */
+  | 'complete_action'
+  /** Action globs: not needed after all; ends the action with a reason. */
+  | 'dismiss_action'
   | 'delete';
 
 /**
@@ -236,11 +244,11 @@ export const hasLiveRun = (glob: Glob): boolean => {
   return run !== null && run.state !== 'ended';
 };
 
-const initialStatus = (type: SlopType): Status =>
-  type === 'sub' ? 'implementing' : type === 'same' ? 'planning' : 'in_progress';
+const initialStatus = (type: SlopType | null): Status =>
+  type === null ? 'planning' : type === 'sub' ? 'implementing' : type === 'same' ? 'planning' : 'in_progress';
 
-const requiredLabels = (type: SlopType): Labels =>
-  type === 'sub' ? { QA: 'required' } : { FR: 'required', CR: 'required', QA: 'required' };
+const requiredLabels = (type: SlopType | null): Labels =>
+  type === null ? {} : type === 'sub' ? { QA: 'required' } : { FR: 'required', CR: 'required', QA: 'required' };
 
 class Builder {
   private readonly events: DomainEvent[] = [];
@@ -280,8 +288,8 @@ class Builder {
 
   /** A glob gets its branch and draft PR when it enters Doing; queued before any routine run. */
   ensureProvisioned(): this {
-    // A decision never gets a branch or a PR.
-    if (this.glob.category === 'decision' || this.glob.provisioning !== 'none') return this;
+    // Human work (a decision, an action) never gets a branch or a PR.
+    if (isHumanCategory(this.glob.category) || this.glob.provisioning !== 'none') return this;
     this.set({ provisioning: 'pending' });
     return this.effect({
       kind: 'provision',
@@ -467,9 +475,10 @@ export interface CreateInput {
   readonly id: string;
   readonly boardId: number;
   readonly title: string;
-  readonly type: SlopType;
+  /** Null for human work (decision, action). */
+  readonly type: SlopType | null;
   readonly category: Category;
-  /** Decisions: the full attributes (scope, source, channel); validated by `create`. Work globs: none. */
+  /** Decisions and actions: the full attributes (scope, source, channel); validated by `create`. Work globs: none. */
   readonly attributes?: GlobAttributes;
   readonly group: string | null;
   readonly environment: string | null;
@@ -497,10 +506,13 @@ export const create = (
   }
   if (input.title.trim() === '') return invalidInput('A glob needs a title');
   if (input.category === 'decision') return createDecision(input, ctx, actor);
+  if (input.category === 'action') return createAction(input, ctx, actor);
+  const type = input.type;
+  if (type === null) return invalidCombination(`A ${input.category} needs a type`);
   // A sub created without an environment gets the board's default for subs, if it has one.
   const environment =
     input.environment ??
-    (input.type === 'sub'
+    (type === 'sub'
       ? (board.environments.find((e) => e.subDefault === true)?.name ?? null)
       : null);
   const envCheck = checkEnvironment(board, environment);
@@ -508,19 +520,19 @@ export const create = (
 
   const impliedAfter = input.impliedAfter ?? [];
   const awaited = awaitedOf(relations);
-  const wantsStart = input.type === 'sub' || (input.type === 'same' && input.autoTrigger);
+  const wantsStart = type === 'sub' || (type === 'same' && input.autoTrigger);
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
   const held = wantsStart && awaited.length > 0;
-  const autoStart = input.type === 'same' && input.autoTrigger && !held;
+  const autoStart = type === 'same' && input.autoTrigger && !held;
   // A parked super waits in Planning for a person to pick it up; nobody's active glob until then.
-  const parked = input.type === 'super' && input.start === false;
+  const parked = type === 'super' && input.start === false;
   const status: Status =
-    held || parked ? 'planning' : autoStart ? 'implementing' : initialStatus(input.type);
+    held || parked ? 'planning' : autoStart ? 'implementing' : initialStatus(type);
   const glob: Glob = {
     id: input.id,
     boardId: input.boardId,
     title: input.title.trim(),
-    type: input.type,
+    type,
     category: input.category,
     group: input.group,
     environment,
@@ -529,7 +541,7 @@ export const create = (
     generation: 1,
     creator: actor.email,
     planner: actor.email,
-    implementer: input.type === 'super' && !parked ? actor.email : null,
+    implementer: type === 'super' && !parked ? actor.email : null,
     labels: {},
     checklists: {},
     pr: null,
@@ -561,7 +573,7 @@ export const create = (
       for: awaited.map((a) => a.id),
       note: waitSummary(awaited),
     });
-  else if (input.type === 'sub' || autoStart) b.queueRun(actor.email);
+  else if (type === 'sub' || autoStart) b.queueRun(actor.email);
   return b.done();
 };
 
@@ -1622,9 +1634,9 @@ export const changeFields = (
   if (
     changes.category !== undefined &&
     changes.category !== glob.category &&
-    (changes.category === 'decision' || glob.category === 'decision')
+    (isHumanCategory(changes.category) || isHumanCategory(glob.category))
   ) {
-    return invalidCombination('A glob cannot become a decision, or stop being one');
+    return invalidCombination('A glob cannot move into or out of human work, nor between a decision and an action');
   }
   const type = changes.type ?? glob.type;
   const category = changes.category ?? glob.category;
@@ -1637,11 +1649,18 @@ export const changeFields = (
     if (!envCheck.ok) return envCheck;
   }
 
-  const typeCheck = checkTypeChange(glob, type, actor);
+  const typeCheck = type === null ? ok(null) : checkTypeChange(glob, type, actor);
   if (!typeCheck.ok) return typeCheck;
   const scope =
-    changes.attributes === undefined ? ok(null) : scopeEdit(glob, changes.attributes, actor);
+    changes.attributes === undefined || glob.category === 'action'
+      ? ok(null)
+      : scopeEdit(glob, changes.attributes, actor);
   if (!scope.ok) return scope;
+  const assignee =
+    changes.attributes === undefined || glob.category !== 'action'
+      ? ok(undefined)
+      : assigneeEdit(glob, changes.attributes);
+  if (!assignee.ok) return assignee;
 
   // A set, not a list: stores return the start relations in different orders, so an echoed `after` must not read as an edit.
   const asSet = (ids: readonly string[]): string => [...new Set(ids)].sort().join('\n');
@@ -1672,6 +1691,10 @@ export const changeFields = (
     diff['attributes'] = {
       scope: { from: scopeJson(decisionAttributesOf(glob).scope), to: scopeJson(scope.value) },
     };
+  }
+  if (assignee.value !== undefined) {
+    attributes = { attributes: { ...actionAttributesOf(glob), assignee: assignee.value } };
+    diff['attributes'] = { assignee: { from: actionAttributesOf(glob).assignee, to: assignee.value } };
   }
   if (Object.keys(diff).length === 0) return unchanged(glob);
 
@@ -3022,6 +3045,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 
 export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
   if (glob.category === 'decision') return decisionActions(glob, actor);
+  if (glob.category === 'action') return actionActions(glob);
   if (isAgentSetGlob(glob)) return agentSetActions(glob, actor);
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
@@ -3197,7 +3221,7 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     id: input.id,
     boardId: input.boardId,
     title: input.title.trim(),
-    type: 'same',
+    type: null,
     category: 'decision',
     attributes: attributes.value,
     group: input.group,
@@ -3233,6 +3257,123 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     })
     .done();
 };
+
+// ---------------------------------------------------------------------------
+// Action globs (rows A1-A3)
+//
+// An action is something a person does: it never has a branch, PR, run, label or deploy. It is open in Planning and ends
+// Signed off, done or dismissed (the outcome says which). Anyone on the board may complete or dismiss it.
+
+/** The attributes of an action glob; an action without them is a broken record, never a state to handle. */
+export const actionAttributesOf = (glob: Glob): ActionAttributes => {
+  const attributes = glob.attributes;
+  if (glob.category !== 'action' || !isActionAttributes(attributes)) throw new Error(`${glob.id} is not an action glob`);
+  return attributes;
+};
+
+/** Row A1: an action enters Planning with no run, no provisioning and no labels. */
+const createAction = (input: CreateInput, ctx: Context, actor: Actor): Result<Transition> => {
+  const attributes = validateAttributes('action', input.attributes ?? { assignee: null, outcome: null });
+  if (!attributes.ok) return attributes;
+  if (!isActionAttributes(attributes.value) || attributes.value.outcome !== null) {
+    return invalidInput('A new action has no outcome yet');
+  }
+  if (input.environment !== null) return invalidInput('An action has no environment');
+  const glob: Glob = {
+    id: input.id,
+    boardId: input.boardId,
+    title: input.title.trim(),
+    type: null,
+    category: 'action',
+    attributes: attributes.value,
+    group: input.group,
+    environment: null,
+    status: 'planning',
+    version: 0,
+    generation: 1,
+    creator: actor.email,
+    planner: actor.email,
+    implementer: null,
+    labels: {},
+    checklists: {},
+    pr: null,
+    prs: [],
+    mergeMode: null,
+    headChecks: null,
+    runs: [],
+    failure: null,
+    provisioning: 'none',
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    signedOffAt: null,
+    doingSince: null,
+    listSince: ctx.now,
+  };
+  return new Builder(glob, ctx)
+    .event('GlobCreated', {
+      type: null,
+      category: glob.category,
+      group: glob.group,
+      environment: null,
+      status: glob.status,
+    })
+    .done();
+};
+
+const notAction = (glob: Glob, actor: Actor | null): Result<never> =>
+  invalidTransition(glob, actor, 'This only applies to an action glob');
+
+/** The new assignee from an `attributes` PATCH on an action (undefined: no change); only while the action is open. */
+const assigneeEdit = (glob: Glob, value: unknown): Result<string | null | undefined> => {
+  const assignee = validateActionEdit(value);
+  if (!assignee.ok) return assignee;
+  const attributes = actionAttributesOf(glob);
+  if (attributes.outcome !== null) return invalidInput('A finished action cannot be reassigned');
+  return ok(assignee.value === attributes.assignee ? undefined : assignee.value);
+};
+
+/** An open action ends: done or dismissed. What waited for it is released either way. */
+const finishAction = (glob: Glob, outcome: ActionOutcome, ctx: Context, event: DomainEventType): Result<Transition> =>
+  releaseWaiting(new Builder(glob, ctx), glob)
+    .set({ attributes: { ...actionAttributesOf(glob), outcome }, signedOffAt: ctx.now })
+    .status('signed_off')
+    .event(event, {
+      by: outcome.by,
+      ...(outcome.note === undefined ? {} : { note: outcome.note }),
+      ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+    })
+    .done();
+
+/** Row A2: a person did the action's work. A repeat on a finished action changes nothing. */
+export const completeAction = (glob: Glob, input: { readonly note?: string }, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'action') return notAction(glob, actor);
+  const { outcome } = actionAttributesOf(glob);
+  if (outcome !== null) {
+    return outcome.kind === 'done' ? unchanged(glob) : invalidTransition(glob, actor, 'This action was dismissed');
+  }
+  if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
+  const note = input.note?.trim() ?? '';
+  return finishAction(glob, { kind: 'done', by: actor.email, at: ctx.now, ...(note === '' ? {} : { note }) }, ctx, 'ActionDone');
+};
+
+/** Row A3: the action is not needed. Needs a reason; a repeat on a dismissed action changes nothing. */
+export const dismissAction = (glob: Glob, input: { readonly reason: string }, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'action') return notAction(glob, actor);
+  const { outcome } = actionAttributesOf(glob);
+  if (outcome !== null) {
+    return outcome.kind === 'dismissed' ? unchanged(glob) : invalidTransition(glob, actor, 'This action is already done');
+  }
+  if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
+  const reason = input.reason.trim();
+  if (reason === '') return invalidInput('Dismissing needs a reason');
+  return finishAction(glob, { kind: 'dismissed', by: actor.email, at: ctx.now, reason }, ctx, 'ActionDismissed');
+};
+
+/** What a person can do with an action: finish it while it is open, and delete it. */
+const actionActions = (glob: Glob): Action[] =>
+  glob.status === 'planning' ? ['complete_action', 'dismiss_action', 'delete'] : ['delete'];
 
 /** A scope edit on a decision (admins and POs): null when it changes nothing. */
 const scopeEdit = (glob: Glob, value: unknown, actor: Actor): Result<DecisionScope | null> => {

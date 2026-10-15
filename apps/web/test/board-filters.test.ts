@@ -20,9 +20,16 @@ describe('board filters', () => {
     expect(matchesFilters(view({ category: 'decision' }), parse('category=all'))).toBe(true);
   });
 
-  it('defaults to feature, task and bug, hiding decisions', () => {
+  it('shows an action by default and filters to it', () => {
+    expect(matchesFilters(view({ category: 'action' }), {})).toBe(true);
+    expect(matchesFilters(view({ category: 'action' }), parse('category=action'))).toBe(true);
+    expect(matchesFilters(view({ category: 'task' }), parse('category=action'))).toBe(false);
+    expect(matchesFilters(view({ category: 'action' }), parse('category=decision'))).toBe(false);
+  });
+
+  it('defaults to feature, task, bug and action, hiding decisions', () => {
     const values = parse('');
-    expect(values).toEqual({ category: 'feature,task,bug' });
+    expect(values).toEqual({ category: 'feature,task,bug,action' });
     expect(values).toEqual(defaultFilters());
     expect(matchesFilters(view({ category: 'task' }), values)).toBe(true);
     expect(matchesFilters(view({ category: 'decision' }), values)).toBe(false);
@@ -134,7 +141,7 @@ describe('board filters', () => {
 
   it('filters by exact group name, hiding globs with no group, and round-trips through the URL', () => {
     const values = parse('group=glob-groups');
-    expect(values).toEqual({ category: 'feature,task,bug', group: 'glob-groups' });
+    expect(values).toEqual({ category: 'feature,task,bug,action', group: 'glob-groups' });
     expect(matchesFilters(view({ group: 'glob-groups' }), values)).toBe(true);
     expect(matchesFilters(view({ group: 'glob' }), values)).toBe(false);
     expect(matchesFilters(view({ group: null }), values)).toBe(false);
@@ -155,7 +162,7 @@ describe('board filters', () => {
 
     it('is off by default and on for human=1', () => {
       expect(parse('')).toEqual(defaultFilters());
-      expect(parse('human=1')).toEqual({ category: 'feature,task,bug', human: '1' });
+      expect(parse('human=1')).toEqual({ category: 'feature,task,bug,action', human: '1' });
       expect(parse('human=nope')).toEqual(defaultFilters());
       expect(activeCount(parse('human=1'))).toBe(1);
     });
@@ -178,7 +185,7 @@ describe('board filters', () => {
     it('round-trips through the URL', () => {
       const params = writeFilters(new URLSearchParams('glob=s1t1'), { ...defaultFilters(), human: '1' });
       expect(params.toString()).toBe('glob=s1t1&human=1');
-      expect(parseFilters(params)).toEqual({ category: 'feature,task,bug', human: '1' });
+      expect(parseFilters(params)).toEqual({ category: 'feature,task,bug,action', human: '1' });
       expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
     });
   });
@@ -190,7 +197,7 @@ describe('board filters', () => {
     const plain = view({ status: 'planning' });
 
     it('is off by default and on for arm=1', () => {
-      expect(parse('arm=1')).toEqual({ category: 'feature,task,bug', arm: '1' });
+      expect(parse('arm=1')).toEqual({ category: 'feature,task,bug,action', arm: '1' });
       expect(parse('arm=nope')).toEqual(defaultFilters());
       expect(activeCount(parse('arm=1'))).toBe(1);
     });
@@ -206,7 +213,7 @@ describe('board filters', () => {
     it('round-trips through the URL', () => {
       const params = writeFilters(new URLSearchParams('glob=s1t1'), { ...defaultFilters(), arm: '1' });
       expect(params.toString()).toBe('glob=s1t1&arm=1');
-      expect(parseFilters(params)).toEqual({ category: 'feature,task,bug', arm: '1' });
+      expect(parseFilters(params)).toEqual({ category: 'feature,task,bug,action', arm: '1' });
     });
   });
 });

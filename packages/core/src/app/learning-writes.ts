@@ -470,7 +470,7 @@ export const createLearning = async (
       id,
       boardId,
       title: decisionGlobTitle(statement),
-      type: 'same',
+      type: null,
       category: 'decision',
       attributes,
       group: decisionGroup(attributes, null),

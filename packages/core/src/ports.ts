@@ -33,11 +33,8 @@ import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.j
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
 import type { BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
 
-/**
- * Which globs a listing includes: `work` (the default: features, tasks and bugs, so every consumer that treats a glob as
- * work is unchanged), `decisions` (decision globs only) or `all`. Anything that must see decisions asks for them.
- */
-export type GlobInclude = 'work' | 'decisions' | 'all';
+import type { GlobInclude } from './domain/types.js';
+export type { GlobInclude };
 
 export interface GlobFilter {
   readonly include?: GlobInclude;

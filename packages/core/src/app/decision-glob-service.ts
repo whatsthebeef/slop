@@ -11,6 +11,7 @@ import { isLearning, learningAssessmentFacts, learningDocument, learningDraft, l
 import type { LearningRead } from '../domain/learning.js';
 import { isAgentSetKind } from '../domain/knowledge.js';
 import type { Artifact, KnowledgeKind } from '../domain/knowledge.js';
+import { isHumanCategory } from '../domain/types.js';
 import type { Glob, Role } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { memberOf, roleOf } from './access.js';
@@ -245,7 +246,7 @@ export class DecisionGlobService {
   private async checkLinked(tx: Tx, decision: Glob, linkedId: string): Promise<Result<Glob>> {
     const linked = await tx.getGlob(linkedId);
     if (linked?.boardId !== decision.boardId) return notFound(`No glob ${linkedId} on board ${String(decision.boardId)}`);
-    if (linked.category === 'decision') return invalidInput('Link a work glob, not another decision');
+    if (isHumanCategory(linked.category)) return invalidInput('Link a work glob, not another decision');
     if (linked.status === 'signed_off' || linked.status === 'merging') return invalidInput(`${linkedId} has already merged or is merging: link a glob that has not`);
     return ok(linked);
   }

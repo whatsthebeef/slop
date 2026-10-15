@@ -8,6 +8,8 @@ import type { Glob } from './types.js';
  */
 export const needsHuman = (glob: Glob): boolean => {
   // A decision waits for a pick-up (Planning) or a sign-off (Reviewing); in Doing someone is already on it.
+  // An action waits for a person until it is done or dismissed.
+  if (glob.category === 'action') return glob.status === 'planning';
   if (glob.category === 'decision') return glob.status === 'planning' || glob.status === 'reviewing';
   if (glob.status === 'failed' || glob.failure !== null) return true;
   if (glob.status === 'pr_open' && glob.type !== 'sub' && glob.pr?.state === 'ready') return true;

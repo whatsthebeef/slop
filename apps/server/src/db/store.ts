@@ -655,7 +655,7 @@ export class PgStore implements Store {
         // The IDs travel as one JSON parameter: a report can name more globs than Postgres's 65,535 bind parameters.
         const wanted = JSON.stringify([...new Set(ids)]);
         return t
-          .select({ id: g.id, boardId: g.boardId, planner: g.planner, category: sql<Category>`${g.data} ->> 'category'`, type: sql<SlopType>`${g.type}` })
+          .select({ id: g.id, boardId: g.boardId, planner: g.planner, category: sql<Category>`${g.data} ->> 'category'`, type: sql<SlopType | null>`${g.type}` })
           .from(g)
           .where(sql`${g.id} in (select jsonb_array_elements_text(${wanted}::jsonb))`);
       },
@@ -738,10 +738,23 @@ export class PgStore implements Store {
       },
       listGlobs: async (boardId, filter: GlobFilter) => {
         const conditions = [eq(schema.globs.boardId, boardId)];
-        // Work by default: decision globs are listed only when asked for. Category lives in the document, not a column.
-        if (filter.include !== 'all') {
-          const decision = sql`${schema.globs.data}->>'category' = 'decision'`;
-          conditions.push(filter.include === 'decisions' ? decision : sql`${schema.globs.data}->>'category' is distinct from 'decision'`);
+        // Work by default: decision and action globs are listed only when asked for. Category lives in the document, not a column.
+        const category = sql`${schema.globs.data}->>'category'`;
+        switch (filter.include ?? 'work') {
+          case 'all':
+            break;
+          case 'decisions':
+            conditions.push(sql`${category} = 'decision'`);
+            break;
+          case 'actions':
+            conditions.push(sql`${category} = 'action'`);
+            break;
+          case 'human':
+            conditions.push(sql`${category} in ('decision', 'action')`);
+            break;
+          case 'work':
+            conditions.push(sql`${category} not in ('decision', 'action')`);
+            break;
         }
         if (filter.status !== undefined) conditions.push(inArray(schema.globs.status, [...filter.status]));
         if (filter.type !== undefined) conditions.push(eq(schema.globs.type, filter.type));

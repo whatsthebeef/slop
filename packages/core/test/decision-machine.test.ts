@@ -21,6 +21,7 @@ const decision = (patch: Partial<Glob> = {}): Glob =>
   glob({
     id: 's1k1',
     category: 'decision',
+    type: null,
     attributes: attributes(),
     pr: null,
     provisioning: 'none',
@@ -41,7 +42,7 @@ const create = (patch: Partial<machine.CreateInput> = {}, actor: Actor = dev) =>
       id: 's1k1',
       boardId: 1,
       title: 'Never edit src/gen/',
-      type: 'same',
+      type: null,
       category: 'decision',
       attributes: attributes(),
       group: null,
@@ -56,13 +57,14 @@ const create = (patch: Partial<machine.CreateInput> = {}, actor: Actor = dev) =>
 describe('D1: creating a decision', () => {
   it('enters Planning with no run, no provisioning, no labels and no doing clock', () => {
     const t = unwrap(create());
-    expect(t.glob).toMatchObject({ category: 'decision', type: 'same', status: 'planning', provisioning: 'none', labels: {}, runs: [], pr: null, doingSince: null });
+    expect(t.glob).toMatchObject({ category: 'decision', type: null, status: 'planning', provisioning: 'none', labels: {}, runs: [], pr: null, doingSince: null });
     expect(t.effects).toEqual([]);
     expect(t.events.map((e) => [e.type, e.data['category']])).toEqual([['GlobCreated', 'decision']]);
   });
 
-  it('refuses a type other than same, a missing or already-decided attribute set, and an environment', () => {
+  it('refuses any type, a missing or already-decided attribute set, and an environment', () => {
     expect(code(create({ type: 'sub' }))).toBe('invalid_combination');
+    expect(code(create({ type: 'same' }))).toBe('invalid_combination');
     expect(code(create({ type: 'super' }))).toBe('invalid_combination');
     expect(code(create({ attributes: undefined }))).toBe('invalid_input');
     expect(code(create({ attributes: attributes({ outcome: { kind: 'accept', by: 'a', at: NOW } }) }))).toBe('invalid_input');

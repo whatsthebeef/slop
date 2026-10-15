@@ -13,6 +13,7 @@ import { INBOX_EXCERPT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import type { InboxItem } from '../domain/inbox.js';
 import type { DraftPreview } from '../domain/kb.js';
 import type { Provenance } from '../domain/knowledge.js';
+import { isHumanCategory } from '../domain/types.js';
 import type { Actor, Glob } from '../domain/types.js';
 import type { Clock, Hint, Tx } from '../ports.js';
 import { addArtifact } from './artifact-service.js';
@@ -82,7 +83,7 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
   let scopedGroup: string | null = null;
   if (scope.kind === 'glob') {
     const governed = await tx.getGlob(scope.ref);
-    if (governed?.boardId !== input.boardId || governed.category === 'decision') return invalidInput(`No work glob ${scope.ref} on board ${String(input.boardId)}`);
+    if (governed?.boardId !== input.boardId || isHumanCategory(governed.category)) return invalidInput(`No work glob ${scope.ref} on board ${String(input.boardId)}`);
     scopedGroup = governed.group;
   }
   const clock: Clock = input.at === undefined ? deps.clock : { now: () => input.at ?? '' };
@@ -96,7 +97,7 @@ export const createDecisionInTx = async (tx: Tx, deps: DecisionDeps, input: NewD
       id,
       boardId: board.id,
       title: input.title,
-      type: 'same',
+      type: null,
       category: 'decision',
       attributes: input.attributes,
       group: input.group ?? decisionGroup(input.attributes, scopedGroup),

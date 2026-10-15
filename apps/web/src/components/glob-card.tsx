@@ -1,8 +1,8 @@
-import { decisionOf, scopeLabel } from '@slop/core';
+import { decisionOf, isHumanCategory, scopeLabel } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
 import { Bug, ListChecks, Loader2, Rocket, Scale, Sparkles } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import { ActorIcon, MachineIcon } from '@/components/actor-icons';
+import type { ComponentType } from 'react';
+import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -32,11 +32,17 @@ export const DotSeparator = ({ testId }: { testId?: string }) => (
 );
 
 /** The glob's category as a small icon in the card's corner. */
-export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
+type CategoryGlyph = ComponentType<{ className?: string; 'aria-label'?: string; role?: 'img' }>;
+
+/** An action is a person's to do: the shared human icon (it labels itself), not a category glyph of its own. */
+const ActionGlyph: CategoryGlyph = ({ className }) => <HumanIcon {...(className === undefined ? {} : { className })} />;
+
+export const CATEGORY_ICON: Record<Category, { icon: CategoryGlyph; className: string }> = {
   bug: { icon: Bug, className: 'text-red' },
   feature: { icon: Sparkles, className: 'text-muted-foreground' },
   task: { icon: ListChecks, className: 'text-muted-foreground' },
   decision: { icon: Scale, className: 'text-muted-foreground' },
+  action: { icon: ActionGlyph, className: 'text-muted-foreground' },
 };
 
 export const CategoryIcon = ({ category }: { category: Category }) => {
@@ -518,6 +524,28 @@ export const ArmSystemLabel = ({ step, onOpen }: { step: Pick<ListedHumanStep, '
   </Tip>
 );
 
+/** An action glob's chip: who is meant to do it, or how it ended. Nothing for other globs. */
+export const ActionChips = ({ glob }: { glob: GlobView }) => {
+  const action = glob.category === 'action' && glob.attributes !== undefined && 'assignee' in glob.attributes ? glob.attributes : null;
+  if (action === null) return null;
+  const { outcome } = action;
+  const text = outcome === null ? (action.assignee ?? 'anyone') : outcome.kind === 'done' ? 'done' : 'dismissed';
+  const tip =
+    outcome === null
+      ? action.assignee === null
+        ? 'Anyone on the board can do this and mark it done'
+        : `${action.assignee} is meant to do this`
+      : `${outcome.kind === 'done' ? 'Done' : 'Dismissed'} by ${outcome.by}${outcome.note === undefined && outcome.reason === undefined ? '' : `: ${outcome.note ?? outcome.reason ?? ''}`}`;
+  return (
+    <Tip text={tip}>
+      <span className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' data-testid='action-chip'>
+        <HumanIcon decorative />
+        {text}
+      </span>
+    </Tip>
+  );
+};
+
 /**
  * A decision glob's chips: what it applies to, what was decided (the outcome so far) and, when it contradicts a decision of
  * broader scope, which one. Nothing for a work glob.
@@ -637,11 +665,12 @@ export const GlobCard = ({
   const age = aging(glob);
   const now = new Date().toISOString();
   const preview = moves.find((m) => m.action === previewing);
-  // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status.
+  // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status; neither do actions.
   const decision = decisionOf(glob) !== null;
+  const human = isHumanCategory(glob.category);
   const status = cornerStatus(glob, now, viewer, repo);
   const blocked = hasBlocker(glob, now, viewer);
-  const armStep = decision ? null : needsRelease(glob.humanSteps ?? []);
+  const armStep = human ? null : needsRelease(glob.humanSteps ?? []);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
   const shown = blocked ? [] : moves;
 
@@ -686,7 +715,7 @@ export const GlobCard = ({
           <span>{glob.id}</span>
           <DotSeparator />
           <span data-testid='card-type'>
-            {decision ? 'decision' : glob.type}
+            {glob.type ?? glob.category}
             {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
           </span>
         </span>
@@ -715,6 +744,8 @@ export const GlobCard = ({
             {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} to={groupHref} progress={groupProgress} />}
             {decision ? (
               <DecisionChips glob={glob} onOpen={() => onOpenSection(cardTargets.decision())} />
+            ) : human ? (
+              <ActionChips glob={glob} />
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}

@@ -178,7 +178,7 @@ export const learningSeed = (tx: Tx, context?: KbWriteContext): LearningSeed => 
           id: item.id,
           boardId: item.boardId,
           title: decisionGlobTitle(item.statement),
-          type: 'same',
+          type: null,
           category: 'decision',
           attributes: seeded,
           group: decisionGroup(seeded, null),

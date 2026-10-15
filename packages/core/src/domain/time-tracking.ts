@@ -1,6 +1,6 @@
 import type { DomainEvent, DomainEventType, JsonValue } from './events.js';
 import { isRnd, listOf } from './matrix.js';
-import { CATEGORIES, SLOP_TYPES, STATUSES } from './types.js';
+import { CATEGORIES, isHumanCategory, SLOP_TYPES, STATUSES } from './types.js';
 import type { Category, SlopType, Status } from './types.js';
 
 /**
@@ -22,7 +22,7 @@ export const WORK_END_HOUR = 17;
 export interface GlobFacts {
   readonly planner: string;
   readonly category: Category;
-  readonly type: SlopType;
+  readonly type: SlopType | null;
 }
 
 /** A glob's facts plus where it lives, as the store reads them for a report (no whole glob). */
@@ -106,9 +106,10 @@ export const deriveSegments = (
       const category = categoryOf(e.type === 'GlobCreated' ? e.data.category : undefined) ?? facts?.category;
       const type = typeOf(e.type === 'GlobCreated' ? e.data.type : undefined) ?? facts?.type;
       // A glob with no planner known (no creation event and no row) can't be attributed to anyone.
-      if (planner === null || category === undefined || type === undefined) continue;
-      // Decisions are board knowledge, not work: no segment is ever opened for one.
-      if (category === 'decision') continue;
+      if (planner === null || category === undefined) continue;
+      // Decisions are board knowledge and actions are a person's own: no segment is ever opened for one.
+      if (isHumanCategory(category)) continue;
+      if (type === undefined || type === null) continue;
       g = { status: null, category, type, planner, implementer: null };
       state.set(e.globId, g);
     }

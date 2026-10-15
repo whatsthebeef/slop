@@ -193,7 +193,7 @@ describe('decision globs', () => {
       expect(made.globId).toBe('s1k1');
       expect(made.globId).toBe(made.id);
       const g = await glob(made.globId);
-      expect(g).toMatchObject({ category: 'decision', type: 'same', status: 'planning', title: GEN, provisioning: 'none', labels: {}, runs: [], doingSince: null, version: 1 });
+      expect(g).toMatchObject({ category: 'decision', type: null, status: 'planning', title: GEN, provisioning: 'none', labels: {}, runs: [], doingSince: null, version: 1 });
       expect(g.attributes).toEqual({
         scope: { kind: 'future_work', ref: null },
         origin: { kind: 'submitted' },

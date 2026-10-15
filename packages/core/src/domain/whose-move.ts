@@ -75,7 +75,7 @@ export const appliedHolding = (glob: Glob, holding: readonly Holding[]): Holding
     }
   });
 
-const named = (h: Holding): string => (h.toIsDecision ? `decision ${h.to}` : h.to);
+const named = (h: Holding): string => (h.toIsDecision ? `decision ${h.to}` : h.toIsAction === true ? `action ${h.to}` : h.to);
 
 /**
  * What a glob's holdings say, one phrase per gate: "waiting on s15f82, decision s15k190" for a start gate, "merge waits on s15f82"
