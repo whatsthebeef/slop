@@ -7,6 +7,7 @@ import type { GlobSection } from '@/lib/glob-section';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import type { ArtifactRef } from './artifacts';
 import type { ReviewLabel } from './labels';
+import { useDecideFlow } from './decision-outcomes';
 import { GlobReset, useGlobActions } from './glob-view/actions';
 import type { GlobViewContext } from './glob-view/context';
 import { useGlobEdits } from './glob-view/edit-fields';
@@ -98,6 +99,7 @@ export const GlobDetail = ({
     ...(email === undefined ? {} : { email }),
   });
   const { decision, busy, disabled } = actionState;
+  const decide = useDecideFlow({ board, glob, busy, onDecide });
   const nowState = useNowState(glob, decision, disabled, actionState);
   const edits = useGlobEdits(glob.id);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
@@ -114,6 +116,7 @@ export const GlobDetail = ({
     busy,
     onAction,
     onUpdate,
+    decide,
     onOpenSection: (target) => {
       const { section: to } = target;
       if (to !== undefined) scrollWhenReady(() => findSection(document, to));
@@ -164,7 +167,6 @@ export const GlobDetail = ({
     onReviewLabel,
     onDismissEdge,
     onAddRelation,
-    onDecide,
     onAddStep,
     onCompleteStep,
     onDismissStep,

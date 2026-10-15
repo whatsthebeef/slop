@@ -224,9 +224,9 @@ export const actionPresentation = (
       return { label: 'Delete', icon: null, tip: 'Deletes the glob', placement: 'reset' };
     case 'decide':
       return {
-        label: 'Decide',
+        label: 'Approve change',
         icon: 'human',
-        tip: 'Records the outcome of this decision',
+        tip: 'Approves the proposed change as drafted',
         placement: 'main',
       };
     case 'sign_off':
