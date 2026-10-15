@@ -229,12 +229,12 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
   if (glob.status === 'reviewing' && openFeedback(glob).length > 0 && (position === null || position.holder === 'machine')) {
     const target = { kind: 'section', target: cardTargets.label() } as const;
     if (position?.holder === 'machine') {
-      return make('machine', position.spinning ? 'machine-spinning' : 'machine', feedbackText(glob, 'fixing feedback'), position.tone, target, [feedbackTip(glob)]);
+      return make('machine', position.spinning ? 'machine-spinning' : 'machine', feedbackText('fixing feedback'), position.tone, target, [feedbackTip(glob)]);
     }
-    return make('feedback', 'human', feedbackText(glob), 'text-signal-strong', target, [feedbackTip(glob)]);
+    return make('feedback', 'human', feedbackText(), 'text-signal-strong', target, [feedbackTip(glob)]);
   }
   if (awaitingSignOff(glob) && position === null) {
-    return make('sign-off', 'human', signOffText(glob.labels), 'text-signal-strong', { kind: 'section', target: cardTargets.label() }, [
+    return make('sign-off', 'human', signOffText(), 'text-signal-strong', { kind: 'section', target: cardTargets.label() }, [
       signOffTip(glob.labels),
     ]);
   }

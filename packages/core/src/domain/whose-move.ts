@@ -54,11 +54,8 @@ export interface MoveOptions {
 /** The labels a merged glob still waits on a person to approve, in FR, CR, QA order. */
 export const labelsWaiting = (labels: Labels): LabelName[] => LABEL_NAMES.filter((name) => labels[name] === 'required' || labels[name] === 'added');
 
-/** The one wording for a merged glob whose labels wait for sign-off: "sign off · QA, CR"; just "sign off" with no labels listed. */
-export const signOffText = (labels: Labels): string => {
-  const waiting = labelsWaiting(labels);
-  return waiting.length === 0 ? 'sign off' : `sign off · ${waiting.join(', ')}`;
-};
+/** The one wording for a merged glob whose labels wait for sign-off: just "sign off"; the labels themselves show which are waiting. */
+export const signOffText = (): string => 'sign off';
 
 /** The unticked, sent items on labels in state `added`: the feedback the developer has to deal with, in FR, CR, QA order. */
 export const openFeedback = (glob: Pick<Glob, 'labels' | 'checklists'>): { readonly label: LabelName; readonly items: readonly ChecklistItem[] }[] =>
@@ -67,11 +64,8 @@ export const openFeedback = (glob: Pick<Glob, 'labels' | 'checklists'>): { reado
     return items.length === 0 ? [] : [{ label, items }];
   });
 
-/** The one wording for feedback waiting on the developer: "fix feedback · QA 2", the labels with open items and how many each. */
-export const feedbackText = (glob: Pick<Glob, 'labels' | 'checklists'>, verb = 'fix feedback'): string =>
-  `${verb} · ${openFeedback(glob)
-    .map((f) => `${f.label} ${String(f.items.length)}`)
-    .join(', ')}`;
+/** The one wording for feedback waiting on the developer: just "fix feedback" (or the given verb); the tooltip lists the items. */
+export const feedbackText = (verb = 'fix feedback'): string => verb;
 
 /**
  * A state a person is the one to move in, whatever steps say: open feedback on a label is the developer's turn and outranks
@@ -79,8 +73,8 @@ export const feedbackText = (glob: Pick<Glob, 'labels' | 'checklists'>, verb = '
  */
 const personReason = (glob: Glob): string | null => {
   if (glob.status !== 'reviewing') return null;
-  if (openFeedback(glob).length > 0) return feedbackText(glob);
-  return labelsWaiting(glob.labels).length > 0 ? signOffText(glob.labels) : null;
+  if (openFeedback(glob).length > 0) return feedbackText();
+  return labelsWaiting(glob.labels).length > 0 ? signOffText() : null;
 };
 
 /** An escalation is a person's turn only when nothing else holds the ball: it never outranks a machine step (see `whoseMove`). */

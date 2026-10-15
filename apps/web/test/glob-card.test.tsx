@@ -633,7 +633,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
   });
 
   it('workstream states show only while the glob is being built, not once merged', () => {
-    expect(corner(mergedWith([], { workstreams: ws([['W1', 'running']]) })).text).toBe('sign off · QA');
+    expect(corner(mergedWith([], { workstreams: ws([['W1', 'running']]) })).text).toBe('sign off');
   });
 
   it('rollout replaces sign off with the human icon, with no upcoming-steps chip lower on the card', () => {
@@ -653,7 +653,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledWith({ section: 'human-steps' });
     const done = mergedWith([step({ state: 'done' })]);
-    expect(corner(done)).toMatchObject({ text: 'sign off · QA', icon: 'human' });
+    expect(corner(done)).toMatchObject({ text: 'sign off', icon: 'human' });
     expect(corner(mergedWith([step({ state: 'done' })], { status: 'signed_off', labels: { QA: 'approved' } })).text).toBe('signed off');
   });
 
