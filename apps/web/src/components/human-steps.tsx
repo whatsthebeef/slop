@@ -1,18 +1,22 @@
 import { isForViewer } from '@slop/core';
-import type { HumanStepViewer } from '@slop/core';
+import type { HumanStepScript, HumanStepViewer } from '@slop/core';
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { GlobView, ListedHumanStep } from '@/lib/api';
 import {
   defaultStepsOpen,
+  dueWorkSteps,
   dismissalText,
   dismissReason,
   EMPTY_DRAFT,
   isDismissedStep,
   isWorkStep,
+  isQuietStep,
   PREDICTED_ROLLOUT_TEXT,
+  quietText,
   readStepsOpen,
   scriptArtifactPath,
   scriptCopyText,
@@ -58,18 +62,10 @@ interface StepActions {
 
 const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
   const [dismissing, setDismissing] = useState(false);
-  const [reason, setReason] = useState('');
-  const [copied, setCopied] = useState(false);
   const predicted = step.predicted === true;
   const work = isWorkStep(step);
   const open = step.state === 'due' || step.state === 'pending';
   const script = step.script ?? null;
-  const copy = async () => {
-    const text = await scriptCopyText(glob.boardId, glob.id, script ?? { path: '' }, api.rolloutScript, window.location.origin);
-    setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
-  };
-  const sourceUrl = script !== null && 'path' in script ? scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch)) : null;
-  const reasonText = dismissReason(reason);
   return (
     <li
       className={cn('grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 rounded border p-2 text-xs', mine && step.state === 'due' && 'border-foreground')}
@@ -102,59 +98,139 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         {step.check != null && step.check !== '' && <span data-testid='step-check'>checked by slop: {step.check}</span>}
       </div>
       {step.detail != null && step.detail !== '' && <StepDetail detail={step.detail} />}
-      {script !== null && (
-        <div className='flex flex-wrap items-center gap-2 text-[11px]'>
-          {'path' in script ? (
-            <>
-              <span className='text-muted-foreground'>Run:</span>
-              <code className='break-all font-mono' data-testid='step-script-path'>
-                {scriptRunCommand(script.path)}
-              </code>
-            </>
-          ) : (
-            <Link className='min-w-0 break-words underline [overflow-wrap:anywhere]' to={scriptArtifactPath(glob.boardId, glob.id, script)} data-testid='step-script-link'>
-              Rollout script: {script.artifact}
-            </Link>
-          )}
-          <Button size='sm' variant='outline' data-testid='step-copy' onClick={() => void copy()}>
-            {copied ? 'Copied' : 'Copy'}
-          </Button>
-          {'path' in script && sourceUrl !== null && (
-            <a className='underline' href={sourceUrl} target='_blank' rel='noreferrer' data-testid='step-script-source'>
-              View script
-            </a>
-          )}
-        </div>
-      )}
+      {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
       {work && open && !dismissing && (
         <button type='button' className='justify-self-start text-[11px] underline' data-testid='step-dismiss' onClick={() => setDismissing(true)}>
           Dismiss
         </button>
       )}
-      {dismissing && (
-        <form
-          className='flex flex-wrap items-end gap-2'
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (reasonText === null) return;
-            void actions.onDismiss(step.id, reasonText).then((ok) => {
-              if (ok) setDismissing(false);
-            });
-          }}
-        >
-          <Label className='min-w-0 grow'>
-            Why is this step wrong?
-            <Input value={reason} onChange={(e) => setReason(e.target.value)} data-testid='dismiss-reason' />
-          </Label>
-          <Button size='sm' type='submit' disabled={busy || reasonText === null} data-testid='dismiss-confirm'>
-            Dismiss step
-          </Button>
-          <Button size='sm' type='button' variant='ghost' onClick={() => setDismissing(false)}>
-            Cancel
-          </Button>
-        </form>
-      )}
+      {dismissing && <DismissForm busy={busy} onDismiss={(text) => actions.onDismiss(step.id, text)} onClose={() => setDismissing(false)} />}
     </li>
+  );
+};
+
+/** A step's script: the command to run (or the link to its artifact), a copy button and a link to the file. */
+const ScriptRow = ({ glob, script, source }: { glob: GlobView; script: HumanStepScript; source: ScriptSource }) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const text = await scriptCopyText(glob.boardId, glob.id, script, api.rolloutScript, window.location.origin);
+    setCopied(await copyOrSelect(text, typeof navigator === 'undefined' ? undefined : navigator.clipboard, () => undefined));
+  };
+  const sourceUrl = 'path' in script ? scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch)) : null;
+  return (
+    <div className='flex flex-wrap items-center gap-2 text-[11px]'>
+      {'path' in script ? (
+        <>
+          <span className='text-muted-foreground'>Run:</span>
+          <code className='break-all font-mono' data-testid='step-script-path'>
+            {scriptRunCommand(script.path)}
+          </code>
+        </>
+      ) : (
+        <Link className='min-w-0 break-words underline [overflow-wrap:anywhere]' to={scriptArtifactPath(glob.boardId, glob.id, script)} data-testid='step-script-link'>
+          Rollout script: {script.artifact}
+        </Link>
+      )}
+      <Button size='sm' variant='outline' data-testid='step-copy' onClick={() => void copy()}>
+        {copied ? 'Copied' : 'Copy'}
+      </Button>
+      {sourceUrl !== null && (
+        <a className='underline' href={sourceUrl} target='_blank' rel='noreferrer' data-testid='step-script-source'>
+          View script
+        </a>
+      )}
+    </div>
+  );
+};
+
+/** The reason form a dismissal needs; resolves its reason through `onDismiss` and closes when that went through. */
+const DismissForm = ({ busy, onDismiss, onClose }: { busy: boolean; onDismiss: (reason: string) => Promise<boolean>; onClose: () => void }) => {
+  const [reason, setReason] = useState('');
+  const reasonText = dismissReason(reason);
+  return (
+    <form
+      className='flex flex-wrap items-end gap-2'
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (reasonText === null) return;
+        void onDismiss(reasonText).then((ok) => {
+          if (ok) onClose();
+        });
+      }}
+    >
+      <Label className='min-w-0 grow'>
+        Why is this step wrong?
+        <Input value={reason} onChange={(e) => setReason(e.target.value)} data-testid='dismiss-reason' />
+      </Label>
+      <Button size='sm' type='submit' disabled={busy || reasonText === null} data-testid='dismiss-confirm'>
+        Dismiss step
+      </Button>
+      <Button size='sm' type='button' variant='ghost' onClick={onClose}>
+        Cancel
+      </Button>
+    </form>
+  );
+};
+
+/**
+ * A due step as a full card in the top block: title, who, the step's text as plain text (Why / Do this / Permissions / Check it
+ * worked), the script's command with a copy button, and Done and Dismiss…. A step slop ticks itself (a capability check) has Done disabled with why.
+ */
+const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
+  const [dismissing, setDismissing] = useState(false);
+  const script = step.script ?? null;
+  const waits = step.check != null && step.check !== '';
+  const detail = step.detail?.trim() ?? '';
+  return (
+    <li className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border bg-background p-3 text-sm' data-testid='due-step' data-kind={step.kind}>
+      <div className='flex flex-wrap items-center gap-2'>
+        <HumanIcon decorative />
+        <span className='min-w-0 break-words font-medium [overflow-wrap:anywhere]' data-testid='step-title'>
+          {step.title}
+        </span>
+        <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
+        {mine && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
+      </div>
+      <span className='text-xs text-muted-foreground' data-testid='step-who'>
+        for {whoText(step.who)}
+      </span>
+      {detail !== '' && (
+        <p className='min-w-0 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]' data-testid='step-detail'>
+          {detail}
+        </p>
+      )}
+      {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
+      {waits && (
+        <span className='text-[11px] text-muted-foreground' data-testid='step-check'>
+          waits for {step.check} to turn on; slop ticks this itself
+        </span>
+      )}
+      {!dismissing && (
+        <div className='flex flex-wrap gap-2'>
+          <Button size='sm' disabled={busy || waits} data-testid='due-done' onClick={() => void actions.onComplete(step.id)}>
+            Done
+          </Button>
+          <Button size='sm' variant='outline' disabled={busy} data-testid='due-dismiss' onClick={() => setDismissing(true)}>
+            Dismiss…
+          </Button>
+        </div>
+      )}
+      {dismissing && <DismissForm busy={busy} onDismiss={(text) => actions.onDismiss(step.id, text)} onClose={() => setDismissing(false)} />}
+    </li>
+  );
+};
+
+/** Steps not yet due behind one quiet line ("2 steps after merge"), collapsed until asked for. */
+const QuietSteps = ({ steps, render }: { steps: readonly ListedHumanStep[]; render: (step: ListedHumanStep) => ReactNode }) => {
+  const [shown, setShown] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground' data-testid='quiet-steps'>
+      <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='quiet-toggle' onClick={() => setShown(!shown)}>
+        {quietText(steps)} {shown ? '▾' : '▸'}
+      </button>
+      {shown && <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>{steps.map(render)}</ul>}
+    </div>
   );
 };
 
@@ -266,16 +342,20 @@ export const HumanSteps = ({
   collapsed?: boolean;
 } & StepActions) => {
   const all = glob.humanSteps ?? [];
-  const steps = all.filter((s) => !isDismissedStep(s));
+  const live = all.filter((s) => !isDismissedStep(s));
+  const due = dueWorkSteps(live);
+  const quiet = live.filter(isQuietStep);
+  const steps = live.filter((s) => !due.includes(s) && !quiet.includes(s));
   const dismissed = all.filter(isDismissedStep);
   const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : collapsed ? false : readStepsOpen()));
+  const stepsOpenByDefault = defaultStepsOpen([...steps, ...quiet]);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   useEffect(() => {
     if (openSignal > 0) setToggled(true);
   }, [openSignal]);
   if (all.length === 0 && !canAdd) return null;
-  const open = toggled ?? defaultStepsOpen(steps);
+  const open = toggled ?? stepsOpenByDefault;
   const toggle = () => {
     setToggled(!open);
     writeStepsOpen(!open);
@@ -292,11 +372,24 @@ export const HumanSteps = ({
     };
   const wrapped: StepActions = { onAdd: guarded(actions.onAdd), onComplete: guarded(actions.onComplete), onDismiss: guarded(actions.onDismiss) };
   const left = steps.filter((s) => (s.state === 'due' || s.state === 'pending') && s.predicted !== true).length;
+  const stepProps = (s: ListedHumanStep) => ({ glob, source: { repo, baseBranch }, step: s, mine: viewer !== undefined && isForViewer(s, glob, viewer), busy, actions: wrapped });
   return (
     <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2' aria-label='Human steps' data-testid='human-steps'>
+      {due.length > 0 && (
+        <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border-2 border-foreground p-3' data-testid='due-steps'>
+          <h3 className='text-sm font-semibold'>
+            {due.length === 1 ? 'A step needs you' : `${String(due.length)} steps need you`}
+          </h3>
+          <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
+            {due.map((s) => (
+              <DueStep key={s.id} {...stepProps(s)} />
+            ))}
+          </ul>
+        </div>
+      )}
       <div className='flex items-center gap-2'>
         <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>
-          Human steps ({steps.length})
+          {due.length > 0 ? 'More steps' : 'Human steps'} ({steps.length + quiet.length})
           {!open && left > 0 && (
             <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='human-steps-left'>
               {left} to do
@@ -324,18 +417,11 @@ export const HumanSteps = ({
           {steps.length > 0 && (
             <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
               {steps.map((s) => (
-                <Step
-                  key={s.id}
-                  glob={glob}
-                  source={{ repo, baseBranch }}
-                  step={s}
-                  mine={viewer !== undefined && isForViewer(s, glob, viewer)}
-                  busy={busy}
-                  actions={wrapped}
-                />
+                <Step key={s.id} {...stepProps(s)} />
               ))}
             </ul>
           )}
+          <QuietSteps steps={quiet} render={(s) => <Step key={s.id} {...stepProps(s)} />} />
           <DismissedSteps steps={dismissed} />
           {canAdd && adding && <AddStep busy={busy} onAdd={wrapped.onAdd} onClose={() => setAdding(false)} />}
         </>
