@@ -4,7 +4,7 @@ import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
-import { cornerStatus } from '@/lib/card-rows';
+import { cornerStatus, waitingOnOwn } from '@/lib/card-rows';
 import { viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
@@ -94,7 +94,7 @@ export type NowState = ReturnType<typeof useNowState>;
  */
 export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decision: boolean; state: NowState }) => {
   const { position, now, viewer } = state;
-  const corner = decision ? null : cornerStatus(glob, now, viewer);
+  const corner = decision ? null : cornerStatus(glob, now, viewer, undefined, waitingOnOwn(glob));
   // A live run's status opens that run's session; the activity log has no session link of its own beyond its run entries.
   const live = position?.holder === 'machine' ? position.sessionUrl : null;
   return (

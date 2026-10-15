@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts } from '../src/lib/card-rows';
+import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts, waitingOnOwn } from '../src/lib/card-rows';
 import { humanSteps as deriveHumanSteps, signOffText, whoseMove } from '@slop/core';
 import type { StoredHumanStep } from '@slop/core';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
@@ -345,5 +345,36 @@ describe('a startable same in Planning', () => {
       view({ id: 's1t5', status: 'implementing', holding: [hold('s1t1')] }),
     ]);
     expect(counts.get('s1t1')).toBe(2);
+  });
+});
+
+describe('"N waiting on this" in the corner status', () => {
+  it('is the status of a glob with nothing else to say, opening its related globs', () => {
+    const status = cornerStatus(view({ status: 'planning' }), NOW, undefined, undefined, 2);
+    expect(status).toMatchObject({ kind: 'waiting-on-this', icon: 'hourglass', text: '2 waiting on this' });
+    expect(status?.click).toMatchObject({ kind: 'section' });
+    expect(status?.tip).toContain('2 in Planning wait for this glob to merge.');
+    expect(cornerStatus(view({ status: 'planning' }), NOW)).toBeNull();
+  });
+
+  it('goes in the tooltip when a higher-priority status wins', () => {
+    const status = cornerStatus(view({ status: 'in_progress', ...live('active') }), NOW, undefined, undefined, 2);
+    expect(status).toMatchObject({ kind: 'machine', text: 'implementing' });
+    expect(status?.tip).toContain('2 in Planning wait for this glob to merge.');
+  });
+
+  it('counts the globs its own view says it holds back at the start gate', () => {
+    const held = (from: string, gate: 'start' | 'merge') => ({
+      relationId: `r_${from}${gate}`,
+      from,
+      fromTitle: null,
+      gate,
+      until: 'merged' as const,
+      reason: null,
+      source: 'person' as const,
+    });
+    const relations = { holding: [], done: [], holdsBack: [held('s1t2', 'start'), held('s1t2', 'merge'), held('s1t3', 'start'), held('s1t4', 'merge')] };
+    expect(waitingOnOwn(view({ relations }))).toBe(2);
+    expect(waitingOnOwn(view({ relations: undefined }))).toBe(0);
   });
 });

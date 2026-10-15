@@ -645,7 +645,7 @@ export const GlobCard = ({
   // Decision globs have their own look (an accent edge, the outcome in the corner) and no labels, branch or routine status; neither do actions.
   const decision = decisionOf(glob) !== null;
   const human = isHumanCategory(glob.category);
-  const status = cornerStatus(glob, now, viewer, repo);
+  const status = cornerStatus(glob, now, viewer, repo, waitingOnThis);
   const blocked = hasBlocker(glob, now, viewer);
   const arming = human ? null : armLabel(glob);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
@@ -723,13 +723,6 @@ export const GlobCard = ({
               <ActionChips glob={glob} />
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
-            )}
-            {waitingOnThis > 0 && (
-              <Tip text={`${String(waitingOnThis)} in Planning wait for this glob to merge. Opens its related globs`}>
-                <ChipButton onOpen={() => onOpenSection(cardTargets.related())} className='font-mono text-[11px] text-muted-foreground' testId='waiting-on-this-chip'>
-                  {waitingOnThis} waiting on this
-                </ChipButton>
-              </Tip>
             )}
             {glob.clash != null && (
               <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>

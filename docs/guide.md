@@ -81,7 +81,7 @@ A decision glob (ID like `s1k4`) is a proposed change to what the project knows,
 
 ## Learnings and the Knowledge page
 
-A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, or a note on how an agent should behave. Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
+A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, a note on how an agent should behave, or a fact (how the system is now, after architecture or operations changed; approving it replaces the outdated description). Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
 
 ## Settings and what slop has learned
 

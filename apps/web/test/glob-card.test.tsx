@@ -102,6 +102,18 @@ describe('card rows', () => {
     for (const gone of ['status-line', 'status-line-open', 'waiting-on', 'waiting-on-open']) expect(root.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
   });
 
+  it('shows "N waiting on this" as the status, with no separate text lower on the card', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={view({ status: 'planning' })} repo='a/b' waitingOnThis={2} />
+      </MemoryRouter>,
+    );
+    const root = dom(html);
+    expect(root.querySelector('[data-testid="card-status"] [data-testid="status-text"]')?.textContent).toBe('2 waiting on this');
+    expect(root.querySelector('[data-testid="waiting-on-this-chip"]')).toBeNull();
+    expect(root.querySelector('[data-testid="card-chips"]')?.textContent ?? '').not.toContain('waiting on this');
+  });
+
   it('keeps the one status on a single truncated line that is never centred, with the full text in a tip', () => {
     const root = dom(markup(stalledByConflict()));
     const status = root.querySelector('[data-testid="card-status"]');
