@@ -1,3 +1,4 @@
+import { LEGACY_RUNNER_NAME } from '../domain/atf-runners.js';
 import { RECENT_MERGE_DAYS, observedEnvironment } from '../domain/environments.js';
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
@@ -13,7 +14,9 @@ import type {
   GlobSpecResult,
   NewTestRun,
   OwnSpecs,
+  RunnerNames,
   StoredRunSpec,
+  TestRun,
   TestRunSpec,
 } from '../domain/test-runs.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -46,6 +49,15 @@ export interface ReportedAtfRun {
 }
 
 /**
+ * Who posted a run, when a registered runner (or the legacy board token: `runnerId` null) did it with its own credential.
+ * The run is recorded on that board only, whatever repo it names, and a branch run only for a glob of that board.
+ */
+export interface RunnerBinding {
+  readonly boardId: number;
+  readonly runnerId: number | null;
+}
+
+/**
  * Application service for acceptance test (ATF) results. Slop only observes ATF: the board's pipeline runs it and
  * reports the counts. Results live beside the glob, like deploys (no glob version bump), and never drive a transition.
  */
@@ -56,15 +68,22 @@ export class TestRunService {
    * Records a reported ATF run. A run on a glob's branch is that glob's (logged as `ATFCompleted` on it); otherwise it
    * is a run against a release or integration environment, recorded on every board on the repo that observes it, at
    * the commit it tested. Returns the boards that recorded it (none: ignored or a redelivery).
+   *
+   * With a `binding` (a runner that proved its identity) only the bound board records it, `input.repo` is ignored, and the
+   * run keeps the runner's ID; the runner's "last result" is stamped when a run was recorded.
    */
-  async recordAtf(input: ReportedAtfRun): Promise<number[]> {
+  async recordAtf(input: ReportedAtfRun, binding?: RunnerBinding): Promise<number[]> {
     const now = this.deps.clock.now();
     const finishedAt = input.at ?? now;
     const counts = { passed: input.passed, failed: input.failed, skipped: input.skipped };
     const hints: Hint[] = [];
     const recorded = await this.deps.store.transaction(async (tx) => {
       const repo = input.repo.toLowerCase();
-      const boards = (await tx.listAllBoards()).filter((b) => b.repo?.toLowerCase() === repo);
+      const runnerId = binding?.runnerId ?? null;
+      const boards =
+        binding === undefined
+          ? (await tx.listAllBoards()).filter((b) => b.repo?.toLowerCase() === repo)
+          : [await tx.getBoard(binding.boardId)].filter((b) => b !== null);
       const branch = input.branch === null ? null : testRuns.branchGlobId(input.branch);
       if (branch !== null && parseId(branch) !== null) {
         // A glob's branch: never an environment run, even when the glob is gone or on another repo's board.
@@ -80,9 +99,11 @@ export class TestRunService {
           url: input.url,
           finishedAt,
           eventId: input.eventId,
+          runnerId,
           ...(input.specs !== undefined && { specs: input.specs }),
         };
         if (!(await tx.insertTestRun(run))) return [];
+        await stampResult(tx, binding, now);
         const event: DomainEvent = {
           type: 'ATFCompleted',
           globId: glob.id,
@@ -111,9 +132,11 @@ export class TestRunService {
           url: input.url,
           finishedAt,
           eventId: input.eventId,
+          runnerId,
           ...(input.specs !== undefined && { specs: await withMissing(tx, board.id, input.environment, sha, input.specs) }),
         });
         if (!inserted) continue;
+        await stampResult(tx, binding, now);
         boardIds.push(board.id);
         hints.push({ kind: 'board.tests', boardId: board.id });
       }
@@ -139,10 +162,11 @@ export class TestRunService {
       // The globs' planned specs (latest test plans, read once) and the runs' per-spec rows, for the chips' own counts.
       const planned = await plannedSpecsOf(tx, globIds);
       const rows = planned.size === 0 ? [] : await tx.listTestRunSpecs(runs.map((r) => r.id));
+      const names = await runnerNamesOf(tx, boardId, runs);
       for (const globId of globIds) {
         const specs = planned.get(globId);
         const own: OwnSpecs | undefined = specs === undefined ? undefined : { planned: specs, rows };
-        const indicators = testRuns.atfIndicators({ id: globId, pr: globs.get(globId)?.pr ?? null }, runs, presences, own);
+        const indicators = testRuns.atfIndicators({ id: globId, pr: globs.get(globId)?.pr ?? null }, runs, presences, own, names);
         if (indicators.length > 0) state.set(globId, indicators);
       }
       return state;
@@ -166,7 +190,8 @@ export class TestRunService {
       const rows = await tx.listTestRunSpecs(runs.map((r) => r.id));
       const planned = (await plannedSpecsOf(tx, [globId])).get(globId) ?? [];
       const own: OwnSpecs | undefined = planned.length === 0 ? undefined : { planned, rows };
-      const listed = testRuns.globTestRuns(glob, runs, presences, own).map((run): GlobTests['runs'][number] => {
+      const names = await runnerNamesOf(tx, glob.boardId, runs);
+      const listed = testRuns.globTestRuns(glob, runs, presences, own, names).map((run): GlobTests['runs'][number] => {
         const specs = runSpecRows(rows, run.id);
         return specs.length === 0 ? run : { ...run, specs };
       });
@@ -261,6 +286,25 @@ const plannedSpecsOf = async (tx: Tx, globIds: readonly string[]): Promise<Map<s
     if (list !== null && list.specs.length > 0) planned.set(artifact.globId, list.specs);
   }
   return planned;
+};
+
+/** Notes the runner's "last result" when a bound run was recorded (the legacy board token has no runner row). */
+const stampResult = async (tx: Tx, binding: RunnerBinding | undefined, now: string): Promise<void> => {
+  if (binding === undefined || binding.runnerId === null) return;
+  await tx.updateAtfRunner(binding.boardId, binding.runnerId, { lastResultAt: now });
+};
+
+/**
+ * Each runner's name, only for a board with more than one (registered runners, or sources among these runs: the legacy
+ * source counts as one). A board with a single runner shows no names.
+ */
+const runnerNamesOf = async (tx: Tx, boardId: number, runs: readonly TestRun[]): Promise<RunnerNames | undefined> => {
+  const runners = await tx.listAtfRunners(boardId, { includeRevoked: true });
+  const sources = new Set(runs.map((r) => r.runnerId));
+  if (sources.size < 2 && runners.filter((r) => r.revokedAt === null).length < 2) return undefined;
+  const names = new Map<number | null, string>(runners.map((r) => [r.id, r.name]));
+  names.set(null, LEGACY_RUNNER_NAME);
+  return names;
 };
 
 /** The run's specs plus a `missing` row for every spec of the environment's batch at that commit that it didn't report. */

@@ -4,6 +4,7 @@ import type { StoredHumanStep } from './domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DecisionOrigin } from './domain/attributes.js';
 import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
+import type { AtfRunner, AtfRunnerPatch, NewAtfRunner } from './domain/atf-runners.js';
 import type { AtfBatch, EnvironmentCommit, NewAtfBatch, NewTestRun, StoredRunSpec, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
@@ -322,6 +323,14 @@ export interface Tx {
   insertAtfBatch(batch: NewAtfBatch): Promise<AtfBatch>;
   /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
   listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
+
+  /** The board's ATF runners, oldest first; revoked ones only when asked (their runs keep pointing at them). */
+  listAtfRunners(boardId: number, options?: { readonly includeRevoked?: boolean }): Promise<AtfRunner[]>;
+  getAtfRunner(boardId: number, id: number): Promise<AtfRunner | null>;
+  /** Registers a runner; null when an active runner of the board already has the name (compared without regard to case). */
+  insertAtfRunner(runner: NewAtfRunner): Promise<AtfRunner | null>;
+  /** Replaces the patch's fields; null when the board has no such runner, or a rename collides with an active runner's name. */
+  updateAtfRunner(boardId: number, id: number, patch: AtfRunnerPatch): Promise<AtfRunner | null>;
 
   /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
   insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;

@@ -34,6 +34,7 @@ const run = (patch: Partial<TestRun> = {}): TestRun => ({
   url: null,
   finishedAt: NOW,
   eventId: 'aws:r1',
+  runnerId: null,
   ...patch,
 });
 
@@ -165,6 +166,107 @@ describe('per-spec attribution', () => {
   });
 });
 
+describe('per-spec attribution with several runners', () => {
+  const g = { id: 's1t1', pr: { number: 7, state: 'ready' as const, headSha: HEAD } };
+  const planned = ['e2e/a.spec.ts', 'e2e/b.spec.ts'];
+  const A = 1;
+  const B = 2;
+  const at = (hour: number): string => `2026-10-05T${String(hour).padStart(2, '0')}:00:00.000Z`;
+  const results = (runs: TestRun[], rows: StoredRunSpec[]) =>
+    Object.fromEntries(testRuns.globSpecResults(g, planned, runs, rows, [presence()]).map((r) => [r.spec, r.status]));
+
+  it('lets a failure from any runner win, whichever reported last', () => {
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10) }), run({ id: 2, runnerId: B, finishedAt: at(12) })];
+    const rows = [row(1, 'e2e/a.spec.ts', 'failed'), row(2, 'e2e/a.spec.ts', 'passed'), row(2, 'e2e/b.spec.ts', 'passed')];
+    expect(results(runs, rows)).toEqual({ 'e2e/a.spec.ts': 'failed', 'e2e/b.spec.ts': 'passed' });
+    const failing = testRuns.globSpecResults(g, planned, runs, rows, [presence()])[0];
+    expect(failing).toMatchObject({ runId: 1, status: 'failed' });
+  });
+
+  it('never lets one runner’s missing row hide another runner’s result', () => {
+    // B ran later and has a missing row for the spec only A ran (slop derives these from the batch).
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10) }), run({ id: 2, runnerId: B, finishedAt: at(12) })];
+    const rows = [row(1, 'e2e/a.spec.ts', 'passed'), row(2, 'e2e/a.spec.ts', 'missing'), row(2, 'e2e/b.spec.ts', 'passed')];
+    expect(results(runs, rows)).toEqual({ 'e2e/a.spec.ts': 'passed', 'e2e/b.spec.ts': 'passed' });
+  });
+
+  it('shows a spec missing only when no runner has another row for it, and unreported when none has a row', () => {
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10) }), run({ id: 2, runnerId: B, finishedAt: at(12) })];
+    expect(results(runs, [row(1, 'e2e/a.spec.ts', 'missing'), row(2, 'e2e/a.spec.ts', 'missing')])).toEqual({
+      'e2e/a.spec.ts': 'missing',
+      'e2e/b.spec.ts': null,
+    });
+  });
+
+  it('ranks skipped under passed, and lets the newest of equal rows speak', () => {
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10), url: 'https://ci/a' }), run({ id: 2, runnerId: B, finishedAt: at(12), url: 'https://ci/b' })];
+    const rows = [row(1, 'e2e/a.spec.ts', 'skipped'), row(2, 'e2e/a.spec.ts', 'passed'), row(1, 'e2e/b.spec.ts', 'passed'), row(2, 'e2e/b.spec.ts', 'passed')];
+    const found = testRuns.globSpecResults(g, planned, runs, rows, [presence()]);
+    expect(found[0]).toMatchObject({ status: 'passed', url: 'https://ci/b' });
+    expect(found[1]).toMatchObject({ status: 'passed', url: 'https://ci/b' });
+  });
+
+  it('takes each runner’s newest run with a row, so a runner’s later pass replaces its own earlier failure', () => {
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10) }), run({ id: 2, runnerId: A, finishedAt: at(12) })];
+    expect(results(runs, [row(1, 'e2e/a.spec.ts', 'failed'), row(2, 'e2e/a.spec.ts', 'passed')])['e2e/a.spec.ts']).toBe('passed');
+  });
+
+  it('still counts a legacy run (no runner) beside a registered runner’s', () => {
+    const runs = [run({ id: 1, runnerId: null, finishedAt: at(10) }), run({ id: 2, runnerId: B, finishedAt: at(12) })];
+    const rows = [row(1, 'e2e/a.spec.ts', 'failed'), row(2, 'e2e/b.spec.ts', 'passed')];
+    expect(results(runs, rows)).toEqual({ 'e2e/a.spec.ts': 'failed', 'e2e/b.spec.ts': 'passed' });
+  });
+
+  it('shows the newest run of each runner on the card, not of each run, and combines the runners’ planned specs', () => {
+    const runs = [
+      run({ id: 1, runnerId: A, finishedAt: at(9), failed: 1 }),
+      run({ id: 2, runnerId: A, finishedAt: at(10) }),
+      run({ id: 3, runnerId: B, finishedAt: at(12) }),
+    ];
+    const rows = [
+      row(1, 'e2e/a.spec.ts', 'failed'),
+      row(2, 'e2e/a.spec.ts', 'passed'),
+      row(3, 'e2e/a.spec.ts', 'missing'),
+      row(3, 'e2e/b.spec.ts', 'passed'),
+    ];
+    const found = testRuns.atfIndicators(g, runs, [presence()], { planned, rows });
+    expect(found.map((i) => i.id)).toEqual([3, 2]);
+    // Both show one combined result: A passed a, B passed b, nothing missing, nothing failing.
+    for (const i of found) expect(i.plannedSpecs).toEqual({ total: 2, passed: 2, failed: 0, skipped: 0, missing: 0, unreported: 0 });
+  });
+
+  it('turns every indicator of the group red when any runner failed a planned spec, amber when only missing', () => {
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10) }), run({ id: 2, runnerId: B, finishedAt: at(12) })];
+    const failed = testRuns.atfIndicators(g, runs, [presence()], {
+      planned,
+      rows: [row(1, 'e2e/a.spec.ts', 'passed'), row(2, 'e2e/a.spec.ts', 'passed'), row(2, 'e2e/b.spec.ts', 'failed')],
+    });
+    for (const i of failed) expect(i.plannedSpecs).toMatchObject({ failed: 1, passed: 1, missing: 0 });
+    const amber = testRuns.atfIndicators(g, runs, [presence()], {
+      planned,
+      rows: [row(1, 'e2e/a.spec.ts', 'passed'), row(2, 'e2e/a.spec.ts', 'missing'), row(2, 'e2e/b.spec.ts', 'missing')],
+    });
+    for (const i of amber) expect(i.plannedSpecs).toMatchObject({ failed: 0, passed: 1, missing: 1 });
+  });
+
+  it('keeps a stale branch run out of the current group’s counts', () => {
+    const branch = (id: number, runnerId: number, sha: string, hour: number) => run({ id, runnerId, globId: 's1t1', environment: null, sha, finishedAt: at(hour) });
+    const runs = [branch(1, A, OLD_HEAD, 9), branch(2, B, HEAD, 10)];
+    const rows = [row(1, 'e2e/a.spec.ts', 'failed'), row(2, 'e2e/a.spec.ts', 'passed'), row(2, 'e2e/b.spec.ts', 'passed')];
+    const found = testRuns.atfIndicators(g, runs, [], { planned, rows });
+    expect(found.find((i) => i.id === 2)?.plannedSpecs).toMatchObject({ failed: 0, passed: 2 });
+    expect(found.find((i) => i.id === 1)).toMatchObject({ stale: true, plannedSpecs: { failed: 1 } });
+  });
+
+  it('names the runner of each indicator and run only when names are given', () => {
+    const runs = [run({ id: 1, runnerId: A, finishedAt: at(10) }), run({ id: 2, runnerId: null, finishedAt: at(12) })];
+    expect(testRuns.atfIndicators(g, runs, [presence()]).map((i) => i.runnerName)).toEqual([undefined, undefined]);
+    const names = new Map<number | null, string>([[A, 'GitHub Actions'], [null, 'Legacy runner']]);
+    expect(testRuns.atfIndicators(g, runs, [presence()], undefined, names).map((i) => i.runnerName)).toEqual(['Legacy runner', 'GitHub Actions']);
+    expect(testRuns.globTestRuns(g, runs, [presence()], undefined, names).map((i) => i.runnerName)).toEqual(['Legacy runner', 'GitHub Actions']);
+  });
+});
+
 describe('TestRunService with per-spec results', () => {
   let store: MemoryStore;
   let service: TestRunService;
@@ -271,4 +373,44 @@ describe('TestRunService with per-spec results', () => {
     expect(view.ok && view.value.runs[0]?.specs).toBeUndefined();
     expect((await service.forGlob('stranger@example.com', 's1t1')).ok).toBe(false);
   });
+
+  it('records each runner’s run with its own missing rows, and a missing row of one never hides the other’s pass', async () => {
+    await environments.recordContainment(board.id, 'staging', DEPLOYED, [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
+    const batch = await service.atfBatch(board.id, 'staging', DEPLOYED);
+    expect(batch.ok && batch.value.status === 'ready' && batch.value.batch.specs.map((s) => s.spec)).toEqual(['e2e/a.spec.ts', 'e2e/b.spec.ts']);
+    const post = (runnerId: number, eventId: string, spec: string, finishedAt: string) =>
+      service.recordAtf(
+        {
+          repo: '',
+          sha: DEPLOYED,
+          environment: 'staging',
+          branch: null,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          url: `https://ci/${String(runnerId)}`,
+          at: finishedAt,
+          eventId,
+          specs: [{ spec, status: 'passed', tests: 1, failedTests: 0, durationMs: null }],
+        },
+        { boardId: board.id, runnerId },
+      );
+    expect(await post(1, 'runner:1:x', 'e2e/a.spec.ts', '2026-10-05T11:00:00.000Z')).toEqual([board.id]);
+    expect(await post(2, 'runner:2:x', 'e2e/b.spec.ts', '2026-10-05T12:00:00.000Z')).toEqual([board.id]);
+    // Each run carries a missing row for the batch spec it didn't report.
+    const rows = store.state.testRunSpecs.map((r) => [r.testRunId, r.spec, r.status]);
+    expect(rows).toHaveLength(4);
+    expect(rows).toContainEqual([expect.any(Number), 'e2e/a.spec.ts', 'missing']);
+    const view = await service.forGlob(DEV, 's1t1');
+    expect(view.ok && view.value.specs.map((s) => [s.spec, s.status])).toEqual([
+      ['e2e/a.spec.ts', 'passed'],
+      ['e2e/b.spec.ts', 'passed'],
+    ]);
+    const state = await service.boardState(board.id, ['s1t1']);
+    expect(state.get('s1t1')?.map((i) => i.plannedSpecs)).toEqual([
+      expect.objectContaining({ passed: 2, missing: 0 }),
+      expect.objectContaining({ passed: 2, missing: 0 }),
+    ]);
+  });
 });
+

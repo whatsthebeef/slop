@@ -1,5 +1,5 @@
-import type { AtfBatch, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, reviewSettingsOf } from '@slop/core';
+import type { AtfBatch, AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, ATF_RUNNER_METHODS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -349,6 +349,21 @@ const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
   ...row,
   kind: oneOf(TEST_RUN_KINDS, row.kind),
   finishedAt: row.finishedAt.toISOString(),
+});
+
+const toAtfRunner = (row: typeof schema.atfRunners.$inferSelect): AtfRunner => ({
+  id: row.id,
+  boardId: row.boardId,
+  name: row.name,
+  method: oneOf(ATF_RUNNER_METHODS, row.method),
+  config: row.config,
+  environments: row.environments,
+  enabled: row.enabled,
+  createdBy: row.createdBy,
+  createdAt: row.createdAt.toISOString(),
+  revokedAt: row.revokedAt?.toISOString() ?? null,
+  lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
+  lastResultAt: row.lastResultAt?.toISOString() ?? null,
 });
 
 const toNotification = (row: typeof schema.boardNotifications.$inferSelect): BoardNotification => ({
@@ -1613,10 +1628,10 @@ export class PgStore implements Store {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
       },
       insertTestRun: async (run) => {
-        const { specs = [], ...fields } = run;
+        const { specs = [], runnerId = null, ...fields } = run;
         const rows = await t
           .insert(schema.testRuns)
-          .values({ ...fields, finishedAt: new Date(fields.finishedAt) })
+          .values({ ...fields, runnerId, finishedAt: new Date(fields.finishedAt) })
           .onConflictDoNothing()
           .returning({ id: schema.testRuns.id });
         const id = rows[0]?.id;
@@ -1689,6 +1704,52 @@ export class PgStore implements Store {
           .where(and(eq(r.boardId, boardId), or(...matches)))
           .orderBy(desc(r.finishedAt), desc(r.id));
         return rows.map(toTestRun);
+      },
+      listAtfRunners: async (boardId, options) => {
+        const r = schema.atfRunners;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(options?.includeRevoked === true ? eq(r.boardId, boardId) : and(eq(r.boardId, boardId), isNull(r.revokedAt)))
+          .orderBy(r.id);
+        return rows.map(toAtfRunner);
+      },
+      getAtfRunner: async (boardId, id) => {
+        const r = schema.atfRunners;
+        const [row] = await t.select().from(r).where(and(eq(r.boardId, boardId), eq(r.id, id)));
+        return row === undefined ? null : toAtfRunner(row);
+      },
+      insertAtfRunner: async (runner) => {
+        const rows = await t
+          .insert(schema.atfRunners)
+          .values({ ...runner, environments: [...runner.environments], createdAt: new Date(runner.createdAt) })
+          .onConflictDoNothing()
+          .returning();
+        return rows[0] === undefined ? null : toAtfRunner(rows[0]);
+      },
+      updateAtfRunner: async (boardId, id, patch) => {
+        const r = schema.atfRunners;
+        const { revokedAt, lastSeenAt, lastResultAt, environments, ...rest } = patch;
+        const set = {
+          ...rest,
+          ...(environments !== undefined && { environments: [...environments] }),
+          ...(revokedAt !== undefined && { revokedAt: new Date(revokedAt) }),
+          ...(lastSeenAt !== undefined && { lastSeenAt: new Date(lastSeenAt) }),
+          ...(lastResultAt !== undefined && { lastResultAt: new Date(lastResultAt) }),
+        };
+        const [current] = await t.select().from(r).where(and(eq(r.boardId, boardId), eq(r.id, id)));
+        if (current === undefined) return null;
+        // A rename must not collide with another active runner's name (the unique index would abort the transaction).
+        if (patch.name !== undefined && (revokedAt ?? current.revokedAt?.toISOString() ?? null) === null) {
+          const [clash] = await t
+            .select({ id: r.id })
+            .from(r)
+            .where(and(eq(r.boardId, boardId), ne(r.id, id), isNull(r.revokedAt), sql`lower(${r.name}) = lower(${patch.name})`))
+            .limit(1);
+          if (clash !== undefined) return null;
+        }
+        const rows = await t.update(r).set(set).where(and(eq(r.boardId, boardId), eq(r.id, id))).returning();
+        return rows[0] === undefined ? null : toAtfRunner(rows[0]);
       },
 
       insertReviewSource: async (input) => {
