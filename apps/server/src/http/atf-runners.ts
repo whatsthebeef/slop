@@ -20,6 +20,8 @@ const configSchema = z.strictObject({
   roleArns: z.array(z.string().max(300)).max(20).optional(),
   accounts: z.array(z.string().max(20)).max(20).optional(),
   clientId: z.string().max(200).optional(),
+  // Only the receiver's URL: the signing secret is slop's, so a `secret` here is refused.
+  webhook: z.strictObject({ url: z.string().max(500) }).optional(),
 });
 
 const environments = z.array(z.string().min(1).max(100)).max(50);
@@ -70,10 +72,10 @@ export const mountAtfRunners = (app: Hono<Env>, deps: AtfRunnerRoutesDeps): void
     if (!body.success) return bad(c, body.error.issues[0]?.message ?? 'Bad runner');
     const result = await deps.runners.create(c.get('email'), boardId, body.data);
     if (!result.ok) return c.json(errorBody(result.error), statusOf(result.error));
-    // The client secret (client credentials only) is in this answer and nowhere else: it is never stored or logged.
-    const { credentials, ...runner } = result.value;
+    // The client secret (client credentials) and the webhook's signing secret are in this answer and nowhere else.
+    const { credentials, webhookSecret, ...runner } = result.value;
     c.header('Cache-Control', 'no-store');
-    return c.json({ value: runner, ...(credentials !== undefined && { credentials }) }, 201);
+    return c.json({ value: runner, ...(credentials !== undefined && { credentials }), ...(webhookSecret !== undefined && { webhookSecret }) }, 201);
   });
 
   app.patch('/api/boards/:b/atf-runners/:id', async (c) => {
@@ -83,9 +85,11 @@ export const mountAtfRunners = (app: Hono<Env>, deps: AtfRunnerRoutesDeps): void
     const body = patchBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return bad(c, body.error.issues[0]?.message ?? 'Bad change');
     const result = await deps.runners.update(c.get('email'), boardId, id, body.data);
-    return result.ok
-      ? c.json({ value: result.value })
-      : c.json(errorBody(result.error), statusOf(result.error));
+    if (!result.ok) return c.json(errorBody(result.error), statusOf(result.error));
+    // Turning the webhook on shows its signing secret once, here.
+    const { webhookSecret, ...runner } = result.value;
+    if (webhookSecret !== undefined) c.header('Cache-Control', 'no-store');
+    return c.json({ value: runner, ...(webhookSecret !== undefined && { webhookSecret }) });
   });
 
   app.delete('/api/boards/:b/atf-runners/:id', async (c) => {

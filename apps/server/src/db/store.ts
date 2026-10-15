@@ -2690,6 +2690,14 @@ export class PgStore implements Store {
               .limit(1);
             if (pending !== undefined || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
           }
+          if (effect.kind === 'deliver_atf_webhook') {
+            // One delivery per runner and deploy, whatever its state: a repeated containment check queues none, and a delivery
+            // that already succeeded is never queued again (a failed one ran out of attempts and stays failed).
+            const jobs = schema.outbox;
+            const same = sql`${jobs.kind} = 'deliver_atf_webhook' and ${jobs.effect}->>'runnerId' = ${String(effect.runnerId)} and ${jobs.effect}->>'deployId' = ${String(effect.deployId)}`;
+            const [existing] = await t.select({ id: jobs.id }).from(jobs).where(sql`${same} and ${jobs.state} in ('pending', 'done', 'failed')`).limit(1);
+            if (existing !== undefined || rows.some((r) => r.effect.kind === effect.kind && r.effect.runnerId === effect.runnerId && r.effect.deployId === effect.deployId)) continue;
+          }
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             // One review job per glob, stage and reviewed commit (a repeated webhook or reconcile queues none). A newer

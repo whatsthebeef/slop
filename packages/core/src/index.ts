@@ -136,6 +136,7 @@ export * from './app/suggest-service.js';
 export * from './app/rollout-service.js';
 export * from './app/integration-token-service.js';
 export * from './domain/atf-runners.js';
+export * from './domain/atf-webhooks.js';
 export * from './app/atf-runner-service.js';
 export * from './app/inbox-pipeline.js';
 export * from './app/report-service.js';

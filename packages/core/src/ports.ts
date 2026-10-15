@@ -32,7 +32,7 @@ import type { LlmSpend, SpendSummary } from './domain/spend.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
-import type { BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
+import type { AtfIntegration, BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
 
 import type { GlobInclude } from './domain/types.js';
 export type { GlobInclude };
@@ -675,6 +675,32 @@ export interface ObjectStore {
   head(key: string): Promise<ObjectInfo | null>;
   /** Removes the object; fine when it isn't there. */
   delete(key: string): Promise<void>;
+}
+
+/** What a push-mode ATF start needs: where, at which commit, and what to run (empty: the board's default suite). */
+export interface AtfStart {
+  readonly boardId: number;
+  readonly integration: AtfIntegration;
+  readonly environment: string;
+  readonly sha: string;
+  /** Repo-relative spec paths, one per line in `SLOP_ATF_SPECS`. */
+  readonly specs: readonly string[];
+  /** Playwright `--grep` patterns of the batch; combined into one alternation in `SLOP_ATF_GREP`. */
+  readonly greps: readonly string[];
+}
+
+export interface StartedAtf {
+  readonly buildId: string;
+  readonly url: string | null;
+}
+
+/**
+ * Starts a run on a system that can't pull its specs (spec, ATF runners: push is only for those). One adapter per kind of
+ * system, in the server (CodeBuild today). Throws `AtfRefusedError` when the server's allow-list refuses the start, which a
+ * retry can't fix; any other throw is retried by the outbox.
+ */
+export interface RunnerStarter {
+  start(job: AtfStart): Promise<StartedAtf>;
 }
 
 export interface Clock {

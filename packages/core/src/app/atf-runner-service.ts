@@ -1,5 +1,6 @@
-import { validateRunner } from '../domain/atf-runners.js';
+import { publicRunner, validateRunner } from '../domain/atf-runners.js';
 import type { AtfRunner, AtfRunnerConfig, AtfRunnerMethod } from '../domain/atf-runners.js';
+import { validateWebhookUrl } from '../domain/atf-webhooks.js';
 import { invalidCombination, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Board } from '../domain/types.js';
@@ -25,17 +26,41 @@ export interface RunnerCredentialIssuer {
   revoke(clientId: string): Promise<void>;
 }
 
+/**
+ * What the server provides for deploy-live webhooks (spec, ATF runners). Present only when it can keep a signing secret
+ * (the signing key is set); without it a runner can't be given a webhook.
+ */
+export interface RunnerWebhooks {
+  /** A new signing secret for a runner. */
+  newSecret(): string;
+  /** The secret as it is stored: encrypted, so the table and its backups don't hold it in the clear. */
+  seal(secret: string): string;
+  /** Why the URL's host may not be delivered to (it resolves to a private address, or not at all), or null. Network. */
+  checkTarget(url: string): Promise<string | null>;
+}
+
 export interface AtfRunnerServiceDeps {
   readonly store: Store;
   readonly clock: Clock;
   /** Present when the server can create client credentials for `client_credentials` runners. */
   readonly issuer?: RunnerCredentialIssuer;
+  /** Present when the server can sign deploy-live webhooks. */
+  readonly webhooks?: RunnerWebhooks;
   /** Task and a message with no secrets, for failures nobody is waiting on. */
   readonly log?: (task: string, message: string) => void;
 }
 
-/** A created runner; `credentials` is set only on the answer to the create call that issued them. */
-export type CreatedRunner = AtfRunner & { readonly credentials?: IssuedRunnerCredentials };
+/**
+ * A created runner; `credentials` is set only on the answer to the create call that issued them, and `webhookSecret` (the
+ * webhook's signing secret) only when the call set a webhook up.
+ */
+export type CreatedRunner = AtfRunner & {
+  readonly credentials?: IssuedRunnerCredentials;
+  readonly webhookSecret?: string;
+};
+
+/** An updated runner; `webhookSecret` is set only when this change turned the webhook on (the secret is shown once). */
+export type UpdatedRunner = AtfRunner & { readonly webhookSecret?: string };
 
 /** A revoked runner; `cleanup` is `failed` when its client credentials could not be removed (the runner is revoked anyway). */
 export type RevokedRunner = AtfRunner & { readonly cleanup?: 'failed' };
@@ -89,25 +114,35 @@ export class AtfRunnerService {
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      return ok(await tx.listAtfRunners(boardId));
+      return ok((await tx.listAtfRunners(boardId)).map(publicRunner));
     });
   }
 
   /**
    * Registers a runner. When the server can issue client credentials, a `client_credentials` runner gets its client from
    * the provider: the runner is saved disabled first (so the name is held and a half-made runner is never usable), the
-   * client is created, and only its ID is stored. The secret comes back in `credentials` of this answer alone.
+   * client is created, and only its ID is stored. The secret comes back in `credentials` of this answer alone. A runner
+   * with a webhook gets its signing secret the same way: sealed in the config, and in `webhookSecret` of this answer alone.
    */
   async create(email: string, boardId: number, input: RunnerInput): Promise<Result<CreatedRunner>> {
     const now = this.deps.clock.now();
     const issuer = input.method === 'client_credentials' ? this.deps.issuer : undefined;
+    const url = input.config?.webhook?.url;
+    let hook: { readonly webhook: { readonly url: string; readonly secret: string }; readonly secret: string } | undefined;
+    if (url !== undefined) {
+      const hooks = await this.webhookTarget(url);
+      if (!hooks.ok) return hooks;
+      const secret = hooks.value.newSecret();
+      hook = { webhook: { url, secret: hooks.value.seal(secret) }, secret };
+    }
     const saved = await this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
       const board = await tx.getBoard(boardId);
       if (board === null) return notFound(`No board ${String(boardId)}`);
       // With an issuer the client ID is ours to set, never a caller's.
-      const config = issuer === undefined ? configFor(input.method, input.config ?? {}) : {};
+      const base = issuer === undefined ? configFor(input.method, input.config ?? {}) : {};
+      const config = hook === undefined ? base : { ...base, webhook: hook.webhook };
       const valid = validateRunner({ ...input, config }, observed(board));
       if (!valid.ok) return valid;
       const runner = await tx.insertAtfRunner({
@@ -122,14 +157,27 @@ export class AtfRunnerService {
       });
       return runner === null ? invalidInput(NAME_TAKEN) : ok(runner);
     });
-    if (!saved.ok || issuer === undefined) return saved;
-    return this.issueFor(boardId, saved.value, issuer);
+    if (!saved.ok) return saved;
+    const webhookSecret = hook === undefined ? {} : { webhookSecret: hook.secret };
+    if (issuer === undefined) return ok({ ...publicRunner(saved.value), ...webhookSecret });
+    return this.issueFor(boardId, saved.value, issuer, webhookSecret);
+  }
+
+  /** The server's webhook support when `url` may be delivered to: the rules, a server that can sign, and the host's addresses. */
+  private async webhookTarget(url: string): Promise<Result<RunnerWebhooks>> {
+    const valid = validateWebhookUrl(url);
+    if (!valid.ok) return valid;
+    const hooks = this.deps.webhooks;
+    if (hooks === undefined) return invalidCombination('Webhook delivery is not set up on this server');
+    const refusal = await hooks.checkTarget(url);
+    return refusal === null ? ok(hooks) : invalidInput(refusal);
   }
 
   private async issueFor(
     boardId: number,
     runner: AtfRunner,
     issuer: RunnerCredentialIssuer,
+    extra: { readonly webhookSecret?: string },
   ): Promise<Result<CreatedRunner>> {
     const failed = async (issued: IssuedRunnerCredentials | null): Promise<Result<never>> => {
       // The runner never became usable: free its name, and take back a client that was made.
@@ -149,22 +197,42 @@ export class AtfRunnerService {
       return await failed(null);
     }
     try {
+      const webhook = runner.config.webhook;
       const updated = await this.deps.store.transaction((tx) =>
-        tx.updateAtfRunner(boardId, runner.id, { config: { clientId: issued.clientId }, enabled: true }),
+        tx.updateAtfRunner(boardId, runner.id, {
+          config: { clientId: issued.clientId, ...(webhook !== undefined && { webhook }) },
+          enabled: true,
+        }),
       );
       if (updated === null) return await failed(issued);
-      return ok({ ...updated, credentials: issued });
+      return ok({ ...publicRunner(updated), credentials: issued, ...extra });
     } catch {
       return await failed(issued);
     }
   }
 
+  /**
+   * Changes a runner. `config.webhook` is the whole webhook setting: a URL turns delivery on (a new signing secret comes back
+   * once in `webhookSecret`; an unchanged or moved URL keeps the secret it has) and leaving it out turns delivery off.
+   * A `config` that isn't sent leaves the settings, webhook included, as they are.
+   */
   async update(
     email: string,
     boardId: number,
     id: number,
     change: RunnerChange,
-  ): Promise<Result<AtfRunner>> {
+  ): Promise<Result<UpdatedRunner>> {
+    const url = change.config === undefined ? undefined : change.config.webhook?.url;
+    let hooks: RunnerWebhooks | undefined;
+    if (url !== undefined) {
+      // The addresses are looked up outside the transaction; an unchanged URL is checked at every delivery anyway.
+      const before = await this.deps.store.transaction((tx) => tx.getAtfRunner(boardId, id));
+      if (before?.config.webhook?.url !== url) {
+        const target = await this.webhookTarget(url);
+        if (!target.ok) return target;
+        hooks = target.value;
+      }
+    }
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
@@ -176,7 +244,21 @@ export class AtfRunnerService {
         return invalidInput('A revoked runner can no longer be changed');
       // A client ID issued by the provider belongs to the runner for good.
       const managed = current.method === 'client_credentials' && this.deps.issuer !== undefined;
-      const config = managed ? current.config : configFor(current.method, change.config ?? current.config);
+      const base = configFor(current.method, managed ? current.config : (change.config ?? current.config));
+      const settings = change.config === undefined ? current.config.webhook : change.config.webhook;
+      // The webhook's secret is slop's: never the caller's. A new one only when delivery was off (or never checked above).
+      let sealed = current.config.webhook?.secret;
+      let shown: string | undefined;
+      if (settings === undefined) sealed = undefined;
+      else if (sealed === undefined) {
+        const target = hooks ?? this.deps.webhooks;
+        if (target === undefined) return invalidCombination('Webhook delivery is not set up on this server');
+        const secret = target.newSecret();
+        sealed = target.seal(secret);
+        shown = secret;
+      }
+      const config: AtfRunnerConfig =
+        settings !== undefined && sealed !== undefined ? { ...base, webhook: { url: settings.url, secret: sealed } } : base;
       const valid = validateRunner(
         {
           name: change.name ?? current.name,
@@ -193,7 +275,9 @@ export class AtfRunnerService {
         environments: valid.value.environments,
         ...(change.enabled !== undefined && { enabled: change.enabled }),
       });
-      return updated === null ? invalidInput(NAME_TAKEN) : ok(updated);
+      return updated === null
+        ? invalidInput(NAME_TAKEN)
+        : ok({ ...publicRunner(updated), ...(shown !== undefined && { webhookSecret: shown }) });
     });
   }
 
@@ -210,11 +294,11 @@ export class AtfRunnerService {
       const current = await tx.getAtfRunner(boardId, id);
       if (current === null)
         return notFound(`No ATF runner ${String(id)} on board ${String(boardId)}`);
-      if (current.revokedAt !== null) return ok(current);
+      if (current.revokedAt !== null) return ok(publicRunner(current));
       const updated = await tx.updateAtfRunner(boardId, id, { enabled: false, revokedAt: now });
       return updated === null
         ? notFound(`No ATF runner ${String(id)} on board ${String(boardId)}`)
-        : ok(updated);
+        : ok(publicRunner(updated));
     });
     if (!revoked.ok) return revoked;
     const clientId = revoked.value.method === 'client_credentials' ? revoked.value.config.clientId : undefined;

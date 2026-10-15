@@ -1456,6 +1456,8 @@ export class MemoryStore implements Store {
           // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
           // backing off) gets a sibling, so a change it may not have seen still gets its step.
           if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft' || effect.kind === 'suggest_decision' || effect.kind === 'write_rollout_steps') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
+          // One delivery per runner and deploy, whatever became of the earlier one.
+          if (effect.kind === 'deliver_atf_webhook' && s.outbox.some((e) => e.kind === effect.kind && e.runnerId === effect.runnerId && e.deployId === effect.deployId)) continue;
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;

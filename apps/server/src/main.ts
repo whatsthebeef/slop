@@ -38,6 +38,7 @@ import { createRunnerAuthenticator } from './atf-auth.js';
 import { AwsCognitoClients, cognitoRunnerCredentials, createCognitoRunnerVerifier } from './atf-cognito.js';
 import { createOidcRunnerVerifier } from './atf-oidc.js';
 import { atfExecutors } from './atf-executors.js';
+import { WebhookSecrets, atfWebhookExecutors, dnsResolver, httpsTransport, runnerWebhooks } from './atf-webhooks.js';
 import { CodeBuildAtfStarter } from './atf-starter.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
@@ -154,6 +155,8 @@ const github = new GitHub(githubCredentials, integrations);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
 // Signs agent-set download links, the board sign-in state and deploy callbacks.
 const links = new SignedLinks(config.SIGNING_SECRET);
+// Deploy-live webhooks seal each runner's signing secret under a key derived from SIGNING_SECRET: without it (local development) they are off.
+const webhookSecrets = (config.SIGNING_SECRET ?? '') === '' ? null : new WebhookSecrets(config.SIGNING_SECRET ?? '');
 const deploys = new DeployService({
   store,
   notifier: hub,
@@ -175,6 +178,9 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(atfPolicy), boardOf, log: logError }),
+    ...(webhookSecrets === null
+      ? {}
+      : atfWebhookExecutors({ store, secrets: webhookSecrets, resolve: dnsResolver, transport: httpsTransport(), clock: { now: () => new Date().toISOString() }, log: logError })),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
     // `rolloutService` is built below and only called once a job runs.
     ...rolloutExecutors(
@@ -562,6 +568,7 @@ const atfRunners = new AtfRunnerService({
   store,
   clock,
   ...(cognitoClients === null ? {} : { issuer: cognitoRunnerCredentials(cognitoClients, `https://${config.COGNITO_DOMAIN ?? ''}/oauth2/token`) }),
+  ...(webhookSecrets === null ? {} : { webhooks: runnerWebhooks(webhookSecrets) }),
   log: logError,
 });
 const oidcRunnerVerifier = createOidcRunnerVerifier({

@@ -213,6 +213,23 @@ export type Effect =
       readonly environment: string;
       readonly sha: string;
     }
+  /**
+   * A deploy of `sha` to `environment` is live and checked: tell one runner that subscribed to webhook delivery (signed POST of
+   * the deploy-live event). Board-wide like `start_atf` (`globId` is `board-<id>`, not generation-checked). The outbox keeps one
+   * job per runner and deploy; dropped when the runner is gone or off, or a newer deploy replaced `sha`; a failed delivery is
+   * retried with the outbox's backoff, never blocks anything.
+   */
+  | {
+      readonly kind: 'deliver_atf_webhook';
+      readonly globId: string;
+      readonly boardId: number;
+      readonly runnerId: number;
+      readonly deployId: number;
+      readonly environment: string;
+      readonly sha: string;
+      /** When the deploy happened. */
+      readonly deployedAt: string;
+    }
   /** Bring the glob's PR branch up to date with the base branch so its checks run again (the base went green). */
   | { readonly kind: 'update_branch'; readonly globId: string; readonly generation: number; readonly sha: string }
   /**

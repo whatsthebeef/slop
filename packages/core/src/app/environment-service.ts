@@ -1,5 +1,6 @@
 import * as environments from '../domain/environments.js';
 import type { Containment, EnvironmentDeploy, EnvironmentIndicator, GlobPresence } from '../domain/environments.js';
+import { webhookSubscribers } from '../domain/atf-runners.js';
 import { forbidden, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Effect } from '../domain/events.js';
@@ -123,7 +124,8 @@ export class EnvironmentService {
     const now = this.deps.clock.now();
     const outcome = await this.deps.store.transaction(async (tx) => {
       await tx.lockEnvironment(boardId, environment);
-      if ((await tx.latestEnvironmentDeploy(boardId, environment))?.sha !== sha) return null;
+      const deploy = await tx.latestEnvironmentDeploy(boardId, environment);
+      if (deploy?.sha !== sha) return null;
       // Globs deleted while the code host was asked are left out; their rows went with them.
       const globs = await tx.getGlobs(results.map((r) => r.globId));
       const onBoard = new Set(globs.filter((g) => g.boardId === boardId).map((g) => g.id));
@@ -135,9 +137,25 @@ export class EnvironmentService {
       // The ATF stage's spec list waits for this stamp: the globs this deploy newly holds are known now.
       await tx.markEnvironmentDeployChecked(boardId, environment, sha, now);
       // A push-mode board's ATF project is started from the outbox, after this commit: the batch needs the stamp above.
+      const effects: Effect[] = [];
       if ((await tx.getBoard(boardId))?.atf?.mode === 'push') {
-        await tx.enqueueEffects([{ kind: 'start_atf', globId: `board-${String(boardId)}`, boardId, environment, sha }]);
+        effects.push({ kind: 'start_atf', globId: `board-${String(boardId)}`, boardId, environment, sha });
       }
+      // Runners that subscribed to the deploy-live webhook hear of the deploy once the stamp is there (the latest deploy is
+      // always a succeeded one); the outbox keeps one delivery per runner and deploy, so a repeated check queues nothing new.
+      for (const runner of webhookSubscribers(await tx.listAtfRunners(boardId), environment)) {
+        effects.push({
+          kind: 'deliver_atf_webhook',
+          globId: `board-${String(boardId)}`,
+          boardId,
+          runnerId: runner.id,
+          deployId: deploy.id,
+          environment,
+          sha,
+          deployedAt: deploy.at,
+        });
+      }
+      await tx.enqueueEffects(effects);
       // ATF reported before this check ran now shows on every glob the commit holds, moved or not.
       const tested = (await tx.listTestRuns(boardId, { commits: [{ environment, sha }] })).length > 0;
       return { moved: change.moved, tested: tested && change.writes.some((w) => w.contained) };

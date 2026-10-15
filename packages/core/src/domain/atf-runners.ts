@@ -1,5 +1,6 @@
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
+import { validateWebhookUrl } from './atf-webhooks.js';
 
 /**
  * ATF runners (spec, ATF runners): a board registers each system that runs its acceptance tests, with its own identity.
@@ -30,6 +31,11 @@ export interface AtfRunnerConfig {
   readonly roleArns?: readonly string[];
   readonly accounts?: readonly string[];
   readonly clientId?: string;
+  /**
+   * Deploy-live webhook, for any method. `url` is the receiver (https, public address); `secret` is the signing secret
+   * sealed by the server: slop makes it, shows it once, and never serves it back (`publicRunner` removes it).
+   */
+  readonly webhook?: { readonly url: string; readonly secret?: string };
 }
 
 export interface AtfRunner {
@@ -62,9 +68,22 @@ export interface AtfRunnerPatch {
   readonly lastResultAt?: string;
 }
 
+/** The runner as the registry's API shows it: the webhook's sealed signing secret never leaves the server. */
+export const publicRunner = (runner: AtfRunner): AtfRunner => {
+  const webhook = runner.config.webhook;
+  if (webhook?.secret === undefined) return runner;
+  return { ...runner, config: { ...runner.config, webhook: { url: webhook.url } } };
+};
+
 /** A registered runner is usable while it is enabled and not revoked. */
 export const runnerUsable = (runner: Pick<AtfRunner, 'enabled' | 'revokedAt'>): boolean =>
   runner.enabled && runner.revokedAt === null;
+
+/** The runners a deploy of `environment` is delivered to: usable, serving it, with a webhook and its signing secret. */
+export const webhookSubscribers = (runners: readonly AtfRunner[], environment: string): AtfRunner[] =>
+  runners.filter(
+    (r) => runnerUsable(r) && r.environments.includes(environment) && r.config.webhook?.secret !== undefined,
+  );
 
 export const MAX_RUNNER_NAME = 100;
 const MAX_RULE_VALUES = 20;
@@ -186,6 +205,10 @@ export const validateRunner = (
         ? validateAwsIam(input.config)
         : ok(null);
   if (!checked.ok) return checked;
+  if (input.config.webhook !== undefined) {
+    const webhook = validateWebhookUrl(input.config.webhook.url);
+    if (!webhook.ok) return webhook;
+  }
   return ok({ name, environments });
 };
 
