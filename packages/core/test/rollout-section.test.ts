@@ -48,6 +48,7 @@ const legacyFlag = async (store: MemoryStore, glob: Glob): Promise<void> => {
         doneBy: null,
         doneAt: null,
         dismissedReason: null,
+        dueSince: null,
       },
     ]),
   );
@@ -78,6 +79,8 @@ describe('parseRollout', () => {
         permissions: null,
         commands: [],
         verify: null,
+        env: null,
+        blocks: null,
       },
       {
         kind: 'setting',
@@ -90,6 +93,8 @@ describe('parseRollout', () => {
         permissions: null,
         commands: [],
         verify: null,
+        env: null,
+        blocks: null,
       },
       {
         kind: 'manual',
@@ -102,6 +107,8 @@ describe('parseRollout', () => {
         permissions: null,
         commands: [],
         verify: null,
+        env: null,
+        blocks: null,
       },
     ]);
   });
@@ -176,6 +183,8 @@ ${FENCE}
       // The script's own run command is dropped: the step block shows it from `script`.
       commands: ['aws sso login --profile admin', 'aws codebuild list-report-groups'],
       verify: 'the list shows the atf group.',
+      env: null,
+      blocks: null,
     });
   });
 
@@ -366,6 +375,8 @@ ${FENCE}
       permissions: null,
       commands: [],
       verify: null,
+      env: null,
+      blocks: null,
     });
   });
 
@@ -377,6 +388,43 @@ ${FENCE}
   it('labels a script by its title, stably', () => {
     expect(rolloutScriptLabel('Deploy the host stack!')).toBe('rollout: deploy-the-host-stack');
     expect(rolloutScriptLabel('Deploy the host stack!')).toBe(rolloutScriptLabel('Deploy the host stack!'));
+  });
+
+  it('reads (env, blocks, check) from a parenthesised suffix, in any order', () => {
+    const [step] = parseRollout('## Rollout\n- script: Roll out the host stack (env: production, check: fileAttachments, blocks: sign_off)\n');
+    expect(step).toMatchObject({ title: 'Roll out the host stack', env: 'production', check: 'fileAttachments', blocks: ['sign_off'], detail: null });
+    const [other] = parseRollout('## Rollout\n- manual: Flip the flag (blocks: sign_off, dependants, env: staging)\n');
+    expect(other).toMatchObject({ title: 'Flip the flag', env: 'staging', blocks: ['sign_off', 'dependants'], check: null });
+    // An environment the board doesn't list is kept as written.
+    expect(parseRollout('## Rollout\n- manual: Do it (env: eu-west.prod)\n')[0]?.env).toBe('eu-west.prod');
+  });
+
+  it('reads the suffix after emphasis around the whole title and unwraps what is left', () => {
+    expect(parseRollout('## Rollout\n- **Do x** (env: production)\n')[0]).toMatchObject({ title: 'Do x', env: 'production' });
+    expect(parseRollout('## Rollout\n- **manual:** Do y (env: staging, blocks: sign_off)\n')[0]).toMatchObject({ title: 'Do y', env: 'staging', blocks: ['sign_off'] });
+  });
+
+  it('has no env and no blocks when the item says neither: after the merge, with the default blocks', () => {
+    for (const text of ['- manual: Plain', '- manual: Plain (check: fileAttachments)', '- manual: Plain check: fileAttachments']) {
+      expect(parseRollout(`## Rollout\n${text}\n`)[0]).toMatchObject({ env: null, blocks: null });
+    }
+  });
+
+  it('drops an unknown key, a bad block and a bad env, each with a note in the detail', () => {
+    const [step] = parseRollout('## Rollout\n- manual: Do it (env: production, owner: ana, blocks: sign_off, launch)\n');
+    expect(step).toMatchObject({ title: 'Do it', env: 'production', blocks: ['sign_off'] });
+    expect(step?.detail).toContain('owner is not a rollout option slop knows');
+    expect(step?.detail).toContain('blocks: launch is not something a step can hold back');
+    expect(parseRollout('## Rollout\n- manual: Do it (env: two words)\n')[0]?.detail).toContain('env: two words is not an environment name');
+  });
+
+  it('says `blocks: none` explicitly: nothing held back, unlike no blocks at all', () => {
+    expect(parseRollout('## Rollout\n- manual: Do it (blocks: none)\n')[0]).toMatchObject({ blocks: [] });
+  });
+
+  it('leaves a parenthesis that carries no known key in the title', () => {
+    expect(parseRollout('## Rollout\n- manual: Run the job (staging: needs approval)\n')[0]).toMatchObject({ title: 'Run the job (staging: needs approval)', env: null, blocks: null });
+    expect(parseRollout('## Rollout\n- manual: Run the job (once)\n')[0]).toMatchObject({ title: 'Run the job (once)' });
   });
 
   it('knows the capability names the parser accepts', () => {
@@ -460,6 +508,7 @@ describe('the implementation record becomes rollout steps', () => {
     doneBy: state === 'done' ? DEV : null,
     doneAt: state === 'done' ? '2026-10-13T11:30:00.000Z' : null,
     dismissedReason: null,
+    dueSince: null,
   });
 
   const ROLLOUT = `## Rollout
@@ -661,6 +710,52 @@ describe('the implementation record becomes rollout steps', () => {
     await put(g.id, record('## Rollout\n\nNone\n'));
     expect((await globs.peek(g.id))?.status).toBe('signed_off');
   });
+
+  it('writes a step with an env as due after that deploy, holding nothing back unless it says so', async () => {
+    const g = await newGlob();
+    await merge(g.id);
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: production)\n- manual: Flip it (env: staging, blocks: sign_off)\n- manual: Now\n'));
+    expect(stepsOf(g.id).map((s) => [s.title, s.due, s.blocks, s.dueSince])).toEqual([
+      ['Set the flag', 'after_deploy:production', [], null],
+      ['Flip it', 'after_deploy:staging', ['sign_off'], null],
+      ['Now', 'after_merge', ['sign_off', 'dependants'], null],
+    ]);
+    // Only the after-merge step is due on a merged glob; the others wait for their deploys.
+    expect(unwrap(await globs.get(DEV, g.id)).humanSteps.map((s) => [s.title, s.state])).toEqual([
+      ['Now', 'due'],
+      ['Flip it', 'pending'],
+      ['Set the flag', 'pending'],
+    ]);
+  });
+
+  it('re-reading a record updates an open step in place when its env or blocks change, and is idempotent otherwise', async () => {
+    const g = await newGlob();
+    await merge(g.id);
+    await put(g.id, record('## Rollout\n- manual: Set the flag\n'));
+    const [first] = stepsOf(g.id);
+    await put(g.id, record('## Rollout\n- manual: Set the flag\n'));
+    expect(stepsOf(g.id)).toEqual([first]);
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: production)\n'));
+    expect(stepsOf(g.id)).toHaveLength(1);
+    expect(stepsOf(g.id)[0]).toMatchObject({ id: first?.id, due: 'after_deploy:production', blocks: [] });
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: production, blocks: sign_off)\n'));
+    expect(stepsOf(g.id)[0]).toMatchObject({ id: first?.id, due: 'after_deploy:production', blocks: ['sign_off'] });
+    expect(events('updated')).toHaveLength(2);
+  });
+
+  it('a step written for an environment the glob is already in is due at once', async () => {
+    const g = await newGlob();
+    await merge(g.id);
+    await store.transaction((tx) =>
+      tx.saveGlobPresence([{ boardId, globId: g.id, environment: 'production', mergeSha: 'abc1234', contained: true, checkedSha: 'def', checkedAt: '2026-10-13T11:00:00.000Z', since: '2026-10-13T11:00:00.000Z' }]),
+    );
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: production)\n- manual: Other (env: staging)\n'));
+    expect(stepsOf(g.id).map((s) => [s.title, s.dueSince])).toEqual([
+      ['Set the flag', '2026-10-13T12:00:00.000Z'],
+      ['Other', null],
+    ]);
+    expect(unwrap(await globs.get(DEV, g.id)).humanSteps.find((s) => s.title === 'Set the flag')?.state).toBe('due');
+  });
 });
 
 describe('the rollout job answer', () => {
@@ -828,6 +923,24 @@ describe('steps that tick themselves', () => {
       await tx.updateGlob({ ...current, ...merged, version: current.version + 1 }, current.version);
     });
     expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(1);
+  });
+
+  it('ticks an after-deploy step with a check only once its environment deploy is recorded (s15f176)', async () => {
+    const g = await create(merged);
+    unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Turn on file attachments', check: 'fileAttachments', due: 'after_deploy:production' }));
+    expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(0);
+    expect(step(g.id)?.state).toBe('open');
+    const pending = step(g.id) as NonNullable<ReturnType<typeof step>>;
+    await store.transaction((tx) => tx.saveHumanSteps([{ ...pending, dueSince: '2026-10-13T11:00:00.000Z' }]));
+    expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(1);
+    expect(step(g.id)?.state).toBe('done');
+  });
+
+  it('does not tick an after-merge step while the glob is in Merging (s15f176)', async () => {
+    const g = await create({ ...merged, status: 'merging' });
+    unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Turn on file attachments', check: 'fileAttachments', due: 'after_merge' }));
+    expect(await globs.tickCapabilitySteps(boardId, { fileAttachments: true })).toBe(0);
+    expect(step(g.id)?.state).toBe('open');
   });
 
   it('is idempotent and leaves steps without a check, with another capability, or already closed alone', async () => {

@@ -3,6 +3,7 @@ import type { Containment, EnvironmentDeploy, EnvironmentIndicator, GlobPresence
 import { forbidden, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Effect } from '../domain/events.js';
+import { markStepsDue } from './step-due.js';
 import type { EnvironmentRole } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store } from '../ports.js';
 
@@ -132,6 +133,9 @@ export class EnvironmentService {
       const change = environments.containmentChange(previous, live, { boardId, environment, sha }, now);
       await tx.saveGlobPresence(change.writes);
       await tx.appendEvents(change.events);
+      // Globs that newly entered the environment: their after-deploy steps for it fall due (a stale or repeated check enters none).
+      const entered = change.events.filter((e) => e.type === 'Deployed').map((e) => e.globId);
+      const due = new Set((await markStepsDue(tx, boardId, entered, environment, now)).map((step) => step.globId));
       // The ATF stage's spec list waits for this stamp: the globs this deploy newly holds are known now.
       await tx.markEnvironmentDeployChecked(boardId, environment, sha, now);
       // A push-mode board's ATF project is started from the outbox, after this commit: the batch needs the stamp above.
@@ -140,13 +144,15 @@ export class EnvironmentService {
       }
       // ATF reported before this check ran now shows on every glob the commit holds, moved or not.
       const tested = (await tx.listTestRuns(boardId, { commits: [{ environment, sha }] })).length > 0;
-      return { moved: change.moved, tested: tested && change.writes.some((w) => w.contained) };
+      return { moved: change.moved, due: globs.filter((g) => due.has(g.id)), tested: tested && change.writes.some((w) => w.contained) };
     });
     if (outcome === null) return 'stale';
     const hints: Hint[] = outcome.tested
       ? [{ kind: 'board.tests', boardId }]
       : outcome.moved.map((globId) => ({ kind: 'glob.deploys', boardId, globId }));
     for (const hint of hints) this.deps.notifier.publish(hint);
+    // A step falling due changes the board's Arm system label and Human steps, which the glob hint above doesn't refresh.
+    for (const glob of outcome.due) this.deps.notifier.publish({ kind: 'glob.changed', boardId, globId: glob.id, version: glob.version });
     return 'recorded';
   }
 

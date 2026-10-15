@@ -5,13 +5,14 @@ import type { ComponentType } from 'react';
 import { ActorIcon, HumanIcon, MachineIcon, PersonRunning } from '@/components/actor-icons';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { AtfRun, GlobView, ListedHumanStep } from '@/lib/api';
+import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { kindOf } from '@/lib/board-filters';
 import type { Kind } from '@/lib/board-filters';
 import { cornerStatus, hasBlocker } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
-import { needsRelease } from '@/lib/human-steps';
+import { armLabel } from '@/lib/rollout-stages';
+import type { ArmLabel } from '@/lib/rollout-stages';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { mainAction } from '@/lib/main-action';
@@ -515,15 +516,15 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
 };
 
 /**
- * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge). Rocket and text in the
+ * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge), named by its stage. Rocket and text in the
  * primary action's colour (not red, which means broken), normal weight. `onOpen` opens the glob at its Human steps; without it the
  * label is plain.
  */
-export const ArmSystemLabel = ({ step, onOpen }: { step: Pick<ListedHumanStep, 'title'>; onOpen?: () => void }) => (
-  <Tip text={`A person has a step at release: ${step.title}`}>
+export const ArmSystemLabel = ({ label, onOpen }: { label: ArmLabel; onOpen?: () => void }) => (
+  <Tip text={label.tip}>
     <ChipButton onOpen={onOpen} className='inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] text-primary' testId='arm-system-label'>
       <Rocket className='h-3 w-3 shrink-0' aria-hidden />
-      Arm system
+      {label.text}
     </ChipButton>
   </Tip>
 );
@@ -633,7 +634,7 @@ export const GlobCard = ({
   const human = isHumanCategory(glob.category);
   const status = cornerStatus(glob, now, viewer, repo, waitingOnThis);
   const blocked = hasBlocker(glob, now, viewer);
-  const armStep = human ? null : needsRelease(glob.humanSteps ?? []);
+  const arming = human ? null : armLabel(glob);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
   // A blocker hides the moves, but not one that runs in place: Fix conflict is the answer to a conflict, which is itself a blocker.
   const shown = blocked ? moves.filter((m) => m.direction === 'none') : moves;
@@ -756,9 +757,9 @@ export const GlobCard = ({
           )}
         </div>
         <div className='flex shrink-0 items-center gap-1.5'>
-          {armStep !== null && (
+          {arming !== null && (
             <>
-              <ArmSystemLabel step={armStep} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
+              <ArmSystemLabel label={arming} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
               <DotSeparator testId='card-arm-separator' />
             </>
           )}
