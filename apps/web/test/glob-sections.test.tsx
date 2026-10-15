@@ -31,10 +31,10 @@ const callbacks = () => ({
   onDismissEdge: vi.fn(() => Promise.resolve(true)),
   onAddRelation: vi.fn(() => Promise.resolve(true)),
   onDismiss: vi.fn(() => Promise.resolve(true)),
+  onDecide: vi.fn(() => Promise.resolve(true)),
   onAddStep: vi.fn(() => Promise.resolve(true)),
   onCompleteStep: vi.fn(() => Promise.resolve(true)),
   onDismissStep: vi.fn(() => Promise.resolve(true)),
-  onDecide: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),
 });
 

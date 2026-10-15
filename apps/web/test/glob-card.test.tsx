@@ -685,13 +685,13 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(start).toContain('bg-primary');
   });
 
-  it('the Arm system label has a dot before it, in normal weight, and only with the label', () => {
+  it('the Arm system label has a dot after it, before the avatar, in normal weight, and only with the label', () => {
     const arm = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-arm-separator"]');
     const withStep = dom(markup(view({ status: 'planning', humanSteps: [step()] })));
     const label = withStep.querySelector('[data-testid="arm-system-label"]');
     expect(label?.className).not.toContain('font-semibold');
     const dot = withStep.querySelector('[data-testid="card-arm-separator"]');
-    expect(dot?.nextElementSibling?.contains(label ?? null)).toBe(true);
+    expect(dot?.previousElementSibling?.contains(label ?? null)).toBe(true);
     expect(arm(view({ status: 'planning', humanSteps: [] }))).toBeNull();
   });
 

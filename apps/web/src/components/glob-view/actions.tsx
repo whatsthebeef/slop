@@ -569,7 +569,11 @@ export const GlobActions = ({
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || stepTurn !== null || lead !== null;
-  const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
+  // A decision's Approve change and its ▾ run the proposal block's flow, so the header and the block never disagree.
+  const flow = ctx.decide ?? null;
+  const decideFlow = main === 'decide' ? flow : null;
+  const flowItems = decideFlow?.menu ?? [];
+  const hasMenu = hasMain && flowItems.length + moves.menu.length + moreActions.length + disabled.length > 0;
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -596,6 +600,20 @@ export const GlobActions = ({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-testid="more-menu">
+        {flowItems.map((item) => (
+          <DropdownMenuItem
+            key={item.key}
+            disabled={item.disabled !== null}
+            data-testid={`more-flow-${item.key}`}
+            onSelect={item.run}
+          >
+            <span className="flex items-center gap-1.5 font-medium">
+              <HumanIcon decorative />
+              {item.label}
+            </span>
+            <span className="text-xs text-muted-foreground">{item.disabled ?? item.tip}</span>
+          </DropdownMenuItem>
+        ))}
         {moves.menu.map((move) => (
           <DropdownMenuItem
             key={move.id}
@@ -677,7 +695,23 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
-            {main !== null && (
+            {decideFlow !== null && decideFlow.approve.blocked !== null && (
+              <span className="flex flex-wrap items-center gap-2 text-xs" data-testid="approve-blocked">
+                <span className="text-muted-foreground">{decideFlow.approve.blocked}</span>
+                {decideFlow.menu.some((item) => item.key === 'reject' && item.disabled === null) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    data-testid="header-reject"
+                    onClick={() => decideFlow.menu.find((item) => item.key === 'reject')?.run()}
+                  >
+                    Reject…
+                  </Button>
+                )}
+              </span>
+            )}
+            {main !== null && !(decideFlow !== null && decideFlow.approve.blocked !== null) && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>
                   <Button
@@ -687,7 +721,7 @@ export const GlobActions = ({
                     disabled={busy}
                     data-testid="main-action"
                     data-variant={state.variant}
-                    onClick={() => state.begin(main)}
+                    onClick={() => (decideFlow === null ? state.begin(main) : decideFlow.approve.run())}
                   >
                     <ActionContent action={main} ctx={ctx} state={state} />
                   </Button>

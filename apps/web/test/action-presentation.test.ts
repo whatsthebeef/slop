@@ -42,6 +42,14 @@ describe('actionPresentation', () => {
     }
   });
 
+  it('names Decide as approving the change, never as a generic Decide', () => {
+    expect(actionPresentation('decide', view())).toMatchObject({
+      label: 'Approve change',
+      tip: 'Approves the proposed change as drafted',
+      placement: 'main',
+    });
+  });
+
   it('reads Start as Start after investigation while an investigation is running', () => {
     const g = view({ type: 'same', status: 'planning' });
     const investigating = { ...g, currentRun: { ...glob().runs[0], purpose: 'investigate', state: 'active' } } as GlobView;

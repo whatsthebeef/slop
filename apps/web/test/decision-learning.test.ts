@@ -1,6 +1,8 @@
 import type { DecisionAttributes, DecisionLearning, EffectCheck } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { canWatch, EFFECT_VERDICTS, inPipeline, sinceText, watching } from '../src/components/decision-learning';
+import { EFFECT_VERDICTS, inPipeline, sinceText, watching } from '../src/components/decision-learning';
+import { watchMode } from '../src/lib/decide-flow';
+import type { KbSignal } from '@slop/core';
 
 const learning = (patch: Partial<DecisionLearning> = {}): DecisionLearning => ({
   status: 'open',
@@ -31,11 +33,26 @@ describe('the pipeline state of a learning', () => {
 });
 
 describe('the signal an approval watches', () => {
-  it('is offered for an open statement with no signal or document of its own', () => {
-    expect(canWatch(learning(), attributes())).toBe(true);
-    expect(canWatch(null, attributes())).toBe(false);
-    expect(canWatch(learning({ status: 'rejected' }), attributes())).toBe(false);
-    expect(canWatch(learning(), attributes({ document: { name: 'd', area: 'a', audience: [], description: 'x' } }))).toBe(false);
+  it('is a choice for an open statement with no signal or document of its own', () => {
+    expect(watchMode(learning(), attributes())).toBe('choose');
+    expect(watchMode(null, attributes())).toBeNull();
+    expect(watchMode(learning({ status: 'rejected' }), attributes())).toBeNull();
+    expect(watchMode(learning(), attributes({ document: { name: 'd', area: 'a', audience: [], description: 'x' } }))).toBeNull();
+  });
+
+  it('is the signal of one mined from a signal', () => {
+    const signal: KbSignal = {
+      key: 'failure',
+      kind: 'failure',
+      agent: null,
+      label: 'Run failures',
+      window: { from: '2026-10-01T00:00:00Z', to: '2026-10-08T00:00:00Z' },
+      figures: { affected: 2, eligible: 10, rate: 0.2, count: 2 },
+      globIds: [],
+      examples: [],
+      measuredAt: '2026-10-08T00:00:00Z',
+    };
+    expect(watchMode(learning(), attributes({ signal }))).toBe('own');
   });
 
   it('is sent only when one was chosen', () => {
