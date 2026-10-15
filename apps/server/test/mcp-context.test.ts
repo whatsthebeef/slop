@@ -251,15 +251,16 @@ describe('MCP get_context include and get_artifact', () => {
     ).toBe(true);
   });
 
-  it('create_glob parks a super that intake chose in Planning, but a super asked for by type starts in Doing', async () => {
+  it('create_glob always parks a super in Planning, whatever start says', async () => {
     const created = async (args: Record<string, unknown>) =>
-      (await call('create_glob', { board: boardId, ...args })).body as unknown as { status: string; type: string };
+      (await call('create_glob', { board: boardId, ...args })).body as unknown as { status: string; type: string; implementer?: string | null };
     const chosen = await created({ input: 'Design the export format with the PO', idempotencyKey: 'intake-super' });
     expect(chosen).toMatchObject({ type: 'super', status: 'planning' });
-    const asked = await created({ title: 'Pair on it', type: 'super', category: 'feature', idempotencyKey: 'typed-super' });
-    expect(asked).toMatchObject({ type: 'super', status: 'in_progress' });
-    const parked = await created({ title: 'Parked', type: 'super', category: 'feature', start: false, idempotencyKey: 'parked-super' });
-    expect(parked).toMatchObject({ status: 'planning' });
+    for (const [key, start] of [['typed-super', undefined], ['started-super', true], ['parked-super', false]] as const) {
+      const made = await created({ title: key, type: 'super', category: 'feature', ...(start === undefined ? {} : { start }), idempotencyKey: key });
+      expect(made).toMatchObject({ type: 'super', status: 'planning' });
+      expect(made.implementer ?? null).toBeNull();
+    }
   });
 
   describe('actor, mode, fix and work kind', () => {

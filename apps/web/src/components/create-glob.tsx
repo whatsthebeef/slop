@@ -131,8 +131,6 @@ export const CreateGlobDialog = ({
         // An environment the person already chose wins over one the request names.
         environment: form.environment ?? proposal.environment,
         autoTrigger: proposal.autoTrigger,
-        // A super intake chose waits in Planning for a person to pick it up.
-        ...(chooses(proposal.type) && proposal.type === 'super' ? { start: false } : {}),
         ...(proposal.files === undefined || proposal.files.length === 0 ? {} : { files: proposal.files }),
       });
       setReason(proposal.autoTriggerReason);
@@ -347,14 +345,9 @@ export const CreateGlobDialog = ({
             </p>
           )}
           {form.mode === 'super' && (
-            <label className='flex items-center gap-2 text-sm'>
-              <input
-                type='checkbox'
-                checked={form.start === false}
-                onChange={(e) => setForm({ ...form, ...(e.target.checked ? { start: false } : { start: true }) })}
-              />
-              Park in Planning until someone picks it up to pair
-            </label>
+            <p className='text-sm text-muted-foreground' data-testid='super-waits'>
+              Waits in Planning until someone picks it up to pair.
+            </p>
           )}
           {form.mode === 'same' && (
             <label className='flex items-center gap-2 text-sm'>

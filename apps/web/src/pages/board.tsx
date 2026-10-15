@@ -341,7 +341,7 @@ export const BoardPage = () => {
     const path = ACTION_PATHS[action];
     if (path === null) return false;
     // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.
-    const finish = copyCommand(action, glob.id);
+    const finish = copyCommand(action, glob.id, glob.type);
     return mutation.mutateAsync(() => api.action(glob.id, path, glob.version)).then(
       async (result) => {
         const said = result === null ? null : mergeOutcomeText(action, result);

@@ -50,6 +50,15 @@ describe('copySstorCommand', () => {
   });
 });
 
+describe('Pick up on a super', () => {
+  it('copies the plain session command on the click, before the request resolves', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    const result = copySstorCommand('pick_up', 's15t219', { writeText });
+    expect(writeText).toHaveBeenCalledWith('sstor --glob s15t219');
+    await expect(result).resolves.toEqual({ command: 'sstor --glob s15t219', copied: true });
+  });
+});
+
 describe('conflict advice', () => {
   it('shows the plain command for a viewer who can take over, the same one Take over copies', () => {
     expect(conflictCommand('s1t1', true)).toBe('sstor --glob s1t1');
