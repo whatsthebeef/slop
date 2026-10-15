@@ -51,7 +51,7 @@ describe('human step routes', () => {
     });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: 'outsider@example.com', name: 'Out', active: true }));
-    const created = await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'production', allowBranchDeploy: false }] });
     if (!created.ok) throw new Error(created.error.message);
     id = `s${String(created.value.id)}f1`;
     const glob: Glob = {
@@ -107,6 +107,24 @@ describe('human step routes', () => {
     expect(wrong).toBeDefined();
     const dismissed = (await (await post(`/human-steps/${wrong?.id ?? ''}/dismiss`, { reason: 'Not needed' })).json()) as typeof view;
     expect(dismissed.humanSteps.find((s) => s.id === wrong?.id)?.state).toBe('dismissed');
+  });
+
+  it('marks an environment deployed: the glob\'s steps for it fall due, and the view carries the arm stage', async () => {
+    const added = (await (await post('/human-steps', { title: 'Set the flag in production', due: 'after_deploy:production' })).json()) as {
+      arm?: { stage: string; title: string };
+      humanSteps: { title: string; state: string; blocks: string[] }[];
+    };
+    expect(added.humanSteps.find((s) => s.title === 'Set the flag in production')).toMatchObject({ state: 'pending', blocks: [] });
+    expect(added.arm).toEqual({ stage: 'production', title: 'Set the flag in production' });
+    const marked = await post('/environments/production/deployed', {});
+    expect(marked.status).toBe(200);
+    const view = (await marked.json()) as typeof added;
+    expect(view.humanSteps.find((s) => s.title === 'Set the flag in production')?.state).toBe('due');
+    expect(view.arm).toEqual({ stage: 'production', title: 'Set the flag in production' });
+    // Again changes nothing; an environment the board doesn't list, and a non-member, are refused.
+    expect((await post('/environments/production/deployed', {})).status).toBe(200);
+    expect((await post('/environments/nowhere/deployed', {})).status).toBe(422);
+    expect((await post('/environments/production/deployed', {}, 'outsider@example.com')).status).toBeGreaterThanOrEqual(403);
   });
 
   it('refuses a missing title or reason, a stale version, and a non-member', async () => {

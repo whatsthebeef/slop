@@ -59,6 +59,8 @@ export const DOMAIN_EVENT_TYPES = [
   'Deployed',
   /** A release or integration environment no longer holds a glob it held (a rollback). */
   'DeployRolledBack',
+  /** A person said an environment now runs a glob's merge (data: the environment, how many steps it made due). Not `Deployed`: ATF reads that. */
+  'EnvironmentMarkedDeployed',
   /** A glob was held in Planning for globs it starts after (`after`, or a merge-policy hold). */
   'Waiting',
   /** What a glob waited for merged: it started by itself. */

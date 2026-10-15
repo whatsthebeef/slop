@@ -1,4 +1,4 @@
-import { BOARD_FILTERS } from './board-filters';
+import { BOARD_FILTERS, LEGACY_KEYS } from './board-filters';
 
 /** The part of `Storage` the memory uses, so tests can pass a fake. */
 export interface FilterStore {
@@ -21,9 +21,9 @@ export const browserStore = (): FilterStore | undefined => {
 /** Only the filters' parameters of a query, in their URL form. */
 export const filterParams = (params: URLSearchParams): URLSearchParams => {
   const only = new URLSearchParams();
-  for (const f of BOARD_FILTERS) {
-    const value = params.get(f.key);
-    if (value !== null) only.set(f.key, value);
+  for (const key of [...BOARD_FILTERS.map((f) => f.key), ...LEGACY_KEYS]) {
+    const value = params.get(key);
+    if (value !== null) only.set(key, value);
   }
   return only;
 };
