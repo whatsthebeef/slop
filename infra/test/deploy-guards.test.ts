@@ -127,3 +127,12 @@ describe('merge_projects', () => {
     }
   });
 });
+
+describe('needs_volume_handover', () => {
+  it('is needed when the volume is attached and the stack has no attachment', () =>
+    expect(sh('needs_volume_handover "" attached').code).toBe(0));
+  it('is not needed when the stack owns the attachment', () =>
+    expect(sh('needs_volume_handover att-1 attached').code).toBe(1));
+  it('is not needed when the volume is detached', () =>
+    expect(sh('needs_volume_handover "" ""').code).toBe(1));
+});

@@ -3,16 +3,25 @@
 # account-specific lives in the repo. A person runs this: it changes paid infrastructure and IAM (see README.md).
 #
 #   infra/deploy/host-deploy.sh [--stage prod] [--add-project <name>]... [--remove-project <name>]... [--yes]
+#                               [--data-volume <vol-id>] [--hand-over-volume]
 #
 # Read-only lookups (needs an AWS session for the account): the deploy connection, the CloudFront domain and certificate,
 # the alert email, the CodeBuild projects the instance role may start (--add-project / --remove-project change that
 # list; names come from the command line only), and (for the stack's pinned AMI and data disk) the
 # running instance's AMI and /dev/sdf volume. It prints the context, runs `cdk diff`, and asks before `cdk deploy`.
 # Without --yes it refuses to run when stdin is not a terminal.
+#
+# --data-volume names the data volume when nothing is on /dev/sdf (it is detached). If the volume is attached to the
+# instance but the stack has no VolumeAttachment (it was attached by hand), CloudFormation would fail with "already
+# attached", so the script stops and prints the handover (infra/deploy/HOST.md). --hand-over-volume runs it: after the
+# diff and your confirmation it snapshots the volume, stops the app and Postgres, unmounts and detaches the volume,
+# deploys, then lets the stack attach it, mounts it and starts everything again; a failed deploy re-attaches it at /dev/sdf.
 set -euo pipefail
 
 STAGE=prod
 YES=0
+DATA_VOLUME=""
+HAND_OVER=0
 ADD_PROJECTS=""
 REMOVE_PROJECTS=""
 while [ $# -gt 0 ]; do
@@ -20,8 +29,10 @@ while [ $# -gt 0 ]; do
     --stage) STAGE="${2:?--stage needs a value}"; shift 2 ;;
     --add-project) ADD_PROJECTS="${ADD_PROJECTS:+$ADD_PROJECTS,}${2:?--add-project needs a name}"; shift 2 ;;
     --remove-project) REMOVE_PROJECTS="${REMOVE_PROJECTS:+$REMOVE_PROJECTS,}${2:?--remove-project needs a name}"; shift 2 ;;
+    --data-volume) DATA_VOLUME="${2:?--data-volume needs a volume id}"; shift 2 ;;
+    --hand-over-volume) HAND_OVER=1; shift ;;
     --yes) YES=1; shift ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -34,6 +45,32 @@ INFRA_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 out() { aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text; }
 res() { aws cloudformation describe-stack-resources --stack-name "$STACK" --query "StackResources[?ResourceType=='$1'].PhysicalResourceId" --output text | tr '\t' '\n'; }
+ssm_json_file=""
+# on_instance <comment> <execution timeout> <command>...: runs the commands on the instance over SSM and fails unless they
+# succeed. Commands are fixed text: a double quote or backslash in one is refused, not escaped.
+on_instance() {
+  local comment="$1" timeout="$2" line sep='' id status=Pending
+  shift 2
+  ssm_json_file="${ssm_json_file:-$(mktemp "${TMPDIR:-/tmp}/host-deploy-ssm.XXXXXX")}"
+  { printf '{"executionTimeout": ["%s"], "commands": [' "$timeout"
+    for line in "$@"; do
+      case "$line" in *'"'* | *\\*) echo "ERROR: unexpected character in an SSM command: $line" >&2; return 1 ;; esac
+      printf '%s\n  "%s"' "$sep" "$line"; sep=','
+    done
+    printf '\n]}\n'
+  } > "$ssm_json_file"
+  id="$(aws ssm send-command --instance-ids "$INSTANCE" --document-name AWS-RunShellScript --comment "$comment" \
+    --timeout-seconds 600 --parameters "file://${ssm_json_file}" --query Command.CommandId --output text)"
+  echo "SSM command $id ($comment)"
+  for _ in $(seq 1 $((timeout / 5 + 24))); do
+    sleep "${HANDOVER_POLL_SECONDS:-5}"
+    status="$(aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE" --query Status --output text 2>/dev/null || echo Pending)"
+    case "$status" in Pending|InProgress|Delayed) ;; *) break ;; esac
+  done
+  aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE" --query StandardOutputContent --output text || true
+  [ "$status" = Success ] || { echo "ERROR: the instance's $comment finished as $status" >&2; return 1; }
+}
+
 # aws prints "None" for a missing value
 set_or_empty() { case "$1" in None|null) echo "" ;; *) echo "$1" ;; esac; }
 
@@ -82,9 +119,47 @@ if [ -n "$MERGED" ]; then ARGS+=(-c "deployProjects=$MERGED"); fi
 # The stack pins the instance's AMI and data volume (infra/deploy/HOST.md): read both from the running instance.
 if [ -n "$INSTANCE" ]; then
   AMI="$(set_or_empty "$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].ImageId' --output text)")"
-  VOLUME="$(set_or_empty "$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query "Reservations[0].Instances[0].BlockDeviceMappings[?DeviceName=='/dev/sdf'].Ebs.VolumeId | [0]" --output text)")"
+  VOLUME="$DATA_VOLUME"
+  if [ -z "$VOLUME" ]; then
+    VOLUME="$(set_or_empty "$(aws ec2 describe-instances --instance-ids "$INSTANCE" --query "Reservations[0].Instances[0].BlockDeviceMappings[?DeviceName=='/dev/sdf'].Ebs.VolumeId | [0]" --output text)")"
+  fi
   if [ -n "$AMI" ]; then ARGS+=(-c "hostAmiId=$AMI"); fi
   if [ -n "$VOLUME" ]; then ARGS+=(-c "hostDataVolumeId=$VOLUME"); fi
+fi
+
+# Prod never synthesises without its data volume; say how to name it rather than letting cdk fail.
+if [ "$STAGE" = prod ] && [ -z "${VOLUME:-}" ]; then
+  echo "ERROR: no data volume on /dev/sdf of ${INSTANCE:-the instance}: it is detached. Pass --data-volume <vol-id> (infra/deploy/HOST.md)" >&2
+  exit 2
+fi
+
+# A volume attached by hand, with no VolumeAttachment in the stack: the deploy would fail with "already attached".
+UNMANAGED=0
+if [ -n "${VOLUME:-}" ] && [ -n "$INSTANCE" ]; then
+  ATTACHMENTS="$(res AWS::EC2::VolumeAttachment | head -1)"
+  STATE="$(set_or_empty "$(aws ec2 describe-volumes --volume-ids "$VOLUME" --query "Volumes[0].Attachments[?InstanceId=='$INSTANCE'].State | [0]" --output text)")"
+  if needs_volume_handover "$ATTACHMENTS" "$STATE"; then UNMANAGED=1; fi
+fi
+if [ "$UNMANAGED" = 1 ] && [ "$HAND_OVER" != 1 ]; then
+  cat >&2 <<MSG
+ERROR: $VOLUME is attached to $INSTANCE, but $STACK has no AWS::EC2::VolumeAttachment (it was attached by hand).
+CloudFormation would try to create one and fail with "already attached", then roll back. Nothing was changed.
+
+The stack can only attach the volume while it is detached. Either run this script again with --hand-over-volume, which
+does the steps below after the diff and your confirmation, or do them by hand (infra/deploy/HOST.md, "Handing over a
+volume attached by hand"):
+  1. snapshot $VOLUME and wait for it to complete;
+  2. take /opt/slop/.deploy.lock on the instance, stop slop-app-1 and slop-postgres-1, sync, umount /var/lib/slop;
+  3. aws ec2 detach-volume --volume-id $VOLUME, and wait for "available";
+  4. host-deploy.sh --data-volume $VOLUME (the stack attaches it at /dev/sdf);
+  5. wait for "in-use", mount -a, start slop-postgres-1 then slop-app-1, check localhost:3000/auth/config;
+  if the deploy fails or you stop, attach it again at /dev/sdf and start both containers.
+MSG
+  exit 3
+fi
+if [ "$HAND_OVER" = 1 ] && [ "$UNMANAGED" != 1 ]; then
+  echo "Nothing to hand over: ${VOLUME:-no volume} is not attached outside $STACK. Deploying as usual."
+  HAND_OVER=0
 fi
 
 echo "cdk context for $STACK:"
@@ -111,4 +186,51 @@ if [ "$YES" != 1 ]; then
   [ "$OK" = y ] || { echo "Not deployed."; exit 1; }
 fi
 
+if [ "$HAND_OVER" != 1 ]; then
+  "${CDK[@]}" deploy "$STACK" "${ARGS[@]}" --require-approval never
+  exit 0
+fi
+
+RELEASE_LOCK='if [ -f /run/slop-handover.pid ]; then kill $(cat /run/slop-handover.pid) 2>/dev/null || true; rm -f /run/slop-handover.pid; fi'
+START_APP='docker start slop-postgres-1 && sleep 10 && docker start slop-app-1'
+CHECK_APP='for i in $(seq 1 60); do curl -fsS -m 5 http://localhost:3000/auth/config >/dev/null && exit 0; sleep 3; done; echo app did not answer; exit 1'
+HANDOVER_STARTED=0
+volume_state() { aws ec2 describe-volumes --volume-ids "$VOLUME" --query 'Volumes[0].State' --output text; }
+wait_volume() { # <state>
+  for _ in $(seq 1 60); do [ "$(volume_state)" = "$1" ] && return 0; sleep "${HANDOVER_POLL_SECONDS:-5}"; done
+  echo "ERROR: $VOLUME did not reach $1" >&2; return 1
+}
+# Puts the volume back where it was and restarts, after a failure: an attachment the stack's rollback may still be
+# removing is waited for first.
+restore_volume() {
+  trap - ERR EXIT
+  echo "Handover failed: re-attaching $VOLUME at /dev/sdf and restarting the app" >&2
+  if [ "$(volume_state)" = in-use ]; then wait_volume available || true; fi
+  if [ "$(volume_state)" = available ]; then
+    aws ec2 attach-volume --volume-id "$VOLUME" --instance-id "$INSTANCE" --device /dev/sdf >/dev/null
+  fi
+  wait_volume in-use
+  on_instance "handover: restore" 300 "mount -a" "$START_APP" "$RELEASE_LOCK" "$CHECK_APP"
+}
+on_failure() { local code=$?; if [ "$HANDOVER_STARTED" = 1 ]; then restore_volume || echo "ERROR: could not restore; see HOST.md" >&2; fi; exit "$code"; }
+
+SNAPSHOT="$(aws ec2 create-snapshot --volume-id "$VOLUME" --description "slop host handover $(date -u +%Y%m%dT%H%M%SZ)" --query SnapshotId --output text)"
+echo "Snapshot $SNAPSHOT of $VOLUME: waiting for it to complete"
+aws ec2 wait snapshot-completed --snapshot-ids "$SNAPSHOT"
+
+trap on_failure ERR EXIT
+HANDOVER_STARTED=1
+on_instance "handover: stop and unmount" 600 \
+  "$RELEASE_LOCK" \
+  'nohup flock -n /opt/slop/.deploy.lock sleep 7200 >/dev/null 2>&1 & echo $! > /run/slop-handover.pid; sleep 2; kill -0 $(cat /run/slop-handover.pid) || { echo a deploy is running; exit 1; }' \
+  "docker stop slop-app-1" "docker stop -t 60 slop-postgres-1" "sync" "umount /var/lib/slop"
+aws ec2 detach-volume --volume-id "$VOLUME" >/dev/null
+wait_volume available
+
 "${CDK[@]}" deploy "$STACK" "${ARGS[@]}" --require-approval never
+
+wait_volume in-use
+on_instance "handover: mount and start" 600 "mount -a" "$START_APP" "$RELEASE_LOCK" "$CHECK_APP"
+HANDOVER_STARTED=0
+trap - ERR EXIT
+echo "Handover complete: $VOLUME is attached by $STACK. Check the next weekly snapshot, and see HOST.md."

@@ -22,7 +22,15 @@ case "$*" in
   *"list-role-policies"*) echo Policy1 ;;
   *"get-role-policy"*) printf 'arn:aws:codebuild:r:1:project/build-a\\tarn:aws:codebuild:r:1:project/build-b\\n' ;;
   *"ImageId"*) echo ami-123 ;;
-  *"/dev/sdf"*) echo vol-456 ;;
+  *"describe-volumes"*"Attachments"*) echo "\${STUB_VOLUME_ATTACHED:-}" ;;
+  *"describe-volumes"*) cat "$STUB_DIR/vstate" 2>/dev/null || echo in-use ;;
+  *"detach-volume"*) echo available > "$STUB_DIR/vstate" ;;
+  *"attach-volume"*) echo in-use > "$STUB_DIR/vstate" ;;
+  *"VolumeAttachment"*) echo "\${STUB_STACK_ATTACHMENT:-}" ;;
+  *"/dev/sdf"*) echo "\${STUB_SDF:-vol-456}" ;;
+  *"create-snapshot"*) echo snap-1 ;;
+  *"send-command"*) echo cmd-1 ;;
+  *"get-command-invocation"*"Status"*) echo Success ;;
   *"ssm get-parameter"*) cat "$STUB_DIR/param"; echo ;;
   *"ssm put-parameter"*)
     while [ $# -gt 0 ]; do [ "$1" = --value ] && { printf '%s' "$2" > "$STUB_DIR/param.written"; }; shift; done ;;
@@ -30,8 +38,11 @@ case "$*" in
   *"batch-get-builds"*) echo "\${STUB_BUILD_STATUS:-SUCCEEDED}" ;;
 esac
 `;
+// A successful `cdk deploy` leaves the data volume attached by the stack.
 const CDK_STUB = `#!/bin/bash
 echo "cdk $*" >> "$STUB_DIR/calls.log"
+[ "$1" = deploy ] && echo in-use > "$STUB_DIR/vstate"
+exit 0
 `;
 
 let dir: string;
@@ -97,6 +108,84 @@ describe('host-deploy.sh', () => {
     const r = run('host-deploy.sh', ['--add-project', 'bad name', '--yes']);
     expect(r.code).toBe(2);
     expect(r.calls.some((c) => c.startsWith('cdk'))).toBe(false);
+  });
+
+  describe('the data volume', () => {
+    const attached = { STUB_VOLUME_ATTACHED: 'attached' };
+    const noCdk = (calls: string[]) => calls.filter((c) => c.startsWith('cdk'));
+
+    it('--data-volume overrides the /dev/sdf lookup', () => {
+      const r = run('host-deploy.sh', ['--data-volume', 'vol-789', '--yes'], { STUB_SDF: '' });
+      expect(r.code).toBe(0);
+      expect(r.calls).toContain(
+        `cdk deploy slop-prod-host ${context.replace('vol-456', 'vol-789')} --require-approval never`,
+      );
+    });
+
+    it('refuses prod without a data volume', () => {
+      const r = run('host-deploy.sh', ['--yes'], { STUB_SDF: 'None' });
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('--data-volume');
+      expect(noCdk(r.calls)).toEqual([]);
+    });
+
+    it('stops before cdk when the volume is attached outside the stack', () => {
+      const r = run('host-deploy.sh', ['--yes'], attached);
+      expect(r.code).toBe(3);
+      expect(r.err).toContain('has no AWS::EC2::VolumeAttachment');
+      expect(r.err).toContain('--hand-over-volume');
+      expect(noCdk(r.calls)).toEqual([]);
+    });
+
+    it('deploys as usual when the stack already owns the attachment', () => {
+      const r = run('host-deploy.sh', ['--yes'], { ...attached, STUB_STACK_ATTACHMENT: 'att-1' });
+      expect(r.code).toBe(0);
+    });
+
+    it('--hand-over-volume snapshots, detaches, deploys, then mounts and restarts', () => {
+      const r = run('host-deploy.sh', ['--hand-over-volume', '--yes'], {
+        ...attached,
+        HANDOVER_POLL_SECONDS: '0',
+      });
+      expect(r.code).toBe(0);
+      const at = (needle: string) => r.calls.findIndex((c) => c.includes(needle));
+      const order = [
+        'create-snapshot',
+        'snapshot-completed',
+        'send-command',
+        'detach-volume',
+        'cdk deploy',
+      ].map(at);
+      expect(order.every((i) => i >= 0)).toBe(true);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      expect(r.calls.filter((c) => c.includes('send-command'))).toHaveLength(2);
+      expect(r.calls.some((c) => c.includes('attach-volume'))).toBe(false);
+    });
+
+    it('--hand-over-volume re-attaches the volume when the deploy fails', () => {
+      writeFileSync(
+        join(dir, 'cdk'),
+        '#!/bin/bash\necho "cdk $*" >> "$STUB_DIR/calls.log"\n[ "$1" = deploy ] && exit 1\nexit 0\n',
+      );
+      const r = run('host-deploy.sh', ['--hand-over-volume', '--yes'], {
+        ...attached,
+        HANDOVER_POLL_SECONDS: '0',
+      });
+      expect(r.code).toBe(1);
+      expect(
+        r.calls.some(
+          (c) => c.startsWith('aws ec2 attach-volume') && c.includes('--device /dev/sdf'),
+        ),
+      ).toBe(true);
+    });
+
+    it('--hand-over-volume changes nothing when the confirmation is declined', () => {
+      const r = run('host-deploy.sh', ['--hand-over-volume'], attached);
+      expect(r.code).toBe(2);
+      expect(
+        r.calls.some((c) => c.includes('create-snapshot') || c.includes('detach-volume')),
+      ).toBe(false);
+    });
   });
 
   it('only reads from aws', () => {
