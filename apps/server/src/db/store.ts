@@ -2698,6 +2698,9 @@ export class PgStore implements Store {
             // by the receiver or the address check, stays dropped: the same delivery ID is not repeated).
             const jobs = schema.outbox;
             const same = sql`${jobs.kind} = 'deliver_atf_webhook' and ${jobs.effect}->>'runnerId' = ${String(effect.runnerId)} and ${jobs.effect}->>'deployId' = ${String(effect.deployId)}`;
+            // Two checks racing on the same deploy would both see no job and both insert one: serialise them per (runner, deploy)
+            // until this transaction commits, so the second one's check sees the first one's job.
+            await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`deliver_atf_webhook:${String(effect.runnerId)}:${String(effect.deployId)}`}))`);
             const [existing] = await t.select({ id: jobs.id }).from(jobs).where(sql`${same}`).limit(1);
             if (existing !== undefined || rows.some((r) => r.effect.kind === effect.kind && r.effect.runnerId === effect.runnerId && r.effect.deployId === effect.deployId)) continue;
           }
