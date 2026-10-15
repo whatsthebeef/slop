@@ -1150,6 +1150,17 @@ export const conflictCleared = (
     by,
     kind,
   });
+  // A failed conflict-fix run's failure (no kind) is about the conflict that is now gone. Failures of another kind
+  // (needs_pairing, merge, provisioning, reverted) are not about the conflict and stay.
+  if (
+    glob.failure !== null &&
+    glob.failure.kind === undefined &&
+    run?.purpose === 'resolve_conflict' &&
+    run.state === 'ended' &&
+    run.outcome === 'failed'
+  ) {
+    b.set({ failure: null });
+  }
   // The fix is pushed and nothing is left for the run: it now watches the PR's checks like any run on a ready PR.
   if (run?.purpose === 'resolve_conflict' && run.state === 'active' && glob.status === 'pr_open')
     b.updateRun({ state: 'watching', lastProgressAt: ctx.now });
