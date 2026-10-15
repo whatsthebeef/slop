@@ -90,7 +90,25 @@ The board's integration token still works for `atf-specs` and `atf-results`. slo
 
 # Other catalog scripts
 
-Generic, board-agnostic scripts a board can run or copy. Each follows `step-template.sh`: a header with what it changes and the permissions it needs, a preflight, a read-only summary, a y/N question (`--yes` skips it), `--dry-run`, safe to re-run, and a final check.
+Generic, board-agnostic scripts a board can run or copy. Each follows `step-template.sh`: a header with what it changes and the permissions it needs, a preflight, pre-checks, a read-only summary, a y/N question (`--yes` skips it), `--dry-run`, safe to re-run, and a final check.
+
+## step-template.sh pre-checks
+
+Before any change, and also under `--dry-run`, a step script runs `precheck()`: it tries what `apply()` will do in a way that leaves nothing behind, and stops with a plain message (`error: ... (nothing was changed)`) if one fails. The template has the helpers; a script calls the ones it needs from `precheck()`:
+
+| Helper | What it checks |
+| --- | --- |
+| `lint_arn ARN` | the string is a well-formed ARN (wildcards allowed inside a segment; a bare `*` is not one) |
+| `precheck_policy_json FILE` | valid JSON with `Version` and `Statement`, every `Resource` an ARN or `*` |
+| `precheck_iam_policy FILE` | the above, then IAM creates the policy as `slop-precheck-<pid>` and it is deleted |
+| `precheck_cfn_change_set STACK TEMPLATE [args]` | existing stack: create, wait for, describe and delete an UPDATE change set ("no changes" passes); new stack: `validate-template` only |
+| `precheck_buildspec FILE` | no tab indentation, top-level `version` and `phases`, valid YAML when PyYAML is installed |
+
+Temporary resources are registered with `cleanup_add <command> [args]` (the values are expanded when it is registered), and `trap cleanup EXIT` runs the registry, newest first, on any exit: a failed pre-check, an error in `apply()`, Ctrl-C or SIGTERM. That covers the temporary IAM policy, the change set, and a stack left in `REVIEW_IN_PROGRESS` (`cleanup_add delete_review_stack <stack>` before creating a change set for a new stack). A change that cannot be tried this way is said so in the script's `summary()`.
+
+The template is written for macOS bash 3.2 (no associative arrays, `mapfile` or `${x,,}`; empty arrays are guarded) and, when sourced with `STEP_TEMPLATE_SOURCE_ONLY=1`, defines its functions without running the main flow.
+
+Test it with no credentials and no AWS call (`aws` is stubbed): `bash catalog/scripts/step-template.test.sh` runs `bash -n`, `shellcheck` when installed, and checks that a failed pre-check stops before `apply()`, that the trap deletes the temporary policy and change set, that `lint_arn` accepts and rejects the right strings, and that `--dry-run` runs the pre-checks and changes nothing.
 
 ## identity-center-permission-set.sh
 
