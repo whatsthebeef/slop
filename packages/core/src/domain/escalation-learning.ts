@@ -25,6 +25,7 @@ export const ESCALATION_CRITERIA = [
   'scope_beyond_plan',
   'open_findings',
   'size',
+  'risk_path',
   'other',
 ] as const;
 export type EscalationCriterion = (typeof ESCALATION_CRITERIA)[number];
@@ -43,6 +44,7 @@ export const CRITERION_TEXT: Record<EscalationCriterion, string> = {
   scope_beyond_plan: 'scope well beyond the plan',
   open_findings: 'in-scope review findings still open after the allowed rounds',
   size: 'a sub the size check flagged as too big for one pull request',
+  risk_path: 'a change to infrastructure, IAM, builds or rollout scripts, or with rollout steps',
   other: 'another concrete reason',
 };
 
@@ -211,6 +213,8 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
       const criterion = criterionOf(escalated.data.criterion, text(escalated.data.reason), text(escalated.data.evidence));
       // Size escalations are slop's own, made by the size check (it has its own learning): agents never raise them.
       if (criterion === 'size') continue;
+      // Likewise risk paths and rollout steps: a rule slop applies (`risk_path`), not a judgement an outcome could teach.
+      if (criterion === 'risk_path') continue;
       // Slop's own risk-area cleanup made it a sub again (no actor, no `Deescalated`): that is no outcome of the escalation.
       if (events.some((e) => e.type === 'FieldsChanged' && e.actor === null && isSameToSub(e.data.type) && e.at >= escalated.at)) continue;
       const deescalated = events.find((e) => e.type === 'Deescalated' && e.at >= escalated.at);

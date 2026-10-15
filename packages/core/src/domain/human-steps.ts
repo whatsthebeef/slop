@@ -125,6 +125,8 @@ export interface HumanStepFacts {
   readonly recordAtHead?: boolean;
   /** File attachments that never arrived, for the upload step. */
   readonly missingUploads?: readonly { readonly key: string; readonly fileName: string }[];
+  /** Open rollout steps holding back sign-off (`openRolloutSteps`): a same with any is merged with Merge and continue. */
+  readonly rolloutSteps?: number;
 }
 
 /** The person looking: their email and role on the board. */
@@ -204,11 +206,17 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   const run = glob.runs[glob.runs.length - 1];
   // Merge as the card says it: the button's conditions, and nothing failed or being fixed by a run.
   if (canMerge(glob) && glob.failure === null && run?.state !== 'active') {
+    const rollout = glob.type === 'same' && (facts.rolloutSteps ?? 0) > 0;
     steps.push(
-      derived('merge', 'Merge', 'anyone', {
-        detail: `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`,
-        blocks: ['reviewing'],
-      }),
+      rollout
+        ? derived('merge', 'Merge and continue', 'anyone', {
+            detail: 'Has rollout steps: Merge and continue merges it, keeps it open and puts the steps up as a checklist to run from master.',
+            blocks: ['reviewing'],
+          })
+        : derived('merge', 'Merge', 'anyone', {
+            detail: `Sames and supers are merged by a person: Merge here or sstor -i ${glob.id} --merge.`,
+            blocks: ['reviewing'],
+          }),
     );
   }
   if (glob.status === 'in_progress' && glob.pr?.state === 'draft' && facts.recordAtHead === true)
@@ -373,6 +381,21 @@ export const blockProgress = (steps: readonly (Pick<HumanStep, 'state' | 'blocks
   const holding = steps.filter((s) => s.source !== 'machine' && s.state !== 'dismissed' && s.blocks.includes(block) && !(s.predicted === true && s.state === 'pending'));
   return { open: holding.filter(isOpenStep).length, total: holding.length };
 };
+
+/**
+ * The real rollout steps still open that hold back sign-off (s15t228): what makes Merge and continue the way a same lands.
+ * The investigator's placeholder is a prediction, not a step a person can run, so it doesn't count.
+ */
+export const openRolloutSteps = (
+  stored: readonly Pick<StoredHumanStep, 'state' | 'kind' | 'blocks' | 'origin' | 'title'>[],
+): number =>
+  stored.filter(
+    (s) =>
+      s.state === 'open' &&
+      s.kind === 'rollout' &&
+      s.blocks.includes('sign_off') &&
+      !(s.origin === 'investigation' && s.title === PREDICTED_ROLLOUT_TITLE),
+  ).length;
 
 /** The refusal and the status text while a glob's rollout holds back its sign-off: "Rollout pending (1 of 3)". */
 export const rolloutPending = (progress: BlockProgress): string => `Rollout pending (${progress.open} of ${progress.total})`;

@@ -106,6 +106,8 @@ export const DOMAIN_EVENT_TYPES = [
   'AttributesChanged',
   /** A person or agent added, ticked or dismissed a work step (data: the step and what changed). */
   'HumanStepChanged',
+  /** A rollout step failed after the merge: the glob's next generation starts on a fresh branch (data: the step, its title, the new generation). */
+  'RolloutStepFailed',
   /** The last work step holding back sign-off was done (or dismissed), so the glob moved on. */
   'RolloutDone',
   /** Every label is approved but a `sign_off` relation is unmet, so the glob stays in Reviewing (data: the globs it waits on). */
