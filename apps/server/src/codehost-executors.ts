@@ -406,14 +406,16 @@ export const codeHostExecutors = (
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       const prNumber = glob.pr.number;
-      const result = await host.squashMerge(repo, glob, prNumber, effect.sha);
+      const result = await host.squashMerge(repo, glob, prNumber, effect.sha, glob.mergeUpdates ?? 0);
       switch (result.outcome) {
         case 'merged':
           // Slop's own merge response; the `closed` webhook that follows is a no-op (rows 15 and 31).
           await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha, number: prNumber }, ctx));
           break;
         case 'updating':
-          // The update pushes a new head; its checks resume the merge.
+          // The update pushes a new head; its checks resume the merge. Count it: the next pass merges even if behind.
+          if ((glob.mergeUpdates ?? 0) >= 1) log('merge', `${glob.id} refused a behind merge (branch must be up to date); updated the branch again`);
+          await globs.applyEvent(glob.id, (g, ctx) => machine.mergeBranchUpdated(g, ctx));
           break;
         case 'conflict':
           {
