@@ -756,6 +756,7 @@ export const startAnyway = (
       .bumpGeneration()
       .set({ implementer: null, failure: null })
       .status('implementing')
+      .event('HandedToMachine', { from: glob.implementer })
       .queueRun(actor.email)
       .done();
   }

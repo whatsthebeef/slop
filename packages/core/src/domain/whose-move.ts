@@ -35,7 +35,7 @@ export interface Move {
   readonly who?: string;
   /** `waiting`: what it waits on (glob IDs, `checks`, `deploy:<env>`, ...). */
   readonly waitingOn?: readonly string[];
-  /** `stalled`: why, and for how many minutes when it is time. */
+  /** `stalled`: why, and for how many minutes when it is time. `human` (picked up, pairing): minutes since the glob was last touched. */
   readonly cause?: StallCause;
   readonly minutes?: number;
 }
@@ -114,6 +114,10 @@ export const holdingReason = (holding: readonly Holding[]): string => {
     ...(signOff.length === 0 ? [] : [`sign-off waits on ${signOff.map(named).join(', ')}`]),
   ].join('; ');
 };
+
+/** The `human` move's reasons when a person holds a glob: picked up (no machine run), or pairing on a super. */
+export const PICKED_UP_REASON = 'Picked up';
+export const PAIRING_REASON = 'Pairing';
 
 const holderOf = (who: string, glob: Pick<Glob, 'implementer' | 'planner'>): string =>
   who === 'implementer' ? (glob.implementer ?? glob.planner) : who;
@@ -292,9 +296,15 @@ export const whoseMove = (
   }
   if (glob.implementer !== null && (glob.status === 'implementing' || glob.status === 'in_progress')) {
     if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
+    // A person holds it: a local session is invisible to slop, so it is never "nobody", however long it has been quiet.
     const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000));
-    if (minutes < thresholds.pickedUp) return { holder: 'human', reason: 'Picked up', since: glob.updatedAt, who: glob.implementer };
-    return stalled('nobody', `picked up ${String(minutes)} min ago, no session`, 'stalled · nobody on it', glob.updatedAt, minutes);
+    return {
+      holder: 'human',
+      reason: glob.type === 'super' ? PAIRING_REASON : PICKED_UP_REASON,
+      since: glob.updatedAt,
+      who: glob.implementer,
+      minutes,
+    };
   }
   if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
   return stalled('nobody', 'nobody is on this', 'stalled · nobody on it', glob.updatedAt);
