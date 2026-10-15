@@ -7,7 +7,7 @@ import { InvestigationService } from '../src/app/investigation-service.js';
 import { CAPABILITY_NAMES } from '../src/domain/capabilities.js';
 import { PREDICTED_ROLLOUT_TITLE } from '../src/domain/human-steps.js';
 import type { Result } from '../src/domain/errors.js';
-import { ROLLOUT_NONE_LABEL, ROLLOUT_NOT_WRITTEN_TITLE, checkRolloutAnswer, parseRollout, rolloutScriptLabel, touchesRolloutPaths } from '../src/domain/rollout.js';
+import { ROLLOUT_NONE_LABEL, ROLLOUT_NOT_WRITTEN_TITLE, checkRolloutAnswer, matchStoredTitles, parseRollout, plainTitle, rolloutScriptLabel, touchesRolloutPaths } from '../src/domain/rollout.js';
 import { DEFAULT_ROLLOUT_PATHS } from '../src/domain/merge-policy.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -236,6 +236,81 @@ ${FENCE}
     }
   });
 
+  it.each(['- **Check the backfill ran**', '- **manual:** Check the backfill ran', '- **manual**: Check the backfill ran', '- __manual:__ Check the backfill ran', '- manual: **Check the backfill ran**', '- **manual: Check the backfill ran**'])(
+    'reads %s as a manual step titled in plain text',
+    (item) => {
+      expect(parseRollout(`## Rollout\n${item}\n`).map((s) => [s.kind, s.title])).toEqual([['manual', 'Check the backfill ran']]);
+    },
+  );
+
+  it('drops any wrapper around the whole title, keeps the kind from a bold prefix, and keeps inline code without backticks', () => {
+    const titles = (items: string) => parseRollout(`## Rollout\n${items}`).map((s) => [s.kind, s.title]);
+    expect(titles('- __Do x__\n- *Do y*\n- _Do z_\n- `npm run backfill`\n- ***Both***\n')).toEqual([
+      ['manual', 'Do x'],
+      ['manual', 'Do y'],
+      ['manual', 'Do z'],
+      ['manual', 'npm run backfill'],
+      ['manual', 'Both'],
+    ]);
+    expect(titles('- **script:** Deploy the host stack (check: fileAttachments)\n- setting: Add `SLOP_X` to the env\n')).toEqual([
+      ['script', 'Deploy the host stack'],
+      ['setting', 'Add SLOP_X to the env'],
+    ]);
+    // Only a wrapper around the whole title goes: these marks are inside it.
+    expect(titles('- **a** and **b**\n- Set SLOP_X_Y_\n- *a* or b\n')).toEqual([
+      ['manual', '**a** and **b**'],
+      ['manual', 'Set SLOP_X_Y_'],
+      ['manual', '*a* or b'],
+    ]);
+  });
+
+  it('reads a stored title as plain text the way the parser now writes it', () => {
+    expect(plainTitle('**Check the backfill ran**')).toBe('Check the backfill ran');
+    expect(plainTitle('**manual:** Check the backfill ran')).toBe('Check the backfill ran');
+    expect(plainTitle('Check the backfill ran')).toBe('Check the backfill ran');
+    expect(plainTitle('**a** and **b**')).toBe('**a** and **b**');
+    // The old parser kept a kind or a check inside a wrapper as part of the title.
+    expect(plainTitle('**manual: Do x**')).toBe('Do x');
+    expect(plainTitle('**Deploy (check: fileAttachments)**')).toBe('Deploy');
+  });
+
+  it('matches stored titles exactly first, then made plain and numbered as the parser numbers repeats', () => {
+    expect(matchStoredTitles(['Do x', 'Do x (2)'], ['**Do x**', 'Do x'])).toEqual([1, 0]);
+    expect(matchStoredTitles(['Do x', 'Do x (2)'], ['Do x', '**Do x**'])).toEqual([0, 1]);
+    expect(matchStoredTitles(['setting: x', 'New'], ['setting: x', 'Old'])).toEqual([0, -1]);
+    expect(matchStoredTitles(['Do x'], ['**Do x**', '*Do x*'])).toEqual([0]);
+  });
+
+  it("finds a `script: path` inside a longer detail line, and keeps the line", () => {
+    const line = '- Do this: Permissions: gh logged in as a repo admin. script: scripts/rollout/s14t11-atf-report-groups.sh. Run: bash scripts/rollout/s14t11-atf-report-groups.sh';
+    const [step] = parseRollout(`## Rollout\n- script: Wire the ATF report groups\n  ${line}\n`);
+    expect(step?.scriptPath).toBe('scripts/rollout/s14t11-atf-report-groups.sh');
+    expect(step?.detail).toBe(line);
+    for (const [text, path] of [
+      ['Run **script:** `scripts/a.sh`, then wait', 'scripts/a.sh'],
+      ['the script: scripts/b.sh; then c', 'scripts/b.sh'],
+      ['ends with script: scripts/c.sh', 'scripts/c.sh'],
+      ['run it (script: scripts/d.sh) from a laptop', 'scripts/d.sh'],
+      ['script: scripts/e.sh: run it', 'scripts/e.sh'],
+      ['then script: scripts/f.sh!', 'scripts/f.sh'],
+      ['script: setup.sh, from the root', 'setup.sh'],
+    ] as const) {
+      expect(parseRollout(`## Rollout\n- manual: Run it\n  ${text}\n`)[0]?.scriptPath).toBe(path);
+    }
+  });
+
+  it('ignores an inline `script:` that is not a repo path, and lets the first path win', () => {
+    for (const text of ['the script: it runs once', 'script: /etc/x.sh. Then', 'script: ../x.sh now', 'noscript: scripts/x.sh', 'see script: e.g. the one below', 'Use the script: README.md explains it']) {
+      expect(parseRollout(`## Rollout\n- manual: Run it\n  ${text}\n`)[0]?.scriptPath).toBeNull();
+    }
+    // Prose doesn't take a script step's fenced body away.
+    const [fenced] = parseRollout(`## Rollout\n- script: Run it\n  - Use the script: README.md explains it\n  ${FENCE}bash\n  echo ok\n  ${FENCE}\n`);
+    expect([fenced?.scriptPath, fenced?.script]).toEqual([null, 'echo ok']);
+    const [step] = parseRollout('## Rollout\n- script: Run it\n  - Do this: script: scripts/first.sh then\n  - script: scripts/second.sh\n');
+    expect(step?.scriptPath).toBe('scripts/first.sh');
+    expect(step?.detail).toBe('- Do this: script: scripts/first.sh then\n- script: scripts/second.sh');
+  });
+
   it('treats an item with no kind as manual, and stops at the next heading of the same level', () => {
     const steps = parseRollout('## Rollout\n- Ask the PO to enable it\n\n### Details\n- not a step either way\n\n## Next\n- nope\n');
     expect(steps.map((s) => [s.kind, s.title])).toEqual([
@@ -361,6 +436,32 @@ describe('the implementation record becomes rollout steps', () => {
   const stepsOf = (id: string) => [...store.state.humanSteps.values()].filter((s) => s.globId === id);
   const events = (change: string) => store.state.events.filter((e) => e.type === 'HumanStepChanged' && e.data.change === change);
 
+  /** A step as the parser stored it before titles were plain, seeded straight into the store. */
+  const old = (g: Glob, id: string, title: string, state: 'open' | 'done') => ({
+    id,
+    boardId: g.boardId,
+    globId: g.id,
+    kind: 'rollout' as const,
+    title,
+    detail: null,
+    who: 'anyone' as const,
+    due: 'after_merge' as const,
+    state,
+    blocks: ['sign_off' as const, 'dependants' as const],
+    check: null,
+    script: null,
+    why: null,
+    permissions: null,
+    commands: [],
+    verify: null,
+    origin: 'rollout-section',
+    createdBy: DEV,
+    createdAt: '2026-10-13T11:00:00.000Z',
+    doneBy: state === 'done' ? DEV : null,
+    doneAt: state === 'done' ? '2026-10-13T11:30:00.000Z' : null,
+    dismissedReason: null,
+  });
+
   const ROLLOUT = `## Rollout
 - script: Deploy the host stack (check: fileAttachments)
   ${FENCE}bash
@@ -484,6 +585,46 @@ describe('the implementation record becomes rollout steps', () => {
     await put(g.id, record('## Rollout\n- manual: Brand new step\n  With some detail.\n'));
     expect(byTitle('Brand new step')).toMatchObject({ id: open?.id, detail: 'With some detail.' });
     expect(events('updated')).toHaveLength(1);
+  });
+
+  it('matches a step stored with emphasis by its plain title: one step, title updated, nothing dismissed or added', async () => {
+    const g = await newGlob();
+    await store.transaction((tx) =>
+      tx.saveHumanSteps([
+        old(g, 'hs_old_open', '**Check the backfill ran**', 'open'),
+        old(g, 'hs_old_done', '**manual:** Tell the team', 'done'),
+        old(g, 'hs_old_kind', '**manual: Do x**', 'open'),
+        old(g, 'hs_old_check', '**Deploy (check: fileAttachments)**', 'open'),
+      ]),
+    );
+    const text = '## Rollout\n- **Check the backfill ran**\n  - **Why:** it fills the column.\n- **manual:** Tell the team\n- **manual: Do x**\n- **Deploy (check: fileAttachments)**\n';
+    await put(g.id, record(text));
+    expect(stepsOf(g.id).map((s) => [s.id, s.title, s.state, s.why, s.check])).toEqual([
+      ['hs_old_open', 'Check the backfill ran', 'open', 'it fills the column.', null],
+      ['hs_old_done', 'Tell the team', 'done', null, null],
+      ['hs_old_kind', 'Do x', 'open', null, null],
+      ['hs_old_check', 'Deploy', 'open', null, 'fileAttachments'],
+    ]);
+    expect(events('updated')).toHaveLength(4);
+    expect(events('added')).toHaveLength(0);
+    expect(events('dismissed')).toHaveLength(0);
+    // Pushing it again, with or without the emphasis, changes nothing.
+    await put(g.id, record(text));
+    await put(g.id, record('## Rollout\n- Check the backfill ran\n  - **Why:** it fills the column.\n- manual: Tell the team\n- Do x\n- Deploy (check: fileAttachments)\n'));
+    expect(stepsOf(g.id)).toHaveLength(4);
+    expect(events('updated')).toHaveLength(4);
+  });
+
+  it('keeps both steps when a record had the same title with and without emphasis', async () => {
+    const g = await newGlob();
+    await store.transaction((tx) => tx.saveHumanSteps([old(g, 'hs_bold', '**Do x**', 'open'), old(g, 'hs_plain', 'Do x', 'open')]));
+    await put(g.id, record('## Rollout\n- **Do x**\n- Do x\n'));
+    expect(stepsOf(g.id).map((s) => [s.id, s.title, s.state])).toEqual([
+      ['hs_bold', 'Do x (2)', 'open'],
+      ['hs_plain', 'Do x', 'open'],
+    ]);
+    expect(events('added')).toHaveLength(0);
+    expect(events('dismissed')).toHaveLength(0);
   });
 
   it('dismisses an open "not written" step when a record with real steps arrives', async () => {
