@@ -159,6 +159,16 @@ const actionRow = () => screen.findByTestId('glob-actions');
 
 const DECIDING = /^(Approve|Reject|Save|Cancel|Waiting)/;
 
+describe('the Decide block', () => {
+  it('is a needs-a-person block of the shared family around the proposal, which keeps its own controls', async () => {
+    renderGlob(decision());
+    const block = await screen.findByTestId('decision-block');
+    expect(block.getAttribute('data-block')).toBe('person');
+    expect(block.querySelector('[data-testid="block-head"]')?.textContent).toBe('Decision needed');
+    expect(block.querySelector('[data-testid="block-body"] [data-testid="proposal-block"]')).not.toBeNull();
+  });
+});
+
 describe('the proposal block of a learning', () => {
   it('reads why, then the change named by its target, then the recommendation and where it came from, under the action row', async () => {
     vi.spyOn(api, 'plan').mockResolvedValue(planOf('Tests next to the code keep them found and kept up to date.'));
