@@ -17,7 +17,10 @@ prevent that:
    Before deploying, check all of these:
    - `Host` (`AWS::EC2::Instance`) is **not** marked `[-/+]` or "replace";
    - no `AWS::EC2::Volume` is added;
-   - the data volume attachment appears as a new `AWS::EC2::VolumeAttachment` only.
+   - the data volume attachment appears as a new `AWS::EC2::VolumeAttachment` only. That is safe only while the volume
+     is **detached**: CloudFormation can't attach a volume that is already attached, so on a host whose volume was
+     attached by hand the deploy fails with "already attached" and rolls back. `host-deploy.sh` detects this before
+     `cdk diff` and stops; see "Handing over a volume attached by hand".
 3. **The first deploy of this layout is itself a replacement.** CloudFormation treats a change to an instance's
    `BlockDeviceMappings` as a replacement, and this change removes `/dev/sdf` from them. So the first time, `cdk diff`
    will show `Host` replaced: don't deploy it as it is. Follow "Changing the AMI" below (snapshot, stop, detach the
@@ -28,6 +31,30 @@ prevent that:
 5. The weekly snapshot policy selects the instance by tag with `excludeBootVolume: true`, so it snapshots whatever
    volumes are attached at 04:00 UTC on Sundays. Check afterwards that a snapshot of the data volume appears
    (`aws ec2 describe-snapshots --filters Name=volume-id,Values=<vol>`).
+
+## Handing over a volume attached by hand
+
+The state: the data volume is attached to the instance at `/dev/sdf`, but `slop-<stage>-host` has no
+`AWS::EC2::VolumeAttachment` (production's volume was re-attached by hand after the 2026-10-13 incident). The first
+deploy would try to create the attachment and fail with `"vol-... is already attached to an instance"`.
+`host-deploy.sh` checks for this before `cdk diff` and exits with status 3 and the steps, changing nothing.
+
+The stack can only attach the volume while it is detached, and `host-deploy.sh` reads the volume from `/dev/sdf`, so
+once it is detached pass it with `--data-volume <vol-id>` (prod refuses to run without one). The handover is a short
+outage of the app. Either run it with `host-deploy.sh --hand-over-volume`, or by hand:
+
+1. Snapshot the volume and wait for it to complete.
+2. On the instance, hold `/opt/slop/.deploy.lock` (so no CodeBuild deploy starts), `docker stop slop-app-1`,
+   `docker stop slop-postgres-1`, `sync`, `umount /var/lib/slop`.
+3. `aws ec2 detach-volume --volume-id <vol>` and wait for `available`.
+4. `host-deploy.sh --data-volume <vol>`: check the diff as above, then deploy. The stack attaches the volume.
+5. Wait for `in-use`, then on the instance `mount -a`, start `slop-postgres-1` and then `slop-app-1`, release the lock and
+   check `curl localhost:3000/auth/config`.
+
+If the deploy fails or you stop, attach the volume again (`aws ec2 attach-volume --volume-id <vol> --instance-id <id>
+--device /dev/sdf`), `mount -a` and start both containers. `--hand-over-volume` does all of it: it takes the snapshot,
+detaches only after the diff is shown and you confirm (or `--yes`), and re-attaches and restarts if the deploy fails.
+It changes paid infrastructure, so a person runs it, never an agent.
 
 ## Changing the AMI (a deliberate replacement)
 
