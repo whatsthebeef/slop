@@ -26,6 +26,7 @@ import { mergeImplied } from '../domain/exclusive-paths.js';
 import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
+import type { PendingEffect } from '../domain/machine-steps.js';
 import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
 import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, pickUpWarning, startIds, toState } from '../domain/relations.js';
 import type { AwaitedDependency, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, TitleInfo, ToState } from '../domain/relations.js';
@@ -511,6 +512,19 @@ export class GlobService {
       by: e.actor,
       at: e.at,
     }));
+  }
+
+  /**
+   * The pending recommendation job of each picked-up decision glob, as the machine-step facts the status reads (a job waiting
+   * to run or running is "getting a recommendation"). Only the globs with one are in the map.
+   */
+  async recommendationEffectsOf(globs: readonly Glob[]): Promise<Map<string, PendingEffect[]>> {
+    const ids = globs.filter((g) => g.category === 'decision' && g.status === 'in_progress').map((g) => g.id);
+    const byGlob = new Map<string, PendingEffect[]>();
+    if (ids.length === 0) return byGlob;
+    const jobs = await this.deps.store.transaction((tx) => tx.latestOutboxJobs(ids, ['suggest_decision']));
+    for (const job of jobs) if (job.state === 'pending') byGlob.set(job.globId, [{ kind: job.kind, state: 'running', since: job.runAfter }]);
+    return byGlob;
   }
 
   /** A board's open work steps by glob ID, for the board list's human-step summaries. */

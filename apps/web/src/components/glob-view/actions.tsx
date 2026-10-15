@@ -541,6 +541,8 @@ export const GlobActions = ({
     flow !== null &&
     flow.hasItem &&
     glob.status !== 'signed_off' &&
+    // Not picked up: Pick up is the only action, with no outcomes behind it.
+    glob.status !== 'planning' &&
     (flow.canDecide || ctx.board.role === 'admin' || ctx.board.role === 'po') &&
     (flow.learning === null || flow.learning.status === 'open') &&
     stepTurn === null &&

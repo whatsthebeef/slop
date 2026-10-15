@@ -285,6 +285,24 @@ describe('suggest', () => {
     });
   });
 
+  describe('a new draft queues a recommendation for a picked-up learning only', () => {
+    it('queues none for an unpicked learning, one after a redraft once picked up', async () => {
+      const made = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
+      expect(jobs()).toHaveLength(0);
+      unwrap(await globs.pickUp(ADMIN, made.id, (await glob(made.id)).version, false));
+      // Picking up asks for one straight away.
+      expect(jobs()).toHaveLength(1);
+      // The first job ran: a pending one would absorb the next.
+      store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'suggest_decision' ? { ...j, state: 'done' as const } : j));
+      store.state.outbox = store.state.outbox.filter((e) => e.kind !== 'suggest_decision');
+      // Retargeting redrafts against the new section.
+      unwrap(await knowledge.changeTarget(ADMIN, made.id, (await item(made.id)).version, { kind: 'doc', name: 'build_test_lint', section: 'Test' }));
+      drafter.answer(JSON.stringify({ section: 'Test', content: 'Run vitest run.', rationale: 'r' }));
+      expect(await queue.process(made.id)).toBe(true);
+      expect(jobs()).toHaveLength(1);
+    });
+  });
+
   describe('request and run', () => {
     const answer = (value: unknown) => llm.answer(JSON.stringify(value));
 

@@ -78,7 +78,8 @@ describe('D2 and D3: pick up', () => {
     for (const actor of [admin, po]) {
       const t = unwrap(machine.pickUp(decision(), ctx(actor), board, { takeOver: false }));
       expect(t.glob).toMatchObject({ status: 'in_progress', implementer: actor.email, doingSince: NOW, provisioning: 'none', runs: [] });
-      expect(t.effects).toEqual([]);
+      // Picking up asks for slop's recommendation straight away (the `llm` lane job), and starts no run.
+      expect(t.effects).toEqual([{ kind: 'suggest_decision', globId: 's1k1' }]);
       expect(eventTypes(t)).toEqual(['StatusChanged', 'PickedUp']);
     }
   });
@@ -94,6 +95,8 @@ describe('D2 and D3: pick up', () => {
     const taken = unwrap(machine.pickUp(mine, ctx(po), board, { takeOver: false }));
     expect(taken.glob.implementer).toBe(po.email);
     expect(taken.events.map((e) => [e.type, e.data['takeOver']])).toEqual([['PickedUp', true]]);
+    expect(taken.effects).toEqual([{ kind: 'suggest_decision', globId: 's1k1' }]);
+    expect(unwrap(machine.pickUp(mine, ctx(admin), board, { takeOver: false })).effects).toEqual([]);
   });
 
   it('refuses a decision in Reviewing', () => {

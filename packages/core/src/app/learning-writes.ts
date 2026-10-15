@@ -8,6 +8,7 @@ import {
 } from '../domain/decision-glob.js';
 import type { LearningAssessmentFacts } from '../domain/decision-glob.js';
 import type { EffectCheck } from '../domain/effect-check.js';
+import { suggestEffect } from '../domain/events.js';
 import type { Effect, OutboxJob } from '../domain/events.js';
 import type { Result } from '../domain/errors.js';
 import { decisionGroup } from '../domain/group.js';
@@ -692,6 +693,9 @@ const editLearning = async (
         after.artifacts.draft?.version ?? null,
       );
   }
+  // A new draft on a learning someone picked up gets a fresh model recommendation; an unpicked one costs no model call.
+  if (edit.draft !== undefined && glob.status === 'in_progress' && status === 'open')
+    await tx.enqueueEffects([suggestEffect(id)]);
   ctx.raise?.({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: next.version });
   if (wrote) ctx.raise?.({ kind: 'glob.artifacts', boardId: glob.boardId, globId: id });
   return true;

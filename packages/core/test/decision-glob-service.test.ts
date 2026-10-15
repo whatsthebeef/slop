@@ -228,7 +228,8 @@ describe('decision globs', () => {
       expect(store.state.outbox.filter((e) => e.globId === 's1k1').map((e) => e.kind)).toEqual(['kb_route']);
       expect(glob_()).toEqual([]);
       await pickUp('s1k1');
-      expect(glob_()).toEqual([]);
+      // Picking up asks for the model's recommendation, and nothing else.
+      expect(glob_().map((e) => e.kind)).toEqual(['suggest_decision']);
       expect(await glob('s1k1')).toMatchObject({ status: 'in_progress', provisioning: 'none', runs: [], implementer: ADMIN });
     });
 
