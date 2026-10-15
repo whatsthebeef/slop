@@ -492,6 +492,51 @@ describe('glob view: Reset', () => {
     await user.click(within(area).getByRole('button', { name: 'Delete permanently' }));
     expect(cb.onDelete).toHaveBeenCalledTimes(1);
   });
+
+  it('renders no red area when the viewer has no destructive action', () => {
+    renderGlob(
+      view({
+        type: 'same',
+        status: 'pr_open',
+        list: 'reviewing',
+        branch: 's1t1',
+        pr: { number: 7, state: 'ready', headSha: 'aaa' },
+        allowedActions: ['merge'],
+      }),
+    );
+    expect(screen.queryByTestId('reset-area')).toBeNull();
+  });
+
+  it('offers Delete on a learning, warning that Reject is what stops repeats', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(
+      view({
+        category: 'decision',
+        status: 'in_progress',
+        list: 'doing',
+        branch: '',
+        pr: null,
+        allowedActions: ['delete'],
+        attributes: {
+          scope: { kind: 'project', ref: null },
+          origin: { kind: 'submitted' },
+          channel: 'human',
+          outcome: null,
+        },
+      }),
+    );
+    const area = screen.getByTestId('reset-area');
+    await user.click(within(area).getByRole('button', { name: /^Delete…/ }));
+    expect((await screen.findByTestId('delete-learning-warning')).textContent).toContain(
+      'Deleting forgets this learning. If slop spots the same thing again, it comes back as new. To say no and stop repeats, use Reject instead.',
+    );
+    const live = () => within(screen.getByTestId('reset-area'));
+    await user.click(live().getByRole('button', { name: 'Cancel' }));
+    expect(cb.onDelete).not.toHaveBeenCalled();
+    await user.click(live().getByRole('button', { name: /^Delete…/ }));
+    await user.click(live().getByRole('button', { name: 'Delete permanently' }));
+    expect(cb.onDelete).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('glob view: a decision in Doing', () => {

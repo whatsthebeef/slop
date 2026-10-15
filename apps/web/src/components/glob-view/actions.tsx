@@ -826,9 +826,16 @@ export const GlobReset = ({
   const { board, glob } = ctx;
   const { busy, tiers, actions } = state;
   const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
-  // A learning is never deleted: it is rejected, which also suppresses its repeats.
+  // A learning can be deleted too, but only Reject suppresses its repeats, so its confirmation says so.
   const attributes = decisionOf(glob);
   const learning = attributes !== null && isLearning(attributes);
+  // Delete follows the server's permission: offered whenever the viewer may delete this glob.
+  const mayDelete = (glob.allowedActions ?? []).includes('delete');
+  const showDelete = mayDelete && !state.confirmDelete;
+  const hasContent =
+    resetActions.length > 0 || state.confirmDelete || state.confirmingAgain || showDelete;
+  // Never an empty red box: the area exists only while it has something to show.
+  if (!hasContent) return null;
   return (
     <div className="grid gap-2 rounded border border-destructive/50 p-3" data-testid="reset-area">
       <div className="flex flex-wrap gap-2">
@@ -845,7 +852,7 @@ export const GlobReset = ({
             </Button>
           </Tip>
         ))}
-        {!state.confirmDelete && !learning && (
+        {showDelete && (
           <Button variant="danger" size="sm" onClick={() => state.setConfirmDelete(true)}>
             Delete…
           </Button>
@@ -880,13 +887,28 @@ export const GlobReset = ({
       )}
       {state.confirmDelete && (
         <div className="grid gap-2 rounded border border-destructive/50 p-3 text-sm">
-          <p>
-            <strong>Delete {glob.id} permanently?</strong> This removes the glob, its branch, its
-            PR, its artifacts and its events, so its time leaves the reports. There is no archive.
-          </p>
+          {learning ? (
+            <p data-testid="delete-learning-warning">
+              <strong>Delete {glob.id} permanently?</strong> Deleting forgets this learning. If slop
+              spots the same thing again, it comes back as new. To say no and stop repeats, use{' '}
+              <a
+                href="#section-actions"
+                className="underline"
+                onClick={() => state.setConfirmDelete(false)}
+              >
+                Reject
+              </a>{' '}
+              instead.
+            </p>
+          ) : (
+            <p>
+              <strong>Delete {glob.id} permanently?</strong> This removes the glob, its branch, its
+              PR, its artifacts and its events, so its time leaves the reports. There is no archive.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => state.setConfirmDelete(false)}>
-              Keep it
+              {learning ? 'Cancel' : 'Keep it'}
             </Button>
             <Button
               variant="destructive"
