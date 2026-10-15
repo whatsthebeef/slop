@@ -1,4 +1,5 @@
 import type { Board, Effect, EffectKind, TestRunService } from '@slop/core';
+import { AtfRefusedError } from './atf-starter.js';
 import type { AtfStarter } from './atf-starter.js';
 import type { Outcome, SettledExecutor } from './jobs/outbox.js';
 
@@ -29,14 +30,22 @@ export const startAtf = async (effect: Effect, deps: AtfStartDeps): Promise<Outc
   if (result.value.status === 'pending')
     throw new Error(`${effect.environment} at ${effect.sha} isn't checked yet`);
   const { batch } = result.value;
-  const started = await deps.starter.start({
-    boardId: effect.boardId,
-    integration,
-    environment: batch.environment,
-    sha: batch.sha,
-    specs: batch.specs.map((s) => s.spec),
-    greps: batch.greps.map((g) => g.grep),
-  });
+  let started;
+  try {
+    started = await deps.starter.start({
+      boardId: effect.boardId,
+      integration,
+      environment: batch.environment,
+      sha: batch.sha,
+      specs: batch.specs.map((s) => s.spec),
+      greps: batch.greps.map((g) => g.grep),
+    });
+  } catch (e) {
+    // A refusal by the server's allow-list won't change on a retry: log it plainly and drop the start.
+    if (!(e instanceof AtfRefusedError)) throw e;
+    deps.log('atf', `board ${String(effect.boardId)} ${effect.environment}: push refused: ${e.message}`);
+    return 'dropped';
+  }
   deps.log(
     'atf',
     `board ${String(effect.boardId)} ${effect.environment} at ${batch.sha}: started ${started.buildId}`,

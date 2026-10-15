@@ -6,6 +6,13 @@ export const JOBS = ['catalog', 'outbox', 'runs', 'deploys', 'kb', 'llm', 'findi
 export type Job = (typeof JOBS)[number];
 const isJob = (name: string): name is Job => JOBS.some((job) => job === name);
 
+/** A comma-separated setting as a list. */
+const list = (v: string | undefined): string[] =>
+  (v ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+
 const schema = z.object({
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().default('postgres://slop:slop@localhost:5432/slop'),
@@ -95,6 +102,26 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => (v ?? '').split(',').map((k) => k.trim()).filter((k) => k !== '')),
+  /**
+   * The CodeBuild projects push-mode ATF may start, comma-separated: exact names, or a prefix ending in `*`. Unset: push mode
+   * is off, and slop starts nothing with its own credentials for a project a board names.
+   */
+  ATF_PUSH_ALLOWED_PROJECTS: z
+    .string()
+    .optional()
+    .transform(list)
+    .refine((projects) => !projects.includes('*'), 'ATF_PUSH_ALLOWED_PROJECTS: a bare * would allow every project; use a prefix'),
+  /** The AWS account IDs (12 digits, comma-separated) whose roles push-mode ATF may assume. Unset: no role is assumed. */
+  ATF_PUSH_ALLOWED_ROLE_ACCOUNTS: z
+    .string()
+    .optional()
+    .transform(list)
+    .refine((accounts) => accounts.every((a) => /^\d{12}$/.test(a)), 'ATF_PUSH_ALLOWED_ROLE_ACCOUNTS: 12-digit account IDs'),
+  /** Emails of the server's admins: the only people who can turn on ATF push mode or change its project or role. */
+  SLOP_SERVER_ADMINS: z
+    .string()
+    .optional()
+    .transform((v) => list(v).map((e) => e.toLowerCase())),
   /** The ngrok tunnel's domain (set by dev.sh): the server watches it and shows a banner when it is down. */
   SLOP_TUNNEL_DOMAIN: z.string().optional(),
   /** Set by `scripts/dev.sh follow` on the main checkout's server: the follow loop's status file. */

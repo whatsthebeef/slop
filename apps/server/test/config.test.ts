@@ -83,3 +83,25 @@ describe('AUTH_MODE', () => {
     expect(loadConfig({ REVIEW_MODEL: 'amazon.nova-pro-v1:0' }).REVIEW_MODEL).toBe('amazon.nova-pro-v1:0');
   });
 });
+
+describe('ATF push allow-list and server admins', () => {
+  it('is off by default: no projects, no role accounts, no admins', () => {
+    const c = loadConfig({});
+    expect(c.ATF_PUSH_ALLOWED_PROJECTS).toEqual([]);
+    expect(c.ATF_PUSH_ALLOWED_ROLE_ACCOUNTS).toEqual([]);
+    expect(c.SLOP_SERVER_ADMINS).toEqual([]);
+  });
+  it('parses comma-separated lists, trimming and lower-casing admin emails', () => {
+    const c = loadConfig({
+      ATF_PUSH_ALLOWED_PROJECTS: 'atf-*, smoke',
+      ATF_PUSH_ALLOWED_ROLE_ACCOUNTS: '123456789012, 210987654321',
+      SLOP_SERVER_ADMINS: 'Ann@Example.com, bob@example.com',
+    });
+    expect(c.ATF_PUSH_ALLOWED_PROJECTS).toEqual(['atf-*', 'smoke']);
+    expect(c.ATF_PUSH_ALLOWED_ROLE_ACCOUNTS).toEqual(['123456789012', '210987654321']);
+    expect(c.SLOP_SERVER_ADMINS).toEqual(['ann@example.com', 'bob@example.com']);
+  });
+  it('refuses a role account that is not 12 digits', () => {
+    expect(() => loadConfig({ ATF_PUSH_ALLOWED_ROLE_ACCOUNTS: '1234' })).toThrow('ATF_PUSH_ALLOWED_ROLE_ACCOUNTS');
+  });
+});
