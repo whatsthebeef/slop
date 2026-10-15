@@ -69,14 +69,13 @@ export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
 ];
 
 /**
- * The order the glob view renders: while a step is due, the Human steps move up with the other blocks that need a person,
+ * The order the glob view renders: while a step is due, the due-steps block sits with the other blocks that need a person,
  * after the Decide and review blocks and before the information blocks (a learning: right after its Decide block). Otherwise
  * the fixed order above.
  */
 export const viewSections = (decision: boolean, stepsDue: boolean, learning = false): readonly GlobSection[] => {
   const base = learning ? LEARNING_VIEW_SECTIONS : decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS;
   if (!stepsDue) return base;
-  const rest = base.filter((name) => name !== 'human-steps');
-  const at = learning ? rest.indexOf('decision') + 1 : rest.indexOf('escalation');
-  return [...rest.slice(0, at), 'human-steps', ...rest.slice(at)];
+  const at = learning ? base.indexOf('decision') + 1 : base.indexOf('escalation');
+  return [...base.slice(0, at), 'due-steps', ...base.slice(at)];
 };

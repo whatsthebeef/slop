@@ -1,7 +1,7 @@
 import { App } from '@octokit/app';
 import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
-import { classifyGitHubFailure, machine } from '@slop/core';
+import { actorOf, classifyGitHubFailure, fixOf, machine, modeOf } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import { REVIEW_CHECK } from '../codehost.js';
 import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
@@ -931,7 +931,7 @@ export class GitHub implements CodeHost, CommitGraph {
     return [
       text === '' ? glob.title : text.length > PR_BODY_PLAN_CHARS ? `${text.slice(0, PR_BODY_PLAN_CHARS).trimEnd()}\n\n…` : text,
       '',
-      `Slop glob **${glob.id}** (${glob.type}, ${glob.category}). Merge from the glob or here; squash merge only.`,
+      `Slop glob **${glob.id}** (${actorOf(glob)} ${modeOf(glob)}${fixOf(glob) ? ', fix' : ''}). Merge from the glob or here; squash merge only.`,
     ].join('\n');
   }
 }

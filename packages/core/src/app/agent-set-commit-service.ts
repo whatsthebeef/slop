@@ -4,7 +4,7 @@ import { ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import * as machine from '../domain/machine.js';
 import type { Context, Transition } from '../domain/machine.js';
-import { formatId, letterOf } from '../domain/ids.js';
+import { formatId, letterFor } from '../domain/ids.js';
 import type { Board, Glob } from '../domain/types.js';
 import type { AgentSetRepo, Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { addArtifact } from './artifact-service.js';
@@ -123,7 +123,7 @@ export class AgentSetCommitService {
    */
   private async create(tx: Tx, board: Board, version: number, creationKey: string): Promise<Result<Glob>> {
     const ctx = this.context();
-    const letter = letterOf('task');
+    const letter = letterFor({ actor: 'machine', mode: 'same', fix: false, workKind: 'maintenance' });
     const id = formatId(board.id, letter, await tx.nextNumber(board.id, letter));
     const created = machine.create(
       {

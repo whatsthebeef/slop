@@ -1,10 +1,113 @@
-import type { Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { blockProgress, checksExplanation, compactStep, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import type { Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
 const explicitNeeds = (relations: readonly Relation[]): string[] =>
   relations.filter((r) => r.gate === 'start' && isExplicit(r) && isActive(r)).map((r) => r.to);
+
+/**
+ * Who works on a glob and how, with the fix flag and work kind: derived or read through the old category for a record from
+ * before they were stored. `category` and `type` stay on the view for one release.
+ */
+export const kindView = (glob: Glob) => ({
+  actor: actorOf(glob),
+  mode: modeOf(glob),
+  fix: fixOf(glob),
+  fixSource: glob.fixSource ?? 'inferred',
+  workKind: workKindOf(glob),
+  workKindSource: glob.workKindSource ?? 'inferred',
+});
+
+/** What a caller says about who works on a glob and how: the new fields, and the old `category` and `type` as aliases. */
+export interface KindInput {
+  readonly actor?: WorkActor | undefined;
+  readonly mode?: SlopType | 'decision' | 'action' | undefined;
+  readonly fix?: boolean | undefined;
+  readonly workKind?: WorkKind | undefined;
+  readonly category?: Category | undefined;
+  readonly type?: SlopType | null | undefined;
+}
+
+export type KindResolved =
+  | { readonly ok: true; readonly type: SlopType | null | undefined; readonly category: Category | undefined; readonly fix: boolean | undefined; readonly workKind: WorkKind | undefined }
+  | { readonly ok: false; readonly message: string };
+
+const isMachineMode = (m: string): m is SlopType => (SLOP_TYPES as readonly string[]).includes(m);
+const isHumanMode = (m: string): m is 'decision' | 'action' => (HUMAN_CATEGORIES as readonly string[]).includes(m);
+
+/**
+ * Folds `actor` and `mode` into the old `type` and `category` the service takes, refusing a mix that means nothing (a machine
+ * action, a human sub, a mode that contradicts `type` or `category`). Nobody chooses a category any more: without one, `fix` and
+ * `workKind` give it (the stored legacy field); with neither, it stays unset and the caller's default or intake decides.
+ * `create` refuses a decision (slop makes those); an update cannot move a glob between actors.
+ */
+export const resolveKind = (input: KindInput, create: boolean): KindResolved => {
+  const bad = (message: string): KindResolved => ({ ok: false, message });
+  let type = input.type;
+  let category = input.category;
+  let mode = input.mode;
+  if (input.actor === 'human' && mode === undefined && create) mode = 'action';
+  if (mode !== undefined) {
+    if (input.actor === 'machine' && isHumanMode(mode)) return bad(`A machine glob has a type (sub, same or super), not ${mode}`);
+    if (input.actor === 'human' && isMachineMode(mode)) return bad(`A human glob is a decision or an action, not a ${mode}`);
+    if (isMachineMode(mode)) {
+      if (type !== undefined && type !== mode) return bad(`mode ${mode} contradicts type ${String(type)}`);
+      type = mode;
+    } else {
+      if (!create) return bad('A glob cannot change between machine and human work');
+      if (mode === 'decision') return bad('Decision globs are created by slop from learnings, never here');
+      if (category !== undefined && category !== mode) return bad(`mode ${mode} contradicts category ${category}`);
+      if (type !== undefined && type !== null) return bad(`A ${mode} has no type`);
+      category = mode;
+    }
+  } else if (input.actor === 'human' && !create) {
+    return bad('A glob cannot change between machine and human work');
+  }
+  if (create && category === undefined && (input.fix !== undefined || input.workKind !== undefined) && type !== null) {
+    category = categoryFor(input.fix ?? false, input.workKind ?? 'maintenance');
+  }
+  if (input.actor === 'machine' && category !== undefined && isHumanCategory(category)) return bad(`A machine glob cannot be a ${category}`);
+  // Human work is never a fix and has no work kind to choose.
+  if (category !== undefined && isHumanCategory(category)) return { ok: true, type, category, fix: undefined, workKind: undefined };
+  return { ok: true, type, category, fix: input.fix, workKind: input.workKind };
+};
+
+/** The kind fields a create passes to the service. */
+export interface CreateKindFields {
+  readonly category: Category;
+  readonly fix?: boolean;
+  readonly fixSource?: InferenceSource;
+  readonly workKind?: WorkKind;
+  readonly workKindSource?: InferenceSource;
+  readonly inferenceReason?: string | null;
+}
+
+/**
+ * The stored category, fix flag and work kind for a create that skipped intake's proposal (a titled create, the CLI): what the
+ * caller said is a person's choice (an old `category` alias says both); the rest is inferred from the title and plan with `infer`
+ * (absent or a super: not a fix, maintenance). A fix is never a super.
+ */
+export const createKindFields = async (
+  input: { readonly type?: SlopType | null | undefined; readonly category?: Category | undefined; readonly fix?: boolean | undefined; readonly workKind?: WorkKind | undefined },
+  infer: (() => Promise<WorkInference>) | undefined,
+): Promise<CreateKindFields> => {
+  const { category } = input;
+  if (category !== undefined && isHumanCategory(category)) return { category };
+  const fix = input.fix ?? (category === undefined ? undefined : defaultFix(category));
+  const workKind = input.workKind ?? (category === undefined ? undefined : defaultWorkKind(category));
+  const found = (fix === undefined || workKind === undefined) && infer !== undefined ? await infer() : null;
+  const chosenFix = fix ?? (input.type === 'super' ? false : (found?.fix ?? false));
+  const chosenKind = workKind ?? found?.workKind ?? 'maintenance';
+  return {
+    category: category ?? categoryFor(chosenFix, chosenKind),
+    fix: chosenFix,
+    fixSource: fix === undefined ? 'inferred' : 'person',
+    workKind: chosenKind,
+    workKindSource: workKind === undefined ? 'inferred' : 'person',
+    ...(found === null ? {} : { inferenceReason: inferenceReasonOf(found) }),
+  };
+};
 
 /**
  * The glob as clients see it: the stored document plus derived fields, and its artifact
@@ -24,6 +127,7 @@ export const globView = (
   holding: readonly Holding[] | null = null,
 ) => ({
   ...glob,
+  ...kindView(glob),
   // The lists the document kept before relations (and the predicted overlaps beside them) are internal data: never shown. `after` below comes from the relations.
   after: undefined,
   impliedAfter: undefined,

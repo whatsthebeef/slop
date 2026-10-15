@@ -99,8 +99,22 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
   environments: ({ ctx }) => <EnvironmentsPanel ctx={ctx} />,
   tests: ({ ctx }) => <TestsPanel ctx={ctx} />,
+  'due-steps': ({ ctx, actions, onAddStep, onCompleteStep, onDismissStep }) => (
+    <HumanSteps
+      part='due'
+      glob={ctx.glob}
+      {...(actions.viewer === undefined ? {} : { viewer: actions.viewer })}
+      canAdd
+      repo={ctx.board.repo}
+      baseBranch={ctx.board.baseBranch}
+      onAdd={onAddStep}
+      onComplete={onCompleteStep}
+      onDismiss={onDismissStep}
+    />
+  ),
   'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep }) => (
     <HumanSteps
+      part='rest'
       glob={ctx.glob}
       {...(actions.viewer === undefined ? {} : { viewer: actions.viewer })}
       canAdd

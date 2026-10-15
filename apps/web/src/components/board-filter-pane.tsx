@@ -2,7 +2,7 @@ import { ListFilter, Rocket, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { HumanIcon } from '@/components/actor-icons';
-import { CATEGORY_ICON } from '@/components/glob-card';
+import { FIX_ICON, HUMAN_MODE_ICON } from '@/components/glob-card';
 import { browserStore, clearFilterMemory, hasFilterParams, loadFilterMemory, saveFilterMemory } from '@/lib/board-filter-memory';
 import { activeCount, BOARD_FILTERS, defaultFilters, parseFilters, selectedOptions, toggleOption, writeFilters } from '@/lib/board-filters';
 import type { BoardFilter, FilterValues } from '@/lib/board-filters';
@@ -151,7 +151,13 @@ const Control = ({
         data-testid={`filter-${filter.key}`}
         onClick={() => onChange(pressed ? '' : '1')}
       >
-        {filter.key === 'arm' ? <Rocket className="h-3.5 w-3.5" aria-hidden /> : <HumanIcon className="h-3.5 w-3.5" decorative />}
+        {filter.key === 'arm' ? (
+          <Rocket className="h-3.5 w-3.5" aria-hidden />
+        ) : filter.key === 'fix' ? (
+          <FIX_ICON.icon className={cn('h-3.5 w-3.5', FIX_ICON.className)} aria-hidden />
+        ) : (
+          <HumanIcon className="h-3.5 w-3.5" decorative />
+        )}
         {filter.label}
       </button>
     );
@@ -161,8 +167,8 @@ const Control = ({
     <div className="flex gap-1" role="group" aria-label={filter.label}>
       {filter.options.map((option) => {
         const category =
-          filter.key === 'category'
-            ? CATEGORY_ICON[option.value as keyof typeof CATEGORY_ICON]
+          filter.key === 'mode'
+            ? HUMAN_MODE_ICON[option.value as keyof typeof HUMAN_MODE_ICON]
             : undefined;
         const pressed = on.includes(option.value);
         return (

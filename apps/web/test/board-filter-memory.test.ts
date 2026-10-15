@@ -31,18 +31,18 @@ const throwing: FilterStore = {
 
 describe('board filter memory', () => {
   it('keeps only the filters of a query', () => {
-    expect(filterParams(new URLSearchParams('category=bug&glob=s1&id=s2')).toString()).toBe(
-      'category=bug&id=s2',
+    expect(filterParams(new URLSearchParams('mode=sub&glob=s1&id=s2')).toString()).toBe(
+      'mode=sub&id=s2',
     );
     expect(hasFilterParams(new URLSearchParams('glob=s1'))).toBe(false);
-    expect(hasFilterParams(new URLSearchParams('category=all'))).toBe(true);
+    expect(hasFilterParams(new URLSearchParams('mode=all'))).toBe(true);
   });
 
   it('saves and loads per board', () => {
     const store = fake();
-    saveFilterMemory(store, 1, new URLSearchParams('category=bug&glob=s1'));
-    expect(store.data.get('slop.board-filters.1')).toBe('category=bug');
-    expect(loadFilterMemory(store, 1)?.toString()).toBe('category=bug');
+    saveFilterMemory(store, 1, new URLSearchParams('mode=sub&glob=s1'));
+    expect(store.data.get('slop.board-filters.1')).toBe('mode=sub');
+    expect(loadFilterMemory(store, 1)?.toString()).toBe('mode=sub');
     expect(loadFilterMemory(store, 2)).toBeNull();
   });
 

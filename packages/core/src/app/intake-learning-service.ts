@@ -13,7 +13,7 @@ import type { ExampleCandidate, IntakeAccuracy, IntakeExample, IntakeRecord, Int
 import type { ReviewStats } from '../domain/knowledge.js';
 import type { BoardJobResult } from '../domain/signals.js';
 import type { RiskOutcome } from '../domain/risk-area.js';
-import { isCodeGlob } from '../domain/types.js';
+import { fixOf, isCodeGlob, workKindOf } from '../domain/types.js';
 import type { CodeGlob } from '../domain/types.js';
 import type { Clock, Embedder, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
@@ -63,6 +63,8 @@ export const snapshotOf = (
   decisions: {
     type: glob.type,
     category: glob.category,
+    fix: fixOf(glob),
+    workKind: workKindOf(glob),
     group: glob.group,
     environment: glob.environment,
     categoryConfidence: intake?.categoryConfidence ?? null,
@@ -158,12 +160,15 @@ export class IntakeLearningService {
         const data = created.get(glob.id)?.data;
         const type = data?.type === 'sub' || data?.type === 'same' || data?.type === 'super' ? data.type : glob.type;
         const category = data?.category === 'feature' || data?.category === 'task' || data?.category === 'bug' ? data.category : glob.category;
+        // Events from before fix and work kind carry the category only; a newer one carries both.
+        const fix = typeof data?.fix === 'boolean' ? data.fix : category === 'bug';
+        const workKind = data?.workKind === 'rnd' || data?.workKind === 'maintenance' ? data.workKind : category === 'feature' ? 'rnd' : 'maintenance';
         const base = snapshotOf(glob, plan, null, 'backfill');
         await tx.insertIntakeSnapshot(
           {
             ...base,
             request: `${glob.title}\n${plan}`.trim(),
-            decisions: { ...base.decisions, type, category },
+            decisions: { ...base.decisions, type, category, fix, workKind },
             backfilled: true,
           },
           null,
@@ -228,7 +233,7 @@ export class IntakeLearningService {
       for (const meta of await tx.listArtifactMeta(boardId, ['local_review'], EPOCH)) {
         if (ids.has(meta.globId) && meta.provenance.reviewStats !== undefined) reviews.set(meta.globId, meta.provenance.reviewStats);
       }
-      const bugs = globs.filter((g) => g.category === 'bug');
+      const bugs = globs.filter((g) => fixOf(g));
       let recorded = 0;
       let refreshed = 0;
       for (const [globId, mergedAt] of due) {

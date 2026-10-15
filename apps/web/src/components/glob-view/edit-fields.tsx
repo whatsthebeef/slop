@@ -1,11 +1,11 @@
-import { isValidCombination } from '@slop/core';
-import type { Category, EditFailure } from '@slop/core';
+import { fixOf, isValidCombination, WORK_KINDS } from '@slop/core';
+import type { EditFailure, WorkKind } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { GroupInput } from '@/components/group-input';
 import { Label, Select } from '@/components/ui/input';
 import type { GlobChanges } from '@/lib/api';
-import { categoryOptions, saveCategory } from '@/lib/type-change';
+import { canBeFix, currentWorkKind, saveFix, saveWorkKind } from '@/lib/type-change';
 import type { GlobViewContext } from './context';
 
 /** The edits being typed into the view (group, environment, waits-for) and the server's refusal of the last save. */
@@ -35,7 +35,7 @@ export const useGlobEdits = (globId: string) => {
 
 export type GlobEdits = ReturnType<typeof useGlobEdits>;
 
-/** Category (saved when it changes, with an Undo), group and environment (saved together with Save). */
+/** The fix flag and work kind (saved when they change, with an Undo), group and environment (saved together with Save). */
 export const EditFieldsSection = ({
   ctx: { board, glob, groups, busy, onUpdate },
   decision,
@@ -55,35 +55,67 @@ export const EditFieldsSection = ({
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
-  // Category saves when it changes, and says so with an Undo.
-  const [categoryNote, setCategoryNote] = useState<{ undo: Category } | null>(null);
-  useEffect(() => setCategoryNote(null), [glob.id]);
-  const changeCategory = async (to: Category, from: Category) => {
-    const result = await saveCategory(onUpdate, from, to);
+  // The fix flag and work kind save when they change, and say so with an Undo.
+  const [kindNote, setKindNote] = useState<{ undo: { fix: boolean } | { workKind: WorkKind } } | null>(null);
+  useEffect(() => setKindNote(null), [glob.id]);
+  const fix = fixOf(glob);
+  const workKind = currentWorkKind(glob);
+  const changeFix = async (to: boolean, from: boolean) => {
+    const result = await saveFix(onUpdate, from, to);
     if (result.saved) {
       setFailure(null);
-      setCategoryNote({ undo: result.undo });
+      setKindNote({ undo: { fix: result.undo } });
     } else {
       setFailure(result.failure);
-      setCategoryNote(null);
+      setKindNote(null);
     }
   };
+  const changeWorkKind = async (to: WorkKind, from: WorkKind) => {
+    const result = await saveWorkKind(onUpdate, from, to);
+    if (result.saved) {
+      setFailure(null);
+      setKindNote({ undo: { workKind: result.undo } });
+    } else {
+      setFailure(result.failure);
+      setKindNote(null);
+    }
+  };
+  // The work kind feeds the time report: only board admins correct it.
+  const canEditWorkKind = board.role === 'admin';
   return (
     <div className="grid gap-3">
-      <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-4">
         {!decision && (
           <Label>
-            Category
+            Fix
             <Select
-              value={glob.category}
+              value={fix ? 'yes' : 'no'}
               disabled={busy}
-              data-testid="category"
-              onChange={(e) =>
-                void run(() => changeCategory(e.target.value as Category, glob.category))
-              }
+              title={glob.fixSource === 'person' ? 'Set by a person' : 'Inferred from the plan: choose to correct it'}
+              data-testid="fix"
+              onChange={(e) => void run(() => changeFix(e.target.value === 'yes', fix))}
             >
-              {categoryOptions(glob.type).map((c) => (
-                <option key={c}>{c}</option>
+              <option value="no">Not a fix</option>
+              <option value="yes" disabled={!canBeFix(glob)}>
+                Fix
+              </option>
+            </Select>
+          </Label>
+        )}
+        {!decision && (
+          <Label>
+            Work kind
+            <Select
+              value={workKind}
+              disabled={busy || !canEditWorkKind}
+              title={canEditWorkKind ? (glob.workKindSource === 'person' ? 'Set by a person' : 'Inferred from the plan') : 'Only board admins change the work kind'}
+              data-testid="work-kind"
+              onChange={(e) => void run(() => changeWorkKind(e.target.value as WorkKind, workKind))}
+            >
+              {WORK_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {k === 'rnd' ? 'R&D' : 'Maintenance'}
+                </option>
               ))}
             </Select>
           </Label>
@@ -111,11 +143,11 @@ export const EditFieldsSection = ({
           </Label>
         )}
       </div>
-      {categoryNote !== null && failure === null && (
+      {kindNote !== null && failure === null && (
         <div
           role="status"
           className="flex items-center justify-end gap-2 text-xs text-muted-foreground"
-          data-testid="category-saved"
+          data-testid="kind-saved"
         >
           <span>Saved</span>
           <Button
@@ -124,7 +156,7 @@ export const EditFieldsSection = ({
             disabled={busy}
             onClick={() =>
               void run(() =>
-                changeCategory(categoryNote.undo, glob.category).then(() => setCategoryNote(null)),
+                ('fix' in kindNote.undo ? changeFix(kindNote.undo.fix, fix) : changeWorkKind(kindNote.undo.workKind, workKind)).then(() => setKindNote(null)),
               )
             }
           >
@@ -162,7 +194,7 @@ export const EditFieldsSection = ({
           </Button>
           <Button
             size="sm"
-            disabled={busy || !isValidCombination(merged.type, merged.category)}
+            disabled={busy || !isValidCombination(merged.type, merged.category, fixOf(merged))}
             onClick={() =>
               void run(async () => {
                 const refused = await onUpdate(draft);

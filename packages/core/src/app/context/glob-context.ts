@@ -8,7 +8,7 @@ import type { Handover } from '../../domain/handover.js';
 import type { GroupContext } from '../../domain/group-view.js';
 import type { HumanStep } from '../../domain/human-steps.js';
 import type { SearchHit } from '../../domain/search.js';
-import type { Glob } from '../../domain/types.js';
+import type { Glob, Mode, WorkActor, WorkKind } from '../../domain/types.js';
 import type { ArtifactListing } from './artifact-listing.js';
 import type { GlobHotspot } from './hotspot-section.js';
 import type { InboxContextItem } from './inbox-section.js';
@@ -16,7 +16,12 @@ import type { InvestigationSummary } from './investigation-section.js';
 import type { SizeContext } from './size-section.js';
 
 export interface GlobContext {
-  readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
+  readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'> & {
+    readonly actor: WorkActor;
+    readonly mode: Mode;
+    readonly fix: boolean;
+    readonly workKind: WorkKind;
+  };
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
   /** plan.md: the latest version. */
   readonly plan: { readonly version: number; readonly content: string } | null;

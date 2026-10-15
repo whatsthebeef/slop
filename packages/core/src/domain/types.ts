@@ -21,6 +21,40 @@ export type Category = (typeof CATEGORIES)[number];
 
 export const isHumanCategory = (category: Category): category is HumanCategory => category === 'decision' || category === 'action';
 
+/** Who does the work (named WorkActor because `Actor` is the signed-in person): a machine (agents, with or without a person reviewing or pairing) or a human. */
+export type WorkActor = 'machine' | 'human';
+/** How the actor works: a machine's type (sub, same, super) or a human's kind of work (decision, action). */
+export type Mode = SlopType | HumanCategory;
+
+/** What the time report counts a glob as. */
+export const WORK_KINDS = ['rnd', 'maintenance'] as const;
+export type WorkKind = (typeof WORK_KINDS)[number];
+
+/** Who set `fix` or `workKind`: slop's inference, or a person (which inference never overwrites). */
+export type InferenceSource = 'inferred' | 'person';
+
+/** Human iff the category is human work. */
+export const actorOf = (g: { readonly category: Category }): WorkActor => (isHumanCategory(g.category) ? 'human' : 'machine');
+
+/**
+ * A machine glob's type, a human glob's category. A machine glob without a type cannot exist after migration 0075; if a
+ * malformed record has none it reads as `same` (a person reviews it), the safe middle.
+ */
+export const modeOf = (g: { readonly category: Category; readonly type: SlopType | null }): Mode =>
+  isHumanCategory(g.category) ? g.category : (g.type ?? 'same');
+
+/** The fix flag of a glob without one stored (a record from before it existed): bugs fix something. */
+export const defaultFix = (category: Category): boolean => category === 'bug';
+/** The work kind of a glob without one stored: features are R&D, everything else is maintenance. */
+export const defaultWorkKind = (category: Category): WorkKind => (category === 'feature' ? 'rnd' : 'maintenance');
+
+/** The fix flag, reading a legacy record by its category. Human work is never a fix. */
+export const fixOf = (g: { readonly category: Category; readonly fix?: boolean | undefined }): boolean =>
+  isHumanCategory(g.category) ? false : (g.fix ?? defaultFix(g.category));
+/** The work kind, reading a legacy record by its category. */
+export const workKindOf = (g: { readonly category: Category; readonly workKind?: WorkKind | undefined }): WorkKind =>
+  g.workKind ?? defaultWorkKind(g.category);
+
 export const STATUSES = [
   'planning',
   'implementing',
@@ -348,6 +382,17 @@ export interface Glob {
   /** Null for human work (decision and action globs): a type only says how code work is done. */
   readonly type: SlopType | null;
   readonly category: Category;
+  /**
+   * Whether the work fixes something broken (drives the bug path: reproduce first, never a super, left out of size learning).
+   * Optional on the type for records from before it existed; read it through `fixOf`.
+   */
+  readonly fix?: boolean;
+  readonly fixSource?: InferenceSource;
+  /** What the time report counts this glob as; read it through `workKindOf`. */
+  readonly workKind?: WorkKind;
+  readonly workKindSource?: InferenceSource;
+  /** Why `fix` and `workKind` have their values (inference's reason); null or absent when none was recorded. */
+  readonly inferenceReason?: string | null;
   /** Per-category fields (a decision's scope and outcome); absent on legacy globs. */
   readonly attributes?: GlobAttributes;
   readonly group: string | null;

@@ -5,7 +5,7 @@ import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
 import { groupFromTitle, normaliseGroup } from '../domain/group.js';
 import { inGroup } from '../domain/group-view.js';
-import { formatId, letterOf } from '../domain/ids.js';
+import { formatId, letterFor } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
 import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
@@ -19,7 +19,7 @@ import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
-import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, Relation, RelationGate, RelationUntil, SlopType } from '../domain/types.js';
+import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, InferenceSource, LabelName, Relation, RelationGate, RelationUntil, SlopType, WorkKind } from '../domain/types.js';
 import { parseWorkstreams, summariseWorkstreams } from '../domain/workstreams.js';
 import type { WorkstreamsSummary } from '../domain/workstreams.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
@@ -34,7 +34,7 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
 import { ACTION_PLAN_TEMPLATE } from '../domain/action-glob.js';
-import { isCodeGlob, isHumanCategory } from '../domain/types.js';
+import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, workKindOf } from '../domain/types.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { readMergePolicy } from './knowledge-service.js';
 import { subGateCheckOf } from '../domain/merge-policy.js';
@@ -45,6 +45,8 @@ import { findHolds } from './hold-service.js';
 import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
+import { inferenceReasonOf } from './intake-service.js';
+import type { WorkInference } from './intake-service.js';
 import { checkFrom } from './size-check-service.js';
 import { hash } from './text-hash.js';
 import type { SizeAssessor } from './size-check-service.js';
@@ -114,6 +116,12 @@ export interface CreateGlobInput {
    */
   readonly typeChosen?: boolean;
   readonly category: Category;
+  /** The fix flag and work kind with who set them (default: inferred from the category; intake and callers drive them). */
+  readonly fix?: boolean;
+  readonly fixSource?: InferenceSource;
+  readonly workKind?: WorkKind;
+  readonly workKindSource?: InferenceSource;
+  readonly inferenceReason?: string | null;
   readonly group: string | null;
   readonly environment: string | null;
   /** Actions: who is meant to do it (default: anyone). */
@@ -153,6 +161,9 @@ export interface SplitPart {
   readonly category?: Category;
   /** Default: the original's type. */
   readonly type?: SlopType;
+  /** Default: the original's fix flag and work kind (or the category's, when the part names another category). */
+  readonly fix?: boolean;
+  readonly workKind?: WorkKind;
   /** Indexes of earlier parts this one needs merged first (stored as ordinary needs); none, the default, leaves the parts independent. Part 0 has none. */
   readonly after?: readonly number[];
   /** Labels of the original's text attachments to copy to this part (link attachments always are). New parts only. */
@@ -160,6 +171,32 @@ export interface SplitPart {
 }
 
 export const MAX_SPLIT_PARTS = 10;
+
+/** The letter inputs of a code glob being created: the fix flag and work kind it was given, else its category's. */
+const inferredOf = (
+  input: Pick<CreateGlobInput, 'category' | 'fix' | 'workKind'>,
+  type: SlopType,
+): { actor: 'machine'; mode: SlopType; fix: boolean; workKind: WorkKind } => ({
+  actor: 'machine',
+  mode: type,
+  fix: input.fix ?? defaultFix(input.category),
+  workKind: input.workKind ?? defaultWorkKind(input.category),
+});
+
+/** A split part's fix flag and work kind: its own, else the original's when the category stays, else the category's defaults. */
+const partInference = (
+  original: Glob,
+  part: SplitPart,
+): { actor: 'machine'; mode: SlopType; fix: boolean; workKind: WorkKind } => {
+  const sameCategory = part.category === undefined || part.category === original.category;
+  const category = part.category ?? original.category;
+  return {
+    actor: 'machine',
+    mode: part.type ?? original.type ?? 'same',
+    fix: part.fix ?? (sameCategory ? fixOf(original) : defaultFix(category)),
+    workKind: part.workKind ?? (sameCategory ? workKindOf(original) : defaultWorkKind(category)),
+  };
+};
 
 /** What a split decided about one part's escalation; `change` is null when the part had none before and has none now. */
 interface PartEscalation {
@@ -1026,6 +1063,15 @@ export class GlobService {
     return actor === null || !actor.ok || canChooseType(actor.value.role, to) ? null : forbidden(CHOOSE_TYPE_REFUSAL);
   }
 
+  /** A person changing a glob's work kind must be a board admin; null when allowed or when other checks will answer. */
+  private async refuseWorkKindChange(email: string, id: string): Promise<Result<never> | null> {
+    const actor = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return glob === null ? null : this.actorFor(tx, email, glob.boardId);
+    });
+    return actor === null || !actor.ok || actor.value.role === 'admin' ? null : forbidden('Only board admins can change the work kind');
+  }
+
   /**
    * An action glob: something a person does, then marks done. No type, intake, size check, branch or relations (nothing holds an
    * action back); plan.md v1 is the caller's, else the action template.
@@ -1047,11 +1093,12 @@ export class GlobService {
         const existing = await tx.findGlobByCreationKey(board.id, input.idempotencyKey);
         if (existing !== null) return ok({ glob: existing, changed: false, events: [], effects: [] });
       }
-      const n = await tx.nextNumber(board.id, letterOf('action'));
+      const letter = letterFor({ actor: 'human', mode: 'action', fix: false, workKind: 'maintenance' });
+      const n = await tx.nextNumber(board.id, letter);
       const ctx = await this.context(actor.value, board);
       const created = machine.create(
         {
-          id: formatId(board.id, letterOf('action'), n),
+          id: formatId(board.id, letter, n),
           boardId: board.id,
           title: input.title,
           type: null,
@@ -1135,7 +1182,7 @@ export class GlobService {
         if (item === null) return notFound(`No inbox item ${String(input.inboxItem)} on board ${String(board.id)}`);
         if (item.status === 'discarded') return invalidInput('A discarded item cannot be attached');
       }
-      const letter = letterOf(input.category);
+      const letter = letterFor(inferredOf(input, input.type));
       const n = await tx.nextNumber(board.id, letter);
       const id = formatId(board.id, letter, n);
       // The person's needs come first, then slop's inferred needs (a person's win): a glob that went away since is dropped,
@@ -1352,7 +1399,7 @@ export class GlobService {
       // IDs first, so every plan can name the others.
       const ids: string[] = [original.id];
       for (const part of wanted.slice(1)) {
-        const letter = letterOf(part.category ?? original.category);
+        const letter = letterFor(partInference(original, part));
         ids.push(formatId(board.id, letter, await tx.nextNumber(board.id, letter)));
       }
       const date = ctx.now.slice(0, 10);
@@ -1394,6 +1441,8 @@ export class GlobService {
         title: first.title,
         ...(group === original.group ? {} : { group }),
         ...(first.category === undefined ? {} : { category: first.category }),
+        ...(first.fix === undefined ? {} : { fix: first.fix }),
+        ...(first.workKind === undefined ? {} : { workKind: first.workKind }),
         ...(firstType === undefined || (first.type === undefined && firstType === original.type) ? {} : { type: firstType }),
       };
       const changed = machine.changeFields(original, changes, board, ctx, await this.relationFacts(tx, ownRelations));
@@ -1442,6 +1491,11 @@ export class GlobService {
             title: part.title,
             type: escalations[index]?.type ?? part.type ?? original.type,
             category: part.category ?? original.category,
+            fix: partInference(original, part).fix,
+            workKind: partInference(original, part).workKind,
+            ...(part.category === undefined || part.category === original.category
+              ? { fixSource: original.fixSource ?? 'inferred', workKindSource: original.workKindSource ?? 'inferred', inferenceReason: original.inferenceReason ?? null }
+              : {}),
             group,
             environment: original.environment,
             autoTrigger: false,
@@ -1544,6 +1598,11 @@ export class GlobService {
     }
     if (changes.type !== undefined) {
       const refused = await this.refuseTypeChoice(email, id, changes.type);
+      if (refused !== null) return refused;
+    }
+    // The work kind feeds the time report: only a board admin corrects it (the fix flag is anyone's to flip).
+    if (changes.workKind !== undefined) {
+      const refused = await this.refuseWorkKindChange(email, id);
       if (refused !== null) return refused;
     }
     // A same becoming a sub is about to start: the merge policy may hold it.
@@ -2255,6 +2314,37 @@ export class GlobService {
       if (result.ok && result.value.version !== glob.version) changed.push(glob.id);
     }
     return changed;
+  }
+
+  /**
+   * Infers the glob's fix flag and work kind again after its plan changed. `infer` is the model-with-rules judgement
+   * (`IntakeService.inferWork`; any function that never throws for the model being down). It is silent: no notification, only
+   * the recorded field change, and the reason is refreshed. A value a person set (source `person`) is never overwritten, and a
+   * plan saved while the model answered wins (the answer is dropped). Only code globs that can still carry the flag are
+   * touched: a fix is never a super, so a super's answer says "not a fix" and stays so.
+   */
+  async reinferWork(id: string, infer: (input: { readonly title: string; readonly plan: string }) => Promise<WorkInference>): Promise<void> {
+    const before = await this.peek(id);
+    if (before === null || !isCodeGlob(before)) return;
+    const plan = await this.deps.store.transaction(async (tx) => (await tx.artifactVersions(id, 'plan', '')).at(-1)?.content ?? '');
+    // Skip the model when a person already decided both: nothing could change.
+    if (before.fixSource === 'person' && before.workKindSource === 'person') return;
+    const found = await infer({ title: before.title, plan });
+    const planHash = hash(plan);
+    const fix = before.type === 'super' ? false : found.fix;
+    await this.command(
+      null,
+      id,
+      null,
+      (g, ctx) => machine.workReinferred(g, { fix, workKind: found.workKind, reason: inferenceReasonOf(found) }, ctx),
+      {
+        applies: 'any',
+        prepare: async (tx) => {
+          const latest = hash((await tx.artifactVersions(id, 'plan', '')).at(-1)?.content ?? '');
+          return latest === planHash ? ok(null) : invalidInput('The plan changed while it was being read');
+        },
+      },
+    );
   }
 
   /**

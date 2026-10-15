@@ -2,9 +2,9 @@
 
 A short, practical guide to what slop does and when to use each part. The behaviour and architecture spec has the full detail; this guide says what each thing is and when you would reach for it.
 
-## Globs and types
+## Globs and modes
 
-A glob is one unit of work on a board. There are two families. **Code work** (a change, a fix, a piece of research) has a type, which decides how the work flows, and a category, which says what kind of work it is. **Human work** (a decision or an action) is done by a person, has a category and no type.
+A glob is one unit of work on a board. Every glob has an **actor** (a machine or a human) and a **mode**, which decides how the work flows. **Machine work** (a change, a fix, a piece of research) has the modes sub, same and super. **Human work** is done by a person and has the modes decision and action.
 
 - **Sub:** a self-contained change one routine (an AI run) can build and merge in one pull request without a person making a design decision. It starts on its own and merges on its own when the sub review passes. Use it for bug fixes, small UI changes, follow-ups and small features that stay in one area. When in doubt, choose sub.
 - **Same:** a standard task. It waits in Planning until someone presses Start (or picks it up), and a person merges the pull request. Use it when you want to look the work over before it merges. A routine can still do the implementing.
@@ -12,25 +12,26 @@ A glob is one unit of work on a board. There are two families. **Code work** (a 
 
 By default only board admins choose sub or super; everyone else creates sames. You can change a type later while the glob is still parked in Planning (and sub to same at any point before it merges).
 
-## Categories
+## Actor, mode, fix and work kind
 
-The category is what the work is. For code work it is used for time tracking: **feature** (research and development), **task** or **bug** (both maintenance). It is separate from the type. Human work has two categories: **decision** (something a person decides, such as a learning to approve) and **action** (something a person does, then marks done). The ID letter shows the category at creation (`s1f3` feature, `s1t3` task, `s1b3` bug, `s1k3` decision, `s1a3` action) and never changes.
+When you create a glob you choose who does it (machine or human), then how (the actor's modes). There is no category picker.
 
-| Category | Sub | Same | Super |
-| --- | --- | --- | --- |
-| Feature | Yes | Yes | Yes |
-| Task | Yes | Yes | Yes |
-| Bug | Yes | Yes | No |
-| Decision | no type | no type | no type |
-| Action | no type | no type | no type |
+| Actor | Modes |
+| --- | --- |
+| Machine | sub, same, super |
+| Human | decision (something a person chooses, such as a learning to approve), action (something a person does, then marks done) |
+
+Two things are worked out for you from the request and plan, shown as small chips you can flip. The **fix flag** says the glob fixes something broken: the investigator reproduces it first, finds the root cause and a regression test is expected. A fix glob is never a super. The **work kind** (R&D or maintenance) is only for the time report; an admin can correct it in the glob's details. Your correction sticks when the plan changes later.
+
+The ID letter is set at creation and never changes: `s1b3` for machine work with the fix flag, `s1t3` for other maintenance, `s1f3` for other machine work (R&D), `s1k3` for a decision and `s1a3` for an action. Existing IDs keep their letters. The old category and type names still work in the MCP tools and API for one release.
 
 An **action glob** has no branch, pull request or run. It is open until someone finishes it with Done (who and when are kept, with an optional note) or drops it with Dismiss (a reason is needed). A glob that must wait for it can hold on it, and either outcome lets that glob go. Its plan says Why, Do this (the script and the command to run), Permissions and Check it worked.
 
-**The revert test.** If this glob were reverted, would the work still be needed? No: it is a rollout step on this glob, a follow-up of this change that gates its sign-off. Yes, or it is about another repo or board, or it is optional setup: create an action glob (category `action`, no type) on the right board, with a relation if this change needs it first. Never file optional setup as a blocking step.
+**The revert test** (human steps versus actions). If this glob were reverted, would the work still be needed? No: it is a rollout step on this glob, a follow-up of this change that gates its sign-off. Yes, or it is about another repo or board, or it is optional setup: create an action glob (category `action`, no type: the human action mode) on the right board, with a relation if this change needs it first. Never file optional setup as a blocking step.
 
 ## Lists and statuses
 
-The board has four lists: **Planning** (waiting to start), **Doing** (being implemented and reviewed in the pull request), **Reviewing** (merged and waiting for people to sign off) and **Signed off** (done). A glob moves by itself as things happen (a run starts, a pull request opens, it merges), and the buttons on the glob only appear when a manual move makes sense. The status on the card says exactly where it is, for example implementing, in progress, pull request open, merging, reviewing. When something holds a glob back, the status says what: "waiting · s15f145" for another glob, "waiting · decision s15k123" for a decision, "merge held · …" for a merge gate; a glob built in workstreams shows "working · 2/3 workstreams" (or the one that failed or waits for a decision), and a merged glob with open rollout steps shows "rollout 1/3" until they are done. The glob view shows the list beside the ID and the same status in its top right. **Arm system** (a rocket) marks a glob that needs a person at release; click it to filter the board to such globs. A failed run stays in Doing with a failed flag; slop never retries on its own.
+The board has four lists: **Planning** (waiting to start), **Doing** (being implemented and reviewed in the pull request), **Reviewing** (merged and waiting for people to sign off) and **Signed off** (done). A glob moves by itself as things happen (a run starts, a pull request opens, it merges), and the buttons on the glob only appear when a manual move makes sense. The status on the card says exactly where it is, for example implementing, in progress, pull request open, merging, reviewing. When something holds a glob back, the status says what: "waiting · s15f145" for another glob, "waiting · decision s15k123" for a decision, "merge held · …" for a merge gate; a glob built in workstreams shows "working · 2/3 workstreams" (or the one that failed or waits for a decision), and a merged glob with open rollout steps shows "rollout" until they are done. The glob view shows the list beside the ID and the same status in its top right. **Arm system** (a rocket) marks a glob that needs a person at release; click it to filter the board to such globs. A failed run stays in Doing with a failed flag; slop never retries on its own.
 
 ## Sign-off labels: CR, QA and FR
 

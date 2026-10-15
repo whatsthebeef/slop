@@ -2,7 +2,7 @@ import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, Kno
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { readCommittedAgentSetVersion } from '../agent-set-executors.js';
-import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES } from '@slop/core';
+import { ARTIFACT_KINDS, WORK_CATEGORIES, KB_HISTORY_MAX, KNOWLEDGE_KINDS, SLOP_TYPES, WORK_KINDS } from '@slop/core';
 import { parseFrontmatter } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -414,6 +414,8 @@ export const mountKnowledge = (
             summary: z.string().optional(),
             type: z.enum(SLOP_TYPES).optional(),
             category: z.enum(WORK_CATEGORIES).optional(),
+            fix: z.boolean().optional(),
+            workKind: z.enum(WORK_KINDS).optional(),
             group: z.string().min(1).optional(),
             environment: z.string().min(1).optional(),
           })
