@@ -206,6 +206,29 @@ describe('action globs over REST and MCP (Postgres)', () => {
     expect(all.length).toBe(work.length + human.length);
   });
 
+  it('keeps a row with no category in the work listing (written before the field existed)', async () => {
+    const base: Glob = unwrap(await globs.create(DEV, { boardId, title: 'old row', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'old' }));
+    await store.transaction(async (tx) => {
+      await tx.deleteGlob(base.id);
+      await tx.insertGlob({ ...base, id: `s${boardId}t9000`, category: undefined as never, version: 1 }, null);
+    });
+    const ids = async (include: 'work' | 'actions' | 'human') => (await store.transaction((tx) => tx.listGlobs(boardId, { include }))).map((g) => g.id);
+    expect(await ids('work')).toContain(`s${boardId}t9000`);
+    expect(await ids('actions')).not.toContain(`s${boardId}t9000`);
+    expect(await ids('human')).not.toContain(`s${boardId}t9000`);
+  });
+
+  it('pick-up and take-over are refused on an action over REST, and a needs-list entry for it waits until done', async () => {
+    const a = (await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Not picked', category: 'action', group: null })).body;
+    expect((await rest('POST', `/api/globs/${a.id}/actions/pick-up`, { version: a.version })).status).toBe(409);
+    expect((await rest('POST', `/api/globs/${a.id}/actions/take-over`, { version: a.version })).status).toBe(409);
+    const sub = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Waits', type: 'sub', category: 'task', group: null, plan: 'p', needs: [a.id] }, ADMIN);
+    const view = unwrap(await globs.get(DEV, sub.body.id));
+    expect(view.holding.map((h) => [h.to, h.until])).toEqual([[a.id, 'done']]);
+    expect((await rest('POST', `/api/globs/${a.id}/actions/done`, { version: a.version })).status).toBe(200);
+    expect(unwrap(await globs.get(DEV, sub.body.id)).holding).toEqual([]);
+  });
+
   it('an action shows on the board list with a type of null and one derived step while open', async () => {
     const list = await rest('GET', `/api/boards/${boardId}/globs`);
     const items = list.body as unknown as Body[];

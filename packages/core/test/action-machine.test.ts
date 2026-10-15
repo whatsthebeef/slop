@@ -234,6 +234,7 @@ describe('work commands on human globs', () => {
     expect((await store.transaction((tx) => tx.artifactVersions(made.id, 'plan', ''))).at(-1)?.content).toBe('# Rotate\n\nDo it.');
     expect(code(await globs.create(DEV, input({ type: 'same' })))).toBe('invalid_input');
     expect(code(await globs.create(DEV, input({ after: [made.id] })))).toBe('invalid_input');
+    expect(code(await globs.create(DEV, input({ files: ['src/a.ts'] })))).toBe('invalid_input');
     expect(code(await globs.create('nobody@example.com', input()))).not.toBeNull();
   });
 
@@ -277,6 +278,60 @@ describe('work commands on human globs', () => {
     const after = unwrap(await globs.get(DEV, sub.id));
     expect(after.holding).toEqual([]);
     expect((await current(a.id)).status).toBe('signed_off');
+  });
+
+  it('holds a sub that needs an action (after/needs lists) until it is done or dismissed', async () => {
+    for (const how of ['done', 'dismissed'] as const) {
+      const a = unwrap(await globs.create(DEV, input({ title: `Action ${how}` })));
+      const sub = unwrap(await globs.create(ADMIN, input({ title: 'Needs it', type: 'sub', category: 'task', after: [a.id] })));
+      const held = unwrap(await globs.get(DEV, sub.id));
+      expect(held.glob.waiting).toBeDefined();
+      expect(held.holding.map((h) => [h.to, h.until, h.toIsAction])).toEqual([[a.id, 'done', true]]);
+      if (how === 'done') unwrap(await globs.completeAction(DEV, a.id, a.version));
+      else unwrap(await globs.dismissAction(DEV, a.id, a.version, 'not needed'));
+      expect(unwrap(await globs.get(DEV, sub.id)).holding).toEqual([]);
+    }
+  });
+
+  it('records no relation to an action that is done already', async () => {
+    const a = unwrap(await globs.create(DEV, input()));
+    unwrap(await globs.completeAction(DEV, a.id, a.version));
+    const sub = unwrap(await globs.create(ADMIN, input({ title: 'Late', type: 'sub', category: 'task', after: [a.id] })));
+    expect(unwrap(await globs.get(DEV, sub.id)).holding).toEqual([]);
+  });
+
+  it('writes a PATCH after-list entry for an action as until done', async () => {
+    const a = unwrap(await globs.create(DEV, input()));
+    const other = unwrap(await globs.create(DEV, input({ title: 'Other' })));
+    const sub = unwrap(await globs.create(ADMIN, input({ title: 'Later', type: 'sub', category: 'task', after: [other.id] })));
+    unwrap(await globs.update(ADMIN, sub.id, sub.version, { after: [a.id] }));
+    expect(unwrap(await globs.get(DEV, sub.id)).holding.map((h) => [h.to, h.until])).toEqual([[a.id, 'done']]);
+    unwrap(await globs.completeAction(DEV, a.id, a.version));
+    expect(unwrap(await globs.get(DEV, sub.id)).holding).toEqual([]);
+  });
+
+  it('gives a split part the original\'s wait for an action as until done', async () => {
+    const a = unwrap(await globs.create(DEV, input()));
+    const sub = unwrap(await globs.create(ADMIN, input({ title: 'Big', type: 'sub', category: 'task', after: [a.id], plan: '# Big\n\nDo it.' })));
+    const split = unwrap(await globs.split(ADMIN, sub.id, sub.version, { group: null, idempotencyKey: null, parts: [{ title: 'one', plan: 'p' }, { title: 'two', plan: 'q' }] }));
+    const ids = JSON.stringify(split).match(/s\d+t\d+/g) ?? [];
+    const part = [...new Set(ids)].find((id) => id !== sub.id);
+    expect(part).toBeDefined();
+    expect(unwrap(await globs.get(DEV, part ?? '')).holding.map((h) => [h.to, h.until])).toEqual([[a.id, 'done']]);
+    unwrap(await globs.completeAction(DEV, a.id, a.version));
+    expect(unwrap(await globs.get(DEV, part ?? '')).holding).toEqual([]);
+  });
+
+  it('refuses pick-up and take-over of an action, with a message that says what to do', async () => {
+    const a = unwrap(await globs.create(DEV, input()));
+    for (const takeOver of [false, true]) {
+      const r = await globs.pickUp(DEV, a.id, a.version, takeOver);
+      expect(code(r)).toBe('invalid_transition');
+      expect(!r.ok && r.error.message).toBe('An action is not picked up: mark it done or dismiss it');
+    }
+    expect(code(await globs.pickUp(ADMIN, a.id, a.version, false))).toBe('invalid_transition');
+    expect((await current(a.id)).status).toBe('planning');
+    expect(unwrap(await globs.completeAction(DEV, a.id, a.version)).status).toBe('signed_off');
   });
 
   it('lets a person relate to an action but never relates an action to anything', async () => {

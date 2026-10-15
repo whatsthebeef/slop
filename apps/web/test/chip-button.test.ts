@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
-import { ArmSystemLabel, ChipButton } from '../src/components/glob-card';
+import { ArmSystemLabel, CategoryIcon, ChipButton } from '../src/components/glob-card';
 import { Tip } from '../src/components/ui/tip';
 
 /** The id of the Tip's hidden description and the `aria-describedby` on the chip it wraps. */
@@ -57,5 +57,17 @@ describe('ArmSystemLabel inside a Tip', () => {
     const { describedBy, descriptionId } = link(html);
     expect(descriptionId).toBeDefined();
     expect(describedBy).toBe(descriptionId);
+  });
+});
+
+describe('CategoryIcon', () => {
+  it('links the tooltip to the action icon and labels it action, not human', () => {
+    const html = renderToStaticMarkup(createElement(CategoryIcon, { category: 'action' }));
+    const { describedBy, descriptionId } = link(html);
+    expect(describedBy).toBeDefined();
+    expect(describedBy).toBe(descriptionId);
+    expect(html).toContain('aria-label="action"');
+    expect(html).toContain('role="img"');
+    expect(html).not.toContain('human');
   });
 });

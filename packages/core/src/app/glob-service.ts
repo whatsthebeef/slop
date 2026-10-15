@@ -1026,6 +1026,9 @@ export class GlobService {
     if (input.type !== null) return invalidInput('An action has no type');
     if (input.environment !== null) return invalidInput('An action has no environment');
     if ((input.after ?? []).length > 0 || (input.relations ?? []).length > 0) return invalidInput('An action is never held back: it takes no relations');
+    // `files` is an agent's advisory guess for exclusive paths; an action has no paths. (`inboxItem` and `intake` come from the web
+    // form's own flow, so they are not refused here: the MCP tool refuses `inboxItem` on its own.)
+    if ((input.files ?? []).length > 0) return invalidInput('An action takes no files: put them in the plan or attach them afterwards');
     const plan = input.plan?.trim() ? input.plan : ACTION_PLAN_TEMPLATE.replace('<What a person needs to do>', input.title.trim());
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       const board = await tx.getBoard(input.boardId);
@@ -1143,6 +1146,16 @@ export class GlobService {
         if (known.get(a)?.boardId !== board.id) return invalidInput(`No glob ${a} on this board`);
       }
       if (wanted.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
+      // A need waits for what its target ends in: a merge, a decision's outcome or an action being done or dismissed.
+      const wantedUntil = new Map<string, RelationUntil>();
+      for (const to of wanted) {
+        const target = known.get(to);
+        if (target === undefined) continue;
+        const until = defaultUntil(target);
+        const shape = checkRelationShape({ id, category: input.category }, { to, until }, target);
+        if (!shape.ok) return shape;
+        wantedUntil.set(to, until);
+      }
       const explicit: NewRelation[] = [];
       for (const r of stated) {
         const target = known.get(r.to);
@@ -1155,7 +1168,7 @@ export class GlobService {
         explicit.push({ to: r.to, gate: r.gate ?? 'start', until, reason: reason === '' ? null : reason, evidence: [], source: by, group: r.group ?? null });
       }
       const needs: NewRelation[] = [
-        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: by })),
+        ...wanted.map((to): NewRelation => ({ to, gate: 'start', until: wantedUntil.get(to) ?? 'merged', reason: null, evidence: [], source: by })),
         ...explicit,
         ...inferredNeeds.slice(0, Math.max(0, MAX_RELATIONS - wanted.length - explicit.filter((r) => r.gate === 'start').length)).map((i): NewRelation => ({ to: i.id, gate: 'start', until: i.kind === 'decision' ? 'decided' : 'merged', reason: i.reason, evidence: i.files, source: 'inferred' })),
       ].filter((r) => {
@@ -1164,7 +1177,8 @@ export class GlobService {
         // An inferred edge must match what it points at: a decision for a decision glob, a need for work.
         if (r.source === 'inferred' && (target.category === 'action' || (r.until === 'decided') !== (target.category === 'decision'))) return false;
         // A start relation to a glob that merged already holds nothing and is not recorded; the other gates are kept.
-        return !(r.gate === 'start' && r.until === 'merged' && hasMerged(target));
+        // (An action that is done or dismissed already is the same: its gate is open.)
+        return !(r.gate === 'start' && ((r.until === 'merged' && hasMerged(target)) || (r.until === 'done' && toState(target) === 'done')));
       });
       const perGate = (gate: RelationGate): number => needs.filter((r) => r.gate === gate).length;
       if (perGate('start') > MAX_RELATIONS || perGate('merge') > MAX_RELATIONS || perGate('sign_off') > MAX_RELATIONS) {
@@ -1403,6 +1417,11 @@ export class GlobService {
         const target = inheritedFound.get(to);
         return target !== undefined && !hasMerged(target);
       });
+      // What a part waits for: the sibling parts merge, an inherited action is done (defaultUntil of what each points at).
+      const untilOf = (to: string): RelationUntil => {
+        const target = inheritedFound.get(to);
+        return target === undefined ? 'merged' : defaultUntil(target);
+      };
       const globs: Glob[] = [updated];
       const needsBy = input.planBy === 'human' || input.planBy === undefined ? 'person' : 'agent';
       const withArtifacts = [original.id];
@@ -1414,7 +1433,7 @@ export class GlobService {
         const awaitedIds = [...new Set([...inherited, ...earlier])];
         if (awaitedIds.length > MAX_AFTER) return invalidInput(`Part ${index} would wait for more than ${MAX_AFTER} globs`);
         // A need the part names is an ordinary relation (a person's or an agent's); what the original waited for stays a person's.
-        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: 'merged', reason: null, evidence: [], source: earlier.includes(to) ? needsBy : 'person' }));
+        const startWrite: NewRelation[] = awaitedIds.map((to): NewRelation => ({ to, gate: 'start', until: untilOf(to), reason: null, evidence: [], source: earlier.includes(to) ? needsBy : 'person' }));
         const startRelations = applyWrite([], { add: startWrite, update: [], remove: [] }, { boardId: board.id, from: partId, now: ctx.now, newId: () => this.relationId() });
         const created = machine.create(
           {
@@ -1652,7 +1671,13 @@ export class GlobService {
     const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
     const adds: NewRelation[] = [];
     for (const to of add) {
-      const draft: NewRelation = { to, gate: 'start', until: 'merged', reason: null, evidence: [], source: 'person' };
+      const target = found.get(to);
+      const until = target === undefined ? 'merged' : defaultUntil(target);
+      if (target !== undefined) {
+        const shape = checkRelationShape(glob, { to, until }, target);
+        if (!shape.ok) return shape;
+      }
+      const draft: NewRelation = { to, gate: 'start', until, reason: null, evidence: [], source: 'person' };
       const checked = checkRelation(draftOf(glob.boardId, glob.id, draft), glob.boardId, growing, (gid) => found.get(gid));
       if (!checked.ok) return checked;
       growing.push(draftOf(glob.boardId, glob.id, draft));
@@ -2092,7 +2117,9 @@ export class GlobService {
    */
   async releaseDependents(mergedId: string, boardId: number): Promise<string[]> {
     // The merge is also an outcome for the board's dependency rules (its overlaps went cleanly or not); it never blocks the release.
-    await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
+    // Human work (a decision or an action) has no overlaps to learn from.
+    const source = await this.deps.store.transaction((tx) => tx.getGlob(mergedId));
+    if (source === null || !isHumanCategory(source.category)) await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
     const dependants = await this.deps.store.transaction(async (tx) => {
       const rows = (await tx.listRelationsTo([mergedId])).filter((r) => isActive(r) && r.boardId === boardId);
       const from = [...new Set(rows.map((r) => r.from))];

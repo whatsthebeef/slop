@@ -753,7 +753,8 @@ export class PgStore implements Store {
             conditions.push(sql`${category} in ('decision', 'action')`);
             break;
           case 'work':
-            conditions.push(sql`${category} not in ('decision', 'action')`);
+            // A row with no category (written before the field existed) is work, so NULL is kept.
+            conditions.push(sql`(${category} is distinct from 'decision' and ${category} is distinct from 'action')`);
             break;
         }
         if (filter.status !== undefined) conditions.push(inArray(schema.globs.status, [...filter.status]));

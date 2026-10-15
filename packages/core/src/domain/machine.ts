@@ -836,6 +836,8 @@ export const pickUp = (
 ): Result<Transition> => {
   if (glob.category === 'decision') return pickUpDecision(glob, ctx);
   const actor = requireActor(ctx);
+  // An action has no branch, run or implementer: it is only ever done or dismissed.
+  if (glob.category === 'action') return invalidTransition(glob, actor, 'An action is not picked up: mark it done or dismiss it');
   if (restrictedFrom(actor, glob)) {
     return forbidden(`QA and PO members cannot pick up ${glob.type}s`);
   }

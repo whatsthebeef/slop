@@ -1,6 +1,6 @@
 import { decisionOf, isHumanCategory, scopeLabel } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { Bug, ListChecks, Loader2, Rocket, Scale, Sparkles } from 'lucide-react';
+import { Bug, ListChecks, Loader2, Rocket, Scale, Sparkles, UserRound } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
@@ -34,8 +34,8 @@ export const DotSeparator = ({ testId }: { testId?: string }) => (
 /** The glob's category as a small icon in the card's corner. */
 type CategoryGlyph = ComponentType<{ className?: string; 'aria-label'?: string; role?: 'img' }>;
 
-/** An action is a person's to do: the shared human icon (it labels itself), not a category glyph of its own. */
-const ActionGlyph: CategoryGlyph = ({ className }) => <HumanIcon {...(className === undefined ? {} : { className })} />;
+/** An action is a person's to do: the same person icon as the human actor (lucide spreads the Tip's props onto its svg). */
+const ActionGlyph: CategoryGlyph = UserRound;
 
 export const CATEGORY_ICON: Record<Category, { icon: CategoryGlyph; className: string }> = {
   bug: { icon: Bug, className: 'text-red' },

@@ -22,11 +22,12 @@ describe('group page helpers', () => {
 
   it('offers work globs from other groups to move in', () => {
     const globs = [
-      { id: 's1t10', group: null, category: 'task', list: 'todo' },
-      { id: 's1t2', group: 'other', category: 'task', list: 'doing' },
-      { id: 's1t3', group: 'Mine', category: 'task', list: 'doing' },
-      { id: 's1k4', group: null, category: 'decision', list: 'todo' },
-      { id: 's1t5', group: null, category: 'task', list: 'signed_off' },
+      { id: 's1t10', group: null, category: 'task' as const, list: 'todo' },
+      { id: 's1t2', group: 'other', category: 'task' as const, list: 'doing' },
+      { id: 's1t3', group: 'Mine', category: 'task' as const, list: 'doing' },
+      { id: 's1k4', group: null, category: 'decision' as const, list: 'todo' },
+      { id: 's1a6', group: null, category: 'action' as const, list: 'todo' },
+      { id: 's1t5', group: null, category: 'task' as const, list: 'signed_off' },
     ];
     expect(movableIn(globs, 'mine').map((g) => g.id)).toEqual(['s1t2', 's1t10']);
   });
