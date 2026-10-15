@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
@@ -11,7 +11,10 @@ import type { GlobView } from '../src/lib/api';
 import type { WorkstreamsSummary, WorkstreamState } from '@slop/core';
 import { handoverKey, statusKey } from '../src/lib/dismissals';
 import { cornerStatus } from '../src/lib/card-rows';
+import { CONFIRM_MS } from '../src/lib/chip-actions';
+import { cardMoves } from '../src/lib/card-moves';
 import { statusLine } from '../src/lib/status-line';
+import { armLabel } from '../src/lib/rollout-stages';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 vi.mock('../src/lib/card-rows', async (importOriginal) => {
@@ -50,7 +53,7 @@ const waitingOn = () =>
   });
 const move = (action: 'start' | 'pick_up', g: GlobView): CardMove => {
   const { label, tip, icon } = actionPresentation(action, g);
-  return { action, direction: 'right', label: `${label} ▸`, description: `${label} ${g.id}: ${tip}`, icon };
+  return { action, direction: 'right', confirm: false, label: `${label} ▸`, description: `${label} ${g.id}: ${tip}`, icon };
 };
 
 const base = () => ({
@@ -125,7 +128,7 @@ describe('card rows', () => {
     expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-0');
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('gap-[3px]');
-    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('bug');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
     expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
     expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
@@ -228,12 +231,12 @@ describe('card rows', () => {
     expect(dom(html).querySelector('[data-testid="overlap-chip"]')).toBeNull();
   });
 
-  it('puts the fix marker last in the header, the status just before it, and the ID on the left', () => {
+  it('puts the kind marker last in the header, the status just before it, and the ID on the left', () => {
     const root = dom(markup(stalledByConflict()));
     const header = root.querySelector('[data-testid="card-header"]');
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
-    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('bug');
     const separator = corner?.lastElementChild?.previousElementSibling;
     expect(separator?.getAttribute('data-testid')).toBe('card-corner-separator');
     expect(separator?.textContent).toBe('·');
@@ -244,7 +247,7 @@ describe('card rows', () => {
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
   });
 
-  it('orders the corner: status text, then the status icon, then the fix marker', () => {
+  it('orders the corner: status text, then the status icon, then the kind marker', () => {
     const root = dom(markup(stalledByConflict()));
     const button = root.querySelector('[data-testid="card-status"] button');
     const kids = Array.from(button?.children ?? []);
@@ -505,6 +508,67 @@ describe('card interaction', () => {
     expect(onOpenSection).not.toHaveBeenCalled();
   });
 
+  describe('Fix conflict button', () => {
+    const fixable = () => prOpen({ type: 'sub', implementer: null, list: 'doing', allowedActions: ['resolve_conflict', 'take_over'], conflict: { base: 'main', files, since: 's1t9', at: NOW } });
+    const withFix = (extra: Partial<Parameters<typeof GlobCard>[0]> = {}) => {
+      const g = fixable();
+      const onMove = vi.fn();
+      const out = renderCard(g, { moves: cardMoves(g).map((m) => m.move), onMove, ...extra });
+      return { ...out, onMove, button: () => screen.getByTestId('move-resolve_conflict') };
+    };
+
+    it('shows a primary Fix conflict on a conflicting glob in Doing, with no arrow', () => {
+      const { button } = withFix();
+      expect(button().textContent).toBe('Fix conflict');
+      expect(button().className).toContain('bg-primary');
+    });
+
+    it('the first click only arms it; the second runs it', async () => {
+      const user = userEvent.setup();
+      const { button, onMove, onOpen } = withFix();
+      await user.click(button());
+      expect(button().textContent).toBe('Confirm fix conflict');
+      expect(button().getAttribute('data-confirming')).toBe('true');
+      expect(onMove).not.toHaveBeenCalled();
+      await user.click(button());
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove.mock.calls[0]?.[0]).toMatchObject({ action: 'resolve_conflict' });
+      expect(onOpen).not.toHaveBeenCalled();
+    });
+
+    it('reverts on Escape and on blur, and runs nothing', async () => {
+      const user = userEvent.setup();
+      const { button, onMove } = withFix();
+      await user.click(button());
+      await user.keyboard('{Escape}');
+      expect(button().textContent).toBe('Fix conflict');
+      await user.click(button());
+      expect(button().textContent).toBe('Confirm fix conflict');
+      await user.tab();
+      expect(button().textContent).toBe('Fix conflict');
+      expect(onMove).not.toHaveBeenCalled();
+    });
+
+    it('reverts after the timeout', () => {
+      vi.useFakeTimers();
+      try {
+        const { button } = withFix();
+        act(() => button().click());
+        expect(button().textContent).toBe('Confirm fix conflict');
+        act(() => void vi.advanceTimersByTime(CONFIRM_MS + 1));
+        expect(button().textContent).toBe('Fix conflict');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shows the pending label while the fix runs', () => {
+      withFix({ pending: 'resolve_conflict' });
+      expect(screen.getByTestId('card-pending').textContent).toBe('Fixing conflict…');
+      expect(screen.getByTestId<HTMLButtonElement>('move-resolve_conflict').disabled).toBe(true);
+    });
+  });
+
   it('reverts the corner merge confirm on Esc', async () => {
     const user = userEvent.setup();
     const { onAct } = renderCard(prOpen({ allowedActions: ['merge'] }));
@@ -685,6 +749,18 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(label(view({ status: 'planning', humanSteps: [] }))).toBeNull();
   });
 
+  it('the Arm system label names the stage from arm, stays after sign-off, and its tooltip is the first open step', () => {
+    const label = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="arm-system-label"]');
+    const main = view({ status: 'reviewing', humanSteps: [step()], arm: { stage: 'main', title: 'Run the **migration**' } });
+    expect(label(main)?.textContent).toBe('Arm system · main');
+    const prod = view({ status: 'signed_off', humanSteps: [step()], arm: { stage: 'production', title: 'Roll out the host stack' } });
+    expect(label(prod)?.textContent).toBe('Arm system · production');
+    expect(armLabel(prod)?.tip).toBe('Roll out the host stack');
+    expect(armLabel(view({ humanSteps: [step()] }))).toMatchObject({ text: 'Arm system' });
+    expect(armLabel(main)).toEqual({ text: 'Arm system · main', tip: 'Run the migration' });
+    expect(label(view({ status: 'signed_off', humanSteps: [] }))).toBeNull();
+  });
+
   it('the Arm system label is a rocket and text in the primary action colour, at the bottom right beside the avatar, with its tooltip', () => {
     const html = markup(view({ status: 'planning', humanSteps: [step()] }));
     const root = dom(html);
@@ -733,10 +809,13 @@ describe('an action glob card', () => {
   const action = (patch: Partial<GlobView> = {}): GlobView =>
     view({ id: 's1a1', category: 'action', type: null, pr: null, attributes: { assignee: null, outcome: null }, ...patch });
 
-  it('shows the human icon, the category word instead of a type, and who is meant to do it', () => {
+  it('shows the running person, the category word instead of a type, and who is meant to do it', () => {
     const root = dom(markup(action({ attributes: { assignee: 'sam@example.com', outcome: null } })));
     expect(root.querySelector('[data-testid="card-type"]')?.textContent).toBe('action');
-    expect(root.querySelector('[data-testid="card-corner"] svg.lucide-user-round')).not.toBeNull();
+    const icon = root.querySelector('[data-testid="card-corner"] [role="img"]');
+    expect(icon?.getAttribute('data-icon')).toBe('person-running');
+    expect(icon?.getAttribute('aria-label')).toBe('action');
+    expect(root.querySelector('[data-testid="card-corner"] svg.lucide-user-round')).toBeNull();
     expect(root.querySelector('[data-testid="action-chip"]')?.textContent).toBe('sam@example.com');
     expect(root.querySelector('[data-testid="card-corner-separator"]')).toBeNull();
   });
@@ -749,15 +828,34 @@ describe('an action glob card', () => {
     expect(dom(markup(dismissed)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('dismissed');
   });
 
-  it('writes the mode beside the ID and marks a fix, but nothing for other machine work', () => {
+  it('writes the mode beside the ID and shows a kind icon on every card', () => {
+    const icon = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"] [role="img"]');
     const plain = dom(markup(view({ category: 'feature', type: 'sub' })));
     expect(plain.querySelector('[data-testid="card-type"]')?.textContent).toBe('sub');
-    expect(plain.querySelector('[data-testid="card-corner"] [role="img"]')).toBeNull();
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('aria-label')).toBe('task');
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('class')).toContain('lucide-list-checks');
+    expect(icon(view({ category: 'task', type: 'super' }))?.getAttribute('aria-label')).toBe('task');
     const fix = dom(markup(view({ category: 'task', type: 'same', fix: true })));
     expect(fix.querySelector('[data-testid="card-type"]')?.textContent).toBe('same');
-    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('bug');
+    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('text-red');
     // The stored flag wins over the old category.
-    expect(dom(markup(view({ category: 'bug', type: 'same', fix: false }))).querySelector('[data-testid="card-corner"] [role="img"]')).toBeNull();
+    expect(icon(view({ category: 'bug', type: 'same', fix: false }))?.getAttribute('aria-label')).toBe('task');
+  });
+
+  it('shows the scale for a decision and a dot before it', () => {
+    const decision = dom(markup(view({ id: 's1k1', category: 'decision', type: null, pr: null })));
+    const icon = decision.querySelector('[data-testid="card-corner"] [role="img"]');
+    expect(icon?.getAttribute('aria-label')).toBe('decision');
+    expect(icon?.getAttribute('class')).toContain('lucide-scale');
+  });
+
+  it('puts a dot before the kind icon after a status, and shows the icon alone without one', () => {
+    const calm = dom(markup(view({ status: 'planning', category: 'feature' })));
+    expect(calm.querySelector('[data-testid="card-corner"] [role="img"]')).not.toBeNull();
+    expect(calm.querySelector('[data-testid="card-corner-separator"]')).toBeNull();
+    const busy = dom(markup(stalledByConflict()));
+    expect(busy.querySelector('[data-testid="card-corner-separator"]')).not.toBeNull();
   });
 
   it('shows a decision with its category word, not a type', () => {

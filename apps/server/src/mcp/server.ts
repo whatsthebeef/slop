@@ -126,7 +126,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D, `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -141,7 +141,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         fix: z.boolean().optional().describe('Whether the work fixes something broken (the investigator reproduces first, a regression test is expected). Omitted: slop infers it from the request and plan'),
         workKind: z.enum(WORK_KINDS).optional().describe('rnd or maintenance, for the time report. Omitted: slop infers it'),
         type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode` for a machine glob'),
-        category: z.enum([...WORK_CATEGORIES, 'action']).optional().describe('Old alias: bug sets `fix`, feature means R&D, task means maintenance; action means actor human'),
+        category: z.enum([...WORK_CATEGORIES, 'action']).optional().describe('Old alias: bug sets `fix`, feature means R&D (stored as a task), task means maintenance; action means actor human'),
         assignee: z.string().min(1).max(200).optional().describe('Action only: the email of the person meant to do it (default: anyone on the board)'),
         group: z.string().nullable().optional().describe('The glob\'s group; omit it to let slop choose one from the title and plan, pass null or an empty string for none'),
         environment: z
@@ -372,7 +372,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               mode: z.enum(SLOP_TYPES).optional().describe("The part's machine mode (default: the glob's)"),
               fix: z.boolean().optional().describe("Whether the part fixes something broken (default: the glob's)"),
               workKind: z.enum(WORK_KINDS).optional().describe("rnd or maintenance (default: the glob's)"),
-              category: z.enum(WORK_CATEGORIES).optional().describe('Old alias: bug is a fix, feature is R&D, task is maintenance'),
+              category: z.enum(WORK_CATEGORIES).optional().describe('Old alias: bug is a fix, feature is R&D (stored as a task), task is maintenance'),
               type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode`'),
               after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part needs merged before it starts'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
@@ -443,7 +443,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'list_globs',
     {
       description:
-        'Globs on a board (ID, title, status, actor, mode, fix, workKind), optionally filtered. Without `actor` or `mode` it lists machine work; pass `actor` human, or `mode` action or decision, to list human work (an action is open while its status is planning; `type` is null for both). The old `category` (feature, task, bug, decision, action) still filters as an alias.',
+        'Globs on a board (ID, title, status, actor, mode, fix, workKind), optionally filtered. Without `actor` or `mode` it lists machine work; pass `actor` human, or `mode` action or decision, to list human work (an action is open while its status is planning; `type` is null for both). The old `category` (feature, task, bug, decision, action) still filters as an alias; `feature` matches only old globs, as new ones are stored as tasks.',
       inputSchema: {
         board: z.number().int(),
         status: z.array(z.enum(STATUSES)).optional(),
@@ -452,7 +452,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         mode: z.enum([...SLOP_TYPES, 'decision', 'action']).optional().describe('sub, same, super, decision or action'),
         fix: z.boolean().optional().describe('Only globs that do (true) or do not (false) fix something broken'),
         workKind: z.enum(WORK_KINDS).optional().describe('Only rnd or only maintenance globs'),
-        category: z.enum(CATEGORIES).optional().describe('Old alias: feature, task, bug, decision or action'),
+        category: z.enum(CATEGORIES).optional().describe('Old alias: feature (old globs only), task, bug, decision or action'),
         group: z.string().optional(),
         person: z.string().optional().describe('Planner or implementer email'),
       },
@@ -1244,13 +1244,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     doneBy: step.doneBy,
     doneAt: step.doneAt,
     dismissedReason: step.dismissedReason,
+    dueSince: step.dueSince,
   });
 
   server.registerTool(
     'add_human_step',
     {
       description:
-        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env>. `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
+        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env> (falls due once a deploy of the glob's merge to <env> is recorded or mark_environment_deployed is called, and holds nothing back unless `blocks` says so). `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
       inputSchema: {
         id: z.string(),
         version: z.number().int().optional(),
@@ -1297,6 +1298,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: { id: z.string(), stepId: z.string(), reason: z.string().min(1), version: z.number().int().optional() },
     },
     async ({ id, stepId, reason, version }) => reply(await globs.dismissHumanStep(email, id, stepId, reason, version ?? null), stepView),
+  );
+
+  server.registerTool(
+    'mark_environment_deployed',
+    {
+      description:
+        "Say that an environment now runs a glob's merge, for boards that report no deploys: the glob's open `after_deploy:<env>` steps for it fall due (once; a rollback later doesn't undo it). Logged on the glob as EnvironmentMarkedDeployed, not Deployed; it changes no status and not the glob's version. `environment` must be one the board lists. Members only.",
+      inputSchema: { id: z.string(), environment: z.string().min(1) },
+    },
+    async ({ id, environment }) => reply(await globs.markEnvironmentDeployed(email, id, environment)),
   );
 
   server.registerTool(

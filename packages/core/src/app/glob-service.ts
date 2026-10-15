@@ -8,11 +8,14 @@ import { inGroup } from '../domain/group-view.js';
 import { formatId, letterFor } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
-import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
+import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, defaultStepBlocks, humanSteps, isHumanStepDue, stateOf, storedBlockProgress } from '../domain/human-steps.js';
+import { armView, rolloutWhen } from '../domain/rollout-stages.js';
+import type { Arm } from '../domain/rollout-stages.js';
+import { dueSinceFor, markStepsDue } from './step-due.js';
 import { isCapabilityName } from '../domain/capabilities.js';
 import type { Capabilities } from '../domain/capabilities.js';
 import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, matchStoredTitles, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
-import type { RolloutAnswer } from '../domain/rollout.js';
+import type { RolloutAnswer, RolloutStep } from '../domain/rollout.js';
 import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
@@ -39,7 +42,7 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
 import { ACTION_PLAN_TEMPLATE } from '../domain/action-glob.js';
-import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, workKindOf } from '../domain/types.js';
+import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, storedCategory, workKindOf } from '../domain/types.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { readMergePolicy } from './knowledge-service.js';
 import { subGateCheckOf } from '../domain/merge-policy.js';
@@ -188,7 +191,7 @@ export interface SplitPart {
 
 export const MAX_SPLIT_PARTS = 10;
 
-/** The letter inputs of a code glob being created: the fix flag and work kind it was given, else its category's. */
+/** The letter inputs of a code glob being created: the fix flag and work kind it was given, else its asked category's (before `feature` is stored as a task). */
 const inferredOf = (
   input: Pick<CreateGlobInput, 'category' | 'fix' | 'workKind'>,
   type: SlopType,
@@ -196,6 +199,7 @@ const inferredOf = (
   actor: 'machine',
   mode: type,
   fix: input.fix ?? defaultFix(input.category),
+  // Read from the asked category: a `feature` is R&D even though it is stored as a task (the letter ignores the work kind).
   workKind: input.workKind ?? defaultWorkKind(input.category),
 });
 
@@ -204,7 +208,7 @@ const partInference = (
   original: Glob,
   part: SplitPart,
 ): { actor: 'machine'; mode: SlopType; fix: boolean; workKind: WorkKind } => {
-  const sameCategory = part.category === undefined || part.category === original.category;
+  const sameCategory = part.category === undefined || storedCategory(part.category) === storedCategory(original.category);
   const category = part.category ?? original.category;
   return {
     actor: 'machine',
@@ -365,6 +369,8 @@ export interface GlobView {
   readonly sizeCheck: SizeCheck | null;
   /** Everything a person must do on the glob: steps the machine implies and stored work steps, most pressing first. */
   readonly humanSteps: readonly HumanStep[];
+  /** The stage the "Arm system" label names (the first environment with an open rollout step), null when no step is open. */
+  readonly arm: Arm | null;
   /** Why a person is needed on the glob and what to do first; null when nothing is wrong. */
   readonly handover: Handover | null;
   /** The status messages the reader dismissed on this glob (their keys); other people's are never shown. */
@@ -384,8 +390,8 @@ const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
 const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
   ARTIFACT_KINDS.indexOf(a.kind) - ARTIFACT_KINDS.indexOf(b.kind) || a.label.localeCompare(b.label);
 
-const stepFields = (s: Pick<StoredHumanStep, 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>) =>
-  [s.detail, s.check, s.script, s.why, s.permissions, s.commands, s.verify];
+const stepFields = (s: Pick<StoredHumanStep, 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify' | 'due' | 'blocks'>) =>
+  [s.detail, s.check, s.script, s.why, s.permissions, s.commands, s.verify, s.due, s.blocks];
 
 type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
 
@@ -463,6 +469,8 @@ export class GlobService {
       const sizeCheck = await tx.getSizeCheck(glob.id);
       const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, ...scriptFacts(check) };
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
+      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored);
+      const board = await tx.getBoard(glob.boardId);
       return ok({
         glob,
         allowedActions: machine.allowedActions(glob, actor.value, facts),
@@ -473,7 +481,8 @@ export class GlobService {
         holding: await this.holdingFor(tx, relations),
         relationGroups: await this.relationGroupsOf(tx, glob, relations),
         sizeCheck,
-        humanSteps: humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored),
+        humanSteps: steps,
+        arm: board === null ? null : armView(steps, board),
         handover: await handoverOf(tx, this.deps.clock, glob),
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
         script: check?.script ?? null,
@@ -683,7 +692,8 @@ export class GlobService {
 
   /**
    * Adds a work step to a glob (members only; version-checked when a version is given, and the glob's version is left
-   * alone). A rollout step defaults to falling due after the merge and holding back sign-off and dependants.
+   * alone). A rollout step defaults to falling due after the merge and holding back sign-off and dependants; one that
+   * waits for a deploy (`after_deploy:<env>`) holds nothing back unless it says so.
    */
   async addHumanStep(email: string, id: string, version: number | null, input: NewHumanStep, origin = 'person'): Promise<Result<StoredHumanStep>> {
     const title = input.title.trim();
@@ -692,7 +702,7 @@ export class GlobService {
     if (!HUMAN_STEP_KINDS.includes(kind)) return invalidInput(`Unknown step kind ${kind}`);
     const due = input.due ?? (kind === 'rollout' ? 'after_merge' : 'now');
     if (!isHumanStepDue(due)) return invalidInput(`Unknown due ${due}: use now, after_merge or after_deploy:<env>`);
-    const blocks = input.blocks ?? (kind === 'rollout' ? ['sign_off', 'dependants'] : []);
+    const blocks = input.blocks ?? (kind === 'rollout' ? defaultStepBlocks(due) : []);
     const unknown = blocks.find((b) => !HUMAN_STEP_BLOCKS.includes(b));
     if (unknown !== undefined) return invalidInput(`Unknown block ${unknown}: use ${HUMAN_STEP_BLOCKS.join(', ')}`);
     const who = (input.who ?? 'anyone').trim();
@@ -704,6 +714,7 @@ export class GlobService {
       if (!actor.ok) return actor;
       if (version !== null && glob.version !== version) return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
       const now = this.deps.clock.now();
+      const dueSince = await dueSinceFor(tx, glob, due, await tx.listHumanSteps(glob.boardId, [id]), now);
       const step: StoredHumanStep = {
         id: `hs_${this.deps.ids.runId()}`,
         boardId: glob.boardId,
@@ -727,6 +738,7 @@ export class GlobService {
         doneBy: null,
         doneAt: null,
         dismissedReason: null,
+        dueSince,
       };
       await tx.saveHumanSteps([step]);
       await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind, title, change: 'added' } }]);
@@ -818,6 +830,7 @@ export class GlobService {
           doneBy: null,
           doneAt: null,
           dismissedReason: null,
+          dueSince: null,
         },
       ]);
       return true;
@@ -825,23 +838,35 @@ export class GlobService {
     if (added) this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: id, version: glob.version });
   }
 
-  /** A rollout work step in the shape every system writer uses: after the merge, holding back sign-off and dependants. */
-  private rolloutStep(glob: Glob, origin: string, createdBy: string, now: string, fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>): StoredHumanStep {
+  /**
+   * A rollout work step in the shape every system writer uses: after the merge (or after a deploy to `when.env`), holding
+   * back what `when.blocks` says, else the default for its due. `dueSince` is the caller's to set (it needs the store).
+   */
+  private rolloutStep(
+    glob: Glob,
+    origin: string,
+    createdBy: string,
+    now: string,
+    fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>,
+    when: Pick<RolloutStep, 'env' | 'blocks'> = { env: null, blocks: null },
+  ): StoredHumanStep {
+    const { due, blocks } = rolloutWhen(when);
     return {
       id: `hs_${this.deps.ids.runId()}`,
       boardId: glob.boardId,
       globId: glob.id,
       kind: 'rollout',
       who: 'anyone',
-      due: 'after_merge',
+      due,
       state: 'open',
-      blocks: ['sign_off', 'dependants'],
+      blocks,
       origin,
       createdBy,
       createdAt: now,
       doneBy: null,
       doneAt: null,
       dismissedReason: null,
+      dueSince: null,
       ...fields,
     };
   }
@@ -892,16 +917,20 @@ export class GlobService {
         }
         const fields = { title: step.title, detail: step.detail, check: step.check, script, why: step.why, permissions: step.permissions, commands: step.commands, verify: step.verify };
         const existing = own[matches[i] ?? -1];
+        const when = rolloutWhen(step);
+        const fresh = { ...fields, ...when };
         if (existing === undefined) {
-          const added = this.rolloutStep(glob, ROLLOUT_SECTION_ORIGIN, email, now, fields);
+          const added = { ...this.rolloutStep(glob, ROLLOUT_SECTION_ORIGIN, email, now, fields, step), dueSince: await dueSinceFor(tx, glob, when.due, stored, now) };
           save.push(added);
           note(added, 'added');
           continue;
         }
         matched.add(existing.id);
-        const refresh = existing.state === 'open' && JSON.stringify(stepFields(existing)) !== JSON.stringify(stepFields(fields));
+        const refresh = existing.state === 'open' && JSON.stringify(stepFields(existing)) !== JSON.stringify(stepFields(fresh));
         if (refresh || existing.title !== step.title) {
-          const updated = refresh ? { ...existing, ...fields } : { ...existing, title: step.title };
+          // A changed environment is a different deploy to wait for; the same one keeps the moment it fell due.
+          const dueSince = refresh && existing.due !== when.due ? await dueSinceFor(tx, glob, when.due, stored, now) : existing.dueSince;
+          const updated = refresh ? { ...existing, ...fields, ...when, dueSince } : { ...existing, title: step.title };
           save.push(updated);
           note(updated, 'updated');
         }
@@ -1024,7 +1053,8 @@ export class GlobService {
             await addArtifact(tx, this.deps.clock, glob, 'slop', { kind: ROLLOUT_SCRIPT_KIND, label, content: written.script, link: null, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
             artifacts = true;
           }
-          const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script, why: written.why, permissions: written.permissions, commands: written.commands, verify: written.verify });
+          const fresh = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script, why: written.why, permissions: written.permissions, commands: written.commands, verify: written.verify }, written);
+          const step = { ...fresh, dueSince: await dueSinceFor(tx, glob, fresh.due, save, now) };
           save.push(step);
           note(step, 'added');
         }
@@ -1047,7 +1077,7 @@ export class GlobService {
 
   /**
    * Capabilities changed or were re-read: every open step whose `check` capability is on, and whose due-ness has arrived
-   * (a merged glob's after-merge step; a step due now), is ticked by slop. Nothing is ticked before the merge, and a step
+   * (a merged glob's after-merge step; a step due now; an after-deploy step once its environment held the glob), is ticked by slop. Nothing is ticked before the merge, and a step
    * already done or dismissed is left alone, so running it again changes nothing. Returns how many steps it ticked.
    */
   async tickCapabilitySteps(boardId: number, capabilities: Capabilities): Promise<number> {
@@ -1060,7 +1090,7 @@ export class GlobService {
         if (glob === null) return 0;
         const now = this.deps.clock.now();
         const ready = (await tx.listHumanSteps(boardId, [globId])).filter(
-          (s) => s.state === 'open' && isOn(s) && (s.due === 'now' || (s.due === 'after_merge' && isMerged(glob))),
+          (s) => isOn(s) && stateOf(glob, s) === 'due',
         );
         if (ready.length === 0) return 0;
         await tx.saveHumanSteps(ready.map((s): StoredHumanStep => ({ ...s, state: 'done', doneBy: 'slop', doneAt: now })));
@@ -1073,6 +1103,33 @@ export class GlobService {
       ticked += done;
     }
     return ticked;
+  }
+
+  /**
+   * A person says the environment now runs the glob's merge, for boards that report no deploys: the glob's open
+   * `after_deploy:<env>` steps fall due (once; a rollback later doesn't undo it). Members only. Logs
+   * `EnvironmentMarkedDeployed`, not `Deployed` (ATF reads that), leaves `glob_environments` and the glob's version alone,
+   * and refuses an environment the board doesn't list. Repeating it changes and logs nothing.
+   */
+  async markEnvironmentDeployed(email: string, id: string, environment: string): Promise<Result<{ readonly marked: number }>> {
+    const result = await this.deps.store.transaction(async (tx): Promise<Result<{ glob: Glob; marked: number }>> => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return notFound(`No glob ${id}`);
+      const actor = await this.actorFor(tx, email, glob.boardId);
+      if (!actor.ok) return actor;
+      const board = await tx.getBoard(glob.boardId);
+      if (board === null || !board.environments.some((e) => e.name === environment)) return invalidInput(`Unknown environment ${environment}`);
+      const now = this.deps.clock.now();
+      const marked = await markStepsDue(tx, glob.boardId, [id], environment, now);
+      const already = (await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['EnvironmentMarkedDeployed'], [id])).some((e) => e.data.environment === environment);
+      if (marked.length > 0 || !already) {
+        await tx.appendEvents([{ type: 'EnvironmentMarkedDeployed', globId: id, actor: email, at: now, data: { environment, steps: marked.length } }]);
+      }
+      return ok({ glob, marked: marked.length });
+    });
+    if (!result.ok) return result;
+    if (result.value.marked > 0) this.deps.notifier.publish({ kind: 'glob.changed', boardId: result.value.glob.boardId, globId: id, version: result.value.glob.version });
+    return ok({ marked: result.value.marked });
   }
 
   /** The globs on a board whose oversized flag nobody has answered yet, for the card's chip. */

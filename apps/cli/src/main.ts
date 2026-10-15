@@ -211,7 +211,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   },
   new: {
     usage: NEW_USAGE,
-    summary: 'Create a glob on SLOP_BOARD from a prompt (intake fills in the rest; --feature, --task and --bug still work: --bug is --fix)',
+    summary: 'Create a glob on SLOP_BOARD from a prompt (intake fills in the rest; --bug is --fix)',
     run: (args, context) => newCommand(args, globDeps(context)),
   },
   ready: {

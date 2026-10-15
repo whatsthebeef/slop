@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HumanSteps } from '../src/components/human-steps';
 import { viewSections } from '../src/components/glob-view/sections';
 import type { GlobView, ListedHumanStep } from '../src/lib/api';
-import { hasDueSteps, quietText } from '../src/lib/human-steps';
+import { hasDueSteps } from '../src/lib/human-steps';
+import { groupText, stageGroups } from '../src/lib/rollout-stages';
 import { glob as coreGlob } from '../../../packages/core/test/fixtures';
 
 afterEach(() => {
@@ -132,7 +133,7 @@ describe('due steps block', () => {
   it('collapses steps not yet due into one quiet line that expands', async () => {
     show([step({ id: 'a', state: 'pending' }), step({ id: 'b', state: 'pending' })]);
     expect(screen.queryByTestId('due-steps')).toBeNull();
-    expect(screen.getByTestId('quiet-toggle').textContent).toBe('2 steps after merge ▸');
+    expect(screen.getByTestId('quiet-toggle').textContent).toBe('After the merge: 2 steps, not due yet ▸');
     expect(screen.queryAllByTestId('human-step')).toHaveLength(0);
     await userEvent.click(screen.getByTestId('quiet-toggle'));
     expect(screen.getAllByTestId('human-step')).toHaveLength(2);
@@ -145,8 +146,62 @@ describe('due steps block', () => {
   });
 
   it('words the quiet line', () => {
-    expect(quietText([step({ id: 'a', state: 'pending' })])).toBe('1 step after merge');
-    expect(quietText([step({ id: 'a', state: 'pending', due: 'now' })])).toBe('1 step not due yet');
+    expect(groupText({ stage: 'after_merge', steps: [step({ id: 'a', state: 'pending' })] })).toBe('After the merge: 1 step, not due yet');
+    expect(groupText({ stage: 'production', steps: [step({ id: 'a', state: 'pending' }), step({ id: 'b', state: 'pending' })] })).toBe(
+      'After the deploy to production: 2 steps, not due yet',
+    );
+  });
+});
+
+describe('steps grouped by stage', () => {
+  const deploy = (id: string, env: string, state: ListedHumanStep['state'] = 'pending') => step({ id, state, due: `after_deploy:${env}` as ListedHumanStep['due'] });
+
+  it('orders after the merge first, then the board environments, unknown environments last', () => {
+    const groups = stageGroups([deploy('a', 'production'), deploy('b', 'qa'), step({ id: 'c', state: 'pending' }), deploy('d', 'staging')], ['staging', 'production']);
+    expect(groups.map((g) => g.stage)).toEqual(['after_merge', 'staging', 'production', 'qa']);
+  });
+
+  const showWith = (humanSteps: ListedHumanStep[], onMarkDeployed = vi.fn(() => Promise.resolve(true))) => {
+    const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+    render(
+      <MemoryRouter>
+        <HumanSteps
+          glob={glob}
+          canAdd
+          environments={['staging', 'production']}
+          onMarkDeployed={onMarkDeployed}
+          onAdd={vi.fn(() => Promise.resolve(true))}
+          onComplete={vi.fn(() => Promise.resolve(true))}
+          onDismiss={vi.fn(() => Promise.resolve(true))}
+        />
+      </MemoryRouter>,
+    );
+    return onMarkDeployed;
+  };
+
+  it('renders a not-due environment group as one quiet line with Mark deployed, in stage order', async () => {
+    const mark = showWith([deploy('a', 'production'), deploy('b', 'production'), step({ id: 'c', state: 'pending' })]);
+    expect(screen.queryByTestId('due-steps')).toBeNull();
+    const lines = screen.getAllByTestId('quiet-toggle').map((el) => el.textContent);
+    expect(lines).toEqual(['After the merge: 1 step, not due yet ▸', 'After the deploy to production: 2 steps, not due yet ▸']);
+    const buttons = screen.getAllByTestId('mark-deployed');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.textContent).toBe('Mark deployed to production');
+    await userEvent.click(buttons[0] as HTMLElement);
+    expect(mark).toHaveBeenCalledWith('production');
+  });
+
+  it('puts only due steps in the needs-you block, the other stage stays quiet', () => {
+    showWith([deploy('a', 'staging', 'due'), deploy('b', 'production')]);
+    expect(screen.getAllByTestId('due-step')).toHaveLength(1);
+    expect(screen.getByTestId('due-steps').textContent).toContain('A step needs you');
+    expect(screen.getAllByTestId('quiet-toggle').map((el) => el.textContent)).toEqual(['After the deploy to production: 1 step, not due yet ▸']);
+  });
+
+  it('shows an empty due block while the glob is merging with an after-merge step pending', () => {
+    showWith([step({ id: 'a', state: 'pending' })]);
+    expect(screen.queryByTestId('due-steps')).toBeNull();
+    expect(screen.queryByTestId('mark-deployed')).toBeNull();
   });
 });
 

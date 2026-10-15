@@ -1,6 +1,8 @@
-import type { Action } from '@slop/core';
-import { actionPresentation, isReviewRetry } from './action-presentation';
+import { isHumanCategory } from '@slop/core';
+import type { Action, HumanStepViewer } from '@slop/core';
+import { actionPresentation, isReviewRetry, presentedActions } from './action-presentation';
 import type { GlobView } from './api';
+import { mainStep } from './human-steps';
 
 type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
   Partial<Pick<GlobView, 'runs' | 'artifacts'>>;
@@ -81,6 +83,23 @@ export const mainAction = (
   };
   return (stepFirst ? FIXES : [...FIXES, ...NEXT_STEPS]).find(candidate) ?? null;
 };
+
+/** The actions the glob view lists (main button and More menu) for this viewer: the allowed ones it presents, never Delete or one with no placement. */
+export const viewActions = (glob: GlobView, email?: string): Action[] =>
+  presentedActions(glob.allowedActions ?? []).filter((a) => a !== 'delete' && actionPresentation(a, glob, false, email).placement !== 'none');
+
+/** The action a stalled glob's step names to lead with, if any. */
+export const leadingAction = (glob: Pick<GlobView, 'humanSteps'>): Action | undefined => {
+  const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
+  return stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+};
+
+/**
+ * The natural main action of the glob view for this viewer (null when none leads). The glob view's primary button and the
+ * board card's primary button both read it, so they never disagree.
+ */
+export const viewMainAction = (glob: GlobView, viewer?: HumanStepViewer): Action | null =>
+  mainAction(viewActions(glob, viewer?.email), glob, isHumanCategory(glob.category), mainStep(glob, viewer) !== null, viewer?.email, leadingAction(glob));
 
 /** Promoted in this order when nothing is the natural main: undo what the person just started, retry a missing review, then step in. */
 const PROMOTION: readonly Action[] = ['cancel_merge', 'review_now', 'take_over', 'pick_up'];

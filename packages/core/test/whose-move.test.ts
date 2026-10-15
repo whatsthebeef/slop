@@ -4,7 +4,7 @@ import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import { machineSteps } from '../src/domain/machine-steps.js';
 import type { MachineFacts } from '../src/domain/machine-steps.js';
 import { stalledNotification, stalledSource } from '../src/domain/notifications.js';
-import { appliedHolding, unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js';
+import { PAIRING_REASON, PICKED_UP_REASON, appliedHolding, unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js';
 import type { UnstickOptions } from '../src/domain/whose-move.js';
 import type { Move } from '../src/domain/whose-move.js';
 import type { Glob } from '../src/domain/types.js';
@@ -120,6 +120,7 @@ describe('whoseMove: priority', () => {
       doneBy: null,
       doneAt: null,
       dismissedReason: null,
+      dueSince: null,
     };
     const g = glob({ status: 'pr_open', type: 'sub', runs: [], pr: { number: 1, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' } });
     expect(move(g, {}, { stored: [rollout] })).toMatchObject({ holder: 'waiting', reason: 'waiting for Deploy the host stack' });
@@ -149,6 +150,7 @@ describe('whoseMove: priority', () => {
       doneBy: null,
       doneAt: null,
       dismissedReason: null,
+      dueSince: null,
     };
     const g = glob({ status: 'planning', type: 'same', runs: [run({ state: 'ended', outcome: 'completed' })] });
     expect(move(g, {}, { stored: [placeholder] }).holder).toBe('idle');
@@ -264,7 +266,11 @@ describe('whoseMove: stalled', () => {
   it('with incomplete facts, a glob nobody is on is idle, while failures and quiet runs still stall', () => {
     const partial = (g: Glob): Move => whoseMove(g, humanSteps(g, {}, []), machineSteps(g, {}), [], NOW, { viewer, complete: false });
     expect(partial(glob({ status: 'in_progress', type: 'sub', updatedAt: minutesAgo(3) }))).toMatchObject({ holder: 'idle', reason: 'Not enough facts to say' });
-    expect(partial(glob({ status: 'implementing', implementer: dev.email, updatedAt: minutesAgo(90) })).holder).toBe('idle');
+    for (const type of ['sub', 'same', 'super'] as const) {
+      const held = partial(glob({ status: 'implementing', type, implementer: dev.email, updatedAt: minutesAgo(90) }));
+      expect(held).toMatchObject({ holder: 'human', who: dev.email });
+      expect(held.reason).toBe(type === 'super' ? PAIRING_REASON : PICKED_UP_REASON);
+    }
     expect(partial(glob({ status: 'failed', failure: { reason: 'run gave up', at: NOW } }))).toMatchObject({ holder: 'stalled', cause: 'failed' });
     const quiet = glob({ status: 'in_progress', runs: [run({ startedAt: minutesAgo(300), lastProgressAt: minutesAgo(90) })] });
     expect(partial(quiet)).toMatchObject({ holder: 'stalled', cause: 'quiet' });

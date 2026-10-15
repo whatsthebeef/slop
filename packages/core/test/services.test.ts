@@ -100,6 +100,14 @@ describe('services', () => {
     expect(unwrap(await globs.create(ADMIN, input({ category: 'bug' }))).id).toBe(`s${boardId}b1`);
   });
 
+  it('stores a created feature as a task with the R&D work kind it implies; an explicit work kind wins', async () => {
+    const feature = unwrap(await globs.create(ADMIN, input({ category: 'feature' })));
+    expect(feature).toMatchObject({ category: 'task', workKind: 'rnd' });
+    expect(feature.id).toBe(`s${boardId}t1`);
+    const explicit = unwrap(await globs.create(ADMIN, input({ category: 'feature', workKind: 'maintenance', workKindSource: 'person' })));
+    expect(explicit).toMatchObject({ category: 'task', workKind: 'maintenance', workKindSource: 'person' });
+  });
+
   it('lists a glob\'s human steps on a read: a stored rollout step is pending until the PR merges', async () => {
     const glob = unwrap(await globs.create(ADMIN, input()));
     await store.transaction((tx) =>
@@ -127,6 +135,7 @@ describe('services', () => {
           doneBy: null,
           doneAt: null,
           dismissedReason: null,
+          dueSince: null,
         },
       ]),
     );
