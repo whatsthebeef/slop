@@ -47,6 +47,6 @@ export const planVersionLine = (saved: PlanSaved | null, editing = false): strin
   return editing ? `${line} · unsaved` : line;
 };
 
-/** Until a glob is signed off the plan field already shows plan.md, so the Artifacts list leaves it out. */
+/** Until a glob is signed off the plan field already shows plan.md, so the Artifacts list leaves it out. The test plan has its own tab, so it is always left out. */
 export const listedArtifacts = <T extends { readonly kind: string }>(artifacts: readonly T[], signedOff: boolean): readonly T[] =>
-  signedOff ? artifacts : artifacts.filter((a) => a.kind !== 'plan');
+  artifacts.filter((a) => a.kind !== 'test_plan' && (signedOff || a.kind !== 'plan'));
