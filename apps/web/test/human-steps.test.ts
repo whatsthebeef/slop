@@ -236,18 +236,19 @@ describe('section markup', () => {
 
   it('renders each step with its icon, who, state, script links, check and tick', () => {
     const out = html(merged(steps));
-    expect(out).toContain('Human steps (3)');
-    expect(out).toContain('aria-label="Done: Roll out the host stack"');
+    expect(out).toContain('More steps (2)');
+    expect(out).toContain('data-testid="due-step"');
+    expect(out).toContain('Roll out the host stack');
     expect(out).toMatch(/for the admin/);
     expect(out).toContain('due now');
     expect(out).toContain('Your turn');
-    expect(out).toContain('checked by slop: fileAttachments');
+    expect(out).toContain('waits for fileAttachments to turn on');
     expect(out).toContain(`href="${scriptArtifactPath(glob().boardId, glob().id, { artifact: 'host' }).replace(/&/g, '&amp;')}"`);
     expect(out).toContain('infra/x.sh');
     expect(out).toContain('done by dev@example.com on 2026-10-06');
     expect(out).toContain('lucide-user-round');
     expect(out).toContain('Add step');
-    expect(out.match(/data-testid="step-tick"/g)).toHaveLength(2);
+    expect(out.match(/data-testid="step-tick"/g)).toHaveLength(1);
     expect(out.match(/data-testid="step-copy"/g)).toHaveLength(2);
   });
 

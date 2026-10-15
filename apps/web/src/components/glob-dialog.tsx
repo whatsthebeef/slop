@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AddRelationInput, BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
+import { hasDueSteps } from '@/lib/human-steps';
 import type { GlobSection } from '@/lib/glob-section';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import type { ArtifactRef } from './artifacts';
@@ -14,7 +15,7 @@ import { useGlobEdits } from './glob-view/edit-fields';
 import { GlobChips, GlobHeader } from './glob-view/header';
 import { GlobMeta } from './glob-view/meta';
 import { AFTER_SECTION, SECTION_VIEWS } from './glob-view/section-views';
-import { DECISION_VIEW_SECTIONS, GLOB_VIEW_SECTIONS } from './glob-view/sections';
+import { viewSections } from './glob-view/sections';
 import { useNowState } from './glob-view/status';
 import { GlobTitle } from './glob-title';
 import { isOversized, useOversized } from './oversized-glob';
@@ -184,7 +185,7 @@ export const GlobDetail = ({
           onReload={onReload}
         />
         <GlobChips ctx={ctx} />
-        {(decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS).map((name) => (
+        {viewSections(decision, hasDueSteps(glob.humanSteps)).map((name) => (
           <Fragment key={name}>
             <Anchor name={name}>{SECTION_VIEWS[name](sectionProps)}</Anchor>
             {AFTER_SECTION[name]?.(sectionProps)}

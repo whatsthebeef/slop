@@ -45,3 +45,15 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
   'findings',
   'human-steps',
 ];
+
+/**
+ * The order the glob view renders: while a step is due, the Human steps move to the top, like the Decide and review blocks
+ * (after the conflict and escalation notices; a decision glob keeps its Decide block first). Otherwise the fixed order above.
+ */
+export const viewSections = (decision: boolean, stepsDue: boolean): readonly GlobSection[] => {
+  const base = decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS;
+  if (!stepsDue) return base;
+  const rest = base.filter((name) => name !== 'human-steps');
+  const at = rest.indexOf(decision ? 'decision' : 'escalation') + 1;
+  return [...rest.slice(0, at), 'human-steps', ...rest.slice(at)];
+};

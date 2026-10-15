@@ -72,7 +72,7 @@ describe('Human steps with long text', () => {
       list: 'planning',
       branch: 's1t1',
       currentRun: null,
-      humanSteps: [{ id: 'hs1', title: long, detail: long, kind: 'manual', state: 'pending', who: 'anyone', due: 'after_merge', script: null }],
+      humanSteps: [{ id: 'hs1', title: long, detail: long, kind: 'manual', state: 'done', who: 'anyone', due: 'after_merge', script: null }],
     } as unknown as GlobView;
     render(
       <MemoryRouter>

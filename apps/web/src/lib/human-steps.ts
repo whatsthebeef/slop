@@ -107,6 +107,22 @@ export const writeStepsOpen = (open: boolean): void => writeSectionOpen(STORAGE_
 /** Starts expanded while a step is still to do (or the link asked for it); an all-done or empty list starts collapsed. */
 export const defaultStepsOpen = (steps: readonly ListedHumanStep[]): boolean => steps.some((s) => s.state === 'due' || s.state === 'pending');
 
+/** The stored work steps that are due now (not predicted): shown as the full block at the top of the glob view. */
+export const dueWorkSteps = (steps: readonly ListedHumanStep[]): ListedHumanStep[] => steps.filter((s) => isWorkStep(s) && s.state === 'due' && s.predicted !== true);
+
+/** A step that isn't due yet: a pending work step, which collapses into one quiet line. */
+export const isQuietStep = (step: ListedHumanStep): boolean => isWorkStep(step) && step.state === 'pending' && step.predicted !== true;
+
+/** The quiet line's text: "2 steps after merge" (or when they fall due, for a step not tied to the merge). */
+export const quietText = (steps: readonly ListedHumanStep[]): string => {
+  const n = steps.length;
+  const noun = `${String(n)} ${n === 1 ? 'step' : 'steps'}`;
+  return steps.every((s) => s.due === 'after_merge') ? `${noun} after merge` : `${noun} not due yet`;
+};
+
+/** Whether the glob view opens with the steps block at the top: some step is due. */
+export const hasDueSteps = (steps: readonly ListedHumanStep[] | undefined): boolean => dueWorkSteps((steps ?? []).filter((s) => !isDismissedStep(s))).length > 0;
+
 /** Who a step is for, in words. */
 export const whoText = (who: string): string => (who === 'anyone' ? 'anyone' : who.includes('@') ? who : `the ${who}`);
 
