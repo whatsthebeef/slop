@@ -4,7 +4,7 @@ import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import { machineSteps } from '../src/domain/machine-steps.js';
 import type { MachineFacts } from '../src/domain/machine-steps.js';
 import { stalledNotification, stalledSource } from '../src/domain/notifications.js';
-import { unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js';
+import { appliedHolding, unstickStep, whoseMove, withUnstick } from '../src/domain/whose-move.js';
 import type { UnstickOptions } from '../src/domain/whose-move.js';
 import type { Move } from '../src/domain/whose-move.js';
 import type { Glob } from '../src/domain/types.js';
@@ -311,6 +311,15 @@ describe('whoseMove: a conflict or failed checks on an open PR is never "nobody"
     const g = glob({ status: 'in_progress', implementer: null, pr: { number: 49, state: 'draft', headSha: head }, runs: [run({ state: 'watching' })] });
     const steps = humanSteps(g, { recordAtHead: true }, []);
     expect(whoseMove(g, steps, machineSteps(g, {}), [], NOW, { viewer })).toMatchObject({ reason: 'Mark ready' });
+  });
+});
+
+describe('appliedHolding', () => {
+  it('keeps the holds that apply where the glob stands: start in Planning, merge on a clean open PR, sign-off when reviewing', () => {
+    const all = [hold({ to: 's1t2' }), hold({ relationId: 'rel_2', to: 's1t3', gate: 'merge' }), hold({ relationId: 'rel_3', to: 's1t4', gate: 'sign_off' })];
+    expect(appliedHolding(glob({ status: 'planning' }), all).map((h) => h.to)).toEqual(['s1t2']);
+    expect(appliedHolding(glob({ status: 'pr_open' }), all).map((h) => h.to)).toEqual(['s1t3']);
+    expect(appliedHolding(glob({ status: 'in_progress' }), all)).toEqual([]);
   });
 });
 

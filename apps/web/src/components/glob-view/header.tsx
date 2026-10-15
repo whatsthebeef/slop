@@ -2,7 +2,9 @@ import { decisionOf } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
+import { ArmSystemLabel } from '../glob-card';
 import { Tip } from '../ui/tip';
+import { needsRelease } from '@/lib/human-steps';
 import { LIST_TITLES } from '@/lib/list-titles';
 import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
@@ -29,6 +31,7 @@ export const GlobHeader = ({
 }) => {
   const { glob } = ctx;
   const decision = decisionOf(glob) !== null;
+  const armStep = decision ? null : needsRelease(glob.humanSteps ?? []);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -95,6 +98,7 @@ export const GlobHeader = ({
         <span className="min-w-0 truncate text-sm text-muted-foreground" data-testid="glob-list">
           {LIST_TITLES[glob.list]}
         </span>
+        {armStep !== null && <ArmSystemLabel step={armStep} to={`/boards/${String(glob.boardId)}?arm=1`} />}
         <HeaderStatus glob={glob} decision={decision} state={state} />
       </div>
     </>

@@ -1,6 +1,8 @@
+import { decisionOf } from '@slop/core';
 import type { Category, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { needsPerson } from './card-rows';
+import { needsRelease } from './human-steps';
 
 /** What a filter may need beyond the glob itself: the time and the viewer decide whose turn it is. */
 export interface FilterContext {
@@ -102,6 +104,14 @@ export const BOARD_FILTERS: BoardFilter[] = [
     normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
     // The same status the card shows: only globs whose status is the human outline.
     matches: (glob, _value, { now, viewer }) => needsPerson(glob, now, viewer),
+  },
+  {
+    key: 'arm',
+    label: 'Arm system',
+    control: 'toggle',
+    normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
+    // Globs with a step a person must do at release (the card's "Arm system" label); a decision glob has none.
+    matches: (glob) => decisionOf(glob) === null && needsRelease(glob.humanSteps ?? []) !== null,
   },
 ];
 

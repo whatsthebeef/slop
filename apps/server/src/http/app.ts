@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
 import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -210,6 +210,9 @@ const updateGlobSchema = z.object({
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
 const splitField = (split: SplitInfo | undefined) => (split === undefined ? {} : { split });
+
+/** A fanned-out glob carries its workstreams' compact state, for the card's corner. */
+const workstreamsField = (workstreams: WorkstreamsSummary | undefined) => (workstreams === undefined ? {} : { workstreams });
 
 const versionSchema = z.object({ version: z.number().int() });
 
@@ -504,6 +507,7 @@ export const createApp = (deps: AppDeps) => {
       (g) => shown(g) && (g.status !== 'signed_off' || kept.has(g.id)),
     );
     const splits = await globs.splitsOf(boardId);
+    const workstreams = await globs.workstreamsOf(boardId);
     const oversized = await globs.oversizedOf(boardId);
     const steps = await globs.humanStepsOf(boardId);
     const dismissed = await globs.dismissedKeysOf(email, boardId);
@@ -526,6 +530,7 @@ export const createApp = (deps: AppDeps) => {
           dismissedKeys: dismissed.get(glob.id) ?? [],
           machineSteps: facts,
           ...splitField(splits.get(glob.id)),
+          ...workstreamsField(workstreams.get(glob.id)),
           ...(oversized.has(glob.id) ? { oversized: true } : {}),
         };
       }),
@@ -585,7 +590,9 @@ export const createApp = (deps: AppDeps) => {
     // A member's read looks at the glob's pending files (best effort); a change reaches the page by its live hint.
     await deps.attachments?.refreshGlob(view.value.glob.id).catch(() => undefined);
     const split = (await globs.splitsOf(view.value.glob.boardId)).get(view.value.glob.id);
-    return send(c, view, (v) => ({ ...globViewOf(v), ...splitField(split) }));
+    const workstreams = (await globs.workstreamsOf(view.value.glob.boardId)).get(view.value.glob.id);
+    // The same machine steps as the board list, so the glob view's header and the card agree (e.g. a deploy still running).
+    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob), ...splitField(split), ...workstreamsField(workstreams) }));
   });
 
   app.patch('/api/globs/:id', async (c) => {

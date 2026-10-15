@@ -3,6 +3,8 @@ import type { GlobView } from '../src/lib/api';
 import {
   chainTip,
   blockedParts,
+  holdLine,
+  workstreamLine,
   mergeWarning,
   statusLine,
   viewStatusLine,
@@ -481,5 +483,51 @@ describe('mergeWarning', () => {
     expect(mergeWarning(prOpen())).toBeNull();
     expect(mergeWarning(prOpen({ behind, conflict: { base: 'main', files: [], since: null, at: NOW } }))).toBeNull();
     expect(mergeWarning(view({ status: 'in_progress', behind }))).toBeNull();
+  });
+});
+
+describe('holdLine', () => {
+  it('is null with nothing holding the glob where it stands', () => {
+    expect(holdLine(view({ status: 'planning', holding: [] }))).toBeNull();
+    expect(holdLine(view({ status: 'in_progress', holding: [hold('s1t1')] }))).toBeNull();
+  });
+
+  it('says a start hold by a glob, a decision and a merge gate in the gate\'s words', () => {
+    expect(holdLine(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 'waiting · s1t1', icon: 'hourglass' });
+    expect(holdLine(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided' })] }))).toMatchObject({
+      text: 'waiting · decision s1k1',
+      icon: 'human',
+    });
+    expect(holdLine(prOpen({ holding: [hold('s1k1', { toIsDecision: true, gate: 'merge' })] }))?.text).toBe('merge held · decision s1k1');
+  });
+
+  it('names the first of several and counts the others, and the tip lists each with its reason', () => {
+    const line = holdLine(view({ status: 'planning', holding: [hold('s1t1', { reason: 'a' }), hold('s1t2', { state: 'planning' }), hold('s1t3', { toIsDecision: true })] }));
+    expect(line?.text).toBe('waiting · s1t1 +2');
+    expect(line?.tip.split('\n')).toEqual(['Waits for s1t1 (Doing): a', 'Waits for s1t2 (Planning)', 'Waits for decision s1t3 (Doing)']);
+  });
+});
+
+describe('workstreamLine', () => {
+  type State = NonNullable<GlobView['workstreams']>['items'][number]['state'];
+  const built = (items: readonly (readonly [string, State, string[]?])[], patch: Partial<GlobView> = {}) =>
+    view({ status: 'in_progress', workstreams: { fannedOut: true, items: items.map(([name, state, conflicts]) => ({ name, state, conflicts: conflicts ?? [] })) }, ...patch });
+
+  it('counts done workstreams of all (skipped ones left out) while the work runs', () => {
+    expect(workstreamLine(built([['W0', 'done'], ['W1', 'running'], ['W2', 'not_started'], ['W3', 'skipped']]))).toMatchObject({ text: 'working · 1/3 workstreams', icon: 'machine-spinning' });
+  });
+
+  it('puts a failed workstream, then a decision, then an integration conflict before progress', () => {
+    expect(workstreamLine(built([['W1', 'running', ['a.ts']], ['W2', 'waiting_decision'], ['W3', 'failed']]))).toMatchObject({ text: 'failed · W3', icon: 'human' });
+    expect(workstreamLine(built([['W1', 'running', ['a.ts']], ['W2', 'waiting_decision']]))?.text).toBe('waiting · decision for W2');
+    expect(workstreamLine(built([['W1', 'running', ['a.ts']], ['W2', 'running', ['b.ts']], ['W3', 'done']]))?.text).toBe('integration conflict · W1+W2');
+    expect(workstreamLine(built([['W1', 'failed'], ['W2', 'failed'], ['W3', 'failed']]))?.text).toBe('failed · W1 +2');
+  });
+
+  it('lists every workstream in the tip, and has nothing for a small glob, a merged one or when all are done', () => {
+    expect(workstreamLine(built([['W1', 'done'], ['W2', 'running', ['a.ts']]]))?.tip.split('\n')).toEqual(['W1: done', 'W2: running (conflicts: a.ts)']);
+    expect(workstreamLine(view({ status: 'in_progress' }))).toBeNull();
+    expect(workstreamLine(built([['W1', 'running'], ['W2', 'running']], { status: 'reviewing' }))).toBeNull();
+    expect(workstreamLine(built([['W1', 'done'], ['W2', 'done']]))).toBeNull();
   });
 });

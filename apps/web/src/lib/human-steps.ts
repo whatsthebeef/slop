@@ -1,5 +1,5 @@
-import { blockProgress, dueText, isMerged, isOpenStep, yourTurn } from '@slop/core';
-import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer } from '@slop/core';
+import { blockProgress, dueText, isInFlight, isMerged, isOpenStep, yourTurn } from '@slop/core';
+import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer, MachineStep } from '@slop/core';
 import type { ListedHumanStep } from './api';
 import { globPath } from './glob-section';
 import { readSectionOpen, writeSectionOpen } from './section-open';
@@ -54,25 +54,41 @@ export const stepMain = (step: Pick<ListedHumanStep, 'title' | 'detail' | 'scrip
 };
 
 /**
- * The status line for a merged glob whose rollout still holds back its sign-off: "rollout" (the icon says whose turn); the
- * tooltip has the count and the first open step. Null when nothing is open or the change isn't merged yet.
+ * The status line for a merged glob whose rollout still holds back its sign-off: "rollout 1/3" (steps done of all; the icon says
+ * whose turn). It takes the place of "sign off" until the rollout is done. The tooltip lists every open step. Null when nothing
+ * is open, the change isn't merged yet, or a deploy of it is still running (where the board tracks deploys, the machine isn't
+ * done until it has deployed; the list's `machineSteps` say so, and an API without them reads as no deploy).
  */
 export const rolloutLine = (
   glob: Glob,
   steps: readonly ListedHumanStep[],
   viewer: HumanStepViewer | undefined,
+  machineSteps?: readonly MachineStep[],
 ): { readonly text: string; readonly tip: string; readonly turn: ListedHumanStep | null } | null => {
   if (!isMerged(glob)) return null;
+  if (machineSteps?.some((s) => s.kind === 'deploy' && isInFlight(s)) === true) return null;
   const progress = blockProgress(steps, 'sign_off');
   if (progress.open === 0) return null;
   const turn = blockingTurn(steps, glob, viewer);
-  const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
+  const open = steps.filter((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
+  const [first] = open;
+  const done = progress.total - progress.open;
   return {
-    text: 'rollout',
-    tip: `Merged; ${String(progress.total - progress.open)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${stepName(first)}`}`,
+    text: `rollout ${String(done)}/${String(progress.total)}`,
+    tip: [
+      `Merged; ${String(done)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${stepName(first)}`}`,
+      ...open.slice(1).map(stepName),
+    ].join('\n'),
     turn,
   };
 };
+
+/**
+ * The first open step that needs a person at release: a written (not predicted) rollout step, or any work step due after the
+ * merge. A done or dismissed step is not open. Null when nobody has a step at release; the card's "Arm system" label.
+ */
+export const needsRelease = (steps: readonly ListedHumanStep[]): ListedHumanStep | null =>
+  steps.find((s) => isOpenStep(s) && isWorkStep(s) && s.predicted !== true && (s.kind === 'rollout' || s.due === 'after_merge')) ?? null;
 
 /** Why a merged glob's labels can't be approved yet: the first sign-off-blocking step still open, or null when nothing holds them. */
 export const approveHold = (glob: Glob & { readonly humanSteps?: readonly ListedHumanStep[] }): string | null => {

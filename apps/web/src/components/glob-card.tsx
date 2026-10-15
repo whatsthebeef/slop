@@ -1,22 +1,21 @@
-import { decisionOf, dueText, scopeLabel, upcomingSteps } from '@slop/core';
+import { decisionOf, scopeLabel } from '@slop/core';
 import type { Action, Category, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
-import { Bug, GitBranch, ListChecks, Loader2, Scale, Sparkles } from 'lucide-react';
+import { Bug, ListChecks, Loader2, Rocket, Scale, Sparkles } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
+import { ActorIcon, MachineIcon } from '@/components/actor-icons';
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { AtfRun, GlobView } from '@/lib/api';
+import type { AtfRun, GlobView, ListedHumanStep } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { cornerStatus, hasBlocker } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
-import { PREDICTED_ROLLOUT_TEXT } from '@/lib/human-steps';
+import { needsRelease } from '@/lib/human-steps';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { OUTCOME_TEXT } from './decision-section';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
-import { splitChip } from '@/lib/split-chip';
 import { CONFIRM_MS, clickTip, prUrl, turnStep } from '@/lib/chip-actions';
 import type { ChipClick } from '@/lib/chip-actions';
 import { cardTargets } from '@/lib/card-targets';
@@ -24,7 +23,13 @@ import type { GlobTarget } from '@/lib/glob-section';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
-import { boardGlobHref } from '@/lib/glob-section';
+
+/** The small dot between a header's values: the card's ID and type, its status and category icon, and the glob view's header. */
+export const DotSeparator = ({ testId }: { testId?: string }) => (
+  <span aria-hidden='true' className='shrink-0' data-testid={testId}>
+    ·
+  </span>
+);
 
 /** The glob's category as a small icon in the card's corner. */
 export const CATEGORY_ICON: Record<Category, { icon: LucideIcon; className: string }> = {
@@ -500,31 +505,33 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
 };
 
 /**
- * The branch icon and the source glob's ID on a part after the first; the ID links to the source. The tooltip and the link's
- * accessible name say "Split from <source>", with the part number and the other parts in the tooltip. A small pill (muted
- * background, sans text) so it is never read as a status.
+ * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge). Rocket and text in the
+ * primary action's colour (not red, which means broken). On the board `onFilter` makes it filter to globs that need this; with `to`
+ * (the glob view) it links to the board filtered so; with neither it is plain.
  */
-export const SplitChip = ({ glob }: { glob: GlobView }) => {
-  const chip = splitChip(glob);
-  if (chip === null) return null;
-  return (
-    <Tip text={`${chip.tip}. ${chip.source} opens that glob`}>
-      <span
-        className='inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground'
-        data-testid='split-chip'
-      >
-        <GitBranch className='h-3 w-3 shrink-0' aria-hidden />
-        <Link
-          to={boardGlobHref(glob.boardId, chip.source, { section: 'size' })}
-          className='truncate underline-offset-2 hover:underline'
-          aria-label={`Split from ${chip.source}`}
-          data-testid='split-chip-open'
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          {chip.source}
+export const ArmSystemLabel = ({ step, onFilter, to }: { step: Pick<ListedHumanStep, 'title'>; onFilter?: () => void; to?: string }) => {
+  const tip = `A person has a step at release: ${step.title}`;
+  const className = 'inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] font-semibold text-primary';
+  const content = (
+    <>
+      <Rocket className='h-3 w-3 shrink-0' aria-hidden />
+      Arm system
+    </>
+  );
+  if (to !== undefined) {
+    return (
+      <Tip text={tip}>
+        <Link to={to} className={cn(className, 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')} data-testid='arm-system-label'>
+          {content}
         </Link>
-      </span>
+      </Tip>
+    );
+  }
+  return (
+    <Tip text={tip}>
+      <ChipButton onOpen={onFilter} className={className} testId='arm-system-label'>
+        {content}
+      </ChipButton>
     </Tip>
   );
 };
@@ -564,27 +571,6 @@ export const DecisionChips = ({ glob, onOpen }: { glob: GlobView; onOpen?: () =>
   );
 };
 
-/** The muted marker for work still to come that only a person can do (a rollout): shown from the moment it is known, in every column. */
-const UpcomingStepsChip = ({ glob, onOpen }: { glob: GlobView; onOpen: () => void }) => {
-  const steps = glob.humanSteps ?? [];
-  const upcoming = upcomingSteps(steps);
-  if (upcoming === null) return null;
-  const [first, ...more] = upcoming.kinds;
-  const tip = steps
-    .filter((s) => s.state === 'pending')
-    .map((s) => (s.predicted === true ? PREDICTED_ROLLOUT_TEXT : `${s.title}: due ${dueText(s.due)}`))
-    .join('\n');
-  return (
-    <Tip text={tip}>
-      <ChipButton onOpen={onOpen} className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' testId='upcoming-steps-chip'>
-        <HumanIcon className='h-3 w-3' decorative />
-        {first?.replace(/_/g, ' ')}
-        {more.length > 0 && ` +${String(more.length)}`}
-      </ChipButton>
-    </Tip>
-  );
-};
-
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
@@ -618,6 +604,7 @@ export const GlobCard = ({
   viewer,
   waitingOnThis = 0,
   onFilterGroup,
+  onFilterArmSystem,
   groupHref,
   groupProgress,
 }: {
@@ -625,6 +612,8 @@ export const GlobCard = ({
   onOpen: () => void;
   /** Filters the board to a group (the card's group tag); without it the tag is plain. */
   onFilterGroup?: (name: string) => void;
+  /** Filters the board to globs that need a person at release (the "Arm system" label); without it the label is plain. */
+  onFilterArmSystem?: () => void;
   /** The group's page; with it the tag links there instead of filtering. */
   groupHref?: string;
   /** The group's progress ("3/5") while it has more than one open glob. */
@@ -673,6 +662,7 @@ export const GlobCard = ({
   const decision = decisionOf(glob) !== null;
   const status = cornerStatus(glob, now, viewer, repo);
   const blocked = hasBlocker(glob, now, viewer);
+  const armStep = decision ? null : needsRelease(glob.humanSteps ?? []);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
   const shown = blocked ? [] : moves;
 
@@ -715,7 +705,7 @@ export const GlobCard = ({
         {/* The ID never truncates: the status text gives way first, the category icon never moves. */}
         <span className='inline-flex shrink-0 gap-[3px] whitespace-nowrap' data-testid='card-id'>
           <span>{glob.id}</span>
-          <span aria-hidden='true'>·</span>
+          <DotSeparator />
           <span data-testid='card-type'>
             {decision ? 'decision' : glob.type}
             {glob.type === 'super' && glob.list === 'planning' ? ' · pairing' : ''}
@@ -725,17 +715,13 @@ export const GlobCard = ({
           {tag !== undefined && (
             <>
               <MoveTagView tag={tag} />
-              <span aria-hidden='true' className='shrink-0' data-testid='card-corner-separator'>
-                ·
-              </span>
+              <DotSeparator testId='card-corner-separator' />
             </>
           )}
           {tag === undefined && status !== null && (
             <>
               <CornerStatusView status={status} pending={pending} onAct={onAct} onOpenSection={onOpenSection} />
-              <span aria-hidden='true' className='shrink-0' data-testid='card-corner-separator'>
-                ·
-              </span>
+              <DotSeparator testId='card-corner-separator' />
             </>
           )}
           <CategoryIcon category={glob.category} />
@@ -753,7 +739,6 @@ export const GlobCard = ({
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
-            <SplitChip glob={glob} />
             {waitingOnThis > 0 && (
               <Tip text={`${String(waitingOnThis)} in Planning wait for this glob to merge. Opens its related globs`}>
                 <ChipButton onOpen={() => onOpenSection(cardTargets.related())} className='font-mono text-[11px] text-muted-foreground' testId='waiting-on-this-chip'>
@@ -761,7 +746,6 @@ export const GlobCard = ({
                 </ChipButton>
               </Tip>
             )}
-            <UpcomingStepsChip glob={glob} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
             {glob.clash != null && (
               <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
                 <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
@@ -806,7 +790,10 @@ export const GlobCard = ({
             </div>
           )}
         </div>
-        <Avatar email={person} planner={glob.implementer === null} />
+        <div className='flex shrink-0 items-center gap-1.5'>
+          {armStep !== null && <ArmSystemLabel step={armStep} onFilter={onFilterArmSystem} />}
+          <Avatar email={person} planner={glob.implementer === null} />
+        </div>
       </div>
     </div>
   );

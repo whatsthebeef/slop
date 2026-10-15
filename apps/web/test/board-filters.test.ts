@@ -118,8 +118,8 @@ describe('board filters', () => {
     expect(toggleOption(category, 'bug', 'bug')).toBe('');
   });
 
-  it('has the category and ID filters, the temporary group filter and the Only human toggle', () => {
-    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['category', 'id', 'group', 'human']);
+  it('has the category and ID filters, the temporary group filter, the Only human toggle and the Arm system toggle', () => {
+    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['category', 'id', 'group', 'human', 'arm']);
   });
 
   it('ignores the removed yourTurn and move parameters and an old human value in links', () => {
@@ -180,6 +180,33 @@ describe('board filters', () => {
       expect(params.toString()).toBe('glob=s1t1&human=1');
       expect(parseFilters(params)).toEqual({ category: 'feature,task,bug', human: '1' });
       expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
+    });
+  });
+
+  describe('Arm system', () => {
+    const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
+    const armed = view({ status: 'planning', humanSteps: [step] });
+    const predicted = view({ status: 'planning', humanSteps: [{ ...step, predicted: true }] });
+    const plain = view({ status: 'planning' });
+
+    it('is off by default and on for arm=1', () => {
+      expect(parse('arm=1')).toEqual({ category: 'feature,task,bug', arm: '1' });
+      expect(parse('arm=nope')).toEqual(defaultFilters());
+      expect(activeCount(parse('arm=1'))).toBe(1);
+    });
+
+    it('shows only globs that need a person at release', () => {
+      const values = parse('arm=1');
+      expect(matchesFilters(armed, values)).toBe(true);
+      expect(matchesFilters(predicted, values)).toBe(false);
+      expect(matchesFilters(plain, values)).toBe(false);
+      expect(matchesFilters(plain, parse(''))).toBe(true);
+    });
+
+    it('round-trips through the URL', () => {
+      const params = writeFilters(new URLSearchParams('glob=s1t1'), { ...defaultFilters(), arm: '1' });
+      expect(params.toString()).toBe('glob=s1t1&arm=1');
+      expect(parseFilters(params)).toEqual({ category: 'feature,task,bug', arm: '1' });
     });
   });
 });

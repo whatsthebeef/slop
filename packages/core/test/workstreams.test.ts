@@ -3,7 +3,7 @@ import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
-import { parseWorkstreams, sameWorkstreams } from '../src/domain/workstreams.js';
+import { parseWorkstreams, sameWorkstreams, summariseWorkstreams } from '../src/domain/workstreams.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
 const WS = (name: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -102,6 +102,21 @@ describe('parseWorkstreams', () => {
   });
 });
 
+describe('summariseWorkstreams', () => {
+  it('keeps only the name, state and conflicts of each workstream', () => {
+    const parsed = parseWorkstreams(record({ ...BLOCK, workstreams: [WS('W0', { state: 'running', conflicts: ['a.ts'] }), WS('W1', { state: 'failed', attempts: 2 }), WS('W2')] }));
+    if (parsed.kind !== 'ok') throw new Error('expected ok');
+    expect(summariseWorkstreams(parsed.block)).toEqual({
+      fannedOut: true,
+      items: [
+        { name: 'W0', state: 'running', conflicts: ['a.ts'] },
+        { name: 'W1', state: 'failed', conflicts: [] },
+        { name: 'W2', state: 'done', conflicts: [] },
+      ],
+    });
+  });
+});
+
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
   return result.value;
@@ -112,7 +127,9 @@ const OPTIONS = { commitSha: 'abc', runId: null, agentSetVersion: null };
 describe('the record hook', () => {
   let store: MemoryStore;
   let artifacts: ArtifactService;
+  let globs: GlobService;
   let globId: string;
+  let boardId: number;
 
   const put = async (content: string, options = OPTIONS) => {
     const stored = unwrap(await artifacts.putArtifact(ADMIN, globId, 'implementation_plan', content, options));
@@ -126,9 +143,9 @@ describe('the record hook', () => {
     const notifier = new RecordingNotifier();
     const clock = { now: () => '2026-10-14T12:00:00.000Z' };
     artifacts = new ArtifactService({ store, clock, notifier });
-    const globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'run-1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
+    globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'run-1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     globId = unwrap(await globs.create(ADMIN, { boardId, title: 'Big', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null })).id;
   });
 
@@ -182,5 +199,15 @@ describe('the record hook', () => {
     expect(recorded().map((e) => e.data.version)).toEqual([1]);
     await put(record({ ...BLOCK, maxParallel: 3 }), { ...OPTIONS, commitSha: 'new' });
     expect(recorded().map((e) => e.data.version)).toEqual([1, 4]);
+  });
+
+  it('workstreamsOf gives the latest block of a fanned-out glob, and nothing for a small one or an unparsed record', async () => {
+    expect((await globs.workstreamsOf(boardId)).size).toBe(0);
+    await put(record(BLOCK));
+    await put(record({ ...BLOCK, workstreams: [WS('W0'), WS('W1', { state: 'running', needs: ['W0'] }), WS('W2', { needs: ['W0'] })] }), { ...OPTIONS, commitSha: 'def' });
+    const found = await globs.workstreamsOf(boardId);
+    expect(found.get(globId)?.items.map((i) => `${i.name}:${i.state}`)).toEqual(['W0:done', 'W1:running', 'W2:done']);
+    await put(record({ fannedOut: false, maxParallel: 1, workstreams: [] }), { ...OPTIONS, commitSha: 'small' });
+    expect((await globs.workstreamsOf(boardId)).has(globId)).toBe(false);
   });
 });

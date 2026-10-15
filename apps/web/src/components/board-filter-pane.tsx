@@ -1,4 +1,4 @@
-import { ListFilter, X } from 'lucide-react';
+import { ListFilter, Rocket, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { HumanIcon } from '@/components/actor-icons';
@@ -151,7 +151,7 @@ const Control = ({
         data-testid={`filter-${filter.key}`}
         onClick={() => onChange(pressed ? '' : '1')}
       >
-        <HumanIcon className="h-3.5 w-3.5" decorative />
+        {filter.key === 'arm' ? <Rocket className="h-3.5 w-3.5" aria-hidden /> : <HumanIcon className="h-3.5 w-3.5" decorative />}
         {filter.label}
       </button>
     );

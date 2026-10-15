@@ -20,6 +20,8 @@ import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.
 import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
 import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, LabelName, Relation, RelationGate, RelationUntil, SlopType } from '../domain/types.js';
+import { parseWorkstreams, summariseWorkstreams } from '../domain/workstreams.js';
+import type { WorkstreamsSummary } from '../domain/workstreams.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
@@ -468,6 +470,23 @@ export class GlobService {
       if (typeof source !== 'string' || typeof part !== 'number' || !Array.isArray(parts)) continue;
       found.set(e.globId, { source, part, parts: parts.filter((p): p is string => typeof p === 'string') });
     }
+    return found;
+  }
+
+  /**
+   * The latest recorded workstreams block of each fanned-out glob on a board, in its compact form, for the card's workstream states.
+   * A glob whose work was not fanned out, or whose block did not parse, has none.
+   */
+  async workstreamsOf(boardId: number): Promise<Map<string, WorkstreamsSummary>> {
+    const events = await this.deps.store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['WorkstreamsRecorded']));
+    const latest = new Map<string, WorkstreamsSummary | null>();
+    // Oldest first, so the last write of a glob wins (including one that no longer parses or is not fanned out).
+    for (const e of events) {
+      const parsed = parseWorkstreams(`## Workstreams\n\n\`\`\`workstreams\n${JSON.stringify(e.data)}\n\`\`\``);
+      latest.set(e.globId, parsed.kind === 'ok' && parsed.block.fannedOut ? summariseWorkstreams(parsed.block) : null);
+    }
+    const found = new Map<string, WorkstreamsSummary>();
+    for (const [id, summary] of latest) if (summary !== null) found.set(id, summary);
     return found;
   }
 
