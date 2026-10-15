@@ -129,8 +129,15 @@ export const stateText = (step: ListedHumanStep): string => {
 export const scriptArtifactPath = (boardId: number, globId: string, script: Extract<HumanStepScript, { artifact: string }>): string =>
   globPath(boardId, globId, { section: 'artifacts', artifact: 'rollout_script', label: script.artifact });
 
+/** The command that runs a repo script: `bash <path>`, which works whether or not the file is executable. */
+export const scriptRunCommand = (path: string): string => `bash ${path}`;
+
+/** Where a repo script is on GitHub: at the base branch once the glob has merged (the squash commit is there), else at the PR's head; null without a repo. */
+export const scriptSourceUrl = (repo: string | null | undefined, path: string, ref: string | null | undefined): string | null =>
+  repo == null || repo === '' || ref == null || ref === '' ? null : `https://github.com/${repo}/blob/${ref}/${path}`;
+
 /**
- * What the copy button copies. A repo path copies as it is. An artifact script copies its text when the server can
+ * What the copy button copies. A repo path copies as the command that runs it (`bash <path>`). An artifact script copies its text when the server can
  * read it, and otherwise the link to it (the artifact kind arrives in a later part, so reading may be refused).
  */
 export const scriptCopyText = async (
@@ -140,7 +147,7 @@ export const scriptCopyText = async (
   readScript: (globId: string, label: string) => Promise<string | null>,
   origin: string,
 ): Promise<string> => {
-  if ('path' in script) return script.path;
+  if ('path' in script) return scriptRunCommand(script.path);
   const text = await readScript(globId, script.artifact).catch(() => null);
   return text ?? `${origin}${scriptArtifactPath(boardId, globId, script)}`;
 };
