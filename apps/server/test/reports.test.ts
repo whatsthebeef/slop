@@ -100,7 +100,7 @@ describe('time reports', () => {
     expect(events.every((e) => TIME_EVENT_TYPES.some((t) => t === e.type) && e.at < '2026-09-07T13:00:00.000Z')).toBe(true);
     expect(events.map((e) => e.type)).toEqual(['GlobCreated', 'GlobCreated', 'StatusChanged', 'StatusChanged']);
     expect(events.map((e) => e.at)).toEqual([...events.map((e) => e.at)].sort());
-    expect(events[0]?.data).toEqual({ status: 'planning', category: 'feature', type: 'same', fix: false, workKind: 'rnd' });
+    expect(events[0]?.data).toEqual({ status: 'planning', category: 'task', type: 'same', fix: false, workKind: 'rnd' });
     expect(events[2]?.data).toEqual({ to: expect.any(String) as unknown });
     const keysOnly = await store.transaction((tx) => tx.listEventsUntil('2026-09-07T13:00:00.000Z', ['GlobCreated'], []));
     expect(keysOnly.map((e) => e.data)).toEqual([{}, {}]);
@@ -144,8 +144,9 @@ describe('time reports', () => {
     const ids = [...real, ...Array.from({ length: 70_000 }, (_, i) => `s999t${String(i)}`)];
     const facts = await store.transaction((tx) => tx.globFacts(ids));
     expect(facts.map((f) => f.id).sort()).toEqual([...real].sort());
-    expect(facts.find((f) => f.category === 'feature')).toMatchObject({ boardId, planner: DEV, type: 'same' });
-    expect(facts.map((f) => f.category).sort()).toEqual(['feature', 'task']);
+    // The asked feature is stored as a task (its R&D work kind is on its events); no new glob is a feature.
+    expect(facts.find((f) => f.id === real[0])).toMatchObject({ boardId, planner: DEV, type: 'same', category: 'task' });
+    expect(facts.map((f) => f.category).sort()).toEqual(['task', 'task']);
     expect(await store.transaction((tx) => tx.globFacts([]))).toEqual([]);
   });
 

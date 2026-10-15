@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
-import { IntakeService, LlmUnavailable, waitedForIn } from '../src/app/intake-service.js';
+import { IntakeService, LlmUnavailable, categoryFor, waitedForIn } from '../src/app/intake-service.js';
 import { INTAKE_PROMPT_VERSION } from '../src/domain/intake-learning.js';
 import type { Result } from '../src/domain/errors.js';
 import { DEFAULT_RISK_AREAS } from '../src/domain/risk-area.js';
@@ -142,15 +142,16 @@ describe('intake', () => {
   it('keeps a model answer of sub + feature, and repairs the matrix around explicit fields', async () => {
     answer = '{"title":"T","summary":"S","type":"sub","category":"feature","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
     const p = await propose('add export', { type: 'sub' });
-    expect([p.type, p.category]).toEqual(['sub', 'feature']);
+    // An old model answer of feature still reads as R&D, but the proposal's category is a task.
+    expect([p.type, p.category, p.workKind]).toEqual(['sub', 'task', 'rnd']);
     const q = await propose('add export');
-    expect([q.type, q.category]).toEqual(['sub', 'feature']);
+    expect([q.type, q.category, q.workKind]).toEqual(['sub', 'task', 'rnd']);
     answer = '{"title":"T","summary":"S","type":"super","category":"bug","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
     const r = await propose('fix it');
     // An invalid combination is repaired optimistically: a bug can be a sub.
     expect([r.type, r.category]).toEqual(['sub', 'bug']);
     const s = await propose('fix it', { type: 'super' });
-    expect([s.type, s.category]).toEqual(['super', 'feature']);
+    expect([s.type, s.category]).toEqual(['super', 'task']);
   });
 
   it("suggests a branch-deploy environment the request names as a target; explicit fields win", async () => {
@@ -256,12 +257,17 @@ describe('intake', () => {
   });
 
   describe('fix and work kind', () => {
+    it('derives only task or bug as the category: R&D work is a task', () => {
+      expect(categoryFor(false)).toBe('task');
+      expect(categoryFor(true)).toBe('bug');
+    });
+
     it('reads the new shape with a reason each', async () => {
       answer = '{"title":"T","plan":"p","type":"sub","fix":true,"fixReason":"Sync crashes","workKind":"maintenance","workKindReason":"A repair","confidence":"low"}';
       const p = await propose('sync crashes on retry');
       expect(p).toMatchObject({ fix: true, fixSource: 'inferred', fixReason: 'Sync crashes', workKind: 'maintenance', workKindReason: 'A repair', category: 'bug', categoryConfidence: 'low' });
       answer = '{"title":"T","plan":"p","type":"sub","fix":false,"workKind":"rnd"}';
-      expect(await propose('add export')).toMatchObject({ fix: false, workKind: 'rnd', category: 'feature' });
+      expect(await propose('add export')).toMatchObject({ fix: false, workKind: 'rnd', category: 'task' });
     });
 
     it('still reads the old category answer, with its reason and confidence', async () => {
@@ -284,14 +290,14 @@ describe('intake', () => {
 
     it('a person\'s fix, work kind or old category is a person\'s source and wins over the model', async () => {
       answer = '{"title":"T","plan":"p","type":"sub","fix":true,"workKind":"maintenance"}';
-      expect(await propose('x', { fix: false, workKind: 'rnd' })).toMatchObject({ fix: false, fixSource: 'person', fixReason: null, workKind: 'rnd', workKindSource: 'person', category: 'feature', needsConfirmation: false });
+      expect(await propose('x', { fix: false, workKind: 'rnd' })).toMatchObject({ fix: false, fixSource: 'person', fixReason: null, workKind: 'rnd', workKindSource: 'person', category: 'task', needsConfirmation: false });
       expect(await propose('x', { category: 'bug' })).toMatchObject({ fix: true, fixSource: 'person', workKind: 'maintenance', workKindSource: 'person' });
-      expect(await propose('x', { category: 'feature' })).toMatchObject({ fix: false, workKind: 'rnd' });
+      expect(await propose('x', { category: 'feature' })).toMatchObject({ fix: false, workKind: 'rnd', category: 'task' });
     });
 
     it('never makes an explicit super a fix', async () => {
       answer = '{"title":"T","plan":"p","type":"sub","fix":true,"workKind":"maintenance"}';
-      expect(await propose('x', { type: 'super' })).toMatchObject({ type: 'super', fix: false, category: 'feature' });
+      expect(await propose('x', { type: 'super' })).toMatchObject({ type: 'super', fix: false, category: 'task' });
       expect(await propose('x', { type: 'super', fix: true })).toMatchObject({ type: 'sub', fix: true });
     });
 

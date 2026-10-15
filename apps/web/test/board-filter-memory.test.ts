@@ -64,6 +64,14 @@ describe('board filter memory', () => {
     }
   });
 
+  it('drops a remembered legacy category value', () => {
+    const store = fake();
+    store.data.set('slop.board-filters.1', 'category=feature&fix=1');
+    expect(loadFilterMemory(store, 1)?.toString()).toBe('fix=1');
+    store.data.set('slop.board-filters.1', 'category=feature');
+    expect(loadFilterMemory(store, 1)).toBeNull();
+  });
+
   it('ignores junk in storage', () => {
     const store = fake();
     store.data.set('slop.board-filters.1', 'glob=s1&x=y');

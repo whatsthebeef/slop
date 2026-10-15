@@ -237,14 +237,14 @@ describe('size forecast', () => {
   describe('code footprint', () => {
     it('predicts files that overlap what a past merged glob changed', async () => {
       const actual = ['apps/server/src/a.ts', 'apps/server/src/b.ts', 'apps/server/src/c.ts', 'apps/server/src/e.ts'];
-      await seedChange('s1f1', `Files: ${actual.join(', ')}`);
+      await seedChange('s1t1', `Files: ${actual.join(', ')}`);
       script = [{ action: 'tree', path: '' }, { action: 'grep', pattern: 'badge' }, ...done(...actual.slice(0, 3), 'apps/server/src/d.ts')];
       footprintSpends.length = 0;
       const footprint = await forecaster.footprint(boardId, THREE);
       // Every turn of the loop goes to the board's ledger as the size check.
       expect(footprintSpends.length).toBeGreaterThanOrEqual(3);
       for (const spend of footprintSpends) expect(spend).toEqual({ boardId, source: 'size_check' });
-      const changed = await store.transaction((tx) => tx.changeCandidates({ boardId, query: '', mode: 'all_time', globId: 's1f1' }, 3));
+      const changed = await store.transaction((tx) => tx.changeCandidates({ boardId, query: '', mode: 'all_time', globId: 's1t1' }, 3));
       const real = parseFilesLine(changed[0]?.text ?? '')?.paths ?? [];
       const hit = (footprint?.files ?? []).filter((f) => real.includes(f)).length;
       expect(hit / real.length).toBeGreaterThanOrEqual(0.75);
@@ -292,18 +292,18 @@ describe('size forecast', () => {
 
   describe('reference class', () => {
     it('shows the real sizes and outcomes of similar merged globs', async () => {
-      // The three merged globs (s1f1 to s1f3) exist on the board, so their events are readable.
+      // The three merged globs (s1t1 to s1t3) exist on the board, so their events are readable.
       for (let i = 0; i < 3; i++) await create(checklist(1));
-      for (const [id, files, lines] of [['s1f1', 'Files: a.ts, b.ts', 80], ['s1f2', 'Files: a.ts, b.ts, c.ts, +3 more', 300], ['s1f3', 'Files: c.ts', 20]] as const) {
+      for (const [id, files, lines] of [['s1t1', 'Files: a.ts, b.ts', 80], ['s1t2', 'Files: a.ts, b.ts, c.ts, +3 more', 300], ['s1t3', 'Files: c.ts', 20]] as const) {
         await seedChange(id, files);
-        await merge(id, lines, id === 's1f2' ? { fixGlobs: ['s1b1'] } : {}, id === 's1f2' ? ['RunFailed'] : []);
+        await merge(id, lines, id === 's1t2' ? { fixGlobs: ['s1b1'] } : {}, id === 's1t2' ? ['RunFailed'] : []);
       }
       const reference = await forecaster.referenceClass(boardId, THREE);
-      expect(reference?.samples.map((s) => s.globId).sort()).toEqual(['s1f1', 's1f2', 's1f3']);
-      expect(reference?.samples.find((s) => s.globId === 's1f2')).toMatchObject({ files: 6, lines: 300, reworkRuns: 1, followUpBugs: 1, cleanSub: false });
+      expect(reference?.samples.map((s) => s.globId).sort()).toEqual(['s1t1', 's1t2', 's1t3']);
+      expect(reference?.samples.find((s) => s.globId === 's1t2')).toMatchObject({ files: 6, lines: 300, reworkRuns: 1, followUpBugs: 1, cleanSub: false });
       // The store reads are bounded by glob ids, so the reference class never needs the board's whole history.
-      expect((await store.transaction((tx) => tx.listGlobOutcomes(boardId, ['s1f1']))).map((o) => o.globId)).toEqual(['s1f1']);
-      expect(new Set((await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', undefined, ['s1f2']))).map((e) => e.globId))).toEqual(new Set(['s1f2']));
+      expect((await store.transaction((tx) => tx.listGlobOutcomes(boardId, ['s1t1']))).map((o) => o.globId)).toEqual(['s1t1']);
+      expect(new Set((await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', undefined, ['s1t2']))).map((e) => e.globId))).toEqual(new Set(['s1t2']));
       expect(await store.transaction((tx) => tx.listGlobOutcomes(boardId, []))).toEqual([]);
       expect(reference?.summary).toContain('3 similar merged globs');
       expect(reference?.summary).toContain('median 80 lines');
