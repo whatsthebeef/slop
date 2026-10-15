@@ -61,7 +61,9 @@ export const mainAction = (
 ): Action | null => {
   if (preferred !== undefined && available.includes(preferred)) return preferred;
   // The machine has failed again after a retry: a person takes over, and Retry moves into the menu.
-  if (!stepFirst && failedRepeatedly(glob)) {
+  // Unless it has moved on since: a person fixed it, so landing it (Merge, or Mark ready) is allowed and leads instead.
+  const movedOn = available.includes('merge') || available.includes('mark_ready');
+  if (!stepFirst && !movedOn && failedRepeatedly(glob)) {
     const person = TAKE_OVERS.find((action) => available.includes(action));
     if (person !== undefined) return person;
   }
@@ -85,11 +87,13 @@ const PROMOTION: readonly Action[] = ['cancel_merge', 'review_now', 'take_over',
 
 /**
  * The menu item to lead with when `mainAction` finds no natural main, so the split button never shows a lone ▾:
- * Cancel merge, Retry review, Pick up, else the first remaining item. Never a destructive action (those stay in the
+ * Cancel merge, Retry review, Pick up, else the first remaining item; none while the glob is merging. Never a destructive action (those stay in the
  * Reset area), and a person's own Review code only as the last resort (only the retry of a missing review leads). Null when
  * nothing is left, and the row then shows no actions.
  */
 export const promotedAction = (available: readonly Action[], glob: Subject): Action | null => {
+  // Merging is waiting for the checks: nothing is the thing to do, so no retry or review button reads as the next step.
+  if (glob.status === 'merging') return null;
   const rest = available.filter((a) => !NEVER_MAIN.includes(a));
   const leading = rest.filter((a) => a !== 'review_now' || isReviewRetry(glob));
   // Only when nothing else is left does a person's own Review code lead, so the row isn't empty.

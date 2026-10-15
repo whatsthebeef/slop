@@ -100,6 +100,12 @@ describe('mainAction after repeated failures', () => {
     expect(failedRepeatedly({ runs: [run('failed'), run('superseded'), run('failed')] })).toBe(true);
   });
 
+  it('leads with Merge once a person has fixed it, with Pick up in the menu', () => {
+    expect(pick(['merge', 'pick_up'], failed)).toBe('merge');
+    expect(pick(['mark_ready', 'pick_up'], failed)).toBe('mark_ready');
+    expect(pick(['retrigger', 'pick_up'], failed)).toBe('pick_up');
+  });
+
   it('leaves a due blocking step as the main button, even after repeated failures', () => {
     expect(mainAction(['retrigger', 'pick_up'], failed, false, true)).toBe('retrigger');
     expect(mainAction(['pick_up'], failed, false, true)).toBeNull();
@@ -143,6 +149,12 @@ describe('promotedAction', () => {
     expect(promotedAction(['review_now', 'investigate', 'pick_up'], own)).toBe('pick_up');
     expect(promotedAction(['review_now', 'investigate'], own)).toBe('investigate');
     expect(promotedAction(['review_now', 'delete'], own)).toBe('review_now');
+  });
+
+  it('promotes nothing while the glob is merging', () => {
+    const merging = glob({ type: 'sub', status: 'merging', pr: pr('ready') });
+    expect(promotedAction(['review_now', 'start_again', 'delete'], merging)).toBeNull();
+    expect(pick(['review_now', 'start_again', 'delete'], merging)).toBeNull();
   });
 
   it('falls back to the first remaining item', () => {
