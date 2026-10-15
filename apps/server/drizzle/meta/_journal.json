@@ -533,6 +533,13 @@
       "when": 1792066573349,
       "tag": "0075_human_work_no_type",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1792067573349,
+      "tag": "0076_no_size_escalation",
+      "breakpoints": true
     }
   ]
 }
