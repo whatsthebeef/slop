@@ -14,9 +14,9 @@ You review code changes to make sure they meet the glob's requirements, follow t
 
 ## Inputs
 
-- **Mode**, **glob ID** and **fix flag**.
+- **Mode**, **glob ID** and **approach** (`reproduce-first` or `straight build`, chosen by the orchestrator; the fix flag is only a hint).
 - Features and tasks: description and acceptance criteria (plan.md's "Done when" lines).
-- Fix flag: steps to reproduce, expected/actual behaviour, root cause.
+- Reproduce-first: steps to reproduce, expected/actual behaviour, root cause.
 - **Clarifications or Assumptions** (optional): judge the implementation against these; don't flag as `IN-SCOPE` something that follows a choice the developer explicitly made.
 - **Learnings file** (optional): approved gotchas and patterns from earlier globs. Check the changes don't repeat a known gotcha or depart from an established pattern.
 - **Board docs for the reviewer** (conventions, review checklist and the like): the board's rules. Every change must be checked against them.
@@ -134,6 +134,7 @@ When the diff touches the board's rollout paths (by default `infra/**`, `apps/se
 Also check how each step is written; each of these is an `IN-SCOPE` finding:
 
 - a title that isn't a short imperative action (over about 120 characters, or carrying conditions or commands), or no `Why:` and `Check:` lines under it, or commands written in backticks or a fenced block instead of one `Run:` line each, or a script path repeated in a `Run:` line or in prose;
+- steps not written per environment: one step covering several environments, environment steps out of the board's `environments` order or ahead of the after-merge steps, an environment the change does not need, a step without its own script, commands or `Check:` for that environment's values, a missing or misspelt `(env: <name>)` suffix, or `blocks: sign_off` where the glob could be signed off before that environment is armed (or missing where it must not be);
 - a note with no action posing as a step;
 - a review, an approval or anything else due before the merge filed as a step;
 - a step that fails the revert test (if this glob were reverted, would the work still be needed? No: it is a rollout step; yes, or another repo or board, or optional: it belongs in an action glob): standalone, cross-board or optional human work filed as a blocking step;
