@@ -501,8 +501,10 @@ export const codeHostExecutors = (
       if (effect.checkPrerequisites === true) {
         const awaited = await globs.startHolds(glob.id);
         if (awaited.length > 0) {
-          await globs.applyEvent(glob.id, (g, ctx) =>
-            machine.reportFailure(g, { reason: `Not fired: ${refusalText(awaited)}`, runId: effect.runId }, ctx),
+          await globs.applyEvent(
+            glob.id,
+            (g, ctx, facts) => machine.reportFailure(g, { reason: `Not fired: ${refusalText(awaited)}`, runId: effect.runId }, ctx, facts.relations),
+            { relations: true },
           );
           return 'done';
         }
@@ -520,8 +522,10 @@ export const codeHostExecutors = (
       }
       const secret = await routines.secretFor(effect.routineOwner, glob.boardId);
       if (secret === null) {
-        await globs.applyEvent(glob.id, (g, ctx) =>
-          machine.reportFailure(g, { reason: `${effect.routineOwner} has no routine set up`, runId: effect.runId }, ctx),
+        await globs.applyEvent(
+          glob.id,
+          (g, ctx, facts) => machine.reportFailure(g, { reason: `${effect.routineOwner} has no routine set up`, runId: effect.runId }, ctx, facts.relations),
+          { relations: true },
         );
         return 'done';
       }
@@ -537,7 +541,7 @@ export const codeHostExecutors = (
       const result = await fireRoutine(secret, text, health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
-        await globs.applyEvent(glob.id, (g, ctx) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx));
+        await globs.applyEvent(glob.id, (g, ctx, facts) => machine.reportFailure(g, { reason: result.reason, runId: effect.runId }, ctx, facts.relations), { relations: true });
         return 'done';
       }
       await globs.applyEvent(glob.id, (g, ctx) =>
