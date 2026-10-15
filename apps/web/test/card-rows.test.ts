@@ -167,7 +167,9 @@ describe('cornerStatus', () => {
   it('shows a red base as waiting, with the failing run in the tooltip', () => {
     const red = prOpen({ headChecks: { sha: head, state: 'failed', inheritedFrom: { base: 'main', since: null }, failure: { name: 'Lint', step: null, lines: ['x'], url: null } } });
     expect(at(red)).toMatchObject({ icon: 'hourglass' });
-    expect(at(red)?.text).toMatch(/main is red/);
+    expect(at(red)?.text).toBe('main is red');
+    const other = prOpen({ headChecks: { sha: head, state: 'failed', inheritedFrom: { base: 'develop', since: null }, failure: { name: 'Lint', step: null, lines: ['x'], url: null } } });
+    expect(at(other)).toMatchObject({ icon: 'hourglass', text: 'develop is red' });
   });
 
   it('names the machine fixing a problem rather than the problem', () => {
