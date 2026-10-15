@@ -19,13 +19,13 @@ describe('position indicator', () => {
 
   it('says who has a picked-up glob, keeps saying so after a long silence, and not while a run is live', () => {
     const picked = view({ status: 'in_progress', implementer: 'john.bower@example.com', updatedAt: NOW, currentRun: null, runs: [] });
-    expect(positionOf(picked, NOW)).toMatchObject({ holder: 'human', text: 'with John', label: 'with John' });
+    expect(positionOf(picked, NOW)).toMatchObject({ holder: 'human', text: 'Picked up', label: 'Picked up' });
     expect(positionOf(picked, NOW)?.tip).toContain('john.bower@example.com picked this up');
-    expect(positionOf(picked, later(60))).toMatchObject({ holder: 'human', text: 'with John' });
-    expect(positionOf(picked, later(2 * 24 * 60))).toMatchObject({ holder: 'human', text: 'with John, quiet 2 days', tone: 'text-muted-foreground' });
-    expect(positionOf(picked, NOW, { email: 'john.bower@example.com', role: 'dev' })).toMatchObject({ text: 'with you' });
+    expect(positionOf(picked, later(60))).toMatchObject({ holder: 'human', text: 'Picked up' });
+    expect(positionOf(picked, later(2 * 24 * 60))).toMatchObject({ holder: 'human', text: 'Picked up, quiet 2 days', tone: 'text-muted-foreground' });
+    expect(positionOf(picked, NOW, { email: 'john.bower@example.com', role: 'dev' })).toMatchObject({ text: 'Picked up' });
     const pairing = view({ type: 'super', status: 'in_progress', implementer: 'john.bower@example.com', updatedAt: NOW, currentRun: null, runs: [] });
-    expect(positionOf(pairing, later(90))).toMatchObject({ holder: 'human', text: 'pairing · John' });
+    expect(positionOf(pairing, later(90))).toMatchObject({ holder: 'human', text: 'pairing' });
     expect(positionOf(withRun('active', {}, { status: 'in_progress', implementer: 'dev@example.com' }), later(1))).toMatchObject({
       holder: 'machine',
       text: 'implementing',

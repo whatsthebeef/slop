@@ -1,7 +1,6 @@
 import { DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '@slop/core';
 import type { HumanStepViewer, MachineStep, MachineStepKind, Move } from '@slop/core';
 import type { GlobView } from './api';
-import { firstNameOf } from './person';
 
 /**
  * Where a glob is, in one indicator: who has the ball and what they are doing. The card's chip and the glob view's "Now" row
@@ -96,18 +95,17 @@ const quietWords = (minutes: number): string => {
 };
 
 /**
- * A glob a person holds, picked up (no machine run) or a super in a pairing session: always says who ("with John", "pairing · John",
- * "with you" for the viewer), never "nobody". A long silence only adds how long, in the same muted human mark.
+ * A glob a person holds, picked up (no machine run) or a super in a pairing session: says "Picked up" or "pairing" with the human icon and no name (the card's avatar says who; the
+ * tooltip and the activity log carry the name and when), never "nobody". A long silence only adds how long.
  */
 const heldByPerson = (move: Move, now: string, viewer?: HumanStepViewer): Position => {
   const who = move.who ?? '';
   const mine = viewer !== undefined && who === viewer.email;
-  const name = mine ? 'you' : who === '' ? 'someone' : firstNameOf(who);
   const full = mine ? 'You' : who === '' ? 'Someone' : who;
   const minutes = move.minutes ?? minutesSince(move.since, now);
   const quiet = minutes !== null && minutes >= QUIET_AFTER_MINUTES ? quietWords(minutes) : null;
   const pairing = move.reason === PAIRING_REASON;
-  const text = pairing ? `pairing · ${name}` : `with ${name}${quiet === null ? '' : `, ${quiet}`}`;
+  const text = pairing ? 'pairing' : `Picked up${quiet === null ? '' : `, ${quiet}`}`;
   const ago = minutes === null ? '' : ` ${minutes < 60 ? `${String(minutes)} min` : minutes < QUIET_AFTER_MINUTES ? `${String(Math.round(minutes / 60))} h` : `${String(Math.round(minutes / 1440))} d`} ago`;
   return {
     holder: 'human',
