@@ -133,8 +133,8 @@ describe('the KB pipeline steps on the outbox', () => {
       const next: LearningWire = { ...item, evidence: 'Changed evidence', draft: null, draftedAgainstVersion: null, rationale: null, version: 2 };
       const before = store.state.artifacts.length;
       await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded(next, 1));
-      // (The assessment follows the draft.)
-      expect(store.state.artifacts.slice(before).map((a) => [a.kind, a.content === ''])).toEqual([['plan', false], ['draft', true], ['assessment', false]]);
+      // (The assessment and the recommendation follow the draft.)
+      expect(store.state.artifacts.slice(before).map((a) => [a.kind, a.content === ''])).toEqual([['plan', false], ['draft', true], ['assessment', false], ['assessment', false]]);
       expect(await read(store)).toMatchObject({ evidence: 'Changed evidence', draft: null, processing: 'routed', version: 2 });
       // Evidence merged in is never taken away.
       await expect(store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...next, extraEvidence: [], version: 3 }, 2))).rejects.toThrow(/never taken away/);

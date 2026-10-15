@@ -7,6 +7,9 @@ import { KbPipeline } from '../src/app/kb-pipeline.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
 import { boardLearnings } from '../src/app/learning-reads.js';
+import { DecisionGlobService } from '../src/app/decision-glob-service.js';
+import type { DecisionAttributes } from '../src/domain/attributes.js';
+import type { LearningAssessmentFacts } from '../src/domain/decision-glob.js';
 import { SuggestService } from '../src/app/suggest-service.js';
 import type { Result } from '../src/domain/errors.js';
 import { suggestEffect } from '../src/domain/events.js';
@@ -16,8 +19,10 @@ import {
   overlappingMerges,
   prefillOf,
   readSuggestion,
+  RULES_MODEL,
   recentOutcomes,
   renderSuggestion,
+  rulesSuggestion,
   siblingLearnings,
   SUGGEST_PROMPT_VERSION,
   SUGGEST_SIBLINGS_MAX,
@@ -219,6 +224,67 @@ describe('suggest', () => {
     });
   });
 
+  describe('the recommendation is always there and never older than the draft', () => {
+    const latest = async (id: string) => {
+      const versions = await store.transaction((tx) => tx.artifactVersions(id, 'assessment', SUGGESTION_LABEL));
+      const last = versions.at(-1);
+      return { count: versions.length, stored: last === undefined ? null : readSuggestion(last.content) };
+    };
+
+    it('leans on the statement alone at creation, then is written again once routed and drafted, with no model call', async () => {
+      const made = unwrap(await knowledge.submitLearning(DEV, boardId, { sourceGlobId: workId, type: 'gotcha', statement: 'Lint with warnings as errors', evidence: 'Seen twice' }));
+      const first = await latest(made.id);
+      expect(first.stored).toMatchObject({ model: RULES_MODEL, suggestion: { action: 'approve' }, stamp: { draftVersion: null } });
+      expect(first.stored?.suggestion.reason).toContain('statement alone');
+
+      unwrap(await knowledge.changeTarget(ADMIN, made.id, (await item(made.id)).version, { kind: 'doc', name: 'build_test_lint', section: 'Lint' }));
+      drafter.answer(JSON.stringify({ section: 'Lint', content: 'Run eslint --max-warnings 0.', rationale: 'r' }));
+      expect(await queue.process(made.id)).toBe(true);
+      const after = await latest(made.id);
+      expect(after.count).toBeGreaterThan(first.count);
+      expect(after.stored?.stamp.draftVersion).not.toBeNull();
+      expect(after.stored?.suggestion.reason).toBe('Drafted, and nothing was flagged.');
+      expect(llm.requests).toEqual([]);
+      const view = unwrap(await suggest.view(ADMIN, made.id));
+      expect(view.stale).toBe(false);
+    });
+
+    it('is written again when the learning is drafted again, and never replaces a model answer made for the current draft', async () => {
+      const made = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
+      llm.answer(JSON.stringify({ action: 'approve', reason: 'Sound.' }));
+      unwrap(await suggest.request(ADMIN, made.id));
+      expect(await suggest.run(made.id)).toBe('done');
+      const modelled = await latest(made.id);
+      expect(modelled.stored?.model).toBe('test-model');
+      // Assessing again (nothing moved) keeps the model's answer.
+      const decisions = new DecisionGlobService({ store, clock, notifier, knowledge, globs });
+      unwrap(await decisions.assess(ADMIN, made.id));
+      expect((await latest(made.id)).count).toBe(modelled.count);
+    });
+
+    it('leans to reject, never to nothing, when the statement may already be covered', () => {
+      const attributes: DecisionAttributes = { scope: { kind: 'project', ref: null }, origin: { kind: 'submitted' }, channel: 'agent', outcome: null };
+      const facts: LearningAssessmentFacts = {
+        status: 'open',
+        coveredBy: null,
+        possiblyCoveredBy: { knowledgeKind: 'doc', name: 'build_test_lint', section: 'Lint', quote: 'Run eslint.', reason: 'Already says it' },
+        contradicts: [],
+        catalogCandidate: false,
+        staleSince: null,
+        processing: 'drafted',
+        document: null,
+        target: null,
+        draft: null,
+        occurrenceCount: 1,
+        sourceGlobIds: [],
+      };
+      const stored = rulesSuggestion({ attributes, item: facts, preview: null, conflicts: [] }, 1, START);
+      expect(stored.suggestion.action).toBe('reject');
+      expect(stored.suggestion.reason).toContain('safer');
+      expect(rulesSuggestion({ attributes, item: { ...facts, possiblyCoveredBy: null }, preview: null, conflicts: [] }, null, START).suggestion.action).toBe('approve');
+    });
+  });
+
   describe('request and run', () => {
     const answer = (value: unknown) => llm.answer(JSON.stringify(value));
 
@@ -244,7 +310,7 @@ describe('suggest', () => {
       expect(request?.prompt).toContain('Run eslint --max-warnings 0.');
       expect(request?.prompt).toContain('Run eslint.');
 
-      const versions = await store.transaction((tx) => tx.artifactVersions(made.id, 'assessment', SUGGESTION_LABEL));
+      const versions = (await store.transaction((tx) => tx.artifactVersions(made.id, 'assessment', SUGGESTION_LABEL))).filter((v) => readSuggestion(v.content)?.model !== RULES_MODEL);
       expect(versions).toHaveLength(1);
       // The deterministic assessment (no label) is untouched.
       expect((await store.transaction((tx) => tx.artifactVersions(made.id, 'assessment', ''))).every((a) => !a.content.includes('## Suggestion'))).toBe(true);
@@ -253,16 +319,16 @@ describe('suggest', () => {
       expect(viewed).toMatchObject({ stale: false, pending: false, suggestion: { model: 'test-model', suggestion: { action: 'merge_into', mergeInto: rival.id } } });
       expect(notifier.hints).toContainEqual({ kind: 'glob.artifacts', boardId, globId: made.id });
 
-      // Approving the rival moves the target's version: the suggestion no longer matches what it was made for.
+      // Approving the rival moves the target's version and drafts this one again: the model's answer no longer matches, so the rules' recommendation for the new draft replaces it as the latest.
       unwrap(await knowledge.approve(ADMIN, rival.id, (await item(rival.id)).version, { as: 'draft' }));
-      expect(unwrap(await suggest.view(ADMIN, made.id))).toMatchObject({ stale: true });
+      expect(unwrap(await suggest.view(ADMIN, made.id))).toMatchObject({ stale: false, suggestion: { model: RULES_MODEL } });
     });
 
     it('does not store an answer that merges into an unknown learning: the attempt fails', async () => {
       const made = await drafted('Lint with warnings as errors', 'Run eslint --max-warnings 0.');
       answer({ action: 'merge_into', reason: 'r', mergeInto: 's1k99', mergedText: 'x' });
       await expect(suggest.run(made.id)).rejects.toThrow(/Unusable suggestion/);
-      expect(await store.transaction((tx) => tx.artifactVersions(made.id, 'assessment', SUGGESTION_LABEL))).toEqual([]);
+      expect((await store.transaction((tx) => tx.artifactVersions(made.id, 'assessment', SUGGESTION_LABEL))).filter((v) => readSuggestion(v.content)?.model !== RULES_MODEL)).toEqual([]);
       llm.answer('not json at all');
       await expect(suggest.run(made.id)).rejects.toThrow(/Unusable suggestion/);
     });

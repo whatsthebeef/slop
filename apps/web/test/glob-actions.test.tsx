@@ -492,6 +492,51 @@ describe('glob view: Reset', () => {
     await user.click(within(area).getByRole('button', { name: 'Delete permanently' }));
     expect(cb.onDelete).toHaveBeenCalledTimes(1);
   });
+
+  it('renders no red area when the viewer has no destructive action', () => {
+    renderGlob(
+      view({
+        type: 'same',
+        status: 'pr_open',
+        list: 'reviewing',
+        branch: 's1t1',
+        pr: { number: 7, state: 'ready', headSha: 'aaa' },
+        allowedActions: ['merge'],
+      }),
+    );
+    expect(screen.queryByTestId('reset-area')).toBeNull();
+  });
+
+  it('offers Delete on a learning, warning that Reject is what stops repeats', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(
+      view({
+        category: 'decision',
+        status: 'in_progress',
+        list: 'doing',
+        branch: '',
+        pr: null,
+        allowedActions: ['delete'],
+        attributes: {
+          scope: { kind: 'project', ref: null },
+          origin: { kind: 'submitted' },
+          channel: 'human',
+          outcome: null,
+        },
+      }),
+    );
+    const area = screen.getByTestId('reset-area');
+    await user.click(within(area).getByRole('button', { name: /^Delete…/ }));
+    expect((await screen.findByTestId('delete-learning-warning')).textContent).toContain(
+      'Deleting forgets this learning. If slop spots the same thing again, it comes back as new. To say no and stop repeats, use Reject instead.',
+    );
+    const live = () => within(screen.getByTestId('reset-area'));
+    await user.click(live().getByRole('button', { name: 'Cancel' }));
+    expect(cb.onDelete).not.toHaveBeenCalled();
+    await user.click(live().getByRole('button', { name: /^Delete…/ }));
+    await user.click(live().getByRole('button', { name: 'Delete permanently' }));
+    expect(cb.onDelete).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('glob view: a decision in Doing', () => {
@@ -513,21 +558,21 @@ describe('glob view: a decision in Doing', () => {
       ...patch,
     });
 
-  it('has no header action: the block holds the one Approve change, which opens the approval', async () => {
+  it('has the outcome as the action row’s main button, the one Approve change, which opens the approval', async () => {
     const user = userEvent.setup();
     const cb = renderGlob(decision());
-    expect(screen.queryByTestId('main-action')).toBeNull();
-    expect(screen.queryByTestId('more-actions')).toBeNull();
     expect(screen.queryByText('Decide')).toBeNull();
-    const outcomes = await screen.findByTestId('outcomes');
-    await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
+    const row = await screen.findByTestId('glob-actions');
+    expect(screen.getAllByTestId('main-action')).toHaveLength(1);
+    expect(within(screen.getByTestId('proposal-block')).queryByRole('button', { name: /^Approve/ })).toBeNull();
+    await user.click(within(row).getByRole('button', { name: 'Approve change' }));
     expect(await screen.findByTestId('outcome-form-accept')).toBeTruthy();
     // Opening the form decides nothing; it never calls the server by itself.
     expect(cb.onAction).not.toHaveBeenCalled();
     expect(cb.onDecide).not.toHaveBeenCalled();
   });
 
-  it('lists Reject…, approve with edits, keeping the statement and a new recommendation in the block ▾ for an admin', async () => {
+  it('lists Reject…, approve with edits, keeping the statement and a new recommendation in the action row ▾ for an admin', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'globDiff').mockResolvedValue({
       target: null,
@@ -537,8 +582,8 @@ describe('glob view: a decision in Doing', () => {
       learning: { status: 'open', processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
     });
     renderGlob(decision(), { ...board, role: 'admin' });
-    await user.click(await screen.findByTestId('more-outcomes'));
-    const menu = await screen.findByTestId('outcomes-menu');
+    await user.click(await screen.findByTestId('more-actions'));
+    const menu = await screen.findByTestId('more-menu');
     await waitFor(() => expect(within(menu).getByText('Approve without changing a document')).toBeTruthy());
     expect(within(menu).getByText('Reject…')).toBeTruthy();
     expect(within(menu).getByText('Get a new recommendation')).toBeTruthy();
@@ -548,10 +593,10 @@ describe('glob view: a decision in Doing', () => {
     expect(within(menu).getByText('Needs work')).toBeTruthy();
   });
 
-  it('opens the reject reason in the block from its menu', async () => {
+  it('opens the reject reason in the body from the action row menu', async () => {
     const user = userEvent.setup();
     renderGlob(decision());
-    await user.click(await screen.findByTestId('more-outcomes'));
+    await user.click(await screen.findByTestId('more-actions'));
     await user.click(await screen.findByTestId('outcome-reject'));
     expect(await screen.findByTestId('outcome-form-reject')).toBeTruthy();
   });
@@ -567,7 +612,7 @@ describe('glob view: a decision in Doing', () => {
     renderGlob(decision(), { ...board, role: 'po' });
     const blocked = await screen.findByTestId('approve-blocked');
     expect(blocked.textContent).toContain('it changes the merge policy');
-    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
   });
 });
 

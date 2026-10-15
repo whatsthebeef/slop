@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approveBlockedText, approveLabel, changeHeading, headerMenu, scopeMatters, submitLabel } from '../src/lib/decide-flow';
+import { approveBlockedText, approveLabel, changeHeading, changeKindOf, headerMenu, scopeMatters, submitLabel } from '../src/lib/decide-flow';
 
 const menu = (patch: Partial<Parameters<typeof headerMenu>[0]> = {}) =>
   headerMenu({ canDecide: true, canSuggest: true, canKeep: true, hasItem: true, adminOnly: null, ...patch });
@@ -16,13 +16,25 @@ describe('what approving is called', () => {
 
 describe('the change heading', () => {
   const doc = (section: string | null) => ({ kind: 'doc', name: 'architecture', section, newDocument: null }) as const;
+  const added = [{ op: 'same' }, { op: 'added' }];
+  const edited = [{ op: 'removed' }, { op: 'added' }];
   it('names the target in words', () => {
-    expect(changeHeading(null, false)).toBeNull();
-    expect(changeHeading(doc('apps/web'), false)).toBe('Edit to architecture › apps/web');
-    expect(changeHeading(doc('apps/web'), true)).toBe('Addition to architecture › apps/web');
-    expect(changeHeading(doc(null), true)).toBe('Addition to architecture');
-    expect(changeHeading({ kind: 'merge_policy', name: 'merge_policy', section: null, newDocument: null }, false)).toBe('Merge policy setting');
-    expect(changeHeading({ kind: 'agent', name: 'orchestrator', section: null, newDocument: null }, true)).toBe('Addition to orchestrator');
+    expect(changeHeading(null, 'edit')).toBeNull();
+    expect(changeHeading({ kind: 'merge_policy', name: 'merge_policy', section: null, newDocument: null }, 'edit')).toBe('Merge policy setting');
+    expect(changeHeading({ kind: 'agent', name: 'orchestrator', section: null, newDocument: null }, 'addition')).toBe('Addition to orchestrator');
+    expect(changeHeading({ kind: 'doc', name: 'runbook', section: null, newDocument: { area: 'a', audience: [], description: 'd' } }, 'addition')).toBe('New document runbook');
+  });
+  it('says new section only when the section did not exist before', () => {
+    expect(changeHeading(doc('apps/web'), changeKindOf(added, false))).toBe('New section in architecture › apps/web');
+    expect(changeHeading(doc('apps/web'), changeKindOf(added, true))).toBe('Addition to architecture › apps/web');
+    // An older server says nothing about the section: never called new.
+    expect(changeHeading(doc('apps/web'), changeKindOf(added))).toBe('Addition to architecture › apps/web');
+  });
+  it('calls a change that removes or replaces lines an edit, and an empty diff no change', () => {
+    expect(changeHeading(doc('apps/web'), changeKindOf(edited, true))).toBe('Edit to architecture › apps/web');
+    expect(changeHeading(doc('apps/web'), changeKindOf(edited, false))).toBe('Edit to architecture › apps/web');
+    expect(changeHeading(doc('apps/web'), changeKindOf([], false))).toBe('No change to architecture › apps/web');
+    expect(changeHeading(doc('apps/web'), changeKindOf([{ op: 'same' }], true))).toBe('No change to architecture › apps/web');
   });
 });
 

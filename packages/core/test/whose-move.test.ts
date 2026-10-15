@@ -106,9 +106,18 @@ describe('whoseMove: priority', () => {
     expect(move(g, {}, { stored: [placeholder] }).holder).toBe('idle');
   });
 
+  it('open feedback is the developer\'s turn and outranks sign-off; ticking it all goes back to sign-off', () => {
+    const item = (id: string, done = false) => ({ id, text: id, done, addedBy: 'r@x', addedAt: NOW, doneBy: null, doneAt: null });
+    const labels = { FR: 'added', CR: 'required', QA: 'added' } as const;
+    const open = glob({ status: 'reviewing', implementer: dev.email, labels, checklists: { FR: [item('a')], QA: [item('b'), item('c'), item('d', true)] } });
+    expect(move(open)).toMatchObject({ holder: 'you', reason: 'fix feedback · FR 1, QA 2', who: dev.email });
+    const done = glob({ status: 'reviewing', implementer: dev.email, labels, checklists: { FR: [item('a', true)], QA: [item('b', true)] } });
+    expect(move(done).reason).toBe('sign off · FR, CR, QA');
+  });
+
   it('a person by state alone: review asked for, an escalation', () => {
     const reviewing = glob({ status: 'reviewing', implementer: dev.email, labels: { QA: 'required' } });
-    expect(move(reviewing)).toMatchObject({ holder: 'you', reason: 'Review needed' });
+    expect(move(reviewing)).toMatchObject({ holder: 'you', reason: 'sign off · QA' });
     expect(move(reviewing, {}, { viewer: { email: other.email, role: 'dev' } })).toMatchObject({ holder: 'human', who: dev.email });
     const escalated = glob({ status: 'implementing', type: 'same', runs: [], escalation: { reason: 'touches auth', by: dev.email, at: NOW } });
     expect(move(escalated).reason).toBe('Needs a human: touches auth');
@@ -349,7 +358,7 @@ describe('whoseMove: unmet relations', () => {
     expect(move(source, {}, { waiting: holds })).toMatchObject({ holder: 'waiting', reason: 'sign-off waits on s1t2, s1t3', waitingOn: ['s1t2', 's1t3'] });
     // Labels still to approve: the reviewer's turn comes first.
     const reviewing = glob({ status: 'reviewing', labels: { QA: 'required' } });
-    expect(move(reviewing, {}, { waiting: holds }).reason).toBe('Review needed');
+    expect(move(reviewing, {}, { waiting: holds }).reason).toBe('sign off · QA');
   });
 
   it('a sign-off relation to another glob', () => {

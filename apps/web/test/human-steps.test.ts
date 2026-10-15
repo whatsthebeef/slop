@@ -113,7 +113,7 @@ describe('rollout status line', () => {
   });
   it('returns the corner to sign off (labels to approve) or signed off once the rollout is done', () => {
     const doneSteps = [step({ state: 'done' })];
-    expect(cornerStatus(merged(doneSteps, { labels: { QA: 'required' } }), NOW, dev)).toMatchObject({ kind: 'sign-off', text: 'sign off', icon: 'human' });
+    expect(cornerStatus(merged(doneSteps, { labels: { QA: 'required' } }), NOW, dev)).toMatchObject({ kind: 'sign-off', text: 'sign off · QA', icon: 'human' });
     expect(cornerStatus(merged(doneSteps, { status: 'signed_off', labels: { QA: 'approved' } }), NOW, dev)).toMatchObject({ kind: 'signed-off', text: 'signed off' });
   });
   it('says nothing before the merge or once the steps are done', () => {

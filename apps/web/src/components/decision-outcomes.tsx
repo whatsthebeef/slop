@@ -1,9 +1,9 @@
-import { decisionOf, KNOWLEDGE_KINDS } from '@slop/core';
+import { decisionOf, KNOWLEDGE_KINDS, RULES_MODEL } from '@slop/core';
 import type { DecisionAttributes, DecisionLearning, KbTarget, KnowledgeKind, SuggestionPrefill } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Link } from 'react-router';
 import { KeepAsLearning, inPipeline, PIPELINE_POLL_MS, WatchSignal, watching } from '@/components/decision-learning';
 import { Button } from '@/components/ui/button';
@@ -46,7 +46,10 @@ const useSuggest = (glob: GlobView, canSuggest: boolean) => {
       .catch(() => setFailed(true))
       .finally(() => setBusy(false));
   };
-  return { state, stored: suggestion.data?.suggestion?.suggestion, prefill: applyPrefill(suggestion.data), error: suggestion.data?.error ?? null, busy, failed, ask };
+  const made = suggestion.data?.suggestion ?? null;
+  // A recommendation the rules wrote (no model call) reads as a leaning; with no draft behind it, it is waiting for one.
+  const leaning = made?.model === RULES_MODEL ? { waiting: made.stamp.draftVersion === null } : null;
+  return { state, stored: made?.suggestion, leaning, prefill: applyPrefill(suggestion.data), error: suggestion.data?.error ?? null, busy, failed, ask };
 };
 
 type Suggest = ReturnType<typeof useSuggest>;
@@ -71,6 +74,8 @@ export interface DecideFlow {
   readonly learning: DecisionLearning | null;
   readonly target: KbTarget | null;
   readonly draftText: string;
+  /** An open learning whose change is still being drafted: nothing to approve yet. */
+  readonly waiting: boolean;
   /** The main action: "Approve change" in the header, what it approves in the block. Pressing it again with the approval form open submits it. */
   readonly approve: { readonly label: string; readonly tip: string; readonly blocked: string | null; readonly run: () => void };
   readonly menu: readonly FlowMenuItem[];
@@ -173,6 +178,7 @@ export const useDecideFlow = ({
     learning,
     target,
     draftText: diff.data?.draft?.content ?? '',
+    waiting: hasItem && !isDocument && learning !== null && inPipeline(learning) && diff.data?.draft == null,
     approve: { ...text, blocked: approveBlockedText(adminOnly, canDecide), run: () => (mode === 'accept' ? submit() : pick('accept')) },
     menu,
     mode,
@@ -326,7 +332,12 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
       {stored !== undefined && (
         <div className='grid gap-1 text-sm' data-testid='suggestion'>
           <p className='whitespace-pre-wrap break-words'>
-            <span className='font-medium'>Recommends: {SUGGESTION_ACTION_TEXT[stored.action]}.</span> {stored.reason}
+            <span className='font-medium'>
+              {suggest.leaning === null
+                ? `Recommends: ${SUGGESTION_ACTION_TEXT[stored.action]}.`
+                : `Leaning: ${SUGGESTION_ACTION_TEXT[stored.action]}${suggest.leaning.waiting ? ', waiting for the draft' : ''}.`}
+            </span>{' '}
+            {stored.reason}
             {stored.mergeInto !== null && (
               <>
                 {' '}
@@ -353,12 +364,9 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
   );
 };
 
-/**
- * The outcome controls at the foot of the proposal block: one primary button (the recommended outcome, else Approve), the
- * other outcomes in the ▾ and the chosen outcome's form beneath. The block holds the learning's only Approve.
- */
-export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
-  const { mode, approve, glob, attributes, busy, input, suggest } = flow;
+/** What the main button of the outcome controls is and does for the flow's current state. */
+const mainState = (flow: DecideFlow) => {
+  const { mode, approve, busy, input, suggest } = flow;
   const outcomeMode = mode !== null && mode !== 'keep' ? mode : null;
   // Both accept modes carry the admin-only check (a PO can reach accept-with-edits through Apply suggestion); the other outcomes need only decide.
   const acceptMode = outcomeMode === null || outcomeMode === 'accept' || outcomeMode === 'accept_with_edits';
@@ -366,9 +374,110 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
   const recommended = outcomeMode === null && flow.applySuggestion !== null && suggest.stored !== undefined && suggest.stored.action !== 'approve';
   // A recommended reject or merge is not an approval: it needs only decide, as in the ▾.
   const blocked = acceptMode && !(recommended && suggest.prefill?.outcome === 'reject') ? approve.blocked : flow.canDecide ? null : "You can't decide this";
-  const mainLabel =
-    outcomeMode !== null ? submitLabel(outcomeMode, approve.label) : recommended ? recommendedLabel(suggest.stored, approve.label) : approve.label;
-  const mainOff = busy || blocked !== null || (outcomeMode !== null && input === null);
+  const label = outcomeMode !== null ? submitLabel(outcomeMode, approve.label) : recommended ? recommendedLabel(suggest.stored, approve.label) : approve.label;
+  const off = busy || blocked !== null || (outcomeMode !== null && input === null);
+  const apply = flow.applySuggestion;
+  const press = () => (recommended && apply !== null ? apply() : outcomeMode === null || mode === 'keep' ? approve.run() : flow.submit());
+  return { outcomeMode, blocked, label, off, press };
+};
+
+const MenuItems = ({ flow, only }: { flow: DecideFlow; only?: MenuKey }) => (
+  <>
+    {flow.menu
+      .filter((item) => only === undefined || item.key === only)
+      .map((item) => (
+        <DropdownMenuItem key={item.key} disabled={item.disabled !== null} data-testid={item.key === 'suggest' ? 'suggest' : `outcome-${item.key}`} onSelect={item.run}>
+          <span className='grid'>
+            <span className='font-medium'>{item.label}</span>
+            <span className='text-xs text-muted-foreground'>{item.disabled ?? item.tip}</span>
+          </span>
+        </DropdownMenuItem>
+      ))}
+  </>
+);
+
+export const WAITING_FOR_DRAFT = 'Waiting for the draft';
+
+/**
+ * A learning's outcome as the glob's main action in the action row under the title: the recommended outcome (else Approve)
+ * with the other outcomes in the ▾. While the change is still being drafted it is a disabled "Waiting for the draft" and
+ * the ▾ holds only Reject…. With a form open the button becomes that form's submit (Save, Reject…) beside a Cancel.
+ * `extra` is the row's other actions, which follow the outcomes in the ▾.
+ */
+export const DecisionMainAction = ({ flow, extra }: { flow: DecideFlow; extra?: ReactNode }) => {
+  const { mode, busy, waiting, attributes } = flow;
+  const { outcomeMode, blocked, label, off, press } = mainState(flow);
+  const holding = waiting && mode === null;
+  const keeping = mode === 'keep';
+  const note = conflictNote(attributes.conflictsWith ?? []);
+  return (
+    <>
+      <div className='inline-flex' data-testid='split-button'>
+        <Tip text={holding ? 'The change is still being drafted; there is nothing to approve yet' : (blocked ?? (outcomeMode === 'accept_with_edits' ? 'Saves your wording and approves the change' : flow.approve.tip))}>
+          <Button
+            size='sm'
+            className='rounded-r-none'
+            disabled={off || holding || keeping}
+            data-testid='main-action'
+            data-outcome={outcomeMode ?? 'accept'}
+            onClick={press}
+          >
+            {holding ? WAITING_FOR_DRAFT : keeping ? 'Approving without a document' : label}
+          </Button>
+        </Tip>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size='sm' className='rounded-l-none border-l-primary-foreground/40 px-1.5' disabled={busy} aria-label='More actions' data-testid='more-actions'>
+              <ChevronDown className='size-3.5' aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' data-testid='more-menu'>
+            <MenuItems flow={flow} {...(holding ? { only: 'reject' as const } : {})} />
+            {extra}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {mode !== null && !keeping && (
+        <Button size='sm' variant='ghost' data-testid='outcome-clear' onClick={flow.close}>
+          Cancel
+        </Button>
+      )}
+      {blocked !== null && (
+        <span className='text-xs text-muted-foreground' data-testid='approve-blocked'>
+          {blocked}
+        </span>
+      )}
+      {note !== null && (
+        <span className='text-xs text-amber-800 dark:text-amber-200' data-testid='conflict-note'>
+          {note}
+        </span>
+      )}
+    </>
+  );
+};
+
+/** The form of the outcome the action row opened (reject reason, the edited wording, retarget…), in the body: fields only, the row's button submits it. */
+export const OutcomeForms = ({ flow }: { flow: DecideFlow }) => {
+  const { mode, glob, attributes, busy } = flow;
+  if (mode === null) return null;
+  return (
+    <div ref={flow.formRef} data-testid='outcome-forms'>
+      {mode === 'keep' ? (
+        <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} />
+      ) : (
+        <OutcomeForm key={`${mode}-${flow.applied?.outcome === mode ? 'applied' : 'plain'}`} flow={flow} choice={mode} />
+      )}
+    </div>
+  );
+};
+
+/**
+ * The outcome controls at the foot of the proposal block: one primary button (the recommended outcome, else Approve), the
+ * other outcomes in the ▾ and the chosen outcome's form beneath. The block holds the learning's only Approve.
+ */
+export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
+  const { mode, approve, glob, attributes, busy } = flow;
+  const { outcomeMode, blocked, label: mainLabel, off: mainOff, press } = mainState(flow);
   const note = conflictNote(attributes.conflictsWith ?? []);
   return (
     <div className='grid gap-2' data-testid='outcomes'>
@@ -380,7 +489,7 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
               className='rounded-r-none'
               disabled={mainOff}
               data-testid={`outcome-${outcomeMode ?? 'accept'}`}
-              onClick={() => (recommended ? flow.applySuggestion() : outcomeMode === null || mode === 'keep' ? approve.run() : flow.submit())}
+              onClick={press}
             >
               {mainLabel}
             </Button>
@@ -392,14 +501,7 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='start' data-testid='outcomes-menu'>
-              {flow.menu.map((item) => (
-                <DropdownMenuItem key={item.key} disabled={item.disabled !== null} data-testid={item.key === 'suggest' ? 'suggest' : `outcome-${item.key}`} onSelect={item.run}>
-                  <span className='grid'>
-                    <span className='font-medium'>{item.label}</span>
-                    <span className='text-xs text-muted-foreground'>{item.disabled ?? item.tip}</span>
-                  </span>
-                </DropdownMenuItem>
-              ))}
+              <MenuItems flow={flow} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
