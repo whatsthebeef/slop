@@ -121,7 +121,30 @@ describe('RolloutService', () => {
     await store.transaction(async (tx) => {
       await tx.appendEvents([{ type: 'Merged', globId: g.id, actor: null, at: '2026-10-13T11:00:00.000Z', data: { sha: 'm1' } }]);
       await tx.saveHumanSteps([
-        { id: 'hs_1', boardId, globId: g.id, kind: 'rollout', title: ROLLOUT_NOT_WRITTEN_TITLE, detail: null, who: 'anyone', due: 'after_merge', state: 'open', blocks: ['sign_off', 'dependants'], check: null, script: null, origin: 'rollout-paths', createdBy: 'slop', createdAt: '2026-10-13T11:00:00.000Z', doneBy: null, doneAt: null, dismissedReason: null },
+        {
+          id: 'hs_1',
+          boardId,
+          globId: g.id,
+          kind: 'rollout',
+          title: ROLLOUT_NOT_WRITTEN_TITLE,
+          detail: null,
+          who: 'anyone',
+          due: 'after_merge',
+          state: 'open',
+          blocks: ['sign_off', 'dependants'],
+          check: null,
+          script: null,
+          why: null,
+          permissions: null,
+          commands: [],
+          verify: null,
+          origin: 'rollout-paths',
+          createdBy: 'slop',
+          createdAt: '2026-10-13T11:00:00.000Z',
+          doneBy: null,
+          doneAt: null,
+          dismissedReason: null,
+        },
       ]);
     });
     expect(await service.backfill(boardId)).toBe(1);
