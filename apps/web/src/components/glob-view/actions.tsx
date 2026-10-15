@@ -832,7 +832,8 @@ export const GlobReset = ({
   // Delete follows the server's permission: offered whenever the viewer may delete this glob.
   const mayDelete = (glob.allowedActions ?? []).includes('delete');
   const showDelete = mayDelete && !state.confirmDelete;
-  const hasContent = resetActions.length > 0 || state.confirmDelete || state.confirmingAgain || showDelete;
+  const hasContent =
+    resetActions.length > 0 || state.confirmDelete || state.confirmingAgain || showDelete;
   // Never an empty red box: the area exists only while it has something to show.
   if (!hasContent) return null;
   return (
