@@ -604,7 +604,7 @@ export const create = (
     environment: glob.environment,
     status,
   });
-  // Subs, supers and auto-started sames start in Doing, so they provision now.
+  // Subs and auto-started sames start in Doing, so they provision now; a super waits in Planning.
   if (listOf(status) === 'doing') b.ensureProvisioned();
   if (held)
     b.event('Waiting', {
