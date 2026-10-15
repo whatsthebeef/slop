@@ -22,7 +22,6 @@ import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
 import { boardGlobHref } from '@/lib/glob-section';
 
-
 /** What the scope's reference means for each kind: null when the kind takes none. */
 const REF_HINT: Record<ScopeKind, string | null> = {
   glob: 'Glob ID, e.g. s15t7',

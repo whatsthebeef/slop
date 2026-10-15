@@ -629,7 +629,7 @@ export const GlobCard = ({
   const age = aging(glob);
   const now = new Date().toISOString();
   const preview = moves.find((m) => m.action === previewing);
-  // Decision globs have their own look (an accent edge, scope and outcome) and no labels, branch or routine status; neither do actions.
+  // Decision globs have their own look (an accent edge, the outcome in the corner) and no labels, branch or routine status; neither do actions.
   const decision = decisionOf(glob) !== null;
   const human = isHumanCategory(glob.category);
   const status = cornerStatus(glob, now, viewer, repo);

@@ -19,7 +19,7 @@ import type { StatusLine } from './status-line';
 export type StatusIcon = 'machine' | 'machine-spinning' | 'alert' | 'human' | 'hourglass' | 'needs-human' | 'check';
 
 export interface CornerStatus {
-  /** What the status is about, for styling and tests: stalled, needs-human, ready, a problem's kind, machine, human, waiting, standby. */
+  /** What the status is about, for styling and tests: stalled, needs-human, ready, a problem's kind, decided (a learning's outcome), machine, human, waiting, standby. */
   readonly kind: string;
   readonly icon: StatusIcon;
   /** One short phrase; the card never wraps it. The icon carries what the words would repeat ("working", "stalled"). */
