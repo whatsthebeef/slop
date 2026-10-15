@@ -19,14 +19,6 @@ const LABEL_TITLES: Record<LabelName, string> = {
 /** Resolves true when the command went through (failures are reported by the board). */
 export type ReviewLabel = (label: LabelName, command: LabelCommand) => Promise<boolean>;
 
-/** Required: outlined brown. Added (items to work through): dark red. Approved: LCD green. */
-const chip = (state: LabelState) =>
-  state === 'approved'
-    ? 'border-foreground bg-lcd text-lcd-foreground'
-    : state === 'added'
-      ? 'border-red bg-red/30 text-foreground'
-      : 'border-required-border bg-transparent text-required';
-
 const presentLabels = (glob: GlobView): LabelName[] =>
   LABEL_NAMES.filter((name) => glob.labels[name] !== undefined);
 
@@ -110,15 +102,35 @@ const CHIP_TIPS: Record<LabelState, string> = {
   approved: 'approved',
 };
 
-const Chip = ({ name, state }: { name: LabelName; state: LabelState }) => (
-  <Tip text={`${LABEL_TITLES[name]}: ${CHIP_TIPS[state]}`}>
-    <span
-      className={cn('rounded-sm border px-1.5 font-mono text-[10px] font-semibold', chip(state))}
-    >
-      {name}
-    </span>
-  </Tip>
-);
+/** Whether a label still has a sent item to work through, whatever its stored state. */
+const hasOutstanding = (glob: GlobView, name: LabelName): boolean =>
+  glob.labels[name] !== 'approved' && itemsOf(glob, name).some((i) => !i.done);
+
+/** Approved: LCD green. Any open item: filled deep red, white text. Otherwise required: outlined brown. */
+const chip = (state: LabelState, outstanding: boolean) =>
+  state === 'approved'
+    ? 'border-foreground bg-lcd text-lcd-foreground'
+    : outstanding
+      ? 'border-outstanding bg-outstanding text-outstanding-foreground'
+      : 'border-required-border bg-transparent text-required';
+
+const Chip = ({ glob, name }: { glob: GlobView; name: LabelName }) => {
+  const state = glob.labels[name] ?? 'required';
+  const outstanding = hasOutstanding(glob, name);
+  return (
+    <Tip text={`${LABEL_TITLES[name]}: ${outstanding ? CHIP_TIPS.added : CHIP_TIPS[state]}`}>
+      <span
+        data-outstanding={outstanding || undefined}
+        className={cn(
+          'rounded-sm border px-1.5 font-mono text-[10px] font-semibold',
+          chip(state, outstanding),
+        )}
+      >
+        {name}
+      </span>
+    </Tip>
+  );
+};
 
 /** The chips alone, for places that show the review elsewhere (the glob view's header). */
 export const LabelChips = ({ glob }: { glob: GlobView }) => {
@@ -127,7 +139,7 @@ export const LabelChips = ({ glob }: { glob: GlobView }) => {
   return (
     <span className="flex gap-1" aria-label="Sign-off labels">
       {present.map((name) => (
-        <Chip key={name} name={name} state={glob.labels[name] ?? 'required'} />
+        <Chip key={name} glob={glob} name={name} />
       ))}
     </span>
   );
@@ -170,7 +182,7 @@ export const LabelPopover = ({
           aria-label="Sign-off labels"
         >
           {present.map((name) => (
-            <Chip key={name} name={name} state={glob.labels[name] ?? 'required'} />
+            <Chip key={name} glob={glob} name={name} />
           ))}
         </PopoverTrigger>
         <PopoverContent
@@ -434,7 +446,7 @@ const LabelReview = ({
       data-testid={`review-${name}`}
     >
       <div className="flex items-center gap-2 text-sm">
-        <Chip name={name} state={state} />
+        <Chip glob={glob} name={name} />
         <span className="font-semibold">{LABEL_TITLES[name]}</span>
         <span className="ml-auto text-xs text-muted-foreground">{stateText(state, items)}</span>
       </div>

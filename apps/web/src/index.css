@@ -30,6 +30,8 @@
   --red-soft: #c9a089; /* clay: failed card border */
   --required: #6e513f; /* brown: FR, CR, QA still required */
   --required-border: #8b6b56;
+  --outstanding: #8f1d12; /* deep red: a label with an open item */
+  --outstanding-foreground: #ffffff;
 }
 
 .dark {
@@ -55,6 +57,8 @@
   --red-soft: #9a5a44;
   --required: #d9b49c;
   --required-border: #c9a089;
+  --outstanding: #a32a1c;
+  --outstanding-foreground: #ffffff;
 }
 
 @theme inline {
@@ -78,6 +82,8 @@
   --color-red-soft: var(--red-soft);
   --color-required: var(--required);
   --color-required-border: var(--required-border);
+  --color-outstanding: var(--outstanding);
+  --color-outstanding-foreground: var(--outstanding-foreground);
   --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --radius-sm: 3px;
