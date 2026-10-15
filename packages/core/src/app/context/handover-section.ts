@@ -3,6 +3,7 @@ import { GROUP_CONTEXT_MAX_GLOBS, contextNeighbours, groupContext, inGroup } fro
 import type { GroupContext } from '../../domain/group-view.js';
 import { handoverBrief, openFindings, resumePhase } from '../../domain/handover.js';
 import type { Handover } from '../../domain/handover.js';
+import { isHumanCategory } from '../../domain/types.js';
 import type { Glob } from '../../domain/types.js';
 import type { Clock, Tx } from '../../ports.js';
 
@@ -18,11 +19,11 @@ export const groupSection = async (tx: Tx, clock: Clock, glob: Glob): Promise<Gr
   if (glob.group === null) return null;
   const all = await tx.listGlobs(glob.boardId, { include: 'all' });
   const members = all.filter((g) => inGroup(g, glob.group ?? '') && !isArchivedDecision(g));
-  const relations = await tx.listRelationsFrom(members.filter((g) => g.category !== 'decision').map((g) => g.id));
+  const relations = await tx.listRelationsFrom(members.filter((g) => !isHumanCategory(g.category)).map((g) => g.id));
   const memberIds = new Set(members.map((g) => g.id));
   const others = await tx.getGlobs([...new Set(relations.map((r) => r.to))].filter((id) => !memberIds.has(id)));
   // Plans only for the neighbours the context shows, in one read.
   const shown = contextNeighbours(glob, members, clock.now()).slice(0, GROUP_CONTEXT_MAX_GLOBS);
   const plans = new Map((await tx.latestArtifacts(shown.map((g) => g.id), ['plan'])).map((a) => [a.globId, a.content]));
-  return groupContext(glob, members, relations, plans, others.filter((g) => g.category === 'decision' && !isArchivedDecision(g)), clock.now());
+  return groupContext(glob, members, relations, plans, others.filter((g) => isHumanCategory(g.category) && !isArchivedDecision(g)), clock.now());
 };

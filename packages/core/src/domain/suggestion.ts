@@ -5,6 +5,7 @@ import type { Result } from './errors.js';
 import type { KbTarget, LearningStatus } from './kb.js';
 import { learningDecision, learningDraft, learningFacts, learningStatement, learningStatus, learningTarget } from './learning.js';
 import type { LearningRead } from './learning.js';
+import { isHumanCategory } from './types.js';
 import type { Glob } from './types.js';
 
 /**
@@ -157,7 +158,7 @@ export const overlappingMerges = (self: Glob, area: readonly string[], merged: r
   const wanted = words(area.join(' '));
   if (wanted.size === 0) return [];
   return merged
-    .filter((g) => g.id !== self.id && g.category !== 'decision' && g.updatedAt > self.createdAt)
+    .filter((g) => g.id !== self.id && !isHumanCategory(g.category) && g.updatedAt > self.createdAt)
     .map((g) => {
       const have = words(g.title);
       let score = 0;

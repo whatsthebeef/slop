@@ -16,6 +16,20 @@ import { FileDropZone } from './file-drop';
 import { GroupInput } from './group-input';
 import type { BoardView, IntakeProposalView, NewGlob } from '@/lib/api';
 
+/** What the form offers: code work and the human action (decisions come from learnings, never from this form). */
+const CREATE_CATEGORIES: readonly Category[] = [...WORK_CATEGORIES, 'action'];
+
+/** A category change keeps the form valid: an action has no type, code work needs one (a same until chosen). */
+export const withCategory = (form: NewGlob, category: Category): NewGlob => {
+  if (category === 'action') {
+    const next: NewGlob = { ...form, category, type: null, environment: null, autoTrigger: false };
+    delete next.start;
+    delete next.files;
+    return next;
+  }
+  return { ...form, category, type: form.type ?? 'same' };
+};
+
 const empty = (): NewGlob => ({
   title: '',
   type: 'same',
@@ -132,6 +146,7 @@ export const CreateGlobDialog = ({
       const created = await onCreate({
         ...form,
         ...(fromInbox === undefined ? {} : { inboxItem: fromInbox.id, idempotencyKey: fromInbox.key }),
+        ...(form.category === 'action' ? { assignee: (form.assignee ?? '').trim() === '' ? null : (form.assignee ?? '').trim() } : {}),
         // A blank group after intake means none; typed by hand with no request, it is left for slop to choose.
         ...((form.group ?? '').trim() === '' ? (insight === null ? { group: undefined } : { group: null }) : { group: form.group ?? null }),
         ...(insight === null
@@ -205,33 +220,47 @@ export const CreateGlobDialog = ({
             <Textarea value={form.plan ?? ''} onChange={(e) => setForm({ ...form, plan: e.target.value })} />
           </Label>
           <div className='grid grid-cols-2 gap-3'>
-            <Label>
-              Type
-              <Select
-                value={form.type}
-                title={types.some((t) => !chooses(t)) ? CHOOSE_TYPE_TOOLTIP : undefined}
-                onChange={(e) => setForm({ ...form, type: e.target.value as SlopType })}
-              >
-                {types.map((t) => (
-                  <option key={t} disabled={!chooses(t)} title={chooses(t) ? undefined : CHOOSE_TYPE_TOOLTIP}>
-                    {t}
-                  </option>
-                ))}
-              </Select>
-            </Label>
+            {/* An action is human work: it has no type, so the control is not offered. */}
+            {form.type !== null && (
+              <Label>
+                Type
+                <Select
+                  value={form.type}
+                  title={types.some((t) => !chooses(t)) ? CHOOSE_TYPE_TOOLTIP : undefined}
+                  onChange={(e) => setForm({ ...form, type: e.target.value as SlopType })}
+                >
+                  {types.map((t) => (
+                    <option key={t} disabled={!chooses(t)} title={chooses(t) ? undefined : CHOOSE_TYPE_TOOLTIP}>
+                      {t}
+                    </option>
+                  ))}
+                </Select>
+              </Label>
+            )}
             <Label>
               Category
               <Select
                 value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value as Category })}
+                onChange={(e) => setForm(withCategory(form, e.target.value as Category))}
               >
-                {WORK_CATEGORIES.map((c) => (
-                  <option key={c} disabled={!isValidCombination(form.type, c)}>
+                {CREATE_CATEGORIES.map((c) => (
+                  <option key={c} disabled={!isValidCombination(c === 'action' ? null : (form.type ?? 'same'), c)}>
                     {c}
                   </option>
                 ))}
               </Select>
             </Label>
+            {form.category === 'action' && (
+              <Label>
+                Assignee (optional)
+                <Input
+                  value={form.assignee ?? ''}
+                  placeholder='Email; empty means anyone'
+                  data-testid='assignee'
+                  onChange={(e) => setForm({ ...form, assignee: e.target.value })}
+                />
+              </Label>
+            )}
             <Label>
               Group
               <GroupInput
@@ -240,18 +269,20 @@ export const CreateGlobDialog = ({
                 onChange={(e) => setForm({ ...form, group: e.target.value })}
               />
             </Label>
-            <Label>
-              Environment
-              <Select
-                value={form.environment ?? ''}
-                onChange={(e) => setForm({ ...form, environment: e.target.value === '' ? null : e.target.value })}
-              >
-                <option value=''>None</option>
-                {deployable.map((env) => (
-                  <option key={env.name}>{env.name}</option>
-                ))}
-              </Select>
-            </Label>
+            {form.category !== 'action' && (
+              <Label>
+                Environment
+                <Select
+                  value={form.environment ?? ''}
+                  onChange={(e) => setForm({ ...form, environment: e.target.value === '' ? null : e.target.value })}
+                >
+                  <option value=''>None</option>
+                  {deployable.map((env) => (
+                    <option key={env.name}>{env.name}</option>
+                  ))}
+                </Select>
+              </Label>
+            )}
           </div>
           {insight !== null && insight.needsConfirmation && !confirmed && (
             <div className='grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-xs' data-testid='intake-unsure'>

@@ -2,7 +2,7 @@ import { ClipboardCheck, FileText } from 'lucide-react';
 import { useState } from 'react';
 import { DocEditor, PlanEditor } from '../plan-editor';
 import { TEST_PLAN_TEMPLATE, TestPlanEmpty, TestPlanPreview } from '../test-plan-view';
-import { decisionOf } from '@slop/core';
+import { decisionOf, isHumanCategory } from '@slop/core';
 import { isLearning } from '../decision-outcomes';
 import type { GlobViewContext } from './context';
 
@@ -21,7 +21,8 @@ export const PlanSection = ({ ctx }: { ctx: GlobViewContext }) => {
   const decision = decisionOf(ctx.glob);
   // A learning's proposal text is the Why of its decision block; it is not shown as a plan.
   if (decision !== null && isLearning(decision)) return null;
-  if (ctx.glob.category === 'decision')
+  // Human work has no test plan: a decision's plan.md, or an action's Why / Do this / Check it worked.
+  if (isHumanCategory(ctx.glob.category))
     return <PlanEditor globId={ctx.glob.id} startExpanded={startExpanded} />;
   const canInvestigate = ctx.glob.allowedActions?.includes('investigate') === true;
   const tabs = [

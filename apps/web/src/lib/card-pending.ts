@@ -10,6 +10,8 @@ const WORKING: Partial<Record<Action, string>> = {
   investigate: 'Investigating…',
   review_now: 'Reviewing…',
   pick_up: 'Picking up…',
+  complete_action: 'Marking done…',
+  dismiss_action: 'Dismissing…',
   take_over: 'Picking up…',
   retrigger: 'Retrying…',
   retry_autofix: 'Fixing checks…',

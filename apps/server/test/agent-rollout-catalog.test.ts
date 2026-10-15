@@ -70,4 +70,23 @@ describe('catalog agents: human steps and rollout', () => {
     expect(text).toContain('Agents never run steps that change paid infrastructure or IAM');
     expect(text).toContain('list the human steps');
   });
+
+  it('has the implementer, orchestrator and change reviewer apply the revert test and file other work as an action glob', async () => {
+    for (const name of ['implementer', 'orchestrator']) {
+      const text = await agent(name);
+      expect(text).toContain('The revert test: if this glob were reverted, would the work still be needed?');
+      expect(text).toContain('write a rollout step on this glob');
+      expect(text).toContain('create an action glob instead (`create_glob` with category `action`, no type, on the right board');
+      expect(text).toContain('Never file optional setup as a blocking step.');
+      expect(text).toContain('`complete_action`');
+      expect(text).toContain('`dismiss_action`');
+      expect(text).toContain('Why / Do this (the script path and run command) / Permissions / Check it worked');
+    }
+    const orchestrator = await agent('orchestrator');
+    expect(orchestrator).toContain('lists each action glob you created, with its ID');
+    const reviewer = await agent('change_reviewer');
+    expect(reviewer).toContain('fails the revert test');
+    expect(reviewer).toContain('action glob');
+    expect(await agent('investigator')).toContain('revert test');
+  });
 });

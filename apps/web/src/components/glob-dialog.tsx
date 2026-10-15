@@ -79,7 +79,7 @@ export const GlobDetail = ({
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
-  onAction: (action: Action, anyway?: boolean) => Promise<boolean>;
+  onAction: (action: Action, anyway?: boolean, text?: string) => Promise<boolean>;
   onReviewLabel: ReviewLabel;
   /** The ✕ on a Related row: the relation is not a dependency; resolves false when it failed. */
   onDismissEdge: (relationId: string) => Promise<boolean>;
@@ -100,12 +100,12 @@ export const GlobDetail = ({
     onCompleteStep,
     ...(email === undefined ? {} : { email }),
   });
-  const { decision, busy, disabled } = actionState;
+  const { decision, human, busy, disabled } = actionState;
   const decide = useDecideFlow({ board, glob, busy, onDecide });
   // A learning has its own, shorter view (see LEARNING_VIEW_SECTIONS).
   const attributes = decisionOf(glob);
   const learning = attributes !== null && isLearning(attributes);
-  const nowState = useNowState(glob, decision, disabled, actionState);
+  const nowState = useNowState(glob, human, disabled, actionState);
   const edits = useGlobEdits(glob.id);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);
@@ -129,7 +129,7 @@ export const GlobDetail = ({
   };
 
   const [splitting, setSplitting] = useState(false);
-  const size = useOversized({ glob, enabled: !actionState.decision && isOversized(glob) });
+  const size = useOversized({ glob, enabled: !human && isOversized(glob) });
   useEffect(() => setSplitting(false), [glob.id]);
   // Esc goes back to the board, unless typing, an overlay or an inline confirmation owns it.
   const confirming = actionState.confirmDelete || actionState.confirmingAgain || splitting;

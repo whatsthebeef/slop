@@ -4,7 +4,8 @@
  */
 import { normaliseGroup } from './group.js';
 import { hasMerged, isActive, isMet, toState } from './relations.js';
-import type { Holding, ToState } from './relations.js';
+import type { Holding, TitleInfo, ToState } from './relations.js';
+import { isHumanCategory } from './types.js';
 import type { Glob, Relation, RelationGate, RelationSource, RelationUntil, SlopType, Status } from './types.js';
 import type { Move } from './whose-move.js';
 
@@ -26,7 +27,7 @@ export interface GroupGlobRow {
   readonly id: string;
   readonly title: string;
   readonly status: Status;
-  readonly type: SlopType;
+  readonly type: SlopType | null;
   readonly updatedAt: string;
   readonly move: Move;
   /** What holds the glob back, with whom (a glob or a decision) and the gate. */
@@ -39,6 +40,7 @@ export interface GroupRelationRow {
   readonly to: string;
   readonly toTitle: string | null;
   readonly toIsDecision: boolean;
+  readonly toIsAction?: boolean;
   readonly gate: RelationGate;
   readonly until: RelationUntil;
   readonly state: ToState;
@@ -87,7 +89,8 @@ export interface GroupSummary {
   readonly lastActivityAt: string | null;
 }
 
-const isDecisionGlob = (g: Glob): boolean => g.category === 'decision';
+/** Human work (a decision or an action): it holds globs back but is not counted as work. */
+const isDecisionGlob = (g: Glob): boolean => isHumanCategory(g.category);
 
 /** Whether a glob's group is `name`, by the board's name matching. */
 export const inGroup = (glob: Pick<Glob, 'group'>, name: string): boolean => glob.group !== null && normaliseGroup(glob.group) === normaliseGroup(name);
@@ -132,13 +135,13 @@ export const groupSummaries = (globs: readonly Glob[]): GroupSummary[] => {
 export const groupView = (
   name: string,
   members: readonly GroupMember[],
-  titles: ReadonlyMap<string, { readonly title: string; readonly decision: boolean }> = new Map(),
+  titles: ReadonlyMap<string, TitleInfo> = new Map(),
 ): GroupView => {
   const work = members.filter((m) => !isDecisionGlob(m.glob));
   const memberIds = new Set(members.map((m) => m.glob.id));
-  const titleOf = (id: string): { readonly title: string; readonly decision: boolean } | null => {
+  const titleOf = (id: string): TitleInfo | null => {
     const member = members.find((m) => m.glob.id === id);
-    return member === undefined ? (titles.get(id) ?? null) : { title: member.glob.title, decision: isDecisionGlob(member.glob) };
+    return member === undefined ? (titles.get(id) ?? null) : { title: member.glob.title, decision: member.glob.category === 'decision', action: member.glob.category === 'action' };
   };
 
   const relations = work
@@ -149,6 +152,7 @@ export const groupView = (
         const to = titleOf(r.to) ?? m.holding.find((h) => h.relationId === r.id) ?? null;
         const toTitle = to === null ? null : 'title' in to ? to.title : to.toTitle;
         const toIsDecision = to === null ? false : 'decision' in to ? to.decision : to.toIsDecision;
+        const toIsAction = to === null ? false : 'decision' in to ? (to.action ?? false) : (to.toIsAction ?? false);
         return [
           {
             id: r.id,
@@ -156,13 +160,14 @@ export const groupView = (
             to: r.to,
             toTitle,
             toIsDecision,
+            toIsAction,
             gate: r.gate,
             until: r.until,
             state,
             reason: r.reason,
             source: r.source,
             holding: !isMet(r, state),
-            crosses: !toIsDecision && !memberIds.has(r.to),
+            crosses: !toIsDecision && !toIsAction && !memberIds.has(r.to),
           },
         ];
       }),
@@ -173,7 +178,7 @@ export const groupView = (
   const held = new Map<string, { title: string; holdsBack: string[] }>();
   for (const m of work) {
     for (const h of m.holding) {
-      if (!h.toIsDecision) continue;
+      if (!h.toIsDecision && h.toIsAction !== true) continue;
       const entry = held.get(h.to) ?? { title: h.toTitle ?? h.to, holdsBack: [] };
       if (!entry.holdsBack.includes(m.glob.id)) entry.holdsBack.push(m.glob.id);
       held.set(h.to, entry);

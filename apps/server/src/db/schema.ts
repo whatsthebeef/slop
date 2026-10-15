@@ -154,7 +154,7 @@ export const globs = pgTable(
       .references(() => boards.id, { onDelete: 'cascade' }),
     version: integer('version').notNull(),
     status: text('status').notNull(),
-    type: text('type').notNull(),
+    type: text('type'),
     groupName: text('group_name'),
     planner: text('planner').notNull(),
     implementer: text('implementer'),

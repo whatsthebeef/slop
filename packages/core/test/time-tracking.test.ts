@@ -507,7 +507,7 @@ describe('time tracking: decision globs', () => {
   });
 
   it('ignores a decision known only from its row (events without a creation)', () => {
-    const facts = new Map<string, GlobFacts>([['s1k2', { planner: BOB, category: 'decision', type: 'same' }]]);
+    const facts = new Map<string, GlobFacts>([['s1k2', { planner: BOB, category: 'decision', type: null }]]);
     const segments = deriveSegments(pickUp('s1k2', ANA, at(MON, '09:00')), facts, at(MON, '17:00'));
     expect(segments).toEqual([]);
   });

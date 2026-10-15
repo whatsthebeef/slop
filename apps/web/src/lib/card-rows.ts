@@ -1,4 +1,4 @@
-import { decisionOf, feedbackText, labelsWaiting, openFeedback, signOffText } from '@slop/core';
+import { decisionOf, feedbackText, isHumanCategory, labelsWaiting, openFeedback, signOffText } from '@slop/core';
 import type { HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
@@ -115,6 +115,8 @@ const feedbackTip = (glob: GlobView): string =>
  * sign-off, an escalation in Planning). A decision glob has no corner status, so its turn is the status line's.
  */
 export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
+  // An action waits for a person until it is done or dismissed.
+  if (glob.category === 'action') return glob.status === 'planning';
   if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
   const icon = cornerStatus(glob, now, viewer)?.icon;
   return icon === 'human' || icon === 'needs-human';
@@ -126,7 +128,7 @@ export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewe
  * prerequisites it waits on, any other waiting, standby. Decision globs have none.
  */
 export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CornerStatus | null => {
-  if (decisionOf(glob) !== null) return null;
+  if (isHumanCategory(glob.category)) return null;
   // Signed off is the glob's whole state: nothing else shows, and the date lives in the tooltip.
   if (glob.status === 'signed_off') {
     const when = glob.signedOffAt == null ? '' : ` ${new Date(glob.signedOffAt).toLocaleString()}`;

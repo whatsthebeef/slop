@@ -238,6 +238,20 @@ export const actionPresentation = (
       };
     case 'reopen':
       return { label: 'Reopen', icon: null, tip: 'Reopens the decision', placement: 'more' };
+    case 'complete_action':
+      return {
+        label: 'Done',
+        icon: 'human',
+        tip: 'You did it: marks the action done, with a note of what you checked if you like',
+        placement: 'main',
+      };
+    case 'dismiss_action':
+      return {
+        label: 'Dismiss…',
+        icon: null,
+        tip: 'Not needed after all: ends the action with your reason, and what waited for it is released',
+        placement: 'more',
+      };
     // Replaced by the type popover.
     case 'deescalate':
       return {

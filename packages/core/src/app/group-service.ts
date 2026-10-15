@@ -66,7 +66,7 @@ export class GroupService {
     const known = new Set(members.map((m) => m.glob.id));
     const outside = [...new Set(members.flatMap((m) => m.relations.map((r) => r.to)))].filter((id) => !known.has(id));
     const found = await this.deps.store.transaction((tx) => tx.getGlobs(outside));
-    const titles = new Map(found.map((g) => [g.id, { title: g.title, decision: g.category === 'decision' }]));
+    const titles = new Map(found.map((g) => [g.id, { title: g.title, decision: g.category === 'decision', action: g.category === 'action' }]));
     const stored = members[0]?.glob.group ?? name;
     return ok(groupView(this.spellingOf(members.map((m) => m.glob), name) ?? stored, members, titles));
   }

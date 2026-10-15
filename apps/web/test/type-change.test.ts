@@ -98,3 +98,13 @@ describe('category', () => {
     expect(await saveCategory(() => Promise.resolve(failure), 'task', 'bug')).toEqual({ saved: false, failure });
   });
 });
+
+describe('human work has no type to change', () => {
+  it('offers no type and no category for a decision or an action', () => {
+    for (const category of ['decision', 'action'] as const) {
+      const g = view({ category, type: null });
+      expect(typeOptions(g, 'admin')).toEqual([]);
+      expect(categoryOptions(g.type)).toEqual([]);
+    }
+  });
+});

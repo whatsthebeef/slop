@@ -1,4 +1,4 @@
-import { isDecisionAttributes } from './attributes.js';
+import { isActionAttributes, isDecisionAttributes } from './attributes.js';
 import type { Action } from './machine.js';
 import { listOf } from './matrix.js';
 import type { Glob, List, Role } from './types.js';
@@ -20,6 +20,8 @@ export const HUMAN_STEP_KINDS = [
   'pair',
   'rollout',
   'review_label',
+  /** An open action glob: a person does it, then marks it done. */
+  'action',
   'unstick',
 ] as const;
 export type HumanStepKind = (typeof HUMAN_STEP_KINDS)[number];
@@ -161,6 +163,13 @@ const derived = (
 /** Steps the machine implies for the glob right now. Pure: the glob and the facts in, the steps out. */
 export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[] => {
   const steps: HumanStep[] = [];
+  if (glob.category === 'action') {
+    const attributes = glob.attributes !== undefined && isActionAttributes(glob.attributes) ? glob.attributes : null;
+    if (glob.status === 'planning' && attributes?.outcome === null) {
+      steps.push(derived('action', `Do: ${glob.title}`, attributes.assignee ?? 'anyone', { id: 'machine:action' }));
+    }
+    return steps;
+  }
   if (glob.category === 'decision') {
     const outcome =
       glob.attributes !== undefined && isDecisionAttributes(glob.attributes) ? glob.attributes.outcome : null;
