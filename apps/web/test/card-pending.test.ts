@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CARD_PENDING_MS, mergeOutcomeText, runCardAction, workingLabel } from '../src/lib/card-pending';
+import { CARD_PENDING_MS, mergeOutcomeText, opensGlobView, runCardAction, workingLabel } from '../src/lib/card-pending';
 
 afterEach(() => vi.useRealTimers());
 
@@ -84,5 +84,17 @@ describe('mergeOutcomeText', () => {
     expect(mergeOutcomeText('merge', { status: 'failed', failure: { reason: 'conflict in a.ts' } })).toBe("Can't merge: conflict in a.ts");
     expect(mergeOutcomeText('cancel_merge', { status: 'pr_open' })).toBe('Merge cancelled');
     expect(mergeOutcomeText('start', { status: 'in_progress' })).toBeNull();
+  });
+
+  it('opens the glob view after Pick up (take_over too) and no other action', () => {
+    expect(opensGlobView('pick_up')).toBe(true);
+    expect(opensGlobView('take_over')).toBe(true);
+    expect(opensGlobView('start')).toBe(false);
+    expect(opensGlobView('merge')).toBe(false);
+  });
+
+  it('resolves false for a failed action, so nothing opens', async () => {
+    const result = await runCardAction(new Set(), 's1t1', 'pick_up', () => Promise.resolve(false), vi.fn(), vi.fn());
+    expect(result === true && opensGlobView('pick_up')).toBe(false);
   });
 });
