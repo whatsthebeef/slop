@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { GlobCard } from '../src/components/glob-card';
 import type { GlobView } from '../src/lib/api';
-import { positionClick, checksUrl, statusClick, turnStep, yourTurnClick } from '../src/lib/chip-actions';
+import { positionClick, checksUrl, sentence, statusClick, tipLines, turnStep, yourTurnClick } from '../src/lib/chip-actions';
 import { positionOf } from '../src/lib/position';
 import { statusLine } from '../src/lib/status-line';
 import type { StatusLine } from '../src/lib/status-line';
@@ -14,6 +14,21 @@ const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), ...patch
 const ready = (patch: Partial<GlobView> = {}) =>
   view({ type: 'same', status: 'pr_open', pr: { number: 289, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...patch });
 const turn = (kind: StatusLine['turn']): StatusLine => ({ kind: 'ready', turn: kind, text: 'x', full: 'x', tone: '', tip: '', url: null, doing: null, sessionUrl: null });
+
+describe('tooltip sentences', () => {
+  it('adds a full stop, leaves finished sentences alone and drops blanks', () => {
+    expect(sentence('merging when checks pass')).toBe('merging when checks pass.');
+    expect(sentence('Opens the glob.  ')).toBe('Opens the glob.');
+    for (const done of ['Done!', 'Done?', 'Needs a person:', 'Waiting…']) expect(sentence(done)).toBe(done);
+    expect(sentence('   ')).toBe('');
+  });
+
+  it('splits multi-line parts, ends each line in a stop and drops empty lines', () => {
+    expect(tipLines(['Checks running on abc\nmerging when checks pass', '', 'Opens the glob.'])).toBe(
+      'Checks running on abc.\nmerging when checks pass.\nOpens the glob.',
+    );
+  });
+});
 
 describe('Your turn click', () => {
   it('asks for a confirming click before Merge runs, then runs it once', () => {

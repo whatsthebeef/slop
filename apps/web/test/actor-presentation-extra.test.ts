@@ -166,7 +166,7 @@ describe('escalation chip (s15f88)', () => {
     );
     expect(html).toContain('data-testid="escalation-chip"');
     expect(html).toMatch(
-      /<span id="[^"]+" class="sr-only">Needs a person: touches billing\. Opens the reason<\/span>/,
+      /<span id="[^"]+" class="sr-only">Needs a person: touches billing\. Opens the reason\.<\/span>/,
     );
     // The chip opens the escalation section (s15f97), so it is a button named by its label.
     expect(html).toMatch(
