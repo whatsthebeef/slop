@@ -784,7 +784,7 @@ describe('glob view: split moves in the action ▾', () => {
       expect(within(row).getByTestId('group-chip').textContent).toBe('glob-view-layout');
       expect(row.lastElementChild?.contains(within(row).getByTestId('group-chip'))).toBe(true);
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
-      expect(screen.queryByTestId('glob-chips')).toBeNull();
+      expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
     });
   });
 });
