@@ -26,12 +26,29 @@ describe('glob view section registry', () => {
   });
 
   it('puts the due Human steps after the labels and before the information blocks', () => {
-    for (const decision of [false, true]) {
-      const order = viewSections(decision, true);
+    for (const [decision, learning] of [[false, false], [true, false], [false, true]] as const) {
+      const order = viewSections(decision, true, learning);
       expect(order.indexOf('due-steps')).toBeGreaterThan(order.indexOf('labels'));
       expect(order.indexOf('due-steps')).toBeLessThan(order.indexOf('escalation'));
+      expect(order.indexOf('due-steps')).toBeLessThan(order.indexOf('actions'));
       expect(order.indexOf('human-steps')).toBeGreaterThan(order.indexOf('actions'));
       expect(new Set(order).size).toBe(order.length);
+    }
+  });
+
+  it('puts every block that needs a person above the actions, in every view kind, with and without a due step', () => {
+    const needsPerson: GlobSection[] = ['conflict', 'problem', 'decision', 'labels', 'due-steps'];
+    for (const order of [
+      viewSections(false, false),
+      viewSections(false, true),
+      viewSections(true, false),
+      viewSections(true, true),
+      viewSections(false, false, true),
+      viewSections(false, true, true),
+    ]) {
+      for (const name of needsPerson) {
+        if (order.includes(name)) expect(order.indexOf(name)).toBeLessThan(order.indexOf('actions'));
+      }
     }
   });
 
@@ -39,11 +56,11 @@ describe('glob view section registry', () => {
     expect(GLOB_VIEW_SECTIONS.indexOf('related')).toBe(GLOB_VIEW_SECTIONS.indexOf('artifacts') + 1);
   });
 
-  it('leaves a work glob’s sections out of a learning’s view, with the action row first and the decision block next', () => {
+  it('leaves a work glob’s sections out of a learning’s view, and keeps the decision block above the action row', () => {
     for (const name of ['plan', 'artifacts', 'deploys', 'environments', 'tests', 'findings', 'size'] as const) {
       expect(LEARNING_VIEW_SECTIONS).not.toContain(name);
     }
-    expect(LEARNING_VIEW_SECTIONS.slice(0, 2)).toEqual(['actions', 'decision']);
+    expect(LEARNING_VIEW_SECTIONS.indexOf('decision')).toBeLessThan(LEARNING_VIEW_SECTIONS.indexOf('actions'));
     expect(new Set(LEARNING_VIEW_SECTIONS).size).toBe(LEARNING_VIEW_SECTIONS.length);
     for (const name of LEARNING_VIEW_SECTIONS) expect(GLOB_SECTIONS).toContain(name);
   });
