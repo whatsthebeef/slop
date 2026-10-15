@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { KindMarker, hasKindMarker } from '@/components/glob-card';
+import { KindMarker } from '@/components/glob-card';
 import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
@@ -120,14 +120,12 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
             </span>
             <StatusIconView icon={corner.icon} />
           </button>
-          {hasKindMarker(glob) && <Dot />}
+          <Dot />
         </>
       )}
-      {hasKindMarker(glob) && (
-        <span className="ml-1.5 inline-flex">
-          <KindMarker glob={glob} />
-        </span>
-      )}
+      <span className="ml-1.5 inline-flex">
+        <KindMarker glob={glob} />
+      </span>
     </span>
   );
 };

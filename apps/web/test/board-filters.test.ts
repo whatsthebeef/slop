@@ -3,6 +3,8 @@ import type { GlobView } from '../src/lib/api';
 import {
   activeCount,
   defaultFilters,
+  kindOf,
+  KINDS,
   matchesFilters,
   parseFilters,
   toggleOption,
@@ -17,72 +19,137 @@ const parse = (q: string) => parseFilters(new URLSearchParams(q));
 describe('board filters', () => {
   it('passes every glob when no filter is on', () => {
     expect(matchesFilters(view({ category: 'decision', type: null }), {})).toBe(true);
-    expect(matchesFilters(view({ category: 'decision', type: null }), parse('mode=all'))).toBe(true);
+    expect(matchesFilters(view({ category: 'decision', type: null }), parse('kind=all'))).toBe(true);
   });
 
   it('shows an action by default and filters to it', () => {
     const action = view({ category: 'action', type: null });
     expect(matchesFilters(action, {})).toBe(true);
-    expect(matchesFilters(action, parse('mode=action'))).toBe(true);
-    expect(matchesFilters(view({ category: 'task', type: 'same' }), parse('mode=action'))).toBe(false);
-    expect(matchesFilters(action, parse('mode=decision'))).toBe(false);
+    expect(matchesFilters(action, parse('kind=action'))).toBe(true);
+    expect(matchesFilters(view({ category: 'task', type: 'same' }), parse('kind=action'))).toBe(false);
+    expect(matchesFilters(action, parse('kind=decision'))).toBe(false);
   });
 
-  it('defaults to the machine modes and action, hiding decisions', () => {
+  it('defaults to task, bug and action, hiding decisions', () => {
     const values = parse('');
-    expect(values).toEqual({ mode: 'sub,same,super,action' });
+    expect(values).toEqual({ kind: 'task,bug,action' });
     expect(values).toEqual(defaultFilters());
     expect(matchesFilters(view({ category: 'task', type: 'same' }), values)).toBe(true);
     expect(matchesFilters(view({ category: 'decision', type: null }), values)).toBe(false);
-    expect(parse('mode=&id=')).toEqual(values);
+    expect(parse('kind=&id=')).toEqual(values);
     expect(activeCount(values)).toBe(0);
   });
 
   it('keeps "show all" distinct from the default across a reload', () => {
     const params = writeFilters(new URLSearchParams('glob=s1t1'), {});
-    expect(params.toString()).toBe('glob=s1t1&mode=all');
-    expect(parse('mode=all')).toEqual({});
+    expect(params.toString()).toBe('glob=s1t1&kind=all');
+    expect(parse('kind=all')).toEqual({});
     expect(activeCount(parseFilters(params))).toBe(1);
     expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
   });
 
   it('writes an explicit selection and reads it back', () => {
-    const params = writeFilters(new URLSearchParams(), { mode: 'decision' });
-    expect(params.toString()).toBe('mode=decision');
-    expect(parseFilters(params)).toEqual({ mode: 'decision' });
-    expect(activeCount({ mode: 'decision' })).toBe(1);
+    const params = writeFilters(new URLSearchParams(), { kind: 'decision' });
+    expect(params.toString()).toBe('kind=decision');
+    expect(parseFilters(params)).toEqual({ kind: 'decision' });
+    expect(activeCount({ kind: 'decision' })).toBe(1);
   });
 
-  it('matches any of several modes, by the glob\'s mode', () => {
-    const values = parse('mode=sub,super');
-    expect(matchesFilters(view({ type: 'sub' }), values)).toBe(true);
-    expect(matchesFilters(view({ type: 'super' }), values)).toBe(true);
-    expect(matchesFilters(view({ type: 'same' }), values)).toBe(false);
-    expect(matchesFilters(view({ category: 'decision', type: null }), parse('mode=decision'))).toBe(true);
-    expect(matchesFilters(view({ type: 'sub' }), parse('mode=decision'))).toBe(false);
-  });
-
-  it('ignores unknown modes and keeps a stable order', () => {
-    expect(parse('mode=super,nope,Sub,super')).toEqual({ mode: 'sub,super' });
-    expect(parse('mode=nope')).toEqual(defaultFilters());
-  });
-
-  it('filters to fixes by the fix flag, reading an old record through its category', () => {
-    const values = parse('fix=1');
-    expect(values).toEqual({ ...defaultFilters(), fix: '1' });
-    expect(matchesFilters(view({ category: 'task', type: 'same', fix: true }), values)).toBe(true);
-    expect(matchesFilters(view({ category: 'bug', type: 'same', fix: false }), values)).toBe(false);
-    expect(matchesFilters(view({ category: 'bug', type: 'same' }), values)).toBe(true);
-    expect(matchesFilters(view({ category: 'feature', type: 'same' }), values)).toBe(false);
+  it('matches any of several kinds, by the glob\'s kind', () => {
+    const values = parse('kind=bug,decision');
+    expect(matchesFilters(view({ type: 'sub', fix: true }), values)).toBe(true);
+    expect(matchesFilters(view({ category: 'decision', type: null }), values)).toBe(true);
+    expect(matchesFilters(view({ type: 'same', fix: false }), values)).toBe(false);
     expect(matchesFilters(view({ category: 'action', type: null }), values)).toBe(false);
-    expect(activeCount(values)).toBe(1);
-    expect(parse('fix=0')).toEqual(defaultFilters());
+  });
+
+  it('ignores unknown kinds and keeps a stable order', () => {
+    expect(parse('kind=decision,nope,Task,decision')).toEqual({ kind: 'task,decision' });
+    expect(parse('kind=nope')).toEqual(defaultFilters());
+  });
+
+  it('has one kind chip per kind and no Fixes toggle', () => {
+    expect(KINDS).toEqual(['task', 'bug', 'action', 'decision']);
+    const [kind] = BOARD_FILTERS;
+    expect(kind?.key).toBe('kind');
+    expect(kind?.control === 'chips' && kind.options.map((o) => o.value)).toEqual([...KINDS]);
+    expect(BOARD_FILTERS.some((f) => f.key === 'fix' || f.key === 'mode')).toBe(false);
+  });
+
+  describe('kinds', () => {
+    const only = (kind: string, glob: GlobView) => matchesFilters(glob, parse(`kind=${kind}`));
+    const subBug = view({ category: 'task', type: 'sub', fix: true });
+    const superTask = view({ category: 'task', type: 'super', fix: false });
+    const sameBug = view({ category: 'bug', type: 'same' });
+    const feature = view({ category: 'feature', type: 'same' });
+    const action = view({ category: 'action', type: null });
+    const decision = view({ category: 'decision', type: null });
+    const all = { subBug, superTask, sameBug, feature, action, decision };
+
+    it.each([
+      ['task', ['superTask', 'feature']],
+      ['bug', ['subBug', 'sameBug']],
+      ['action', ['action']],
+      ['decision', ['decision']],
+    ])('the %s chip matches exactly its globs', (kind, expected) => {
+      const hits = Object.entries(all)
+        .filter(([, g]) => only(kind, g))
+        .map(([name]) => name);
+      expect(hits).toEqual(expected);
+    });
+
+    it('reads the kind of a glob: a feature is a task, a fix is a bug', () => {
+      expect(kindOf(feature)).toBe('task');
+      expect(kindOf(superTask)).toBe('task');
+      expect(kindOf(subBug)).toBe('bug');
+      expect(kindOf(action)).toBe('action');
+      expect(kindOf(decision)).toBe('decision');
+    });
+
+    it('shows task, bug and action by default, hiding decisions', () => {
+      const values = parse('');
+      expect(Object.values(all).map((g) => matchesFilters(g, values))).toEqual([true, true, true, true, true, false]);
+    });
+  });
+
+  describe('old links', () => {
+    it('maps mode sub, same or super to task and bug, and keeps action and decision', () => {
+      expect(parse('mode=sub')).toEqual({ kind: 'task,bug' });
+      expect(parse('mode=same,super')).toEqual({ kind: 'task,bug' });
+      expect(parse('mode=sub,decision')).toEqual({ kind: 'task,bug,decision' });
+      expect(parse('mode=action')).toEqual({ kind: 'action' });
+      expect(parse('mode=decision,action')).toEqual({ kind: 'action,decision' });
+      expect(parse('mode=sub,same,super,action')).toEqual(defaultFilters());
+      expect(parse('mode=all')).toEqual({});
+    });
+
+    it('maps fix=1 to bug only, and ignores fix=0', () => {
+      expect(parse('fix=1')).toEqual({ kind: 'bug' });
+      expect(parse('mode=sub,same&fix=1')).toEqual({ kind: 'bug' });
+      expect(parse('fix=0')).toEqual(defaultFilters());
+      expect(activeCount(parse('fix=1'))).toBe(1);
+    });
+
+    it('prefers kind over the old parameters', () => {
+      expect(parse('kind=decision&mode=sub&fix=1')).toEqual({ kind: 'decision' });
+    });
+
+    it('writes the normalised kind and drops the old parameters, so equal selections give equal URLs', () => {
+      const write = (q: string) => writeFilters(new URLSearchParams(q), parse(q)).toString();
+      expect(write('mode=sub')).toBe('kind=task%2Cbug');
+      expect(write('mode=same,super')).toBe(write('mode=sub'));
+      expect(write('mode=sub')).toBe(write('kind=bug,task'));
+      expect(write('fix=1')).toBe('kind=bug');
+      expect(write('mode=sub&fix=1')).toBe(write('kind=bug'));
+      expect(write('mode=sub,same,super,action')).toBe('');
+      expect(write('glob=s1&mode=all&fix=0')).toBe('glob=s1&kind=all');
+    });
   });
 
   it('ignores a legacy category value in the URL: there is no category filter', () => {
     expect(parse('category=feature')).toEqual(defaultFilters());
     expect(parse('category=task')).toEqual(defaultFilters());
-    expect(parse('category=feature&fix=1')).toEqual({ ...defaultFilters(), fix: '1' });
+    expect(parse('category=feature&fix=1')).toEqual({ kind: 'bug' });
   });
 
   it('matches IDs by case-insensitive substring', () => {
@@ -119,7 +186,7 @@ describe('board filters', () => {
   });
 
   it('requires every active filter', () => {
-    const values = parse('fix=1&id=b1');
+    const values = parse('kind=bug&id=b1');
     expect(matchesFilters(view({ id: 's1b1', category: 'bug' }), values)).toBe(true);
     expect(matchesFilters(view({ id: 's1b1', category: 'task' }), values)).toBe(false);
     expect(matchesFilters(view({ id: 's1b2', category: 'bug' }), values)).toBe(false);
@@ -128,24 +195,24 @@ describe('board filters', () => {
   });
 
   it('round-trips through the query and leaves other parameters alone', () => {
-    const values = parse('mode=same,super&id=f4');
-    const params = writeFilters(new URLSearchParams('glob=s1t1&mode=sub'), values);
+    const values = parse('kind=task,decision&id=f4');
+    const params = writeFilters(new URLSearchParams('glob=s1t1&kind=bug'), values);
     expect(params.get('glob')).toBe('s1t1');
     expect(parseFilters(params)).toEqual(values);
     expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
   });
 
-  it('toggles a mode option on and off', () => {
-    const [mode] = BOARD_FILTERS;
-    if (mode === undefined) throw new Error('No filters');
-    expect(toggleOption(mode, '', 'super')).toBe('super');
-    expect(toggleOption(mode, 'super', 'sub')).toBe('sub,super');
-    expect(toggleOption(mode, 'sub,super', 'sub')).toBe('super');
-    expect(toggleOption(mode, 'super', 'super')).toBe('');
+  it('toggles a kind option on and off', () => {
+    const [kind] = BOARD_FILTERS;
+    if (kind === undefined) throw new Error('No filters');
+    expect(toggleOption(kind, '', 'bug')).toBe('bug');
+    expect(toggleOption(kind, 'bug', 'task')).toBe('task,bug');
+    expect(toggleOption(kind, 'task,bug', 'task')).toBe('bug');
+    expect(toggleOption(kind, 'bug', 'bug')).toBe('');
   });
 
-  it('has the mode and fix filters, the ID filter, the temporary group filter, the Only human toggle and the Arm system toggle', () => {
-    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['mode', 'fix', 'id', 'group', 'human', 'arm']);
+  it('has the kind filter, the ID filter, the temporary group filter, the Only human toggle and the Arm system toggle', () => {
+    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['kind', 'id', 'group', 'human', 'arm']);
   });
 
   it('ignores the removed yourTurn and move parameters and an old human value in links', () => {
@@ -160,7 +227,7 @@ describe('board filters', () => {
 
   it('filters by exact group name, hiding globs with no group, and round-trips through the URL', () => {
     const values = parse('group=glob-groups');
-    expect(values).toEqual({ mode: 'sub,same,super,action', group: 'glob-groups' });
+    expect(values).toEqual({ kind: 'task,bug,action', group: 'glob-groups' });
     expect(matchesFilters(view({ group: 'glob-groups' }), values)).toBe(true);
     expect(matchesFilters(view({ group: 'glob' }), values)).toBe(false);
     expect(matchesFilters(view({ group: null }), values)).toBe(false);
@@ -181,7 +248,7 @@ describe('board filters', () => {
 
     it('is off by default and on for human=1', () => {
       expect(parse('')).toEqual(defaultFilters());
-      expect(parse('human=1')).toEqual({ mode: 'sub,same,super,action', human: '1' });
+      expect(parse('human=1')).toEqual({ kind: 'task,bug,action', human: '1' });
       expect(parse('human=nope')).toEqual(defaultFilters());
       expect(activeCount(parse('human=1'))).toBe(1);
     });
@@ -195,7 +262,7 @@ describe('board filters', () => {
     });
 
     it('combines with the other filters', () => {
-      const values = parse('human=1&fix=1');
+      const values = parse('human=1&kind=bug');
       expect(matchesFilters(signOff, values, ctx)).toBe(true);
       expect(matchesFilters({ ...signOff, category: 'task' }, values, ctx)).toBe(false);
       expect(matchesFilters(machine, values, ctx)).toBe(false);
@@ -204,7 +271,7 @@ describe('board filters', () => {
     it('round-trips through the URL', () => {
       const params = writeFilters(new URLSearchParams('glob=s1t1'), { ...defaultFilters(), human: '1' });
       expect(params.toString()).toBe('glob=s1t1&human=1');
-      expect(parseFilters(params)).toEqual({ mode: 'sub,same,super,action', human: '1' });
+      expect(parseFilters(params)).toEqual({ kind: 'task,bug,action', human: '1' });
       expect(writeFilters(params, defaultFilters()).toString()).toBe('glob=s1t1');
     });
   });
@@ -216,7 +283,7 @@ describe('board filters', () => {
     const plain = view({ status: 'planning' });
 
     it('is off by default and on for arm=1', () => {
-      expect(parse('arm=1')).toEqual({ mode: 'sub,same,super,action', arm: '1' });
+      expect(parse('arm=1')).toEqual({ kind: 'task,bug,action', arm: '1' });
       expect(parse('arm=nope')).toEqual(defaultFilters());
       expect(activeCount(parse('arm=1'))).toBe(1);
     });
@@ -232,7 +299,7 @@ describe('board filters', () => {
     it('round-trips through the URL', () => {
       const params = writeFilters(new URLSearchParams('glob=s1t1'), { ...defaultFilters(), arm: '1' });
       expect(params.toString()).toBe('glob=s1t1&arm=1');
-      expect(parseFilters(params)).toEqual({ mode: 'sub,same,super,action', arm: '1' });
+      expect(parseFilters(params)).toEqual({ kind: 'task,bug,action', arm: '1' });
     });
   });
 });
