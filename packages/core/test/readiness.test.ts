@@ -16,6 +16,7 @@ const ready: ReadinessFacts = {
   installUrl: null,
   gateCheck: 'checks',
   checksWorkflow: true,
+  branchRules: { requiredChecks: ['checks'], integrationBypasses: true },
   claudeWorkflow: true,
   slopBot: 'slop[bot]',
   claudeAllowsSlop: true,
@@ -72,6 +73,29 @@ describe('Claude workflow readiness', () => {
   it('names the missing workflow when checks failed and the run has not reacted', () => {
     const claudeApp = readiness({ ...ready, claudeWorkflow: false, unreactedCheckFailures: [{ id: 's1t1', sha: 'abcdef123', url: null }] }).find((i) => i.key === 'claude_app');
     expect(claudeApp?.detail).toMatch(/no Claude workflow/);
+  });
+});
+
+describe('branch rules readiness', () => {
+  const detail = (branchRules: ReadinessFacts['branchRules']) => readiness({ ...ready, branchRules }).find((i) => i.key === 'sub_gate');
+
+  it('says the gate is required and the App bypasses', () => {
+    const item = detail({ requiredChecks: ['checks'], integrationBypasses: true });
+    expect(item?.state).toBe('ok');
+    expect(item?.detail).toMatch(/required status check on main, and slop's App can bypass/);
+  });
+
+  it('points to the setup command when the gate is not required', () => {
+    expect(detail({ requiredChecks: ['lint'], integrationBypasses: null })?.detail).toMatch(/not a required status check on main: run catalog\/scripts\/setup-repo\.sh acme\/app .*--protect checks/);
+  });
+
+  it("warns when the App can't bypass", () => {
+    expect(detail({ requiredChecks: ['checks'], integrationBypasses: false })?.detail).toMatch(/App can't bypass/);
+  });
+
+  it('stays quiet about bypass when the list is not visible, and asks for setup when rules are unreadable', () => {
+    expect(detail({ requiredChecks: ['checks'], integrationBypasses: null })?.detail).not.toMatch(/bypass/);
+    expect(detail(null)?.detail).toMatch(/can't read the branch's rules yet/);
   });
 });
 
