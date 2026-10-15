@@ -734,4 +734,18 @@ describe('an action glob card', () => {
     const decision = view({ id: 's1k1', category: 'decision', type: null, pr: null });
     expect(dom(markup(decision)).querySelector('[data-testid="card-type"]')?.textContent).toBe('decision');
   });
+
+  it('gives a learning no scope, outcome or conflict tags; a decided one reads its outcome in the corner', () => {
+    const learning = view({
+      id: 's1k1',
+      category: 'decision',
+      type: null,
+      pr: null,
+      attributes: { scope: { kind: 'project', ref: null }, outcome: { kind: 'accept', by: 'a@b.c', at: NOW }, conflictsWith: ['s1k2'] },
+    } as unknown as Partial<GlobView>);
+    const root = dom(markup(learning));
+    for (const id of ['scope-chip', 'outcome-chip', 'conflict-chip']) expect(root.querySelector(`[data-testid="${id}"]`)).toBeNull();
+    expect(root.querySelector('[data-testid="card-corner"]')?.textContent).toContain('accepted');
+    expect(root.textContent).not.toContain('conflicts with');
+  });
 });
