@@ -18,6 +18,7 @@ export const GLOB_SECTIONS = [
   'decision',
   'assessment',
   'actions',
+  'action',
   'human-steps',
 ] as const;
 

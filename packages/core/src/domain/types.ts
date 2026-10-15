@@ -13,8 +13,13 @@ export type SlopType = (typeof SLOP_TYPES)[number];
 /** What a person or intake may create through the work form; `decision` globs come from KB items, the inbox and the backfill only. */
 export const WORK_CATEGORIES = ['feature', 'task', 'bug'] as const;
 export type WorkCategory = (typeof WORK_CATEGORIES)[number];
-export const CATEGORIES = [...WORK_CATEGORIES, 'decision'] as const;
+/** Human work: a choice (decision) or something a person does (action). It has no type and never runs, branches or merges. */
+export const HUMAN_CATEGORIES = ['decision', 'action'] as const;
+export type HumanCategory = (typeof HUMAN_CATEGORIES)[number];
+export const CATEGORIES = [...WORK_CATEGORIES, ...HUMAN_CATEGORIES] as const;
 export type Category = (typeof CATEGORIES)[number];
+
+export const isHumanCategory = (category: Category): category is HumanCategory => category === 'decision' || category === 'action';
 
 export const STATUSES = [
   'planning',
@@ -244,8 +249,8 @@ export interface ImpliedAfter {
 /** What `from` cannot do yet while a relation is unmet: start, merge, or be signed off. */
 export const RELATION_GATES = ['start', 'merge', 'sign_off'] as const;
 export type RelationGate = (typeof RELATION_GATES)[number];
-/** What `to` must reach for the gate to open: merged, decided (a decision glob's outcome) or signed off. */
-export const RELATION_UNTILS = ['merged', 'decided', 'signed_off'] as const;
+/** What `to` must reach for the gate to open: merged, decided (a decision glob's outcome), done (an action glob's outcome) or signed off. */
+export const RELATION_UNTILS = ['merged', 'decided', 'done', 'signed_off'] as const;
 export type RelationUntil = (typeof RELATION_UNTILS)[number];
 /** Who set a relation: a person, slop's inference, slop's learning from outcomes, an agent, or (old rows only; nothing creates it now) a split. */
 export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent'] as const;
@@ -309,11 +314,39 @@ export interface PathClash {
   readonly paths: readonly string[];
 }
 
+/**
+ * Which globs a listing includes: `work` (the default: features, tasks and bugs, so every consumer that treats a glob as
+ * work is unchanged), `decisions` (decision globs only), `actions` (action globs only), `human` (decisions and actions) or
+ * `all`. Anything that must see human work asks for it.
+ */
+export type GlobInclude = 'work' | 'decisions' | 'actions' | 'human' | 'all';
+
+/** Whether a listing with this `include` (default `work`) takes a glob of this category. */
+export const includes = (include: GlobInclude | undefined, category: Category): boolean => {
+  switch (include ?? 'work') {
+    case 'all':
+      return true;
+    case 'decisions':
+      return category === 'decision';
+    case 'actions':
+      return category === 'action';
+    case 'human':
+      return category === 'decision' || category === 'action';
+    case 'work':
+      return category !== 'decision' && category !== 'action';
+  }
+};
+
+/** A glob that has a type: code work. */
+export type CodeGlob = Glob & { readonly type: SlopType };
+export const isCodeGlob = (glob: Glob): glob is CodeGlob => glob.type !== null;
+
 export interface Glob {
   readonly id: string;
   readonly boardId: number;
   readonly title: string;
-  readonly type: SlopType;
+  /** Null for human work (decision and action globs): a type only says how code work is done. */
+  readonly type: SlopType | null;
   readonly category: Category;
   /** Per-category fields (a decision's scope and outcome); absent on legacy globs. */
   readonly attributes?: GlobAttributes;

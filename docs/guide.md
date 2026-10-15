@@ -4,7 +4,7 @@ A short, practical guide to what slop does and when to use each part. The behavi
 
 ## Globs and types
 
-A glob is one unit of work on a board: a change, a fix, a piece of research. Every glob has a type, which decides how the work flows, and a category, which says what kind of work it is.
+A glob is one unit of work on a board. There are two families. **Code work** (a change, a fix, a piece of research) has a type, which decides how the work flows, and a category, which says what kind of work it is. **Human work** (a decision or an action) is done by a person, has a category and no type.
 
 - **Sub:** a self-contained change one routine (an AI run) can build and merge in one pull request without a person making a design decision. It starts on its own and merges on its own when the sub review passes. Use it for bug fixes, small UI changes, follow-ups and small features that stay in one area. When in doubt, choose sub.
 - **Same:** a standard task. It waits in Planning until someone presses Start (or picks it up), and a person merges the pull request. Use it when you want to look the work over before it merges. A routine can still do the implementing.
@@ -14,7 +14,19 @@ By default only board admins choose sub or super; everyone else creates sames. Y
 
 ## Categories
 
-The category is what the work is, and it is used for time tracking: **feature** (research and development), **task** or **bug** (both maintenance). It is separate from the type. Every category works with sub and same; a bug is never a super. The ID letter shows the category at creation (`s1f3` is a feature, `s1t3` a task, `s1b3` a bug) and never changes, even if you change the category later.
+The category is what the work is. For code work it is used for time tracking: **feature** (research and development), **task** or **bug** (both maintenance). It is separate from the type. Human work has two categories: **decision** (something a person decides, such as a learning to approve) and **action** (something a person does, then marks done). The ID letter shows the category at creation (`s1f3` feature, `s1t3` task, `s1b3` bug, `s1k3` decision, `s1a3` action) and never changes.
+
+| Category | Sub | Same | Super |
+| --- | --- | --- | --- |
+| Feature | Yes | Yes | Yes |
+| Task | Yes | Yes | Yes |
+| Bug | Yes | Yes | No |
+| Decision | no type | no type | no type |
+| Action | no type | no type | no type |
+
+An **action glob** has no branch, pull request or run. It is open until someone finishes it with Done (who and when are kept, with an optional note) or drops it with Dismiss (a reason is needed). A glob that must wait for it can hold on it, and either outcome lets that glob go. Its plan says Why, Do this (the script and the command to run), Permissions and Check it worked.
+
+**The revert test.** If this glob were reverted, would the work still be needed? No: it is a rollout step on this glob, a follow-up of this change that gates its sign-off. Yes, or it is about another repo or board, or it is optional setup: create an action glob (category `action`, no type) on the right board, with a relation if this change needs it first. Never file optional setup as a blocking step.
 
 ## Lists and statuses
 
@@ -80,7 +92,7 @@ A **watch signal** is how you pick the signal to measure when you approve a subm
 
 ## Human steps
 
-A human step is something only a person can do on a glob: merge a ready same, resolve a conflict, decide a decision, sign off, pair on a super, upload a missing file, or run a rollout after a deploy. Slop works these out from the glob's state and lists them in one place, including your turn view, so you can see what is waiting on you. You can also add your own steps to a glob with a title, who it is for and when it is due. A step can be done or dismissed with a reason. Use human steps to make manual work, such as a database change after deploy, visible instead of living in someone's head.
+A human step is something only a person can do on a glob: merge a ready same, resolve a conflict, decide a decision, sign off, pair on a super, upload a missing file, or run a rollout after a deploy. Slop works these out from the glob's state and lists them in one place, including your turn view, so you can see what is waiting on you. You can also add your own steps to a glob with a title, who it is for and when it is due. A step can be done or dismissed with a reason. Use human steps to make manual work, such as a database change after deploy, visible instead of living in someone's head. A human step belongs to the glob that needs it and gates its sign-off; use an action glob instead when the work stands on its own, belongs to another repo or board, or is optional (see the revert test under Categories).
 
 ## Attachments
 

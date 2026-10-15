@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -140,8 +140,11 @@ const settingsSchema = z.object({
 
 export const createGlobSchema = z.object({
   title: z.string().min(1),
-  type: z.enum(SLOP_TYPES).default('same'),
-  category: z.enum(WORK_CATEGORIES).default('task'),
+  /** Code work: omitted means a same. An action has no type (null or omitted). */
+  type: z.enum(SLOP_TYPES).nullable().optional(),
+  category: z.enum([...WORK_CATEGORIES, 'action']).default('task'),
+  /** Actions only: who is meant to do it. */
+  assignee: z.string().trim().min(1).max(200).nullable().optional(),
   /** Omitted: slop chooses one from the title and plan. Null or empty: none. */
   group: z.string().nullable().optional(),
   environment: z.string().min(1).nullable().default(null),
@@ -204,8 +207,13 @@ const updateGlobSchema = z.object({
   after: z.array(z.string().min(1)).max(20).optional(),
   /** Relations to add or change (any gate); additive, unlike `after`, which replaces the start list. */
   relations: relationListSchema.optional(),
-  /** A decision's scope, the only attribute a client edits; core validates it (kind, ref, glob on the board). */
-  attributes: z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict().optional(),
+  /** A decision's scope or an action's assignee, the only attributes a client edits; core validates them. */
+  attributes: z
+    .union([
+      z.object({ scope: z.object({ kind: z.string(), ref: z.string().nullable() }).strict() }).strict(),
+      z.object({ assignee: z.string().nullable() }).strict(),
+    ])
+    .optional(),
 });
 
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
@@ -217,7 +225,14 @@ const workstreamsField = (workstreams: WorkstreamsSummary | undefined) => (works
 const versionSchema = z.object({ version: z.number().int() });
 
 /** Glob actions carry the version read; pick-up and take-over may also choose the environment. */
-const actionSchema = versionSchema.extend({ environment: z.string().min(1).optional(), anyway: z.boolean().optional() });
+const actionSchema = versionSchema.extend({
+  environment: z.string().min(1).optional(),
+  anyway: z.boolean().optional(),
+  /** Done: what the person checked (optional). */
+  note: z.string().max(OUTCOME_REASON_MAX).optional(),
+  /** Dismiss: why the action is not needed (required by the action). */
+  reason: z.string().max(OUTCOME_REASON_MAX).optional(),
+});
 type ActionBody = z.infer<typeof actionSchema>;
 
 /** Rejected and pipeline-closed decisions are archived: they leave the board and its counts. */
@@ -564,8 +579,10 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, group, relations, ...fields } = body;
+    const { intake, needs, group, relations, type, ...fields } = body;
     const boardId = Number(c.req.param('b'));
+    // An action has no type; code work defaults to a same.
+    const chosenType = type === undefined ? (fields.category === 'action' ? null : 'same') : type;
     let chosen: string | null = group?.trim() === '' ? null : (group ?? null);
     if (group === undefined && deps.intake !== undefined) {
       const suggested = await deps.intake.suggestGroup(email, boardId, { title: fields.title, plan: fields.plan ?? '' });
@@ -573,6 +590,7 @@ export const createApp = (deps: AppDeps) => {
     }
     const created = await globs.create(email, {
       ...fields,
+      type: chosenType,
       group: chosen,
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       ...(relations === undefined ? {} : { relations: relationInputs(relations) }),
@@ -649,6 +667,9 @@ export const createApp = (deps: AppDeps) => {
     // Decision globs (the outcome has its own route: POST /api/globs/:id/decision).
     'sign-off': (email: string, id: string, b: ActionBody) => globs.signOffDecision(email, id, b.version),
     reopen: (email: string, id: string, b: ActionBody) => (deps.decisions ?? { reopen: (e: string, i: string, v: number) => globs.reopenDecision(e, i, v) }).reopen(email, id, b.version),
+    // Action globs: a person did it (optional note), or it is not needed (reason required).
+    done: (email: string, id: string, b: ActionBody) => globs.completeAction(email, id, b.version, b.note),
+    dismiss: (email: string, id: string, b: ActionBody) => globs.dismissAction(email, id, b.version, b.reason ?? ''),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),

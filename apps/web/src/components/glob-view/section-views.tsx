@@ -6,6 +6,7 @@ import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
 import { LabelReviews } from '../labels';
 import type { ReviewLabel } from '../labels';
+import { ActionOutcome } from './action';
 import { ActivityLog } from './activity';
 import { GlobActions } from './actions';
 import type { GlobActionsState } from './actions';
@@ -68,11 +69,11 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     <EscalationSection ctx={ctx} startOpen={section === 'escalation'} />
   ),
   labels: ({ ctx, actions, onReviewLabel, openLabel }) =>
-    !actions.decision && (
+    !actions.human && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
   related: ({ ctx, actions, onDismissEdge, onAddRelation }) =>
-    actions.decision ? (
+    actions.human ? (
       <DecisionHoldsBack ctx={ctx} onAddRelation={onAddRelation} />
     ) : (
       <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} />
@@ -80,7 +81,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection
       ctx={ctx}
-      decision={actions.decision}
+      decision={actions.human}
       size={size}
       splitting={splitting}
       onSplitting={onSplitting}
@@ -90,6 +91,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   actions: ({ ctx, actions, onSplitting }) => (
     <GlobActions ctx={ctx} state={actions} onSplitting={onSplitting} />
   ),
+  action: ({ ctx }) => <ActionOutcome ctx={ctx} />,
   plan: ({ ctx }) => <PlanSection ctx={ctx} />,
   decision: ({ ctx }) => <DecisionPanel ctx={ctx} />,
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
@@ -103,7 +105,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       repo={ctx.board.repo}
       baseBranch={ctx.board.baseBranch}
       startOpen={section === 'human-steps'}
-      collapsed={actions.decision}
+      collapsed={actions.human}
       openSignal={actions.stepsSignal}
       onAdd={onAddStep}
       onComplete={onCompleteStep}
@@ -125,7 +127,7 @@ export const AFTER_SECTION: Partial<Record<GlobSection, SectionView>> = {
       <ActivityLog ctx={ctx} state={nowState} actions={actions} />
       <EditFieldsSection
         ctx={ctx}
-        decision={actions.decision}
+        decision={actions.human}
         edits={edits}
         run={actions.run}
         onReload={onReload}

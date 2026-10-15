@@ -1,4 +1,4 @@
-import { decisionOf } from '@slop/core';
+import { isHumanCategory } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
@@ -31,8 +31,9 @@ export const GlobHeader = ({
   actions?: GlobActionsState;
 }) => {
   const { glob } = ctx;
-  const decision = decisionOf(glob) !== null;
-  const armStep = decision ? null : needsRelease(glob.humanSteps ?? []);
+  // Human work (a decision, an action) has no type to change, no deploy to arm and no machine status.
+  const human = isHumanCategory(glob.category);
+  const armStep = human ? null : needsRelease(glob.humanSteps ?? []);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -88,9 +89,9 @@ export const GlobHeader = ({
         <span className="hidden items-center gap-3 sm:flex">
           <Dot />
         </span>
-        {decision || actions === undefined ? (
+        {human || actions === undefined || glob.type === null ? (
           <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" data-testid="glob-type">
-            {decision ? 'decision' : glob.type}
+            {glob.type ?? glob.category}
           </span>
         ) : (
           <span className="hidden shrink-0 sm:inline">
@@ -106,7 +107,7 @@ export const GlobHeader = ({
         {armStep !== null && (
           <ArmSystemLabel step={armStep} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
         )}
-        <HeaderStatus glob={glob} decision={decision} state={state} />
+        <HeaderStatus glob={glob} decision={human} state={state} />
       </div>
     </>
   );

@@ -1,3 +1,4 @@
+import { isHumanCategory } from '@slop/core';
 import type { Holding, RelationGate, RelationSource, RelationUntil } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -70,8 +71,8 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
   if (view === undefined) return null;
   const holding = view.holding;
   const groups: RelatedGroups = {
-    holding: holding.filter((h) => !h.toIsDecision).map(rowOf),
-    decisions: holding.filter((h) => h.toIsDecision).map(rowOf),
+    holding: holding.filter((h) => !h.toIsDecision && h.toIsAction !== true).map(rowOf),
+    decisions: holding.filter((h) => h.toIsDecision || h.toIsAction === true).map(rowOf),
     holdsBack: view.holdsBack.map((h) => ({
       relationId: h.relationId,
       id: h.from,
@@ -164,14 +165,14 @@ export const AddRelationForm = ({
   onAdd: (input: AddRelationInput) => Promise<boolean>;
   onClose: () => void;
 }) => {
-  const decision = glob.category === 'decision';
+  const decision = isHumanCategory(glob.category);
   const [other, setOther] = useState('');
   const [gate, setGate] = useState<RelationGate>('start');
   const [reason, setReason] = useState('');
   const [working, setWorking] = useState(false);
   const globs = useQuery({ queryKey: globsKey(glob.boardId), queryFn: () => api.globs(glob.boardId) });
   // A decision holds work globs back; a glob is held back by other work globs and by decisions.
-  const candidates = (globs.data ?? []).filter((g) => g.id !== glob.id && (!decision || g.category !== 'decision'));
+  const candidates = (globs.data ?? []).filter((g) => g.id !== glob.id && (!decision || !isHumanCategory(g.category)));
   const id = other.trim();
   const submit = async () => {
     if (id === '') return;

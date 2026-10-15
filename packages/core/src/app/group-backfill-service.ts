@@ -1,3 +1,4 @@
+import { isHumanCategory } from '../domain/types.js';
 import { ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { decisionOf } from '../domain/decision-glob.js';
@@ -74,7 +75,7 @@ export class GroupBackfillService {
     });
     if (!read.ok) return read;
     // Decisions and signed-off globs are history: their group is not worth rewriting.
-    const open = read.value.globs.filter((g) => g.category !== 'decision' && g.status !== 'signed_off');
+    const open = read.value.globs.filter((g) => !isHumanCategory(g.category) && g.status !== 'signed_off');
     const existing = [...new Set(read.value.globs.flatMap((g) => (g.group === null ? [] : [g.group])))];
     const byId = new Map(open.map((g) => [g.id, g]));
     const items: GroupBackfillItem[] = [];

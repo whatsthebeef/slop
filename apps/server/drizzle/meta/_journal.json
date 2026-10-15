@@ -526,6 +526,13 @@
       "when": 1792017073647,
       "tag": "0074_atf_specs",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1792066573349,
+      "tag": "0075_human_work_no_type",
+      "breakpoints": true
     }
   ]
 }
