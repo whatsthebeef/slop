@@ -191,10 +191,21 @@ describe('whoseMove: stalled', () => {
     expect(move(g, live).holder).toBe('machine');
   });
 
-  it('a person who picked it up is on it for a while, then nobody is', () => {
+  it('a person who picked it up is on it however long it has been quiet: never "nobody"', () => {
     const picked = (n: number) => glob({ status: 'implementing', implementer: dev.email, updatedAt: minutesAgo(n) });
-    expect(move(picked(5), {}, { viewer: undefined })).toMatchObject({ holder: 'human', who: dev.email });
-    expect(move(picked(40))).toMatchObject({ holder: 'stalled', cause: 'nobody', minutes: 40 });
+    expect(move(picked(5), {}, { viewer: undefined })).toMatchObject({ holder: 'human', reason: 'Picked up', who: dev.email, minutes: 5 });
+    expect(move(picked(40))).toMatchObject({ holder: 'human', reason: 'Picked up', who: dev.email, minutes: 40 });
+    expect(move(picked(3 * 24 * 60))).toMatchObject({ holder: 'human', reason: 'Picked up', minutes: 3 * 24 * 60 });
+  });
+
+  it('a super a person is pairing on is theirs, not stalled', () => {
+    const pair = glob({ type: 'super', status: 'in_progress', implementer: dev.email, updatedAt: minutesAgo(90) });
+    expect(move(pair)).toMatchObject({ holder: 'human', reason: 'Pairing', who: dev.email });
+  });
+
+  it('a machine run on a picked-up glob wins over the person', () => {
+    const handed = glob({ status: 'implementing', implementer: dev.email, updatedAt: minutesAgo(90), runs: [run({ lastProgressAt: minutesAgo(5) })] });
+    expect(move(handed).holder).toBe('machine');
   });
 
   it('a failed provision or a failed effect stalls', () => {
@@ -217,7 +228,7 @@ describe('whoseMove: stalled', () => {
 });
 
 describe('stall hand-off', () => {
-  const stalledGlob = (patch: Partial<Glob> = {}) => glob({ status: 'in_progress', implementer: dev.email, updatedAt: minutesAgo(60), ...patch });
+  const stalledGlob = (patch: Partial<Glob> = {}) => glob({ status: 'in_progress', implementer: null, updatedAt: minutesAgo(60), ...patch });
 
   it('adds an unstick step titled by its one action, with the cause as detail', () => {
     const step = (g: Glob, options: UnstickOptions = {}) => unstickStep(move(g), g, options);
@@ -233,8 +244,9 @@ describe('stall hand-off', () => {
   });
 
   it('a person who is the implementer is offered Pick up, or Start for a hand-over', () => {
-    const g = stalledGlob({ updatedAt: minutesAgo(60) });
-    expect(unstickStep(move(g), g)).toMatchObject({ title: 'Pick up', action: 'pick_up', alternative: 'start_anyway' });
+    // A person who holds a glob that has gone quiet is not stalled: there is nothing to unstick.
+    const held = glob({ status: 'in_progress', implementer: dev.email, updatedAt: minutesAgo(60) });
+    expect(unstickStep(move(held), held)).toBeNull();
     const failed = glob({ status: 'failed', implementer: dev.email, failure: { reason: 'x', at: NOW } });
     const step = unstickStep(move(failed), failed);
     expect(step).toMatchObject({ title: 'Pick up', action: 'pick_up' });

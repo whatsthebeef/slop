@@ -271,6 +271,16 @@ describe('card rows', () => {
       expect(bottom?.textContent).toContain('Planner: slop (machine)');
       expect(bottom?.lastElementChild?.querySelector('[aria-label="machine"]')).not.toBeNull();
     });
+    it('shows the implementer over the planner', () => {
+      const bottom = avatar(view({implementer: 'bo@x.com', planner: 'ann@x.com', runs: []}));
+      expect(bottom?.textContent).toContain('Implementer: bo@x.com');
+      expect(bottom?.lastElementChild?.textContent).toContain('BO');
+    });
+    it('shows the robot head for a bot planner account', () => {
+      const bottom = avatar(view({implementer: null, planner: 'ci-bot@x.com', runs: []}));
+      expect(bottom?.textContent).toContain('Planner: ci-bot@x.com (machine)');
+      expect(bottom?.lastElementChild?.querySelector('[aria-label="machine"]')).not.toBeNull();
+    });
   });
 
   describe('dismissing', () => {

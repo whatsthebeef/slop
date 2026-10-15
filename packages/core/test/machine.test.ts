@@ -208,6 +208,12 @@ describe('investigate (row 5a)', () => {
     expect(t.events.map((e) => e.type)).toEqual(['HoldOverridden', 'StartQueued']);
   });
 
+  it('Start on a glob a person picked up records the hand-over to the machine, naming who had it', () => {
+    const t = value(m.startAnyway(glob({ status: 'in_progress', implementer: other.email }), ctx()));
+    expect(t.glob.implementer).toBeNull();
+    expect(t.events.find((e) => e.type === 'HandedToMachine')).toMatchObject({ data: { from: other.email } });
+  });
+
   it('the queued start is released when the investigation is stored, and its run starts for whoever pressed Start', () => {
     const queued = value(m.start(glob({ runs: [run({ id: 'run-9', purpose: 'investigate' })] }), ctx())).glob;
     const t = value(m.investigationPushed(queued, 'run-9', ctx(null)));

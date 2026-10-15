@@ -40,6 +40,8 @@ export const DOMAIN_EVENT_TYPES = [
   'LabelChanged',
   'LabelItemTicked',
   'PickedUp',
+  /** Start was pressed on a glob a person had picked up: it went to the machine (data: `from`, the person who had it). */
+  'HandedToMachine',
   'ArtifactAdded',
   /** The implementation record's workstreams block changed (data: the parsed block, `version`, `commitSha`, `runId`). */
   'WorkstreamsRecorded',

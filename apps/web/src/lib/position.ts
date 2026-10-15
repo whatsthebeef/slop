@@ -1,4 +1,4 @@
-import { DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove } from '@slop/core';
+import { DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '@slop/core';
 import type { HumanStepViewer, MachineStep, MachineStepKind, Move } from '@slop/core';
 import type { GlobView } from './api';
 
@@ -86,6 +86,43 @@ const machineText = (step: MachineStep, now: string): string => {
   return DOING[step.kind];
 };
 
+/** Past this many minutes without a touch, a person's glob says how long it has been quiet. */
+const QUIET_AFTER_MINUTES = 24 * 60;
+
+const quietWords = (minutes: number): string => {
+  const days = Math.floor(minutes / (24 * 60));
+  return `quiet ${String(days)} ${days === 1 ? 'day' : 'days'}`;
+};
+
+/**
+ * A glob a person holds, picked up (no machine run) or a super in a pairing session: says "Picked up" or "pairing" with the human icon and no name (the card's avatar says who; the
+ * tooltip and the activity log carry the name and when), never "nobody". A long silence only adds how long.
+ */
+const heldByPerson = (move: Move, now: string, viewer?: HumanStepViewer): Position => {
+  const who = move.who ?? '';
+  const mine = viewer !== undefined && who === viewer.email;
+  const full = mine ? 'You' : who === '' ? 'Someone' : who;
+  const minutes = move.minutes ?? minutesSince(move.since, now);
+  const quiet = minutes !== null && minutes >= QUIET_AFTER_MINUTES ? quietWords(minutes) : null;
+  const pairing = move.reason === PAIRING_REASON;
+  const text = pairing ? 'pairing' : `Picked up${quiet === null ? '' : `, ${quiet}`}`;
+  const ago = minutes === null ? '' : ` ${minutes < 60 ? `${String(minutes)} min` : minutes < QUIET_AFTER_MINUTES ? `${String(Math.round(minutes / 60))} h` : `${String(Math.round(minutes / 1440))} d`} ago`;
+  return {
+    holder: 'human',
+    text,
+    label: text,
+    tip: pairing
+      ? `${full} ${mine ? 'are' : 'is'} pairing on this super${ago === '' ? '' : `; last touched${ago}`}. The session is local, so slop can't see it.`
+      : `${full} picked this up${ago}. A local session isn't visible to slop; Start hands it back to the machine.`,
+    spinning: false,
+    queued: false,
+    tone: 'text-muted-foreground',
+    sessionUrl: null,
+    onChecks: false,
+    minutes,
+  };
+};
+
 /**
  * The glob's position, or null when the indicator shows nothing: it is the viewer's turn (the Your turn chip says it), the
  * glob is idle in Planning, or it is signed off.
@@ -163,16 +200,14 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       };
     case 'human':
       // Without a server move or a viewer a due step could be anyone's, so say nothing; the Your turn chip covers the viewer.
-      if (move.reason !== 'Picked up' && glob.move === undefined && viewer === undefined) return null;
-      // Someone else's turn. A person's pick-up that nothing has touched keeps its old explanation.
+      if (move.reason === PICKED_UP_REASON || move.reason === PAIRING_REASON) return heldByPerson(move, now, viewer);
+      if (glob.move === undefined && viewer === undefined) return null;
+      // Someone else's turn.
       return {
         holder: 'human',
-        text: move.reason === 'Picked up' ? 'picked up, no machine run' : move.reason,
-        label: move.reason === 'Picked up' ? 'picked up, no machine run' : (move.label ?? move.reason),
-        tip:
-          move.reason === 'Picked up'
-            ? `${move.who ?? 'Someone'} picked this up and no machine run is working on it. A local session isn't visible to slop. Start hands it to the machine.`
-            : `${move.who ?? 'Someone'}'s turn: ${move.reason}`,
+        text: move.reason,
+        label: move.label ?? move.reason,
+        tip: `${move.who ?? 'Someone'}'s turn: ${move.reason}`,
         spinning: false,
         queued: false,
         tone: 'text-muted-foreground',
