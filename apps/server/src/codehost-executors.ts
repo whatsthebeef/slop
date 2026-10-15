@@ -213,7 +213,7 @@ export const codeHostExecutors = (
       }
       // The head's checks: re-read them when slop has no result for this head (the effect records it like a webhook would).
       const now = await globs.peek(glob.id);
-      if (now?.status === 'pr_open' && (now.headChecks === null ||
+      if ((now?.status === 'pr_open' || now?.status === 'merging') && (now.headChecks === null ||
           now.headChecks.sha !== pr.headSha ||
           now.headChecks.state === 'pending' ||
           // Recorded as failed with no detail while the PR conflicts: that was the conflict, not the checks.
