@@ -219,14 +219,14 @@ const AppliesTo = ({
 };
 
 /** Earlier recommendations, newest first, collapsed at the foot of the block; the latest is the block's recommendation. */
-export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
+export const DecisionAssessment = ({ glob, all = false }: { glob: GlobView; all?: boolean }) => {
   const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
   const versions = useQuery({
     queryKey: artifactKey(glob.id, 'assessment', ''),
     queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
     enabled: has,
   });
-  const older = [...(versions.data ?? [])].slice(0, -1).reverse();
+  const older = [...(versions.data ?? [])].slice(0, all ? undefined : -1).reverse();
   if (older.length === 0) return null;
   return (
     <details className='grid gap-2' data-testid='assessment-history'>

@@ -22,7 +22,7 @@ export const DecisionPanel = ({ ctx }: { ctx: GlobViewContext }) =>
 export const DecisionAssessmentPanel = ({ ctx }: { ctx: GlobViewContext }) => {
   const decision = decisionOf(ctx.glob);
   return decision !== null && decision.origin.kind !== 'replacement' && !isLearning(decision) ? (
-    <DecisionAssessment glob={ctx.glob} />
+    <DecisionAssessment glob={ctx.glob} all />
   ) : null;
 };
 

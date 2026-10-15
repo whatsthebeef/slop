@@ -362,9 +362,10 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
   const outcomeMode = mode !== null && mode !== 'keep' ? mode : null;
   // Both accept modes carry the admin-only check (a PO can reach accept-with-edits through Apply suggestion); the other outcomes need only decide.
   const acceptMode = outcomeMode === null || outcomeMode === 'accept' || outcomeMode === 'accept_with_edits';
-  const blocked = acceptMode ? approve.blocked : flow.canDecide ? null : "You can't decide this";
   // The primary button is the recommended outcome; an approval is just the default.
   const recommended = outcomeMode === null && flow.applySuggestion !== null && suggest.stored !== undefined && suggest.stored.action !== 'approve';
+  // A recommended reject or merge is not an approval: it needs only decide, as in the ▾.
+  const blocked = acceptMode && !(recommended && suggest.prefill?.outcome === 'reject') ? approve.blocked : flow.canDecide ? null : "You can't decide this";
   const mainLabel =
     outcomeMode !== null ? submitLabel(outcomeMode, approve.label) : recommended ? recommendedLabel(suggest.stored, approve.label) : approve.label;
   const mainOff = busy || blocked !== null || (outcomeMode !== null && input === null);

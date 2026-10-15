@@ -68,7 +68,7 @@ const signal: KbSignal = {
 const planOf = (content: string): Awaited<ReturnType<typeof api.plan>> =>
   ({ current: { content, version: 1 }, versions: [{ version: 1 }] }) as unknown as Awaited<ReturnType<typeof api.plan>>;
 
-const suggestionOf = (action: 'approve' | 'approve_with_edit', editedDraft: string | null = null): Awaited<ReturnType<typeof api.suggestion>> => ({
+const suggestionOf = (action: 'approve' | 'approve_with_edit' | 'reject', editedDraft: string | null = null): Awaited<ReturnType<typeof api.suggestion>> => ({
   suggestion: {
     suggestion: { action, editedDraft, mergeInto: null, mergedText: null, reason: 'Fits the conventions.' },
     model: 'm',
@@ -314,6 +314,16 @@ describe('the admin-only check on both accept modes', () => {
     await user.click(primary);
     expect(screen.queryByTestId('outcome-form-accept_with_edits')).toBeNull();
     expect(onDecide).not.toHaveBeenCalled();
+  });
+});
+
+describe('a recommended reject on an admin-only target', () => {
+  it('leaves a PO a usable primary Reject…', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ target: mergePolicy }));
+    vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('reject'));
+    renderGlob(decision(), 'po');
+    const outcomes = await screen.findByTestId('outcomes');
+    expect(await within(outcomes).findByRole('button', { name: 'Reject…' })).toHaveProperty('disabled', false);
   });
 });
 
