@@ -8,7 +8,7 @@ A glob is one unit of work on a board. Every glob has an **actor** (a machine or
 
 - **Sub:** a self-contained change one routine (an AI run) can build and merge in one pull request without a person making a design decision. It starts on its own and merges on its own when the sub review passes. Use it for bug fixes, small UI changes, follow-ups and small features that stay in one area. When in doubt, choose sub.
 - **Same:** a standard task. It waits in Planning until someone presses Start (or picks it up), and a person merges the pull request. Use it when you want to look the work over before it merges. A routine can still do the implementing.
-- **Super:** a person and a developer pairing on the work. It goes straight to Doing, no routine runs, and the developer implements it. Use it when the work needs a conversation.
+- **Super:** a person and a developer pairing on the work. It waits in Planning until a developer picks it up, no routine runs, and the developer implements it. Use it when the work needs a conversation.
 
 By default only board admins choose sub or super; everyone else creates sames. You can change a type later while the glob is still parked in Planning (and sub to same at any point before it merges).
 
@@ -42,7 +42,7 @@ After a glob merges it enters Reviewing with sign-off labels set to Required: **
 These buttons answer "who works on this now?".
 
 - **Start** starts a same that is waiting in Planning: slop opens the branch and pull request and queues a routine run. It is refused while something it waits for has not merged.
-- **Pick up** makes you the implementer instead of a routine. Use it when a glob failed, or you want to do the work yourself. On a super parked in Planning the button reads Pick up to pair. If a run is active, taking over asks for confirmation and ends that run. When you pick up, slop writes a short hand-over note saying why a person is needed and what to do first.
+- **Pick up** makes you the implementer instead of a routine. Use it when a glob failed, or you want to do the work yourself. A super always waits in Planning until someone picks it up: Pick up (on the card or in the glob view) makes you the implementer, provisions the branch and copies `sstor --glob <id>`, which opens the pairing session on the branch once slop has created it (if the clipboard is refused, the notice shows the command to copy by hand). If a run is active, taking over asks for confirmation and ends that run. When you pick up, slop writes a short hand-over note saying why a person is needed and what to do first.
 - **Retry** runs a failed sub or same again on its existing branch.
 - **Start again** (shown as Discard and restart) throws the current attempt away, closing the pull request and deleting the branch, and starts the glob from scratch. Use it when the existing attempt is the problem.
 - **Start now** overrides a hold: use it to start a glob that is waiting for another glob when you know it is safe. An oversized flag is only advice and never holds a glob, so there is nothing to override for it.

@@ -470,7 +470,9 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
     ? `waits for ${(glob.after ?? []).join(', ')} to merge, then a routine will implement it`
     : routineWillImplement
       ? 'a routine will implement it'
-      : 'pick it up to implement it';
+      : glob.type === 'super'
+        ? `it waits in Planning until you pick it up to pair: sstor --glob ${glob.id}`
+        : 'pick it up to implement it';
   deps.stdout(
     `${glob.id} [${describeKind(glob)}] ${glob.status}: branch ${glob.branch}; ${who}\n`,
   );

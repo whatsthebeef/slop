@@ -47,24 +47,20 @@ describe('create (rows 1–4)', () => {
     expect(effectKinds(t)).toEqual(['provision', 'fire_routine']);
   });
 
-  it('row 3: a super starts in progress with the creator as implementer', () => {
-    const t = value(m.create(createInput({ type: 'super' }), board, ctx()));
-    expect(t.glob.status).toBe('in_progress');
-    expect(t.glob.implementer).toBe(dev.email);
-  });
-
-  it('a super created with start: false is parked in planning: no branch, run, implementer or active glob', () => {
-    const t = value(m.create(createInput({ type: 'super', category: 'feature', start: false }), board, ctx()));
-    expect(t.glob.status).toBe('planning');
-    expect(t.glob.implementer).toBeNull();
-    expect(t.glob.provisioning).toBe('none');
-    expect(t.glob.doingSince).toBeNull();
-    expect(t.glob.runs).toEqual([]);
-    expect(effectKinds(t)).toEqual([]);
-    const actions = m.allowedActions(t.glob, dev);
-    expect(actions).toContain('pick_up');
-    expect(actions).not.toContain('start');
-    expect(errorCode(m.start(t.glob, ctx()))).toBe('invalid_transition');
+  it('row 3: a super waits in planning, whatever start says: no branch, run, implementer or active glob', () => {
+    for (const start of [undefined, true, false]) {
+      const t = value(m.create(createInput({ type: 'super', category: 'feature', ...(start === undefined ? {} : { start }) }), board, ctx()));
+      expect(t.glob.status).toBe('planning');
+      expect(t.glob.implementer).toBeNull();
+      expect(t.glob.provisioning).toBe('none');
+      expect(t.glob.doingSince).toBeNull();
+      expect(t.glob.runs).toEqual([]);
+      expect(effectKinds(t)).toEqual([]);
+      const actions = m.allowedActions(t.glob, dev);
+      expect(actions).toContain('pick_up');
+      expect(actions).not.toContain('start');
+      expect(errorCode(m.start(t.glob, ctx()))).toBe('invalid_transition');
+    }
   });
 
   it('start: false changes nothing for a sub or a same', () => {
@@ -72,8 +68,15 @@ describe('create (rows 1–4)', () => {
     expect(value(m.create(createInput({ type: 'same', start: false }), board, ctx())).glob.status).toBe('planning');
   });
 
+  it('a glob in planning changed to super stays in planning, unpicked', () => {
+    const same = value(m.create(createInput({ type: 'same' }), board, ctx())).glob;
+    const t = value(m.changeFields(same, { type: 'super' }, board, ctx()));
+    expect(t.glob).toMatchObject({ type: 'super', status: 'planning', implementer: null });
+    expect(m.allowedActions(t.glob, dev)).toContain('pick_up');
+  });
+
   it('picking up a parked super provisions it and makes the person its implementer', () => {
-    const parked = value(m.create(createInput({ type: 'super', category: 'feature', start: false }), board, ctx())).glob;
+    const parked = value(m.create(createInput({ type: 'super', category: 'feature' }), board, ctx())).glob;
     const t = value(m.pickUp(parked, ctx(other), board, { takeOver: false }));
     expect(t.glob.status).toBe('in_progress');
     expect(t.glob.implementer).toBe(other.email);
@@ -1309,10 +1312,11 @@ describe('provisioning when a glob enters Doing', () => {
     expect(effectKinds(value(m.pickUp(planning, ctx(), board, { takeOver: false })))).toEqual(['provision']);
   });
 
-  it('subs, supers and auto-started sames provision at creation', () => {
-    for (const input of [createInput({ type: 'sub' }), createInput({ type: 'super' }), createInput({ autoTrigger: true })]) {
+  it('subs and auto-started sames provision at creation, a super waits to be picked up', () => {
+    for (const input of [createInput({ type: 'sub' }), createInput({ autoTrigger: true })]) {
       expect(effectKinds(value(m.create(input, board, ctx())))[0]).toBe('provision');
     }
+    expect(effectKinds(value(m.create(createInput({ type: 'super' }), board, ctx())))).toEqual([]);
   });
 
   it('same to sub from planning provisions as it starts work', () => {
