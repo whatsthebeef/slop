@@ -110,6 +110,38 @@ describe('derived steps', () => {
   });
 });
 
+describe('answer steps (open questions)', () => {
+  const question = (patch = {}) => ({
+    id: 'q1',
+    text: 'Does the scope include prod?',
+    raisedBy: { kind: 'intake' as const, actor: null },
+    source: 'create' as const,
+    blocking: 'start' as const,
+    raisedAt: NOW,
+    ...patch,
+  });
+
+  it('one step per open question that holds the start or the merge, and none for notices, answered or overridden ones', () => {
+    const g = glob({
+      questions: [
+        question(),
+        question({ id: 'q2', text: 'Keep the PR as is?', blocking: 'merge' }),
+        question({ id: 'q3', blocking: 'none' }),
+        question({ id: 'q4', answer: { text: 'yes', by: 'dev@example.com', at: NOW } }),
+        question({ id: 'q5', startOverridden: { by: 'dev@example.com', at: NOW } }),
+      ],
+    });
+    expect(derivedSteps(g).map((s) => [s.id, s.kind, s.title, s.who, s.state])).toEqual([
+      ['machine:answer:q1', 'answer', 'Answer: Does the scope include prod?', 'anyone', 'due'],
+      ['machine:answer:q2', 'answer', 'Answer: Keep the PR as is?', 'anyone', 'due'],
+    ]);
+  });
+
+  it('a start question is a person\'s turn only while the glob has not started', () => {
+    expect(derivedSteps(glob({ status: 'in_progress', questions: [question()] }))).toEqual([]);
+  });
+});
+
 describe('work steps and due-ness', () => {
   it('after_merge steps are pending until the PR merges, then due', () => {
     const open = stored();

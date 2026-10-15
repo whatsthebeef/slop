@@ -2,7 +2,7 @@ import { decisionOf } from '@slop/core';
 import type { Action, EditFailure, LabelName } from '@slop/core';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AddRelationInput, BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
+import type { AddRelationInput, AnswerQuestionInput, BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
 import { hasDueSteps } from '@/lib/human-steps';
 import type { GlobSection } from '@/lib/glob-section';
@@ -48,6 +48,8 @@ export const GlobDetail = ({
   onReviewLabel,
   onDismissEdge,
   onAddRelation,
+  onAnswerQuestion,
+  onDismissQuestion,
   onDismiss,
   onDecide,
   onDelete,
@@ -87,6 +89,10 @@ export const GlobDetail = ({
   onDismissEdge: (relationId: string) => Promise<boolean>;
   /** "Add relation…" (and a decision's "Holds back…"); resolves false when it failed. */
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
+  /** The Questions section: answers an open question (an option or text); resolves false when it failed. */
+  onAnswerQuestion: (questionId: string, input: AnswerQuestionInput) => Promise<boolean>;
+  /** The Questions section's Dismiss (go ahead as is, optional note); resolves false when it failed. */
+  onDismissQuestion: (questionId: string, note?: string) => Promise<boolean>;
   /** "Got it" / ×: dismisses a status message for the viewer (`dismiss` false is Show again); resolves false when it failed. */
   onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
@@ -174,6 +180,8 @@ export const GlobDetail = ({
     onReviewLabel,
     onDismissEdge,
     onAddRelation,
+    onAnswerQuestion,
+    onDismissQuestion,
     onAddStep,
     onCompleteStep,
     ...(onMarkDeployed === undefined ? {} : { onMarkDeployed }),

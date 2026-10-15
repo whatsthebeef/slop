@@ -2303,8 +2303,21 @@ describe('escalation to a same', () => {
     expect(t.glob.type).toBe('same');
     expect(t.glob.status).toBe('implementing');
     expect(t.glob.escalation).toMatchObject({ reason: 'Unplanned auth change', evidence: 'src/auth.ts', runId: 'run-0' });
-    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged', 'Escalated']);
+    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged', 'Escalated', 'QuestionRaised']);
     expect(effectKinds(t)).toEqual(['sync_pr_labels']);
+  });
+
+  it('attaches the cause as a notice question, once per criterion', () => {
+    const t = value(m.escalateToSame(sub(), { reason: 'Unplanned auth change', criterion: 'auth_permissions', runId: 'run-0' }, ctx(null)));
+    expect(t.glob.questions).toEqual([
+      expect.objectContaining({ id: 'q1', key: 'escalation:auth_permissions', text: 'Unplanned auth change', blocking: 'none', source: 'run', raisedBy: { kind: 'routine', actor: null, runId: 'run-0' } }),
+    ]);
+    expect(t.glob.questions?.[0]?.options).toEqual(['Keep as same', 'Make it a sub again']);
+    // A notice holds nothing.
+    expect(m.allowedActions(t.glob, dev)).not.toContain('start_anyway');
+    // Once per criterion: the glob already has one for it.
+    const again = value(m.escalateToSame(sub({ questions: t.glob.questions ?? [] }), { reason: 'Again', criterion: 'auth_permissions', runId: 'run-0' }, ctx(null)));
+    expect(again.glob.questions).toHaveLength(1);
   });
 
   it('a sub in Planning can be escalated before it starts', () => {

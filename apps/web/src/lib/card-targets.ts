@@ -11,6 +11,8 @@ export const cardTargets = {
   related: (): GlobTarget => ({ section: 'related' }),
   /** The "needs a human" chip. */
   escalation: (): GlobTarget => ({ section: 'escalation' }),
+  /** The Question chip and the "Waiting for an answer" hold. */
+  questions: (): GlobTarget => ({ section: 'questions' }),
   /** The clash chip. */
   conflict: (): GlobTarget => ({ section: 'conflict' }),
   /** The oversized chip. */

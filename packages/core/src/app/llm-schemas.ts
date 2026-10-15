@@ -140,6 +140,9 @@ export const INTAKE_SCHEMA = named(
     autoTrigger: bool,
     autoTriggerQuote: nullable(str),
     files: array(str),
+    questions: array(
+      object({ kind: oneOf('type', 'environment', 'scope', 'acceptance'), text: str, options: array(str), blocking: oneOf('start', 'none') }),
+    ),
   }),
 );
 

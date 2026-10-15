@@ -8,6 +8,7 @@ export const GLOB_SECTIONS = [
   'findings',
   'labels',
   'related',
+  'questions',
   'escalation',
   'conflict',
   'problem',

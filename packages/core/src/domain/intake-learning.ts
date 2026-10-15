@@ -12,8 +12,8 @@ import type { Category, SlopType, WorkKind } from './types.js';
  * store, the embedder and the jobs are in the services.
  */
 
-/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise, v7 big settled work stays one glob (the agents split it into workstreams in the run). */
-export const INTAKE_PROMPT_VERSION = 8;
+/** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise, v7 big settled work stays one glob (the agents split it into workstreams in the run, v9 intake may raise open questions). */
+export const INTAKE_PROMPT_VERSION = 9;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;

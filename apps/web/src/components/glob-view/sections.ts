@@ -7,6 +7,7 @@ import type { GlobSection } from '@/lib/glob-section';
  * information (escalation, size).
  */
 export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
+  'questions',
   'conflict',
   'problem',
   'decision',
