@@ -19,6 +19,7 @@ import { CONFIRM_MS, clickTip, prUrl, tipLines, turnStep } from '@/lib/chip-acti
 import type { ChipClick } from '@/lib/chip-actions';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from './ui/tip';
 import { LabelPopover } from './labels';
 import type { ReviewLabel } from './labels';
@@ -711,7 +712,7 @@ export const GlobCard = ({
         </span>
       </div>
       <div className='leading-snug font-medium break-words' data-testid='card-title'>
-        {glob.title}
+        {stripMarkdown(glob.title)}
       </div>
       <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>

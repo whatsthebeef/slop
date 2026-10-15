@@ -30,6 +30,7 @@ import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from '../ui/tip';
 import { GroupChip } from '../glob-card';
 import { boardGroupPath } from '@/lib/group-page';
@@ -374,7 +375,7 @@ const StepMainButton = ({
         {menu}
       </div>
       <span className="text-xs text-muted-foreground" data-testid="main-action-note">
-        {main.kind === 'wait' ? `${step.title}: ${main.reason}` : step.title}
+        {stripMarkdown(main.kind === 'wait' ? `${step.title}: ${main.reason}` : step.title)}
       </span>
     </>
   );
