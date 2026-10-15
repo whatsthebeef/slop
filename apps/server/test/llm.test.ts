@@ -254,3 +254,58 @@ describe('reviewerLlm', () => {
     expect(await sentConfig('openai.gpt-oss-120b-1:0')).toEqual({ maxTokens: 10, temperature: 0 });
   });
 });
+
+describe('BedrockLlm structured outputs', () => {
+  const schema = { name: 'kb_dedupe', schema: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: false } };
+  const reply = (text: string, stopReason = 'end_turn') => ({ output: { message: { content: [{ text }] } }, stopReason, usage: {} });
+  const llm = () => new BedrockLlm({ id: MODEL, configKey: 'KB_ROUTE_MODEL' }, 'us-east-1');
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends the schema as the JSON output format and returns the answer text', async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue(reply('{"a":"x \\"quoted\\" `code`"}') as never);
+    const answer = await llm().complete({ system: 's', prompt: 'p', maxTokens: 10, schema });
+    expect(JSON.parse(answer)).toEqual({ a: 'x "quoted" `code`' });
+    const input = (send.mock.calls[0]?.[0] as ConverseCommand).input;
+    expect(input.outputConfig?.textFormat).toEqual({
+      type: 'json_schema',
+      structure: { jsonSchema: { name: 'kb_dedupe', schema: JSON.stringify(schema.schema) } },
+    });
+  });
+
+  it('sends no output format without a schema', async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue(reply('hi') as never);
+    await llm().complete({ system: 's', prompt: 'p', maxTokens: 10 });
+    expect((send.mock.calls[0]?.[0] as ConverseCommand).input.outputConfig).toBeUndefined();
+  });
+
+  it('raises the limit once when the answer is cut off, then reports it as cut off', async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue(reply('{"a":', 'max_tokens') as never);
+    await expect(llm().complete({ system: 's', prompt: 'p', maxTokens: 10, schema })).rejects.toThrow(/kb_dedupe answer was cut off at the output limit \(20 tokens\)/);
+    expect(send.mock.calls.map((c) => (c[0] as ConverseCommand).input.inferenceConfig?.maxTokens)).toEqual([10, 20]);
+  });
+
+  it('retries a cut-off answer with the doubled limit and returns it when complete', async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, 'send')
+      .mockResolvedValueOnce(reply('{"a":', 'max_tokens') as never)
+      .mockResolvedValueOnce(reply('{"a":"ok"}') as never);
+    expect(await llm().complete({ system: 's', prompt: 'p', maxTokens: 10, schema })).toBe('{"a":"ok"}');
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('names a refusal instead of calling it unusable JSON', async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, 'send').mockResolvedValue(reply('', 'refusal') as never);
+    await expect(llm().complete({ system: 's', prompt: 'p', maxTokens: 10, schema })).rejects.toThrow('The model refused to give the kb_dedupe answer');
+  });
+
+  it('falls back to free text when the model takes no structured outputs', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, 'send')
+      .mockRejectedValueOnce(sdkError('ValidationException', 'This model does not support outputConfig.textFormat'))
+      .mockResolvedValueOnce(reply('{"a":"free"}') as never);
+    expect(await llm().complete({ system: 's', prompt: 'p', maxTokens: 10, schema })).toBe('{"a":"free"}');
+    expect((send.mock.calls[1]?.[0] as ConverseCommand).input.outputConfig).toBeUndefined();
+  });
+});

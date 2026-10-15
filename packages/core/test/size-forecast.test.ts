@@ -508,7 +508,7 @@ describe('size forecast', () => {
       const rechecked = new SizeCheckService({ store, clock: { now: () => NOW }, notifier: new RecordingNotifier(), llm, codeView, embedder, onRechecked: (id) => globs.reconcileSizeCheck(id) });
       const sub = await createSub(checklist(10));
       expect(sub.status).toBe('implementing');
-      expect(sub.type).toBe('same');
+      expect(sub.type).toBe('sub');
       expect((await check(sub.id))?.flagged).toBe(true);
       await rechecked.forecast(sub.id);
       expect(unwrap(await globs.get(DEV, sub.id)).glob.status).toBe('implementing');

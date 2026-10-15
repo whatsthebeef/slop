@@ -127,25 +127,25 @@ const oversized = () =>
   });
 
 describe('information blocks', () => {
-  it('shows the escalation as an info block: head, the reason as the why line, the evidence and author in the folded body', () => {
+  it('shows the escalation as an info block: the one-line sentence as the head, who and when as the why line, the evidence folded', () => {
     renderGlob(escalated('From the split of s1t0: files a.ts'));
     const block = screen.getByTestId('escalation-note');
     expect(block.getAttribute('data-block')).toBe('info');
-    expect(within(block).getByTestId('block-head').textContent).toBe('Why a person?');
-    expect(within(block).getByTestId('block-why').textContent).toBe('Touches auth');
+    expect(within(block).getByTestId('block-head').textContent).toBe(
+      'Changed from sub to same because touches auth.',
+    );
+    expect(within(block).getByTestId('block-why').textContent).toBe(`By dev@example.com, ${NOW.slice(0, 10)}`);
     const body = within(block).getByTestId('block-body');
     expect(body.tagName).toBe('DETAILS');
+    expect(body.querySelector('summary')?.textContent).toBe('Details');
     expect(body.textContent).toContain('From the split of s1t0: files a.ts');
-    expect(body.textContent).toContain('Escalated by dev@example.com');
     expect(within(block).queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('shows the escalation without evidence and never as Markdown', () => {
+  it('shows the escalation without evidence with no Details fold, and never as Markdown', () => {
     renderGlob(escalated());
     const block = screen.getByTestId('escalation-note');
-    expect(within(block).getByTestId('block-body').textContent).toBe(
-      'DetailsEscalated by dev@example.com',
-    );
+    expect(within(block).queryByTestId('block-body')).toBeNull();
     expect(block.querySelector('strong, em, a, ul, h1, h2')).toBeNull();
   });
 

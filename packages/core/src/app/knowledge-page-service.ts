@@ -41,6 +41,7 @@ import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { field, isObject, list, parseJson, text } from './llm-json.js';
 import type { SpendService } from './spend-service.js';
 import { hash } from './text-hash.js';
+import { KNOWLEDGE_PAGE_SCHEMA } from './llm-schemas.js';
 
 /** The ledger's source for the page's model calls. */
 export const KNOWLEDGE_PAGE_SPEND_SOURCE: LlmSpendSource = 'knowledge_page';
@@ -512,7 +513,7 @@ export class KnowledgePageService {
     // Everything in force that the previous section covered or that changed must be behind an entry.
     const required = new Set(inForce.filter((d) => previous === null || covered.has(d.glob.id) || before[d.glob.id] !== d.fingerprint).map((d) => d.glob.id));
     const ask = (text: string): Promise<string> =>
-      completeWithDeadline(this.deps.llm, { system: KNOWLEDGE_PAGE_SYSTEM, prompt: text, maxTokens: ANSWER_MAX_TOKENS }, this.deps.timeoutMs ?? LLM_TIMEOUT_MS);
+      completeWithDeadline(this.deps.llm, { system: KNOWLEDGE_PAGE_SYSTEM, prompt: text, maxTokens: ANSWER_MAX_TOKENS, schema: KNOWLEDGE_PAGE_SCHEMA }, this.deps.timeoutMs ?? LLM_TIMEOUT_MS);
     // Tokens as characters over four: the adapter's usage isn't passed up through the `Llm` port.
     let input = 0;
     let output = 0;

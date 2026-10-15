@@ -5,7 +5,7 @@ import type { GlobViewContext } from './context';
 
 /**
  * The "needs a <person>" chip in the glob view header, as on the card: shown only while the glob is in Planning, the one rule
- * for both. After that the reason lives in the "Why a person?" disclosure. The reason is in its tooltip; the visible words are
+ * for both. After that the reason lives in the "Changed from sub to same because …" line. The reason is in its tooltip; the visible words are
  * hidden from assistive tech because the label names the chip, so the reason is never read out or shown a second time.
  */
 export const EscalationChip = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
@@ -26,7 +26,16 @@ export const EscalationChip = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
   );
 };
 
-/** "Why a person?": an information block with the escalation's reason, and its evidence and author folded under Details. The reason is shown here once and not in Now. */
+/** The reason as the tail of a sentence: its first word loses its capital unless it looks like a name or an acronym. */
+const inSentence = (reason: string): string => {
+  const text = reason.trim().replace(/\.$/, '');
+  return /^[A-Z][a-z]/.test(text) ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
+};
+
+/**
+ * The escalation as an information block: the head line says the sub became a same and why ("Changed from sub to same because
+ * …"), the why line says who and when, and the evidence is folded under Details. The reason is shown here once and not in Now.
+ */
 export const EscalationSection = ({
   ctx: { glob },
   startOpen = false,
@@ -34,18 +43,19 @@ export const EscalationSection = ({
   ctx: GlobViewContext;
   startOpen?: boolean;
 }) => {
-  if (glob.escalation == null) return null;
+  const escalation = glob.escalation;
+  if (escalation == null) return null;
+  const evidence = escalation.evidence !== undefined && escalation.evidence !== '' ? escalation.evidence : null;
   return (
     <Block
       tone="info"
       actor="human"
       testId="escalation-note"
-      title="Why a person?"
-      why={glob.escalation.reason}
+      title={`Changed from sub to same because ${inSentence(escalation.reason)}.`}
+      why={<span className="text-xs text-muted-foreground">By {escalation.by}, {escalation.at.slice(0, 10)}</span>}
       fold={{ label: 'Details', open: startOpen }}
     >
-      {glob.escalation.evidence !== undefined && <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>}
-      <span className="text-xs text-muted-foreground">Escalated by {glob.escalation.by}</span>
+      {evidence !== null && <p className="whitespace-pre-line text-xs text-muted-foreground">{evidence}</p>}
     </Block>
   );
 };

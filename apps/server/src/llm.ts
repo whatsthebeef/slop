@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { LlmBusy, LlmUnavailable } from '@slop/core';
-import type { Llm, LlmRequest, LlmSpendTag, SpendService } from '@slop/core';
+import type { Llm, LlmRequest, LlmSchema, LlmSpendTag, SpendService } from '@slop/core';
 import { requestMetrics } from './request-metrics.js';
 
 /** One call's token usage as Bedrock reports it. */
@@ -103,6 +103,9 @@ const BUSY_ERRORS: ReadonlySet<string> = new Set([
 /** Adaptive retry spreads the SDK's own retries under throttling; the pipelines' waits take over after these. */
 export const BEDROCK_CLIENT_RETRY = { retryMode: 'adaptive', maxAttempts: 5 } as const;
 
+/** Bedrock's wording when a model or region has no structured-output support for the request. */
+const STRUCTURED_OUTPUT_UNSUPPORTED = /output ?config|text ?format|json[ _]?schema|structured output/i;
+
 const nameOf = (error: unknown): string =>
   error instanceof Error ? error.name : '';
 
@@ -169,6 +172,8 @@ export class BedrockLlm implements Llm {
   private readonly site: CallSite;
 
   private readonly modelId: string;
+  /** Set once Bedrock says this model takes no structured outputs, so later calls skip the failed request. */
+  private noStructuredOutputs = false;
 
   constructor(
     model: BedrockModel,
@@ -183,29 +188,63 @@ export class BedrockLlm implements Llm {
   }
 
   async complete(request: LlmRequest): Promise<string> {
-    let response;
-    try {
-      response = await requestMetrics.llm(() => this.client.send(
-        new ConverseCommand({
-          modelId: this.modelId,
-          system: [{ text: request.system }],
-          messages: [{ role: 'user', content: [{ text: request.prompt }] }],
-          inferenceConfig:
-            this.temperature === null
-              ? { maxTokens: request.maxTokens }
-              : { maxTokens: request.maxTokens, temperature: this.temperature },
-        }),
-        // The SDK has no request timeout by default; the caller's deadline ends a stalled call.
-        request.signal === undefined ? {} : { abortSignal: request.signal },
-      ));
-    } catch (error) {
-      throw classifyBedrockError(error, this.site) ?? error;
+    let schema = this.noStructuredOutputs ? undefined : request.schema;
+    let maxTokens = request.maxTokens;
+    for (;;) {
+      let response;
+      try {
+        response = await this.converse(request, maxTokens, schema);
+      } catch (error) {
+        if (schema !== undefined && STRUCTURED_OUTPUT_UNSUPPORTED.test(messageOf(error)) && nameOf(error) === 'ValidationException') {
+          // This model or region takes no structured outputs: ask in free text, which the caller's `parseJson` reads.
+          console.warn(`[llm] ${this.modelId} doesn't support structured outputs (${schema.name}); using free-text JSON for this model from now on`);
+          this.noStructuredOutputs = true;
+          schema = undefined;
+          continue;
+        }
+        throw classifyBedrockError(error, this.site) ?? error;
+      }
+      this.report(
+        { model: this.modelId, input: response.usage?.inputTokens ?? 0, output: response.usage?.outputTokens ?? 0 },
+        request.spend,
+      );
+      const stop: string = response.stopReason ?? '';
+      if (schema !== undefined && stop === 'max_tokens' && maxTokens === request.maxTokens) {
+        // A cut-off structured answer is invalid JSON: raise the limit once and ask again.
+        maxTokens = request.maxTokens * 2;
+        continue;
+      }
+      if (schema !== undefined && stop === 'max_tokens') {
+        throw new Error(`The model's ${schema.name} answer was cut off at the output limit (${String(maxTokens)} tokens)`);
+      }
+      if (schema !== undefined && stop === 'refusal') {
+        throw new Error(`The model refused to give the ${schema.name} answer`);
+      }
+      return (response.output?.message?.content ?? []).map((block) => block.text ?? '').join('');
     }
-    this.report(
-      { model: this.modelId, input: response.usage?.inputTokens ?? 0, output: response.usage?.outputTokens ?? 0 },
-      request.spend,
-    );
-    return (response.output?.message?.content ?? []).map((block) => block.text ?? '').join('');
+  }
+
+  private converse(request: LlmRequest, maxTokens: number, schema: LlmSchema | undefined) {
+    return requestMetrics.llm(() => this.client.send(
+      new ConverseCommand({
+        modelId: this.modelId,
+        system: [{ text: request.system }],
+        messages: [{ role: 'user', content: [{ text: request.prompt }] }],
+        inferenceConfig: this.temperature === null ? { maxTokens } : { maxTokens, temperature: this.temperature },
+        ...(schema === undefined
+          ? {}
+          : {
+              outputConfig: {
+                textFormat: {
+                  type: 'json_schema' as const,
+                  structure: { jsonSchema: { name: schema.name, schema: JSON.stringify(schema.schema) } },
+                },
+              },
+            }),
+      }),
+      // The SDK has no request timeout by default; the caller's deadline ends a stalled call.
+      request.signal === undefined ? {} : { abortSignal: request.signal },
+    ));
   }
 
   /** `complete`, handing each piece of text over as it arrives (the board chat's streaming answers). */

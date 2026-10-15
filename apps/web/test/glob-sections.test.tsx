@@ -104,9 +104,20 @@ describe('glob view: escalation, dependencies and edit fields', () => {
   it('shows the escalation once, as a header chip, with the reason in the disclosure only', () => {
     renderGlob(escalated());
     expect(screen.getAllByTestId('escalation-chip')).toHaveLength(1);
-    expect(screen.getByTestId('escalation-note').textContent).toContain('Touches auth');
+    expect(screen.getByTestId('escalation-note').textContent).toContain('touches auth');
     expect(screen.getByTestId('escalation-note').textContent).toContain('From the split of s1t0');
-    expect(visibleText().split('Touches auth')).toHaveLength(2);
+    expect(visibleText().split('touches auth')).toHaveLength(2);
+  });
+
+  it('says in one plain line that the sub became a same and why, with the evidence collapsed under Details', () => {
+    renderGlob(escalated());
+    const note = screen.getByTestId('escalation-note');
+    expect(note.textContent).toContain('Changed from sub to same because touches auth.');
+    expect(note.textContent).toContain('By dev@example.com, 2026-10-13');
+    const details = note.querySelector('details');
+    expect(details?.hasAttribute('open')).toBe(false);
+    expect(details?.textContent).toContain('From the split of s1t0');
+    expect(details?.querySelector('summary')?.textContent).toBe('Details');
   });
 
   it('keeps the chip text out of the visible and accessible text but names it for screen readers', () => {
@@ -119,7 +130,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
   it('shows the chip only in Planning, as on the card: a pr_open escalated glob keeps the disclosure but no chip', () => {
     renderGlob({ ...escalated(), status: 'pr_open', list: 'doing' });
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
-    expect(screen.getByTestId('escalation-note').textContent).toContain('Touches auth');
+    expect(screen.getByTestId('escalation-note').textContent).toContain('touches auth');
   });
 
   it('leaves the chip and the disclosure out without an escalation', () => {
@@ -182,7 +193,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
     expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
     expect(screen.getByTestId('problem-block').textContent).toContain('Error: boom');
-    // Escalation reason appears only behind "Why a person?", never in Now.
+    // Escalation reason appears only in the escalation block, never in Now.
     expect(screen.getByTestId('activity').textContent).not.toContain('Touches auth');
   });
 
