@@ -445,7 +445,7 @@ export class GlobService {
   constructor(private readonly deps: GlobServiceDeps) {}
 
   /** Whether the base branch has an action's script, by board and path; see `scriptCheckFor`. */
-  private readonly scriptCache = new Map<string, { readonly onBase: boolean; readonly at: number }>();
+  private readonly scriptCache = new Map<string, { readonly onBase: boolean | null; readonly at: number }>();
 
   // -------------------------------------------------------------------------
   // Reads
@@ -506,10 +506,9 @@ export class GlobService {
     });
     const found = new Map<string, ScriptCheck>();
     if (read.board === null) return found;
-    for (const { id, plan } of read.plans) {
-      const check = await this.checkScript(boardId, read.board.baseBranch, scriptPathOf(plan));
-      if (check !== null) found.set(id, check);
-    }
+    const baseBranch = read.board.baseBranch;
+    const checks = await Promise.all(read.plans.map(async ({ id, plan }) => ({ id, check: await this.checkScript(boardId, baseBranch, scriptPathOf(plan)) })));
+    for (const { id, check } of checks) if (check !== null) found.set(id, check);
     return found;
   }
 
@@ -528,6 +527,8 @@ export class GlobService {
     } catch (e) {
       // Fails open: an unreachable code host doesn't stop a person from finishing their work.
       if (!(e instanceof CodeViewUnavailable)) this.deps.log?.('action script check', e instanceof Error ? e.message : String(e));
+      // Cached briefly too, so a down host costs one failing read per path, not one per list load.
+      this.scriptCache.set(key, { onBase: null, at: now });
       return { script: { path, onBase: null }, baseBranch };
     }
   }

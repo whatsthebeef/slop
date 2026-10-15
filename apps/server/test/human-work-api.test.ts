@@ -56,6 +56,7 @@ describe('action globs over REST and MCP (Postgres)', () => {
   const onBase = new Set<string>();
   const baseReads: string[] = [];
   let hostDown = false;
+  let downReads = 0;
   // The local clone lags a push until the board's code sync runs: reads miss `onBase` files while true.
   let stale = false;
   // Moves the service's clock forward (ms), to pass cache lifetimes.
@@ -88,7 +89,10 @@ describe('action globs over REST and MCP (Postgres)', () => {
     const deps = { store, notifier, clock };
     const codeView = {
       read: (_board: number, ref: string | null, path: string) => {
-        if (hostDown) return Promise.reject(new CodeViewUnavailable('host down'));
+        if (hostDown) {
+          downReads += 1;
+          return Promise.reject(new CodeViewUnavailable('host down'));
+        }
         baseReads.push(`${String(ref)}:${path}`);
         return Promise.resolve(onBase.has(path) && !stale ? { path, content: '#!/bin/sh\n', startLine: 1, endLine: 1, totalLines: 1, truncated: false, binary: false } : null);
       },
@@ -282,6 +286,11 @@ describe('action globs over REST and MCP (Postgres)', () => {
         const view = await rest('GET', `/api/globs/${a.id}`);
         expect(view.body.script).toEqual({ path: 'scripts/rollout/s4-run.sh', onBase: null });
         expect(view.body.allowedActions).toContain('complete_action');
+        // The unavailable answer is cached briefly: repeated reads don't hit the down host again.
+        const reads = downReads;
+        await rest('GET', `/api/globs/${a.id}`);
+        await rest('GET', `/api/boards/${boardId}/globs`);
+        expect(downReads).toBe(reads);
         expect((await done(view.body)).body).toMatchObject({ status: 'signed_off' });
       } finally {
         hostDown = false;
