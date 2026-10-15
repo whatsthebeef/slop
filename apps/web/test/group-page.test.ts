@@ -38,7 +38,7 @@ describe('group page helpers', () => {
   });
 
   it('says who holds the move and why', () => {
-    expect(holdText({ move: { holder: 'you', reason: 'sign off · QA', since: null, who: 'a@b.c' }, holding: [] })).toBe('you (a@b.c): sign off · QA');
+    expect(holdText({ move: { holder: 'you', reason: 'sign off', since: null, who: 'a@b.c' }, holding: [] })).toBe('you (a@b.c): sign off');
     expect(holdText({ move: { holder: 'machine', reason: '', since: null }, holding: [] })).toBe('machine');
   });
 });
