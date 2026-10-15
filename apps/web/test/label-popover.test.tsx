@@ -2,7 +2,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LabelPopover } from '../src/components/labels';
+import { LabelChips, LabelPopover } from '../src/components/labels';
 import type { GlobView } from '../src/lib/api';
 import { glob } from '../../../packages/core/test/fixtures';
 
@@ -75,4 +75,57 @@ describe('card label popover width', () => {
     expect(required).toEqual(approved);
     expect(required.states).toEqual(['Approved', 'Approved', 'Approved']);
   });
+});
+
+describe('outstanding label chips', () => {
+  const item = (id: string, done: boolean) => ({
+    id,
+    text: id,
+    done,
+    addedBy: 'a',
+    doneBy: done ? 'b' : null,
+  });
+  const withLabels = (
+    labels: Record<string, string>,
+    checklists: Record<string, ReturnType<typeof item>[]>,
+  ) => ({ ...glob(), labels, checklists }) as unknown as GlobView;
+  const chipOf = (container: HTMLElement, name: string) =>
+    [...container.querySelectorAll('span')].find((e) => e.textContent === name) as HTMLElement;
+
+  const places = {
+    card: (g: GlobView) =>
+      render(<LabelPopover glob={g} onReview={vi.fn()} onOpenReview={vi.fn()} />).container,
+    'glob view': (g: GlobView) => render(<LabelChips glob={g} />).container,
+  };
+
+  for (const [where, draw] of Object.entries(places)) {
+    it(`shows an open item as filled deep red with white text on the ${where}, whatever the stored state`, () => {
+      for (const state of ['required', 'added']) {
+        cleanup();
+        const c = draw(withLabels({ QA: state }, { QA: [item('x', false)] }));
+        expect(chipOf(c, 'QA').className).toContain('bg-outstanding');
+        expect(chipOf(c, 'QA').className).toContain('text-outstanding-foreground');
+      }
+    });
+
+    it(`keeps required with no items brown and approved green on the ${where}`, () => {
+      const c = draw(
+        withLabels({ FR: 'required', QA: 'approved' }, { FR: [], QA: [item('x', false)] }),
+      );
+      expect(chipOf(c, 'FR').className).toContain('text-required');
+      expect(chipOf(c, 'FR').className).not.toContain('bg-outstanding');
+      expect(chipOf(c, 'QA').className).toContain('bg-lcd');
+    });
+
+    it(`ignores unsent drafts on the ${where}`, () => {
+      const draft = { ...item('d', false), draft: true };
+      const c = draw(withLabels({ QA: 'required' }, { QA: [draft] }));
+      expect(chipOf(c, 'QA').className).not.toContain('bg-outstanding');
+    });
+
+    it(`drops the red once the last item is ticked on the ${where}`, () => {
+      const c = draw(withLabels({ QA: 'added' }, { QA: [item('x', true)] }));
+      expect(chipOf(c, 'QA').className).not.toContain('bg-outstanding');
+    });
+  }
 });
