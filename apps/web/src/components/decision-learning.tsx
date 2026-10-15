@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Label, Select, Textarea } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { GlobView } from '@/lib/api';
+import { watchMode } from '@/lib/decide-flow';
 import { nextTry } from '@/lib/kb-processing';
 import { globDiffKey, globKey, globsKey } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -250,20 +251,34 @@ export const StaleNote = ({ glob, attributes, admin }: { glob: GlobView; attribu
   );
 };
 
-/** For a learning an admin approves that has no signal of its own: one of the board's signals as measured now, for the effect check to watch. */
-export const WatchSignal = ({ boardId, value, onChange }: { boardId: number; value: string; onChange: (key: string) => void }) => {
-  const signals = useQuery({ queryKey: ['kb-signals', boardId], queryFn: () => api.boardSignals(boardId) });
+/** What the watch step says it does, in one line. */
+const WATCH_EXPLAIN = 'If the signal gets worse after approval, slop flags it.';
+
+/**
+ * The optional "did it work" step of an approval: a choice among the board's signals as measured now (default: don't watch),
+ * or for an item with a signal of its own the one line naming it, with no choice to make.
+ */
+export const WatchSignal = ({ boardId, value, onChange, own }: { boardId: number; value: string; onChange: (key: string) => void; own?: KbSignal | undefined }) => {
+  const signals = useQuery({ queryKey: ['kb-signals', boardId], queryFn: () => api.boardSignals(boardId), enabled: own === undefined });
+  if (own !== undefined) {
+    return (
+      <p className='text-xs text-muted-foreground' data-testid='watch-own'>
+        Check it worked: slop watches <span className='font-medium'>{own.label}</span>. {WATCH_EXPLAIN}
+      </p>
+    );
+  }
   return (
     <Label className='text-xs'>
-      Watch signal (effect check)
+      Check it worked (optional): watch
       <Select value={value} onChange={(e) => onChange(e.target.value)} disabled={signals.data === undefined} data-testid='watch-signal'>
-        <option value=''>None</option>
+        <option value=''>Don't watch</option>
         {(signals.data ?? []).map((s) => (
           <option key={s.key} value={s.key}>
             {s.label} ({s.figures.affected}/{s.figures.eligible}, {percent(s.figures.rate)})
           </option>
         ))}
       </Select>
+      <span className='font-normal text-muted-foreground'>{WATCH_EXPLAIN}</span>
     </Label>
   );
 };
@@ -271,67 +286,61 @@ export const WatchSignal = ({ boardId, value, onChange }: { boardId: number; val
 /** The approval's Watch signal field: only when one was chosen. */
 export const watching = (key: string): { watchSignal?: string } => (key === '' ? {} : { watchSignal: key });
 
-/** Whether an open learning can be given a signal to watch on approval: statements without one (mined ones watch their own). */
-export const canWatch = (learning: DecisionLearning | null, attributes: DecisionAttributes): boolean =>
-  learning?.status === 'open' && attributes.document === undefined && attributes.signal === undefined;
-
-/** Keeps an open learning's statement as an approved learning, without changing any document (admins). */
+/**
+ * Keeps an open learning's statement as an approved learning, without changing any document (admins). The form opens in the
+ * proposal block when "Approve without changing a document" is chosen.
+ */
 export const KeepAsLearning = ({
   glob,
   attributes,
   learning,
   busy,
+  onClose,
 }: {
   glob: GlobView;
   attributes: DecisionAttributes;
   learning: DecisionLearning | null;
   busy: boolean;
+  onClose: () => void;
 }) => {
   const client = useQueryClient();
   const toast = useToast();
-  const [open, setOpen] = useState(false);
   const [statement, setStatement] = useState(glob.title);
   const [watch, setWatch] = useState('');
+  const mode = watchMode(learning, attributes);
   const keep = useMutation({
     mutationFn: () => api.keepAsLearning(glob.id, glob.version, statement, watch === '' ? undefined : watch),
     onSuccess: () => {
       toast(`${glob.id} kept as a learning`);
-      setOpen(false);
+      onClose();
       refreshGlob(client, glob);
     },
     onError: (e) => reportError(client, glob, toast, e),
   });
   return (
-    <div className='grid gap-2'>
-      <Button size='sm' variant={open ? 'default' : 'outline'} aria-pressed={open} disabled={busy} data-testid='keep-as-learning' onClick={() => setOpen(!open)}>
-        Keep as a learning
-      </Button>
-      {open && (
-        <form
-          className='grid gap-2 rounded border p-3'
-          data-testid='keep-form'
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (statement.trim() !== '') keep.mutate();
-          }}
-        >
-          <p className='text-xs text-muted-foreground'>Kept as an approved learning, served to agents with the board's conventions, without changing any document.</p>
-          <Label>
-            Statement
-            <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
-          </Label>
-          {canWatch(learning, attributes) && <WatchSignal boardId={glob.boardId} value={watch} onChange={setWatch} />}
-          <div className='flex justify-end gap-2'>
-            <Button type='button' size='sm' variant='ghost' onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button type='submit' size='sm' disabled={busy || keep.isPending || statement.trim() === ''}>
-              Keep as a learning
-            </Button>
-          </div>
-        </form>
-      )}
-    </div>
+    <form
+      className='grid gap-2 rounded border p-3'
+      data-testid='keep-form'
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (statement.trim() !== '') keep.mutate();
+      }}
+    >
+      <p className='text-xs text-muted-foreground'>Kept as an approved learning, served to agents with the board's conventions, without changing any document.</p>
+      <Label>
+        Statement
+        <Textarea value={statement} onChange={(e) => setStatement(e.target.value)} />
+      </Label>
+      {mode !== null && <WatchSignal boardId={glob.boardId} value={watch} onChange={setWatch} own={attributes.signal} />}
+      <div className='flex justify-end gap-2'>
+        <Button type='button' size='sm' variant='ghost' onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type='submit' size='sm' data-testid='keep-submit' disabled={busy || keep.isPending || statement.trim() === ''}>
+          Approve as a learning
+        </Button>
+      </div>
+    </form>
   );
 };
 
