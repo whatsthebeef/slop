@@ -29,6 +29,39 @@ export const HumanIcon = ({ className, decorative = false }: ActorIconProps) => 
   />
 );
 
+/**
+ * A running person: the kind icon of an action, so it isn't read as the human actor's person. lucide has no running figure, so
+ * this draws the path data of the `run` icon from Tabler Icons (MIT, https://tabler.io/icons) in lucide's style: 24x24, 2px
+ * round stroke, current colour. It takes the props lucide icons take, so a Tip can wrap it.
+ */
+export const PersonRunning = ({
+  className,
+  ...props
+}: {
+  className?: string;
+  'aria-label'?: string;
+  'aria-hidden'?: boolean;
+  role?: 'img';
+}) => (
+  <svg
+    xmlns='http://www.w3.org/2000/svg'
+    viewBox='0 0 24 24'
+    fill='none'
+    stroke='currentColor'
+    strokeWidth={2}
+    strokeLinecap='round'
+    strokeLinejoin='round'
+    className={className}
+    data-icon='person-running'
+    {...props}
+  >
+    <path d='M13 4m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0' />
+    <path d='M4 17l5 1l.75 -1.5' />
+    <path d='M15 21l0 -4l-4 -3l1 -6' />
+    <path d='M7 12l0 -3l5 -1l3 3l3 1' />
+  </svg>
+);
+
 /** The Matrix: patterns slop mines from the board's own activity (lucide Binary). */
 export const MatrixIcon = ({ className, decorative = false }: ActorIconProps) => (
   <Binary
