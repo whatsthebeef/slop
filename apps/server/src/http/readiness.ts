@@ -57,6 +57,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
   let installUrl: string | null = null;
   let checksWorkflow: boolean | null = null;
   const gateCheck = subGateCheckOf(await deps.store.transaction((tx) => readMergePolicy(tx, board.id)));
+  let branchRules: ReadinessFacts['branchRules'] = null;
   let claudeWorkflow: boolean | null = null;
   let slopBot: string | null = null;
   let claudeAllowsSlop: boolean | null = null;
@@ -68,11 +69,13 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
       repoConnected = connection.connected;
       installUrl = connection.installUrl === null ? null : `${connection.installUrl}?state=${String(board.id)}`;
       if (connection.connected) {
-        const [workflow, agentSet, claude] = await Promise.all([
+        const [workflow, agentSet, claude, rules] = await Promise.all([
           deps.host.readFile(repo, board.baseBranch, subGateWorkflowPath(gateCheck)),
           deps.host.readFile(repo, board.baseBranch, '.claude/slop-agent-set.json'),
           claudeWorkflows(deps.host, repo, board.baseBranch),
+          deps.host.branchRules(repo, board.baseBranch),
         ]);
+        branchRules = rules;
         claudeWorkflow = claude.length > 0;
         slopBot = connection.appName === null ? null : `${connection.appName}[bot]`;
         const bot = slopBot;
@@ -113,6 +116,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     installUrl,
     gateCheck,
     checksWorkflow,
+    branchRules,
     claudeWorkflow,
     slopBot,
     claudeAllowsSlop,
