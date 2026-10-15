@@ -102,3 +102,28 @@ describe('disk_full_message', () => {
     );
   });
 });
+
+describe('merge_projects', () => {
+  const merge = (e: string, a: string, r = '') => {
+    const x = spawnSync('bash', ['-c', `. ${lib}; merge_projects "${e}" "${a}" "${r}"`], {
+      encoding: 'utf8',
+    });
+    return { code: x.status, out: x.stdout, err: x.stderr };
+  };
+  it('adds to the existing projects, keeping them', () =>
+    expect(merge('build-a,build-b', 'atf').out).toBe('build-a,build-b,atf\n'));
+  it('does not duplicate a project', () =>
+    expect(merge('build-a,build-b', 'build-a,atf,atf').out).toBe('build-a,build-b,atf\n'));
+  it('returns the existing projects when nothing is added', () =>
+    expect(merge('build-a,build-b', '').out).toBe('build-a,build-b\n'));
+  it('removes the named projects', () =>
+    expect(merge('build-a,build-b', 'atf', 'build-a').out).toBe('build-b,atf\n'));
+  it('refuses an invalid name and prints nothing', () => {
+    for (const bad of ['-x', 'a', 'a b', 'a/b', 'arn:aws:codebuild:r:1:project/x']) {
+      const r = merge('build-a', bad);
+      expect(r.code).toBe(1);
+      expect(r.out).toBe('');
+      expect(r.err).toContain('not a CodeBuild project name');
+    }
+  });
+});
