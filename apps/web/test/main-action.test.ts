@@ -37,6 +37,10 @@ describe('mainAction', () => {
     expect(pick(['pick_up', 'delete'], glob({ type: 'super' }))).toBe('pick_up');
   });
 
+  it('leads with Pick up for typeless human work (a learning or an action)', () => {
+    expect(pick(['pick_up'], glob({ type: null }), true)).toBe('pick_up');
+  });
+
   it('offers Pick up only in More for a same with no Start', () => {
     expect(pick(['pick_up', 'delete'])).toBeNull();
   });
