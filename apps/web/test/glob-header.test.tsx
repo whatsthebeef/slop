@@ -223,8 +223,8 @@ describe('GlobHeader', () => {
           <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
-      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout 1/2');
-      expect(header).toBe('rollout 1/2');
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');
+      expect(header).toBe('rollout');
     });
 
     it('shows "ID · list" on the left and, with nothing happening, only the fix marker on the right', () => {

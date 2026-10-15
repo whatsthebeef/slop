@@ -36,26 +36,25 @@ const stepName = (step: Pick<ListedHumanStep, 'title' | 'predicted'>): string =>
 /** What a due step's main button does: copy its command, tick it, or wait (disabled, with why). Never just scroll to the section. */
 export type StepMain =
   | { readonly kind: 'copy'; readonly label: string; readonly then: string }
-  | { readonly kind: 'done'; readonly label: string; readonly text: string | null }
+  | { readonly kind: 'done'; readonly label: string }
   | { readonly kind: 'wait'; readonly label: string; readonly reason: string };
 
 /**
  * The main action for a due blocking step, by its kind. A step with a capability check is slop's to tick, so the button
  * is disabled with the reason; a script step copies its command (and offers Mark done after); any other step is
- * ticked with Mark done, with its text shown beside it.
+ * ticked with Mark done (its text is shown once, in the due-steps block).
  */
-export const stepMain = (step: Pick<ListedHumanStep, 'title' | 'detail' | 'script' | 'check'>): StepMain => {
+export const stepMain = (step: Pick<ListedHumanStep, 'script' | 'check'>): StepMain => {
   if (step.check != null && step.check !== '') {
     return { kind: 'wait', label: 'Mark done', reason: `waits for ${step.check} to turn on; slop ticks this itself` };
   }
   if (step.script != null) return { kind: 'copy', label: 'Copy rollout command', then: 'Mark done' };
-  const detail = step.detail?.trim();
-  return { kind: 'done', label: 'Mark done', text: detail === undefined || detail === '' ? null : detail };
+  return { kind: 'done', label: 'Mark done' };
 };
 
 /**
- * The status line for a merged glob whose rollout still holds back its sign-off: "rollout 1/3" (steps done of all; the icon says
- * whose turn). It takes the place of "sign off" until the rollout is done. The tooltip lists every open step. Null when nothing
+ * The status line for a merged glob whose rollout still holds back its sign-off: "rollout" (the icon says whose turn; the tooltip
+ * counts the steps done). It takes the place of "sign off" until the rollout is done. The tooltip lists every open step. Null when nothing
  * is open, the change isn't merged yet, or a deploy of it is still running (where the board tracks deploys, the machine isn't
  * done until it has deployed; the list's `machineSteps` say so, and an API without them reads as no deploy).
  */
@@ -74,7 +73,7 @@ export const rolloutLine = (
   const [first] = open;
   const done = progress.total - progress.open;
   return {
-    text: `rollout ${String(done)}/${String(progress.total)}`,
+    text: 'rollout',
     tip: [
       `Merged; ${String(done)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${stepName(first)}`}`,
       ...open.slice(1).map(stepName),
