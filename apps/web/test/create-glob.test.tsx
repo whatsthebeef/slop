@@ -108,8 +108,8 @@ describe('CreateGlobDialog who and how', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Process' }));
     const fix = await screen.findByTestId('chip-fix');
     expect(fix.textContent).toBe('Fix');
-    expect(screen.getByTestId('chip-work-kind').textContent).toBe('Maintenance');
-    await userEvent.click(screen.getByTestId('chip-work-kind'));
+    // The work kind is inferred silently: there is no chip to choose it.
+    expect(screen.queryByTestId('chip-work-kind')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     expect(onCreate.mock.calls[0]?.[0]).toMatchObject({
@@ -117,8 +117,8 @@ describe('CreateGlobDialog who and how', () => {
       mode: 'same',
       fix: true,
       fixSource: 'inferred',
-      workKind: 'rnd',
-      workKindSource: 'person',
+      workKind: 'maintenance',
+      workKindSource: 'inferred',
       inferenceReason: 'The request says fails A fix is maintenance',
     });
   });

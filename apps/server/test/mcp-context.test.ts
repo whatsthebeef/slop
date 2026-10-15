@@ -285,12 +285,14 @@ describe('MCP get_context include and get_artifact', () => {
       const { body } = await made({ title: 'Old style bug', type: 'same', category: 'bug', idempotencyKey: 'kind-alias-bug' });
       expect(body).toMatchObject({ type: 'same', category: 'bug', actor: 'machine', mode: 'same', fix: true, fixSource: 'person', workKind: 'maintenance' });
       const feature = await made({ title: 'Old style feature', type: 'same', category: 'feature', idempotencyKey: 'kind-alias-feature' });
-      expect(feature.body).toMatchObject({ actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' });
+      // An asked feature means R&D and is stored as a task.
+      expect(feature.body).toMatchObject({ actor: 'machine', mode: 'same', fix: false, workKind: 'rnd', category: 'task' });
+      expect(feature.body.id).toMatch(/^s\d+t\d+$/);
     });
 
     it('takes actor, mode, fix and workKind, and a person choice is stored as such', async () => {
       const { body } = await made({ title: 'New style', actor: 'machine', mode: 'same', fix: false, workKind: 'rnd', idempotencyKey: 'kind-new' });
-      expect(body).toMatchObject({ type: 'same', actor: 'machine', mode: 'same', fix: false, fixSource: 'person', workKind: 'rnd', workKindSource: 'person', category: 'feature' });
+      expect(body).toMatchObject({ type: 'same', actor: 'machine', mode: 'same', fix: false, fixSource: 'person', workKind: 'rnd', workKindSource: 'person', category: 'task' });
     });
 
     it('infers fix and workKind for a titled create that gives none, with the reason', async () => {
