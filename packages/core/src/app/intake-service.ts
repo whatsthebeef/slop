@@ -20,6 +20,17 @@ import { recentTypeCorrections } from './type-learning-service.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
 import type { LlmSpendTag } from '../domain/spend.js';
+import { INTAKE_GROUP_SCHEMA, INTAKE_SCHEMA } from './llm-schemas.js';
+
+/**
+ * A JSON Schema the model's answer must follow (structured outputs). A plain object, so core needs no schema library:
+ * `additionalProperties: false` and a `required` list on every object, as the model API demands.
+ */
+export interface LlmSchema {
+  /** A short name for the answer's shape, e.g. `kb_dedupe`. */
+  readonly name: string;
+  readonly schema: Readonly<Record<string, unknown>>;
+}
 
 /**
  * The LLM port: a single completion. The adapter chooses the model (Haiku for intake). An adapter
@@ -30,6 +41,11 @@ export interface LlmRequest {
   readonly prompt: string;
   readonly maxTokens: number;
   readonly signal?: AbortSignal;
+  /**
+   * Constrains the answer to this schema, so it always parses as JSON. Adapters that can't (or a model that can't)
+   * ignore it, and the caller's `parseJson` then reads the free text as it always did.
+   */
+  readonly schema?: LlmSchema;
   /**
    * Which board and source the call is for. Local metadata: adapters never send it to the model. The
    * server's usage callback writes one ledger row per tagged call; untagged calls are only logged.
@@ -265,6 +281,7 @@ export class IntakeService {
     try {
       completion = await this.deps.llm.complete({
         system: INTAKE_SYSTEM,
+        schema: INTAKE_SCHEMA,
         prompt,
         maxTokens: 1200,
         spend: { boardId, source: 'intake' },
@@ -292,6 +309,7 @@ export class IntakeService {
     try {
       completion = await this.deps.llm.complete({
         system: GROUP_SYSTEM,
+        schema: INTAKE_GROUP_SCHEMA,
         prompt: [
           `Existing groups: ${groups.value.length === 0 ? '(none)' : groups.value.join(', ')}`,
           '',

@@ -51,6 +51,7 @@ import {
   routeLearning,
 } from './learning-writes.js';
 import type { LearningRouting, LearningWriteContext } from './learning-writes.js';
+import { KB_DEDUPE_SCHEMA, KB_DRAFT_SCHEMA, KB_ROUTE_SCHEMA } from './llm-schemas.js';
 
 /**
  * Failures at one stage (LLM errors or unusable answers) before an item is marked `failed`: the `llm` outbox lane's
@@ -125,11 +126,11 @@ Rules:
 - Rewrite one section: the existing heading the learning belongs under (you may choose a better heading in the same text than the one suggested), or add a new section when none fits.
 - For an agent file you change only the project's board rules. The catalog text is shown for context and is never changed; don't repeat what it already says. Board rules are appended under a "## Board rules" heading, so their sections use "###" headings.
 - For a new document, write the whole body (no frontmatter), starting with a "#" title, and don't overlap the existing documents listed.
-- For the local-run spec, write its whole new value: content is a JSON object {"build"?: string, "launch": string} and nothing else (build runs first, then launch; each one shell command line, run from the worktree root), and section is null. Keep what the current value does unless the learning changes it.
-- For the merge policy, write its whole new value: content is a JSON object {"exclusivePaths"?: string[], "sizeIgnoredPaths"?: string[], "rolloutPaths"?: string[], "subGateCheck"?: string} and nothing else (path globs relative to the repo root, such as "apps/server/drizzle/**"; exclusivePaths are paths only one open glob may change at a time, sizeIgnoredPaths are not counted when a sub's size is measured, rolloutPaths are paths whose merge needs a rollout step when the implementation record has no Rollout section, subGateCheck is the one check run name a sub waits for before it merges, default "checks"), and section is null. Keep the entries the current value has unless the learning changes them.
+- For the local-run spec, write its whole new value: content is the JSON object written as text {"build"?: string, "launch": string} and nothing else (build runs first, then launch; each one shell command line, run from the worktree root), and section is null. Keep what the current value does unless the learning changes it.
+- For the merge policy, write its whole new value: content is the JSON object written as text {"exclusivePaths"?: string[], "sizeIgnoredPaths"?: string[], "rolloutPaths"?: string[], "subGateCheck"?: string} and nothing else (path globs relative to the repo root, such as "apps/server/drizzle/**"; exclusivePaths are paths only one open glob may change at a time, sizeIgnoredPaths are not counted when a sub's size is measured, rolloutPaths are paths whose merge needs a rollout step when the implementation record has no Rollout section, subGateCheck is the one check run name a sub waits for before it merges, default "checks"), and section is null. Keep the entries the current value has unless the learning changes them.
 
 Respond with one JSON object and nothing else:
-{"section": string | null, "content": string | object, "rationale": string}
+{"section": string | null, "content": string, "rationale": string}
 - section: the existing heading (its text, without "#") whose section content replaces, or null to add content as a new section. Always null for a new document.
 - content: the full new text of that section, from its heading line through to the end of the section, including any subsections it keeps; for a new section, its heading line and body; for a new document, the whole body; for the local-run spec, the JSON object.
 - rationale: one line saying what the change does and why.`;
@@ -356,6 +357,7 @@ export class KbPipeline {
       drafted = parseDraft(
         await this.complete(this.deps.draft, {
           system: DRAFT_SYSTEM,
+          schema: KB_DRAFT_SCHEMA,
           prompt: draftPrompt(learning, target, state, context.docs),
           maxTokens: DRAFT_MAX_TOKENS,
           spend: { boardId: glob.boardId, source: 'kb_draft', globId: glob.id },
@@ -412,6 +414,7 @@ export class KbPipeline {
       const routing = parseRouting(
         await this.complete(this.deps.route, {
           system: ROUTE_SYSTEM,
+          schema: KB_ROUTE_SCHEMA,
           prompt: routePrompt(learning, snapshot),
           maxTokens: 600,
           spend,
@@ -426,6 +429,7 @@ export class KbPipeline {
       const dedupe = parseDedupe(
         await this.complete(this.deps.route, {
           system: DEDUPE_SYSTEM,
+          schema: KB_DEDUPE_SCHEMA,
           prompt: dedupePrompt(learning, snapshot, routing.target, targetText),
           // The fact, up to five relations and whole-sentence quotes come before the answer; a long statement
           // overran 1,000 tokens and the JSON was cut off.
