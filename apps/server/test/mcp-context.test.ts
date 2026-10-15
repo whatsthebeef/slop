@@ -262,6 +262,97 @@ describe('MCP get_context include and get_artifact', () => {
     expect(parked).toMatchObject({ status: 'planning' });
   });
 
+  describe('actor, mode, fix and work kind', () => {
+    interface KindBody {
+      id: string;
+      version: number;
+      type: string | null;
+      category: string;
+      actor: string;
+      mode: string;
+      fix: boolean;
+      fixSource: string;
+      workKind: string;
+      workKindSource: string;
+      inferenceReason?: string;
+    }
+    const made = async (args: Record<string, unknown>) => {
+      const r = await call('create_glob', { board: boardId, ...args });
+      return { error: r.isError, body: r.body as unknown as KindBody };
+    };
+
+    it('accepts the old category and type as aliases and returns actor, mode, fix and workKind', async () => {
+      const { body } = await made({ title: 'Old style bug', type: 'same', category: 'bug', idempotencyKey: 'kind-alias-bug' });
+      expect(body).toMatchObject({ type: 'same', category: 'bug', actor: 'machine', mode: 'same', fix: true, fixSource: 'person', workKind: 'maintenance' });
+      const feature = await made({ title: 'Old style feature', type: 'same', category: 'feature', idempotencyKey: 'kind-alias-feature' });
+      expect(feature.body).toMatchObject({ actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' });
+    });
+
+    it('takes actor, mode, fix and workKind, and a person choice is stored as such', async () => {
+      const { body } = await made({ title: 'New style', actor: 'machine', mode: 'same', fix: false, workKind: 'rnd', idempotencyKey: 'kind-new' });
+      expect(body).toMatchObject({ type: 'same', actor: 'machine', mode: 'same', fix: false, fixSource: 'person', workKind: 'rnd', workKindSource: 'person', category: 'feature' });
+    });
+
+    it('infers fix and workKind for a titled create that gives none, with the reason', async () => {
+      const { body } = await made({ title: 'Fix the broken CSV export', type: 'same', idempotencyKey: 'kind-inferred' });
+      expect(body).toMatchObject({ fix: true, fixSource: 'inferred', workKind: 'maintenance', workKindSource: 'inferred' });
+      expect(body.inferenceReason).toContain('broken');
+    });
+
+    it('never makes a super a fix when it is inferred', async () => {
+      const { body } = await made({ title: 'Fix the broken design', mode: 'super', idempotencyKey: 'kind-super' });
+      expect(body).toMatchObject({ mode: 'super', fix: false });
+    });
+
+    it('creates a human action from actor and mode, and refuses a mix that means nothing', async () => {
+      const { body } = await made({ title: 'Rotate the token', actor: 'human', idempotencyKey: 'kind-action' });
+      expect(body).toMatchObject({ actor: 'human', mode: 'action', category: 'action', type: null, fix: false });
+      expect((await made({ title: 'x', actor: 'machine', mode: 'action', idempotencyKey: 'kind-bad-1' })).error).toBe(true);
+      expect((await made({ title: 'x', actor: 'human', mode: 'sub', idempotencyKey: 'kind-bad-2' })).error).toBe(true);
+      expect((await made({ title: 'x', mode: 'same', type: 'sub', idempotencyKey: 'kind-bad-3' })).error).toBe(true);
+    });
+
+    it('lists with actor, mode, fix and workKind, and filters by them (category stays an alias)', async () => {
+      const list = async (args: Record<string, unknown>) =>
+        (await call('list_globs', { board: boardId, ...args })).body as unknown as KindBody[];
+      const fixes = await list({ fix: true });
+      expect(fixes.length).toBeGreaterThan(0);
+      expect(fixes.every((g) => g.fix && g.actor === 'machine')).toBe(true);
+      expect((await list({ workKind: 'rnd' })).every((g) => g.workKind === 'rnd')).toBe(true);
+      expect((await list({ mode: 'super' })).every((g) => g.mode === 'super')).toBe(true);
+      const human = await list({ actor: 'human' });
+      expect(human.some((g) => g.mode === 'action')).toBe(true);
+      expect(human.every((g) => g.actor === 'human')).toBe(true);
+      expect((await list({ category: 'bug' })).every((g) => g.category === 'bug')).toBe(true);
+    });
+
+    it('update_glob flips fix and workKind as a person, and a human mode cannot be set', async () => {
+      const { body } = await made({ title: 'Flip me', type: 'same', category: 'task', idempotencyKey: 'kind-flip' });
+      const flipped = (await call('update_glob', { id: body.id, version: body.version, fix: true, workKind: 'rnd' })).body as unknown as KindBody;
+      expect(flipped).toMatchObject({ fix: true, fixSource: 'person', workKind: 'rnd', workKindSource: 'person' });
+      const moved = (await call('update_glob', { id: body.id, version: flipped.version, mode: 'same' })).body as unknown as KindBody;
+      expect(moved).toMatchObject({ actor: 'machine', mode: 'same' });
+      const get = (await call('get_glob', { id: body.id })).body as unknown as KindBody;
+      expect(get).toMatchObject({ actor: 'machine', mode: 'same', fix: true, workKind: 'rnd' });
+    });
+
+    it('split_glob parts take mode, fix and workKind', async () => {
+      const { body } = await made({ title: 'Split me', type: 'same', category: 'task', plan: 'Two things', idempotencyKey: 'kind-split' });
+      const split = (
+        await call('split_glob', {
+          id: body.id,
+          version: body.version,
+          idempotencyKey: 'kind-split-key',
+          parts: [
+            { title: 'Split me: one', plan: 'One' },
+            { title: 'Split me: two', plan: 'Two', fix: true, workKind: 'rnd' },
+          ],
+        })
+      ).body as unknown as { parts: KindBody[] };
+      expect(split.parts[1]).toMatchObject({ actor: 'machine', fix: true, workKind: 'rnd' });
+    });
+  });
+
   it('create_glob chooses a group for a titled create, and an explicit group or null wins', async () => {
     const groupOf = async (args: Record<string, unknown>) =>
       ((await call('create_glob', { board: boardId, category: 'task', type: 'same', ...args })).body as unknown as { group: string | null }).group;

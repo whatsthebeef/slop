@@ -1,5 +1,5 @@
 {
-  "id": "8743ee0d-dc59-42fb-adc1-e7b2d05cba66",
+  "id": "15cfb522-9fe6-4bde-bceb-a2e1713e2d76",
   "prevId": "b9b32a46-e6df-413b-babc-f0f18de38f75",
   "version": "7",
   "dialect": "postgresql",
@@ -3894,31 +3894,6 @@
         "script": {
           "name": "script",
           "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "why": {
-          "name": "why",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "permissions": {
-          "name": "permissions",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "commands": {
-          "name": "commands",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "verify": {
-          "name": "verify",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

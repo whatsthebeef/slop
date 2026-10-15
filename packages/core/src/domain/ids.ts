@@ -1,4 +1,4 @@
-import type { Category } from './types.js';
+import type { Category, Mode, WorkActor, WorkKind } from './types.js';
 
 /**
  * ID letters. `h` (hotfix) is reserved; `k` numbers the decision globs, one sequence per board (a KB item is its
@@ -11,6 +11,16 @@ export const ID_LETTERS = 'ftbhka';
 
 export const letterOf = (category: Category): IdLetter =>
   category === 'feature' ? 'f' : category === 'task' ? 't' : category === 'decision' ? 'k' : category === 'action' ? 'a' : 'b';
+
+/**
+ * The letter for a new glob, from the model: human decisions `k`, human actions `a`; machine work with the fix flag `b`,
+ * otherwise `t` when the work kind is maintenance and `f` when it is R&D. Existing IDs never change.
+ */
+export const letterFor = (g: { readonly actor: WorkActor; readonly mode: Mode; readonly fix: boolean; readonly workKind: WorkKind }): IdLetter => {
+  if (g.actor === 'human') return g.mode === 'decision' ? 'k' : 'a';
+  if (g.fix) return 'b';
+  return g.workKind === 'maintenance' ? 't' : 'f';
+};
 
 export const formatId = (boardId: number, letter: IdLetter, n: number): string =>
   `s${boardId}${letter}${n}`;

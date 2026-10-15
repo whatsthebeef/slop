@@ -1,6 +1,6 @@
-import type { Relation, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, StoredHumanStep } from '@slop/core';
-import { cleanFileName, invalidInput, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, OUTCOME_REASON_MAX, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
+import type { Relation, SlopType, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, StoredHumanStep } from '@slop/core';
+import { cleanFileName, inferenceReasonOf, invalidInput, isHumanCategory, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, OUTCOME_REASON_MAX, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -18,7 +18,8 @@ import { requestOrigin } from '../http/origin.js';
 import { addRelationSchema, relationInput, relationInputs, relationInputSchema } from '../http/relation-schemas.js';
 import { isDate, parseBound, toRequest } from '../search-request.js';
 import { requestMetrics } from '../request-metrics.js';
-import { compactKbItem, compactSizeProposal, errorBody, globView, globViewOf, onBoard } from '../http/views.js';
+import type { CreateKindFields } from '../http/views.js';
+import { compactKbItem, compactSizeProposal, createKindFields, errorBody, globView, globViewOf, kindView, onBoard, resolveKind } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { MergeGate, ReadyGate } from '../ready-gate.js';
 
@@ -125,7 +126,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work: a feature, task or bug) on a board; decision globs are created by slop from learnings, never here. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: category `action`, a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. Pass the request as `input` and slop proposes the title, plan, type, category and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `type` always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D, `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -135,8 +136,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .string()
           .optional()
           .describe('The full spec, stored verbatim as plan.md v1; without it plan.md v1 is the write-up intake makes of the input, else the title'),
-        type: z.enum(SLOP_TYPES).optional().describe('sub (small, auto-merged), same (standard) or super (pairing). Sub and super are for board admins only; everyone else creates a same'),
-        category: z.enum([...WORK_CATEGORIES, 'action']).optional().describe('feature, task or bug (code work), or action (something a person does: no type)'),
+        actor: z.enum(['machine', 'human']).optional().describe('Who works on it: machine (agents) or human (a person: an action). Default: machine'),
+        mode: z.enum([...SLOP_TYPES, 'action']).optional().describe('How: sub (small, auto-merged), same (standard) or super (pairing) for a machine; action for a human. Sub and super are for board admins only; everyone else creates a same'),
+        fix: z.boolean().optional().describe('Whether the work fixes something broken (the investigator reproduces first, a regression test is expected). Omitted: slop infers it from the request and plan'),
+        workKind: z.enum(WORK_KINDS).optional().describe('rnd or maintenance, for the time report. Omitted: slop infers it'),
+        type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode` for a machine glob'),
+        category: z.enum([...WORK_CATEGORIES, 'action']).optional().describe('Old alias: bug sets `fix`, feature means R&D, task means maintenance; action means actor human'),
         assignee: z.string().min(1).max(200).optional().describe('Action only: the email of the person meant to do it (default: anyone on the board)'),
         group: z.string().nullable().optional().describe('The glob\'s group; omit it to let slop choose one from the title and plan, pass null or an empty string for none'),
         environment: z
@@ -188,10 +193,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       },
     },
     async (input) => {
-      if (input.category === 'action') {
+      const kind = resolveKind(input, true);
+      if (!kind.ok) return { ...json({ code: 'invalid_input', message: kind.message }), isError: true };
+      const askedType = kind.type ?? undefined;
+      if (kind.category === 'action') {
         const refused = (message: string) => ({ ...json({ code: 'invalid_input', message }), isError: true });
         if (input.title === undefined || input.title.trim() === '') return refused('An action needs a title');
-        if (input.type !== undefined) return refused('An action has no type');
+        if (askedType !== undefined) return refused('An action has no type');
         if (input.environment !== undefined || input.start !== undefined || input.autoTrigger === true) return refused('An action has no environment, start or autoTrigger: nothing runs for it');
         if ((input.files ?? []).length > 0 || input.inboxItem !== undefined) return refused('An action takes no files or inbox item: put them in the plan or attach them afterwards');
         const made = await globs.create(email, {
@@ -218,6 +226,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           status: glob.status,
           type: null,
           category: glob.category,
+          ...kindView(glob),
           group: glob.group,
           assignee: made.value.attributes !== undefined && 'assignee' in made.value.attributes ? made.value.attributes.assignee : null,
         }));
@@ -230,10 +239,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           }
         }
       }
-      let fields = {
+      // The kind of a titled create: what the caller said, the rest inferred from the title and plan (an intake proposal replaces it).
+      const kindFields = await createKindFields({ type: askedType, category: kind.category, fix: kind.fix, workKind: kind.workKind }, input.title === undefined ? undefined : () =>
+        deps.intake.inferWork(input.board, { title: input.title ?? '', plan: input.plan ?? input.input ?? '' }),
+      );
+      let fields: { title: string; type: SlopType; group: string | null; autoTrigger: boolean } & CreateKindFields = {
+        ...kindFields,
         title: input.title ?? '',
-        type: input.type ?? ('sub' as const),
-        category: input.category ?? ('task' as const),
+        type: askedType ?? ('sub' as const),
         group: input.group === undefined || input.group === null || input.group.trim() === '' ? null : input.group.trim(),
         autoTrigger: input.autoTrigger ?? false,
       };
@@ -253,15 +266,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         const proposal = await deps.intake.propose(email, input.board, {
           text: input.input,
           explicit: {
-            ...(input.type === undefined ? {} : { type: input.type }),
-            ...(input.category === undefined ? {} : { category: input.category }),
+            ...(askedType === undefined ? {} : { type: askedType }),
+            ...(kind.category === undefined || isHumanCategory(kind.category) ? {} : { category: kind.category }),
+            ...(kind.fix === undefined ? {} : { fix: kind.fix }),
+            ...(kind.workKind === undefined ? {} : { workKind: kind.workKind }),
             ...(input.group === undefined ? {} : { group: input.group ?? '' }),
             ...(input.environment === undefined ? {} : { environment: input.environment }),
           },
         });
         if (!proposal.ok) return reply(proposal);
         const { environment, plan, ...proposed } = proposal.value;
-        fields = { ...proposed, autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger };
+        fields = {
+          ...proposed,
+          inferenceReason: inferenceReasonOf(proposal.value),
+          autoTrigger: input.autoTrigger ?? proposal.value.autoTrigger,
+        };
         suggestedEnvironment = environment;
         proposedPlan = plan;
         intakeRecord = {
@@ -282,11 +301,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         if (suggested.ok) fields = { ...fields, group: suggested.value };
       }
       // A super intake chose waits in Planning for a person; one asked for by type starts in Doing as before.
-      const start = input.start ?? (intakeRecord !== null && input.type === undefined && fields.type === 'super' ? false : undefined);
+      const start = input.start ?? (intakeRecord !== null && askedType === undefined && fields.type === 'super' ? false : undefined);
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
-        typeChosen: input.type !== undefined,
+        typeChosen: askedType !== undefined,
         ...(start === undefined ? {} : { start }),
         plan: input.plan ?? proposedPlan ?? input.input ?? '',
         planBy: 'sessionator',
@@ -321,6 +340,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         status: glob.status,
         type: glob.type,
         category: glob.category,
+        ...kindView(glob),
+        ...(glob.inferenceReason == null ? {} : { inferenceReason: glob.inferenceReason }),
         group: glob.group,
         environment: glob.environment,
         ...(startIds(relations).length === 0 ? {} : { after: startIds(relations) }),
@@ -337,7 +358,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'split_glob',
     {
       description:
-        "Cut the scope of a glob in Planning (not started: no run, no branch) into independent globs in one step: a scope cut, for work that could each ship alone, not a way to parallelise one piece of work (parallel work happens inside the run as workstreams). Part 0 is this glob: it keeps its ID, history and decisions, gets the new title and plan, and signs off on its own like any glob. The other parts are created in its group with their own plan and copies of its link attachments (and the text attachments you list). Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Title every part with the feature's short name from the original title, a colon, then what it delivers and changes (\"Board chat: answers get 👍/👎 buttons, stored per board\", not \"Feedback UI and submission\"); at most ~100 characters, no \"Part N\". Parts default to the glob's type and category. The parts are independent: there is no gate between them and no sign-off from the original on the others, unless you pass `after` on a part (earlier parts it needs merged before it starts), which is stored as an ordinary need (a start relation from the part to the earlier part). Name only direct prerequisites in `after`. The parts keep a \"Split from <id>\" line in their plan and a split event as provenance.",
+        "Cut the scope of a glob in Planning (not started: no run, no branch) into independent globs in one step: a scope cut, for work that could each ship alone, not a way to parallelise one piece of work (parallel work happens inside the run as workstreams). Part 0 is this glob: it keeps its ID, history and decisions, gets the new title and plan, and signs off on its own like any glob. The other parts are created in its group with their own plan and copies of its link attachments (and the text attachments you list). Write `{part:N}` in a plan for part N's glob ID. Pass the version you read and an idempotency key (a retry returns the same parts). Title every part with the feature's short name from the original title, a colon, then what it delivers and changes (\"Board chat: answers get 👍/👎 buttons, stored per board\", not \"Feedback UI and submission\"); at most ~100 characters, no \"Part N\". Parts default to the glob's mode, fix flag and work kind. The parts are independent: there is no gate between them and no sign-off from the original on the others, unless you pass `after` on a part (earlier parts it needs merged before it starts), which is stored as an ordinary need (a start relation from the part to the earlier part). Name only direct prerequisites in `after`. The parts keep a \"Split from <id>\" line in their plan and a split event as provenance.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -348,8 +369,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
             z.object({
               title: z.string().min(1),
               plan: z.string().min(1).describe("This part's share of plan.md (Markdown); {part:N} stands for part N's glob ID"),
-              category: z.enum(WORK_CATEGORIES).optional(),
-              type: z.enum(SLOP_TYPES).optional(),
+              mode: z.enum(SLOP_TYPES).optional().describe("The part's machine mode (default: the glob's)"),
+              fix: z.boolean().optional().describe("Whether the part fixes something broken (default: the glob's)"),
+              workKind: z.enum(WORK_KINDS).optional().describe("rnd or maintenance (default: the glob's)"),
+              category: z.enum(WORK_CATEGORIES).optional().describe('Old alias: bug is a fix, feature is R&D, task is maintenance'),
+              type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode`'),
               after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional().describe('Indexes of earlier parts this part needs merged before it starts'),
               attachments: z.array(z.string().min(1)).optional().describe("Labels of the original's text attachments to copy (new parts only; link attachments are always copied)"),
             }),
@@ -363,12 +387,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         idempotencyKey,
         ...(group === undefined ? {} : { group }),
         planBy: 'sessionator',
-        parts: parts.map(({ attachments, after, category, type, ...rest }) => ({
+        parts: parts.map(({ attachments, after, category, type, mode, fix, workKind, ...rest }) => ({
           ...rest,
           ...(attachments === undefined ? {} : { attachments }),
           ...(after === undefined ? {} : { after }),
           ...(category === undefined ? {} : { category }),
-          ...(type === undefined ? {} : { type }),
+          ...((mode ?? type) === undefined ? {} : { type: mode ?? type }),
+          ...(fix === undefined ? {} : { fix }),
+          ...(workKind === undefined ? {} : { workKind }),
         })),
       });
       if (split.ok) for (const glob of split.value) await deps.outbox.drain(glob.id);
@@ -381,6 +407,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           title: glob.title,
           type: glob.type,
           category: glob.category,
+          ...kindView(glob),
           status: glob.status,
           ...(startIds(relations.get(glob.id) ?? []).length === 0 ? {} : { after: startIds(relations.get(glob.id) ?? []) }),
           ...(glob.waiting == null ? {} : { waiting: true }),
@@ -416,34 +443,51 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'list_globs',
     {
       description:
-        'Globs on a board (ID, title, status), optionally filtered. Without `category` it lists code work (features, tasks, bugs); pass `action` or `decision` to list human work (an action is open while its status is planning; `type` is null for both).',
+        'Globs on a board (ID, title, status, actor, mode, fix, workKind), optionally filtered. Without `actor` or `mode` it lists machine work; pass `actor` human, or `mode` action or decision, to list human work (an action is open while its status is planning; `type` is null for both). The old `category` (feature, task, bug, decision, action) still filters as an alias.',
       inputSchema: {
         board: z.number().int(),
         status: z.array(z.enum(STATUSES)).optional(),
-        type: z.enum(SLOP_TYPES).optional(),
-        category: z.enum(CATEGORIES).optional().describe('One category: feature, task, bug, decision or action'),
+        type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode` for machine globs'),
+        actor: z.enum(['machine', 'human']).optional().describe('machine (agents) or human (actions and decisions)'),
+        mode: z.enum([...SLOP_TYPES, 'decision', 'action']).optional().describe('sub, same, super, decision or action'),
+        fix: z.boolean().optional().describe('Only globs that do (true) or do not (false) fix something broken'),
+        workKind: z.enum(WORK_KINDS).optional().describe('Only rnd or only maintenance globs'),
+        category: z.enum(CATEGORIES).optional().describe('Old alias: feature, task, bug, decision or action'),
         group: z.string().optional(),
         person: z.string().optional().describe('Planner or implementer email'),
       },
     },
-    async ({ board, status, type, category, group, person }) => {
+    async ({ board, status, type, actor, mode, fix, workKind, category, group, person }) => {
+      const humanMode = mode === 'action' || mode === 'decision' ? mode : undefined;
+      const wanted = humanMode ?? category;
+      const machineMode = mode === undefined || mode === 'action' || mode === 'decision' ? type : mode;
       const result = await globs.list(email, board, {
-        include: category === 'action' ? 'actions' : category === 'decision' ? 'decisions' : 'work',
+        include: wanted === 'action' ? 'actions' : wanted === 'decision' ? 'decisions' : actor === 'human' ? 'human' : 'work',
         ...(status === undefined ? {} : { status }),
-        ...(type === undefined ? {} : { type }),
+        ...(machineMode === undefined ? {} : { type: machineMode }),
         ...(group === undefined ? {} : { group }),
         ...(person === undefined ? {} : { person }),
       });
       const now = Date.now();
       return reply(result, (list) =>
         list
-          .filter((g) => onBoard(g, now) && (category === undefined || g.category === category))
+          .filter((g) => {
+            const kind = kindView(g);
+            return (
+              onBoard(g, now) &&
+              (category === undefined || g.category === category) &&
+              (actor === undefined || kind.actor === actor) &&
+              (fix === undefined || kind.fix === fix) &&
+              (workKind === undefined || kind.workKind === workKind)
+            );
+          })
           .map((g) => ({
             id: g.id,
             title: g.title,
             status: g.status,
             type: g.type,
             category: g.category,
+            ...kindView(g),
             group: g.group,
             planner: g.planner,
             implementer: g.implementer,
@@ -470,13 +514,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, type (changing it to sub or super needs a board admin; to same is open to anyone who can edit the glob), category, group, environment, `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them) or `relations` (added or changed, any gate; they never remove one: use dismiss_relation). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
+        "Change a glob's title, `mode` (a machine glob's sub, same or super; alias `type`; changing it to sub or super needs a board admin; to same is open to anyone who can edit the glob), `fix` (whether it fixes something broken: anyone who can edit the glob may flip it; a fix is never a super), `workKind` (rnd or maintenance for the time report: board admins only), the old `category` alias, group, environment, `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them) or `relations` (added or changed, any gate; they never remove one: use dismiss_relation). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
         title: z.string().optional(),
-        type: z.enum(SLOP_TYPES).optional(),
-        category: z.enum(WORK_CATEGORIES).optional(),
+        mode: z.enum(SLOP_TYPES).optional().describe("A machine glob's mode: sub, same or super"),
+        fix: z.boolean().optional(),
+        workKind: z.enum(WORK_KINDS).optional(),
+        type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode`'),
+        category: z.enum(WORK_CATEGORIES).optional().describe('Old alias: moves a still-inferred fix flag and work kind to the category\'s meaning'),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
         needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
@@ -484,7 +531,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         relations: z.array(relationInputSchema).max(60).optional().describe(RELATIONS_HELP),
       },
     },
-    async ({ id, version, needs, relations, ...changes }) => {
+    async ({ id, version, needs, relations, mode, ...changes }) => {
+      const kind = resolveKind({ mode, type: changes.type, category: changes.category }, false);
+      if (!kind.ok) return { ...json({ code: 'invalid_input', message: kind.message }), isError: true };
+      if (kind.type !== undefined) changes.type = kind.type ?? undefined;
       const merged = needs === undefined && changes.after === undefined ? changes : { ...changes, after: [...new Set([...(needs ?? []), ...(changes.after ?? [])])] };
       const clean = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
       const stated = relations === undefined ? {} : { relations: relationInputs(relations), relationsBy: 'agent' as const };

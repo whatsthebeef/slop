@@ -125,8 +125,8 @@ describe('GlobHeader', () => {
       ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
       ['a problem', () => prOpen({ conflict: { base: 'main', files, since: 's1t9', at: NOW } })],
     ];
-    it('orders the header corner: text, then the status icon, then the category icon, and lets the text truncate', () => {
-      const { getByTestId } = renderBar(view({ status: 'in_progress', ...live('active') }));
+    it('orders the header corner: text, then the status icon, then the fix marker, and lets the text truncate', () => {
+      const { getByTestId } = renderBar(view({ category: 'bug', status: 'in_progress', ...live('active') }));
       const corner = getByTestId('header-corner');
       const button = getByTestId('header-status');
       expect(corner.firstElementChild).toBe(button);
@@ -137,11 +137,18 @@ describe('GlobHeader', () => {
       expect(getByTestId('glob-id').className).toContain('shrink-0');
     });
 
-    it('puts a dot between the status and the category icon', () => {
-      const { getByTestId } = renderBar(view({ status: 'in_progress', ...live('active') }));
+    it('puts a dot between the status and the fix marker, and leaves both out of a plain machine glob', () => {
+      const { getByTestId } = renderBar(view({ category: 'bug', status: 'in_progress', ...live('active') }));
       const corner = getByTestId('header-corner');
       expect(corner.children).toHaveLength(3);
       expect(corner.children[1]?.getAttribute('data-testid')).toBe('header-dot');
+    });
+
+    it('shows no dot and no marker after the status of machine work that is not a fix', () => {
+      const { getByTestId } = renderBar(view({ category: 'task', status: 'in_progress', ...live('active') }));
+      const corner = getByTestId('header-corner');
+      expect(corner.children).toHaveLength(1);
+      expect(corner.querySelector('[role="img"]')).toBeNull();
     });
 
     it('shows the type and the list in the same quiet style', () => {
@@ -220,24 +227,24 @@ describe('GlobHeader', () => {
       expect(header).toBe('rollout');
     });
 
-    it('shows "ID · list" on the left and, with nothing happening, only the category icon on the right', () => {
-      const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', list: 'planning' }));
+    it('shows "ID · list" on the left and, with nothing happening, only the fix marker on the right', () => {
+      const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', list: 'planning', category: 'bug' }));
       const left = getByTestId('glob-header');
       expect(getByTestId('glob-list').textContent).toBe('Planning');
       expect(queryByTestId('header-status')).toBeNull();
       const corner = getByTestId('header-corner');
       expect(corner.querySelector('[data-testid="header-dot"]')).toBeNull();
       expect(corner.children).toHaveLength(1);
-      expect(corner.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(view().category);
+      expect(corner.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('fix');
       expect(left.textContent).not.toContain('Planning ');
     });
 
-    it('shows the card\'s corner, a dot, then the category icon for a merging glob, and never the list name', () => {
-      const g = view({ status: 'merging', list: 'doing', pr: { number: 7, state: 'ready', headSha: 'abc' } });
+    it('shows the card\'s corner, a dot, then the fix marker for a merging fix, and never the list name', () => {
+      const g = view({ status: 'merging', list: 'doing', category: 'bug', pr: { number: 7, state: 'ready', headSha: 'abc' } });
       const { getByTestId } = renderBar(g);
       const corner = getByTestId('header-corner');
       expect(getByTestId('header-status').textContent).toBe('merging');
-      expect([...corner.children].map((c) => c.getAttribute('data-testid') ?? 'category')).toEqual(['header-status', 'header-dot', 'category']);
+      expect([...corner.children].map((c) => c.getAttribute('data-testid') ?? 'marker')).toEqual(['header-status', 'header-dot', 'marker']);
       expect(corner.children[2]?.className).toContain('ml-1.5');
       expect(getByTestId('header-status').textContent).not.toContain('Doing');
       expect(getByTestId('glob-list').textContent).toContain('Doing');

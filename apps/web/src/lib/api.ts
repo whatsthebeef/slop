@@ -20,6 +20,10 @@ import type {
   ContextSettingsView,
   CatalogUpdate,
   Category,
+  InferenceSource,
+  Mode,
+  WorkActor,
+  WorkKind,
   ChatCitation,
   ChatMessage,
   Confidence,
@@ -102,6 +106,9 @@ export type ListedHumanStep = CompactHumanStep &
   >;
 
 export interface GlobView extends Glob {
+  /** Who works on the glob and how (derived on the server; read through `actorOf` and `modeOf` where a fixture may lack them). */
+  readonly actor?: WorkActor;
+  readonly mode?: Mode;
   readonly list: List;
   readonly branch: string;
   readonly currentRun: Run | null;
@@ -421,9 +428,18 @@ export interface NewGlob {
   title: string;
   /** plan.md v1 (intake's write-up of the request); without it the glob's plan starts as its title. */
   plan?: string;
-  /** Null for an action (human work has no type). */
-  type: SlopType | null;
-  category: Category;
+  /** Who works on it: agents (machine) or a person (human). */
+  actor: WorkActor;
+  /** How: a machine's sub, same or super; a human's action (decisions come from learnings, never from the form). */
+  mode: SlopType | 'action';
+  /** Whether the work fixes something broken, with who set it; absent: slop infers it from the title and plan. */
+  fix?: boolean;
+  fixSource?: InferenceSource;
+  /** R&D or maintenance for the time report, with who set it; absent: slop infers it. */
+  workKind?: WorkKind;
+  workKindSource?: InferenceSource;
+  /** Intake's one-line reason for the two, passed back so the glob keeps it. */
+  inferenceReason?: string | null;
   /** Actions only: who is meant to do it. */
   assignee?: string | null;
   /** Omitted: slop chooses one from the title and plan; null: none. */
@@ -452,9 +468,17 @@ export interface NewGlob {
 }
 
 /** Intake's answer: the form's fields, plus how sure it is and the past globs it was shown. */
-export type IntakeProposalView = Omit<NewGlob, 'group' | 'type'> & {
-  /** Intake only proposes code work, so always a type. */
+export type IntakeProposalView = Omit<NewGlob, 'group' | 'actor' | 'mode' | 'fix' | 'workKind' | 'fixSource' | 'workKindSource'> & {
+  /** Intake only proposes code work, so always a type (the machine mode). */
   type: SlopType;
+  /** The legacy category the fields derive: nobody picks it. */
+  category: Category;
+  fix: boolean;
+  fixSource: InferenceSource;
+  fixReason: string | null;
+  workKind: WorkKind;
+  workKindSource: InferenceSource;
+  workKindReason: string | null;
   group: string | null;
   plan: string;
   autoTriggerReason: string | null;
@@ -474,6 +498,8 @@ export interface SplitPartInput {
   plan: string;
   category?: Category;
   type?: SlopType;
+  fix?: boolean;
+  workKind?: WorkKind;
   /** Indexes of earlier parts this one starts after. */
   after?: number[];
 }
@@ -485,7 +511,7 @@ export type AddRelationInput = {
   readonly reason?: string;
 } & ({ readonly to: string; readonly version: number } | { readonly holdsBack: string });
 
-export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'group' | 'environment'>> & {
+export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'fix' | 'workKind' | 'group' | 'environment'>> & {
   /** A decision's scope or an action's assignee, the only attributes a person edits. */
   attributes?: { scope: DecisionScope } | { assignee: string | null };
 };

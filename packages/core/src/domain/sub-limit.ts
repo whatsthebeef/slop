@@ -1,5 +1,5 @@
 import type { DomainEvent, JsonValue } from './events.js';
-import type { Glob } from './types.js';
+import { fixOf, type Glob } from './types.js';
 
 /**
  * The learned sub size limit (spec, Sub review): subs changing more lines than the board's limit convert to sames,
@@ -313,7 +313,7 @@ export const subLimitCandidates = (facts: SubLimitFacts): SubLimitCandidate[] =>
   }
   const globs = new Map(facts.globs.map((g) => [g.id, g]));
   const bugs = facts.globs
-    .filter((g) => g.category === 'bug')
+    .filter((g) => fixOf(g))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const candidates: SubLimitCandidate[] = [];
   for (const [globId, events] of byGlob) {

@@ -14,13 +14,14 @@ import {
   workingTime,
 } from '../src/domain/time-tracking.js';
 import type { GlobFacts, Period, ReportRow, Segment } from '../src/domain/time-tracking.js';
-import type { Category, SlopType, Status } from '../src/domain/types.js';
+import type { Category, SlopType, Status, WorkKind } from '../src/domain/types.js';
 
 const ANA = 'ana@example.com';
 const BOB = 'bob@example.com';
 const HOUR = 3_600_000;
 const NO_FACTS: ReadonlyMap<string, GlobFacts> = new Map();
 
+const kindOf = (category: Category): WorkKind => (category === 'feature' ? 'rnd' : 'maintenance');
 const at = (day: string, time: string) => `${day}T${time}:00.000Z`;
 const MON = '2026-10-05';
 const event = (type: DomainEvent['type'], globId: string, actor: string | null, when: string, data: { readonly [key: string]: JsonValue } = {}): DomainEvent => ({
@@ -61,7 +62,7 @@ describe('time tracking: the spec’s worked examples', () => {
     expect(hours(segments, ANA, 's1t4')).toBe(4);
     expect(hours(segments, ANA, 's1b2')).toBe(3);
     expect(segments.filter((s) => s.globId === 's1b2')).toEqual([
-      { person: ANA, globId: 's1b2', category: 'bug', from: at(MON, '14:00'), to: at(MON, '17:00') },
+      { person: ANA, globId: 's1b2', category: 'bug', workKind: 'maintenance', from: at(MON, '14:00'), to: at(MON, '17:00') },
     ]);
     expect(hours(segments, BOB)).toBe(0);
   });
@@ -230,14 +231,14 @@ describe('the active glob', () => {
   it('closes open segments at `until` and ignores later events', () => {
     const events = [same('s1t1'), moved('s1t1', BOB, at(MON, '10:00'), 'planning', 'implementing'), moved('s1t1', null, at(MON, '16:00'), 'implementing', 'reviewing')];
     const segments = deriveSegments(events, NO_FACTS, at(MON, '12:00'));
-    expect(segments).toEqual([{ person: BOB, globId: 's1t1', category: 'task', from: at(MON, '10:00'), to: at(MON, '12:00') }]);
+    expect(segments).toEqual([{ person: BOB, globId: 's1t1', category: 'task', workKind: 'maintenance', from: at(MON, '10:00'), to: at(MON, '12:00') }]);
   });
 
   it('falls back to the glob row when its creation event is missing', () => {
     const facts = new Map<string, GlobFacts>([['s1t9', { planner: BOB, category: 'feature', type: 'same' }]]);
     const events = [moved('s1t9', BOB, at(MON, '10:00'), 'planning', 'implementing')];
     expect(deriveSegments(events, facts, at(MON, '17:00'))).toEqual([
-      { person: BOB, globId: 's1t9', category: 'feature', from: at(MON, '10:00'), to: at(MON, '17:00') },
+      { person: BOB, globId: 's1t9', category: 'feature', workKind: 'rnd', from: at(MON, '10:00'), to: at(MON, '17:00') },
     ]);
     // Without either, nobody can be attributed.
     expect(deriveSegments(events, NO_FACTS, at(MON, '17:00'))).toEqual([]);
@@ -308,7 +309,7 @@ describe('periods', () => {
 });
 
 describe('reports', () => {
-  const seg = (person: string, category: Category, from: string, to: string, globId = 's1t1'): Segment => ({ person, globId, category, from, to });
+  const seg = (person: string, category: Category, from: string, to: string, globId = 's1t1'): Segment => ({ person, globId, category, workKind: kindOf(category), from, to });
   const october = parsePeriod('2026-10');
   if (october === null) throw new Error('unparsed');
 
@@ -386,14 +387,14 @@ describe('edge cases', () => {
 
   it('puts an interval spanning a UTC month boundary in the local month (Auckland, NZDT UTC+13)', () => {
     // 20:00–23:00 UTC on 30 September is 09:00–12:00 on Thursday 1 October in Auckland.
-    const segments: Segment[] = [{ person: BOB, globId: 's1t1', category: 'task', from: at('2026-09-30', '20:00'), to: at('2026-09-30', '23:00') }];
+    const segments: Segment[] = [{ person: BOB, globId: 's1t1', category: 'task', workKind: 'maintenance', from: at('2026-09-30', '20:00'), to: at('2026-09-30', '23:00') }];
     expect(reportRows(segments, september, 'Pacific/Auckland')).toEqual([]);
     expect(reportRows(segments, october, 'Pacific/Auckland')).toEqual([{ developer: BOB, period: '2026-10', rndMs: 0, maintenanceMs: 3 * HOUR }]);
   });
 
   it('keeps a local afternoon that is already the next UTC month in the local month (Los Angeles, PDT UTC-7)', () => {
     // Friday 31 July 13:00–17:00 local is 20:00 UTC to 00:00 UTC on 1 August.
-    const segments: Segment[] = [{ person: BOB, globId: 's1f1', category: 'feature', from: '2026-07-31T20:00:00.000Z', to: '2026-08-01T03:00:00.000Z' }];
+    const segments: Segment[] = [{ person: BOB, globId: 's1f1', category: 'feature', workKind: 'rnd', from: '2026-07-31T20:00:00.000Z', to: '2026-08-01T03:00:00.000Z' }];
     expect(reportRows(segments, july, 'America/Los_Angeles')).toEqual([{ developer: BOB, period: '2026-07', rndMs: 4 * HOUR, maintenanceMs: 0 }]);
     expect(reportRows(segments, august, 'America/Los_Angeles')).toEqual([]);
   });
@@ -457,8 +458,8 @@ describe('edge cases', () => {
 
   it('writes a header-only CSV when every segment is outside working hours (no 0/0 % RnD)', () => {
     const segments: Segment[] = [
-      { person: BOB, globId: 's1t1', category: 'feature', from: at(MON, '17:00'), to: at('2026-10-06', '09:00') },
-      { person: ANA, globId: 's1t2', category: 'bug', from: at('2026-10-10', '09:00'), to: at('2026-10-11', '17:00') },
+      { person: BOB, globId: 's1t1', category: 'feature', workKind: 'rnd', from: at(MON, '17:00'), to: at('2026-10-06', '09:00') },
+      { person: ANA, globId: 's1t2', category: 'bug', workKind: 'maintenance', from: at('2026-10-10', '09:00'), to: at('2026-10-11', '17:00') },
     ];
     const rows = reportRows(segments, october, 'UTC');
     expect(rows).toEqual([]);
@@ -490,6 +491,55 @@ describe('edge cases', () => {
     const rows = reportRows(deriveSegments(events, NO_FACTS, at(MON, '17:00')), october, 'UTC');
     expect(rows).toEqual([{ developer: BOB, period: '2026-10', rndMs: 3 * HOUR, maintenanceMs: 5 * HOUR }]);
     expect(reportCsv(rows)).toBe('developer,period,RnD hours,maintenance hours,% RnD\r\nbob@example.com,2026-10,3.00,5.00,37.5\r\n');
+  });
+});
+
+describe('time tracking: work kind', () => {
+  const october = parsePeriod('2026-10');
+  if (october === null) throw new Error('unparsed');
+  const kinds = (segments: readonly Segment[]) => segments.map((s) => [s.workKind, s.from, s.to]);
+
+  it('uses the work kind of the creation event, not the category', () => {
+    const events = [
+      event('GlobCreated', 's1t1', BOB, at(MON, '08:00'), { type: 'same', category: 'task', workKind: 'rnd', status: 'planning' }),
+      moved('s1t1', BOB, at(MON, '09:00'), 'planning', 'implementing'),
+    ];
+    expect(kinds(deriveSegments(events, NO_FACTS, at(MON, '17:00')))).toEqual([['rnd', at(MON, '09:00'), at(MON, '17:00')]]);
+  });
+
+  it('falls back to the category for events written before work kinds', () => {
+    const events = [same('s1f1', 'feature'), moved('s1f1', BOB, at(MON, '09:00'), 'planning', 'implementing')];
+    expect(kinds(deriveSegments(events, NO_FACTS, at(MON, '17:00')))).toEqual([['rnd', at(MON, '09:00'), at(MON, '17:00')]]);
+    const bug = [same('s1b1', 'bug'), moved('s1b1', BOB, at(MON, '09:00'), 'planning', 'implementing')];
+    expect(kinds(deriveSegments(bug, NO_FACTS, at(MON, '17:00')))).toEqual([['maintenance', at(MON, '09:00'), at(MON, '17:00')]]);
+  });
+
+  it('moves time to the new kind when the work kind changes', () => {
+    const events = [
+      event('GlobCreated', 's1t1', BOB, at(MON, '08:00'), { type: 'same', category: 'task', workKind: 'maintenance', status: 'planning' }),
+      moved('s1t1', BOB, at(MON, '09:00'), 'planning', 'implementing'),
+      event('FieldsChanged', 's1t1', BOB, at(MON, '12:00'), { workKind: { from: 'maintenance', to: 'rnd' } }),
+    ];
+    const segments = deriveSegments(events, NO_FACTS, at(MON, '17:00'));
+    expect(kinds(segments)).toEqual([
+      ['maintenance', at(MON, '09:00'), at(MON, '12:00')],
+      ['rnd', at(MON, '12:00'), at(MON, '17:00')],
+    ]);
+    expect(reportRows(segments, october, 'UTC')).toEqual([{ developer: BOB, period: '2026-10', rndMs: 5 * HOUR, maintenanceMs: 3 * HOUR }]);
+  });
+
+  it('a category change on an old event moves a glob without a stored work kind', () => {
+    const events = [same('s1f1', 'feature'), moved('s1f1', BOB, at(MON, '09:00'), 'planning', 'implementing'), event('FieldsChanged', 's1f1', BOB, at(MON, '12:00'), { category: { from: 'feature', to: 'task' } })];
+    expect(kinds(deriveSegments(events, NO_FACTS, at(MON, '17:00')))).toEqual([
+      ['rnd', at(MON, '09:00'), at(MON, '12:00')],
+      ['maintenance', at(MON, '12:00'), at(MON, '17:00')],
+    ]);
+  });
+
+  it("takes the row's work kind when the creation event is missing", () => {
+    const facts = new Map<string, GlobFacts>([['s1t9', { planner: BOB, category: 'task', type: 'same', workKind: 'rnd' }]]);
+    const events = [moved('s1t9', BOB, at(MON, '10:00'), 'planning', 'implementing')];
+    expect(kinds(deriveSegments(events, facts, at(MON, '17:00')))).toEqual([['rnd', at(MON, '10:00'), at(MON, '17:00')]]);
   });
 });
 

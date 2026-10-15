@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -16,7 +16,7 @@ import { addRelationSchema, relationInput, relationInputs, relationListSchema } 
 import { requestTiming } from '../request-metrics.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
-import { errorBody, globView, globViewFor, globViewOf, statusOf } from './views.js';
+import { createKindFields, errorBody, globView, globViewFor, globViewOf, resolveKind, statusOf } from './views.js';
 
 export interface AppDeps {
   readonly auth: Auth;
@@ -25,7 +25,7 @@ export interface AppDeps {
   readonly hub: HintHub;
   readonly outbox: OutboxRunner;
   /** Chooses the group of a glob created without one; absent: it gets none. */
-  readonly intake?: Pick<IntakeService, 'suggestGroup'>;
+  readonly intake?: Pick<IntakeService, 'suggestGroup'> & Partial<Pick<IntakeService, 'inferWork'>>;
   /** Proposes (and with apply, writes) groups for a board's open globs that have none; absent: its route isn't mounted. */
   readonly groupBackfill?: Pick<GroupBackfillService, 'run'>;
   /** The board's groups (list, one group's view, rename, merge); absent: their routes aren't mounted. */
@@ -138,11 +138,27 @@ const settingsSchema = z.object({
     .optional(),
 });
 
+/** Who works on a glob and how, with the fix flag and work kind; the old `category` and `type` stay as aliases for one release. */
+const kindFields = {
+  actor: z.enum(['machine', 'human']).optional(),
+  /** A machine glob's sub, same or super; a human glob's action (decisions are made by slop). */
+  mode: z.enum([...SLOP_TYPES, 'decision', 'action']).optional(),
+  fix: z.boolean().optional(),
+  workKind: z.enum(WORK_KINDS).optional(),
+};
+
 export const createGlobSchema = z.object({
   title: z.string().min(1),
-  /** Code work: omitted means a same. An action has no type (null or omitted). */
+  ...kindFields,
+  /** Code work: omitted means a same. An action has no type (null or omitted). Alias of `mode`. */
   type: z.enum(SLOP_TYPES).nullable().optional(),
-  category: z.enum([...WORK_CATEGORIES, 'action']).default('task'),
+  /** Old alias: bug is a fix, feature is R&D, task is maintenance, action is actor human. Nobody picks it any more. */
+  category: z.enum([...WORK_CATEGORIES, 'action']).optional(),
+  /** Who set `fix` and `workKind` (the form passes back intake's chips: `inferred` unless the person flipped one). Default: `person` for a value given. */
+  fixSource: z.enum(['inferred', 'person']).optional(),
+  workKindSource: z.enum(['inferred', 'person']).optional(),
+  /** The one-line reason intake gave for the fix flag and work kind. */
+  inferenceReason: z.string().max(500).nullable().optional(),
   /** Actions only: who is meant to do it. */
   assignee: z.string().trim().min(1).max(200).nullable().optional(),
   /** Omitted: slop chooses one from the title and plan. Null or empty: none. */
@@ -188,6 +204,9 @@ export const splitGlobSchema = z.object({
         plan: z.string().min(1),
         category: z.enum(WORK_CATEGORIES).optional(),
         type: z.enum(SLOP_TYPES).optional(),
+        mode: z.enum(SLOP_TYPES).optional(),
+        fix: z.boolean().optional(),
+        workKind: z.enum(WORK_KINDS).optional(),
         after: z.array(z.number().int().min(0)).max(MAX_SPLIT_PARTS).optional(),
         attachments: z.array(z.string().min(1)).optional(),
       }),
@@ -200,6 +219,11 @@ const updateGlobSchema = z.object({
   version: z.number().int(),
   title: z.string().min(1).optional(),
   type: z.enum(SLOP_TYPES).optional(),
+  /** A machine glob's sub, same or super (alias: `type`). */
+  mode: z.enum(SLOP_TYPES).optional(),
+  fix: z.boolean().optional(),
+  /** Board admins only. */
+  workKind: z.enum(WORK_KINDS).optional(),
   category: z.enum(WORK_CATEGORIES).optional(),
   group: z.string().min(1).nullable().optional(),
   environment: z.string().min(1).nullable().optional(),
@@ -579,10 +603,26 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, group, relations, type, ...fields } = body;
+    const { intake, needs, group, relations, type, actor, mode, fix, workKind, fixSource, workKindSource, inferenceReason, category, ...fields } = body;
     const boardId = Number(c.req.param('b'));
+    const kind = resolveKind({ actor, mode, type, category, fix, workKind }, true);
+    if (!kind.ok) return send(c, invalidInput(kind.message));
     // An action has no type; code work defaults to a same.
-    const chosenType = type === undefined ? (fields.category === 'action' ? null : 'same') : type;
+    const chosenType = kind.type === undefined ? (kind.category === 'action' ? null : 'same') : kind.type;
+    const inferrer = deps.intake;
+    const kindOf =
+      fixSource !== undefined || workKindSource !== undefined || inferenceReason !== undefined
+        ? // The form passes back intake's chips with who set each: kept as given, no second model call.
+          {
+            category: kind.category ?? 'task',
+            ...(kind.fix === undefined ? {} : { fix: kind.fix, fixSource: fixSource ?? 'person' }),
+            ...(kind.workKind === undefined ? {} : { workKind: kind.workKind, workKindSource: workKindSource ?? 'person' }),
+            ...(inferenceReason === undefined ? {} : { inferenceReason }),
+          }
+        : await createKindFields(
+            { type: chosenType, category: kind.category, fix: kind.fix, workKind: kind.workKind },
+            inferrer?.inferWork === undefined || kind.category === 'action' ? undefined : () => inferrer.inferWork?.(boardId, { title: fields.title, plan: fields.plan ?? '' }) as ReturnType<IntakeService['inferWork']>,
+          );
     let chosen: string | null = group?.trim() === '' ? null : (group ?? null);
     if (group === undefined && deps.intake !== undefined) {
       const suggested = await deps.intake.suggestGroup(email, boardId, { title: fields.title, plan: fields.plan ?? '' });
@@ -590,6 +630,7 @@ export const createApp = (deps: AppDeps) => {
     }
     const created = await globs.create(email, {
       ...fields,
+      ...kindOf,
       type: chosenType,
       group: chosen,
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
@@ -620,7 +661,10 @@ export const createApp = (deps: AppDeps) => {
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
     if (body instanceof Response) return body;
-    const { version, needs, relations, ...changes } = body;
+    const { version, needs, relations, mode, ...changes } = body;
+    const kind = resolveKind({ mode, type: changes.type }, false);
+    if (!kind.ok) return send(c, invalidInput(kind.message));
+    if (kind.type !== undefined && kind.type !== null) changes.type = kind.type;
     const after = needs ?? changes.after;
     return withView(
       c,
@@ -636,10 +680,10 @@ export const createApp = (deps: AppDeps) => {
     const split = await globs.split(email, c.req.param('id'), body.version, {
       idempotencyKey: body.idempotencyKey,
       ...(body.group === undefined ? {} : { group: body.group }),
-      parts: body.parts.map(({ category, type, after, attachments, ...rest }) => ({
+      parts: body.parts.map(({ category, type, mode, after, attachments, ...rest }) => ({
         ...rest,
         ...(category === undefined ? {} : { category }),
-        ...(type === undefined ? {} : { type }),
+        ...((mode ?? type) === undefined ? {} : { type: mode ?? type }),
         ...(after === undefined ? {} : { after }),
         ...(attachments === undefined ? {} : { attachments }),
       })),

@@ -11,7 +11,7 @@ import {
 } from '../domain/risk-area.js';
 import type { RiskArea, RiskAreaView, RiskOutcome } from '../domain/risk-area.js';
 import { SUB_LIMIT_WINDOW_DAYS, namesGlob, nearLimit } from '../domain/sub-limit.js';
-import type { Board } from '../domain/types.js';
+import { fixOf, type Board } from '../domain/types.js';
 import type { ChangeSource, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 
@@ -169,7 +169,7 @@ export class RiskAreaService {
     if (read === null) return 0;
     const { board, events, globs, snapshots, limitChanges, done } = read;
     const planned = new Map(snapshots.map((s) => [s.globId, s.features.filePaths]));
-    const bugs = globs.filter((g) => g.category === 'bug');
+    const bugs = globs.filter((g) => fixOf(g));
     const merges = new Map<string, { at: string; sha: string }>();
     for (const e of events)
       if (e.type === 'Merged') merges.set(e.globId, { at: e.at, sha: typeof e.data.sha === 'string' ? e.data.sha : '' });
