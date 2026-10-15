@@ -421,7 +421,19 @@ const chat = new ChatService({
 });
 // An arriving investigation escalates a sub that needs a human and raises the oversize flag with workstreams.
 const investigation = new InvestigationService({ store, clock, notifier: hub, escalate: (email, id, input) => globs.escalateToSame(email, id, input), predictRollout: (id) => globs.predictRollout(id) });
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
+// A saved plan re-infers the glob's fix flag and work kind (a person's choice is never touched); a failure only logs, the plan save has returned.
+const workInference = {
+  refresh: async (globId: string): Promise<void> => {
+    try {
+      const glob = await store.transaction((tx) => tx.getGlob(globId));
+      if (glob === null) return;
+      await globs.reinferWork(globId, (input) => intake.inferWork(glob.boardId, input));
+    } catch (error) {
+      logError('work-inference', error instanceof Error ? error.message : String(error));
+    }
+  },
+};
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), workInference, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
   attachmentObjects === null
     ? null

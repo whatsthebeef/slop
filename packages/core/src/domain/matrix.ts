@@ -1,15 +1,13 @@
-import type { Category, List, SlopType, Status, WorkCategory } from './types.js';
+import type { Category, List, SlopType, Status, WorkKind } from './types.js';
+import { defaultFix } from './types.js';
 
-const ALLOWED: Record<WorkCategory, readonly SlopType[]> = {
-  feature: ['sub', 'same', 'super'],
-  task: ['sub', 'same', 'super'],
-  bug: ['sub', 'same'],
-};
-
-/** Code work takes one of its allowed types; human work (decision, action) takes none. Bugs are never supers. */
-export const isValidCombination = (type: SlopType | null, category: Category): boolean => {
+/**
+ * Code work takes any type; human work (decision, action) takes none. A glob with the fix flag is never a super (fixing
+ * something broken needs no pairing). `fix` defaults to the category's (bug), for callers that only know the category.
+ */
+export const isValidCombination = (type: SlopType | null, category: Category, fix: boolean = defaultFix(category)): boolean => {
   if (category === 'decision' || category === 'action') return type === null;
-  return type !== null && ALLOWED[category].includes(type);
+  return type !== null && !(fix && type === 'super');
 };
 
 export const LIST_OF_STATUS: Record<Status, List> = {
@@ -25,5 +23,9 @@ export const LIST_OF_STATUS: Record<Status, List> = {
 
 export const listOf = (status: Status): List => LIST_OF_STATUS[status];
 
-/** Features are RnD; tasks and bugs are maintenance. */
-export const isRnd = (category: Category): boolean => category === 'feature';
+/**
+ * Whether time on a glob counts as R&D: its work kind, else (a record or event from before work kinds) its category, where
+ * features are R&D and tasks and bugs are maintenance. A bare category is still accepted.
+ */
+export const isRnd = (g: Category | { readonly category: Category; readonly workKind?: WorkKind | undefined }): boolean =>
+  typeof g === 'string' ? g === 'feature' : (g.workKind ?? (g.category === 'feature' ? 'rnd' : 'maintenance')) === 'rnd';

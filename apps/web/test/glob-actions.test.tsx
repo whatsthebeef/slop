@@ -848,12 +848,13 @@ describe('glob view: split moves in the action ▾', () => {
         ...patch,
       });
 
-    it('shows no type control and no category or environment fields, only the category word in the bar', () => {
+    it('shows no type control and no fix, work kind or environment fields, only the mode word in the bar', () => {
       renderGlob(action());
       const type = screen.getByTestId('glob-type');
       expect(type.textContent).toBe('action');
       expect(screen.queryByTestId('type-popover')).toBeNull();
-      expect(screen.queryByTestId('category')).toBeNull();
+      expect(screen.queryByTestId('fix')).toBeNull();
+      expect(screen.queryByTestId('work-kind')).toBeNull();
     });
 
     it('leads with Done and the human icon, and keeps Dismiss… in the menu', async () => {

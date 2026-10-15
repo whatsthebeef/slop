@@ -548,6 +548,18 @@ describe('SubLimitService', () => {
       expect(await limit()).toBe(2000);
     });
 
+    it('reads the fix flag, not the category: a fix filed as a task counts, a bug a person cleared does not', async () => {
+      const llm = new FakeLlm();
+      addGlobs(
+        sub('s1t1'),
+        bug('s1t5', at(HOUR), 'Related to s1t1.', { category: 'task', fix: true }),
+        bug('s1b6', at(HOUR), 'Related to s1t1.', { fix: false }),
+      );
+      addEvents(...passed('s1t1', NEAR));
+      await service(llm).learn(boardId, NOW, null);
+      expect(llm.requests).toHaveLength(1);
+    });
+
     it('only asks about bug globs created after the merge that name the sub as a whole ID', async () => {
       const llm = new FakeLlm();
       addGlobs(

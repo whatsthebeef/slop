@@ -43,6 +43,12 @@ describe('intake', () => {
       type: 'sub',
       typeReason: null,
       category: 'bug',
+      fix: true,
+      fixSource: 'inferred',
+      fixReason: null,
+      workKind: 'maintenance',
+      workKindSource: 'inferred',
+      workKindReason: null,
       group: 'Device Sync',
       environment: null,
       autoTrigger: false,
@@ -247,5 +253,95 @@ describe('intake', () => {
   it('still throws ordinary model failures', async () => {
     const failing = new IntakeService({ store, llm: { complete: () => Promise.reject(new Error('Too many requests')) } });
     await expect(failing.propose(DEV, boardId, { text: 'add export', explicit: {} })).rejects.toThrow('Too many requests');
+  });
+
+  describe('fix and work kind', () => {
+    it('reads the new shape with a reason each', async () => {
+      answer = '{"title":"T","plan":"p","type":"sub","fix":true,"fixReason":"Sync crashes","workKind":"maintenance","workKindReason":"A repair","confidence":"low"}';
+      const p = await propose('sync crashes on retry');
+      expect(p).toMatchObject({ fix: true, fixSource: 'inferred', fixReason: 'Sync crashes', workKind: 'maintenance', workKindReason: 'A repair', category: 'bug', categoryConfidence: 'low' });
+      answer = '{"title":"T","plan":"p","type":"sub","fix":false,"workKind":"rnd"}';
+      expect(await propose('add export')).toMatchObject({ fix: false, workKind: 'rnd', category: 'feature' });
+    });
+
+    it('still reads the old category answer, with its reason and confidence', async () => {
+      answer = '{"title":"T","plan":"p","type":"sub","category":"feature","categoryConfidence":"medium","categoryReason":"New capability"}';
+      expect(await propose('x')).toMatchObject({ fix: false, workKind: 'rnd', fixReason: 'New capability', categoryConfidence: 'medium' });
+      answer = '{"title":"T","plan":"p","type":"sub","category":"task"}';
+      expect(await propose('x')).toMatchObject({ fix: false, workKind: 'maintenance', category: 'task' });
+    });
+
+    it('falls back to the words of the request when the model gives neither', async () => {
+      answer = '{"title":"T"}';
+      for (const word of ['fails', 'is broken', 'throws an error', 'a regression', 'crashes']) {
+        const p = await propose(`The export ${word} for big boards`);
+        expect(p).toMatchObject({ fix: true, workKind: 'maintenance', fixSource: 'inferred' });
+        expect(p.fixReason).toMatch(/mentions/);
+      }
+      expect(await propose('Add a CSV export')).toMatchObject({ fix: false, workKind: 'rnd' });
+      expect(await propose('Rename the settings page')).toMatchObject({ fix: false, workKind: 'maintenance' });
+    });
+
+    it('a person\'s fix, work kind or old category is a person\'s source and wins over the model', async () => {
+      answer = '{"title":"T","plan":"p","type":"sub","fix":true,"workKind":"maintenance"}';
+      expect(await propose('x', { fix: false, workKind: 'rnd' })).toMatchObject({ fix: false, fixSource: 'person', fixReason: null, workKind: 'rnd', workKindSource: 'person', category: 'feature', needsConfirmation: false });
+      expect(await propose('x', { category: 'bug' })).toMatchObject({ fix: true, fixSource: 'person', workKind: 'maintenance', workKindSource: 'person' });
+      expect(await propose('x', { category: 'feature' })).toMatchObject({ fix: false, workKind: 'rnd' });
+    });
+
+    it('never makes an explicit super a fix', async () => {
+      answer = '{"title":"T","plan":"p","type":"sub","fix":true,"workKind":"maintenance"}';
+      expect(await propose('x', { type: 'super' })).toMatchObject({ type: 'super', fix: false, category: 'feature' });
+      expect(await propose('x', { type: 'super', fix: true })).toMatchObject({ type: 'sub', fix: true });
+    });
+
+    it('inferWork gives the model\'s answer, fills gaps and falls back when the model is down', async () => {
+      answer = '{"fix":true,"fixReason":"It crashes","workKind":"maintenance","workKindReason":"A repair"}';
+      expect(await intake.inferWork(boardId, { title: 'x', plan: 'y' })).toEqual({ fix: true, fixReason: 'It crashes', workKind: 'maintenance', workKindReason: 'A repair' });
+      answer = 'not json';
+      expect(await intake.inferWork(boardId, { title: 'Add export', plan: '' })).toMatchObject({ fix: false, workKind: 'rnd' });
+      const down = new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('down', 'later')) } });
+      expect(await down.inferWork(boardId, { title: 'Login is broken', plan: '' })).toMatchObject({ fix: true, workKind: 'maintenance' });
+    });
+  });
+
+  describe('re-inference on plan change', () => {
+    const NOW = '2026-10-05T12:00:00.000Z';
+    const make = async () => {
+      const notifier = new RecordingNotifier();
+      const globs = new GlobService({ store, notifier, clock: { now: () => NOW }, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) } });
+      const created = unwrap(await globs.create(DEV, { boardId, title: 'Export', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      return { globs, id: created.id, version: created.version };
+    };
+    const setPlan = (id: string, content: string) => store.transaction((tx) => tx.insertArtifact({ globId: id, kind: 'plan', label: '', content, link: null, commitSha: null, provenance: { by: 'human', actor: DEV, runId: null, agentSetVersion: null }, createdAt: NOW }));
+    const read = async (id: string) => {
+      const g = await store.transaction((tx) => tx.getGlob(id));
+      if (g === null) throw new Error('missing');
+      return g;
+    };
+    const infer = (g: GlobService, id: string) => g.reinferWork(id, (input) => intake.inferWork(boardId, input));
+
+    it('updates an inferred fix and work kind and the reason, silently', async () => {
+      const { globs, id } = await make();
+      await setPlan(id, 'The export crashes on big boards.');
+      answer = '{"fix":true,"fixReason":"It crashes","workKind":"maintenance","workKindReason":"A repair"}';
+      await infer(globs, id);
+      const g = await read(id);
+      expect(g).toMatchObject({ fix: true, fixSource: 'inferred', workKind: 'maintenance', inferenceReason: 'It crashes A repair' });
+    });
+
+    it('never overwrites what a person set', async () => {
+      const { globs, id, version } = await make();
+      await setPlan(id, 'The export crashes.');
+      unwrap(await globs.update(DEV, id, version, { workKind: 'rnd' }));
+      answer = '{"fix":true,"fixReason":"It crashes","workKind":"maintenance","workKindReason":"A repair"}';
+      await infer(globs, id);
+      const g = await read(id);
+      expect(g).toMatchObject({ workKind: 'rnd', workKindSource: 'person', fix: true, fixSource: 'inferred' });
+      const fixed = unwrap(await globs.update(DEV, id, g.version, { fix: false }));
+      expect(fixed).toMatchObject({ fix: false, fixSource: 'person' });
+      await infer(globs, id);
+      expect(await read(id)).toMatchObject({ fix: false, fixSource: 'person', workKind: 'rnd' });
+    });
   });
 });
