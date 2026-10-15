@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
 import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -554,12 +554,14 @@ export const createApp = (deps: AppDeps) => {
     const now = new Date().toISOString();
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
+    // A picked-up learning's recommendation job reads as a machine step ("getting a recommendation").
+    const recommending = result.ok ? await globs.recommendationEffectsOf(result.value.map((r) => r.glob)) : new Map<string, PendingEffect[]>();
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, relations, holding }) => {
         const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
-        const facts = machineSteps(glob);
+        const facts = machineSteps(glob, { effects: recommending.get(glob.id) ?? [] });
         const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, steps.get(glob.id) ?? []);
         const move = whoseMove(glob, human, facts, holding, now, { viewer, thresholds, complete: false });
         return {
@@ -655,7 +657,8 @@ export const createApp = (deps: AppDeps) => {
     // The same machine steps as the board list, so the glob view's header and the card agree (e.g. a deploy still running).
     const gateCheck = await globs.gateCheckOf(view.value.glob.boardId);
     const handoffs = await globs.handoffsOf(view.value.glob.boardId, view.value.glob.id);
-    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob), handoffs, ...splitField(split), ...workstreamsField(workstreams) }));
+    const effects = (await globs.recommendationEffectsOf([view.value.glob])).get(view.value.glob.id) ?? [];
+    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob, { effects }), handoffs, ...splitField(split), ...workstreamsField(workstreams) }));
   });
 
   app.patch('/api/globs/:id', async (c) => {

@@ -18,6 +18,16 @@ const viewer = { email: dev.email, role: dev.role };
 const move = (g: Glob, facts: MachineFacts = {}, opts: { viewer?: typeof viewer; waiting?: Holding[]; stored?: StoredHumanStep[] } = {}): Move =>
   whoseMove(g, humanSteps(g, {}, opts.stored ?? []), machineSteps(g, facts), opts.waiting ?? [], NOW, { ...('viewer' in opts ? (opts.viewer === undefined ? {} : { viewer: opts.viewer }) : { viewer }) });
 
+describe('a picked-up decision while slop gets its recommendation', () => {
+  const picked = glob({ category: 'decision', type: null, status: 'in_progress', implementer: dev.email, attributes: { origin: { kind: 'submitted' }, scope: { kind: 'project', ref: null }, outcome: null } as never });
+  const running = { effects: [{ kind: 'suggest_decision', state: 'running' as const, since: NOW }] };
+
+  it('is the machine\'s move while the job runs, and the person\'s Decide again afterwards', () => {
+    expect(move(picked, running)).toMatchObject({ holder: 'machine', reason: 'recommendation' });
+    expect(move(picked, {})).toMatchObject({ holder: 'human', reason: 'Decide' });
+  });
+});
+
 const hold = (patch: Partial<Holding> = {}): Holding => ({
   relationId: 'rel_1',
   to: 's1t9',

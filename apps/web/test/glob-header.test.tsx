@@ -240,7 +240,7 @@ describe('GlobHeader', () => {
     });
 
     it('shows the card\'s corner, a dot, then the fix marker for a merging fix, and never the list name', () => {
-      const g = view({ status: 'merging', list: 'doing', category: 'bug', pr: { number: 7, state: 'ready', headSha: 'abc' } });
+      const g = view({ status: 'merging', list: 'doing', category: 'bug', pr: { number: 7, state: 'ready', headSha: 'abc' }, headChecks: { sha: 'abc', state: 'passed' } });
       const { getByTestId } = renderBar(g);
       const corner = getByTestId('header-corner');
       expect(getByTestId('header-status').textContent).toBe('merging');
