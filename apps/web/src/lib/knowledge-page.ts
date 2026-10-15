@@ -21,7 +21,7 @@ export const relativeTime = (iso: string, now: number): string => {
 export const globHref = boardGlobHref;
 
 /** The board with the decision mode selected (the same `?mode=` filter the board's filter bar writes). */
-export const decisionsHref = (boardId: number): string => `/boards/${boardId}?mode=decision`;
+export const decisionsHref = (boardId: number): string => `/boards/${boardId}?kind=decision`;
 
 /** The page shows at most this many key decisions; the rest sit behind "N more decisions". */
 export const KEY_DECISIONS_MAX = 20;

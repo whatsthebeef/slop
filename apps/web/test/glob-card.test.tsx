@@ -125,7 +125,7 @@ describe('card rows', () => {
     expect(status?.className).not.toMatch(/text-center|justify-center|flex-wrap|whitespace-normal/);
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('shrink-0');
     expect(root.querySelector('[data-testid="card-id"]')?.className).toContain('gap-[3px]');
-    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('bug');
     expect(root.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('shrink-0');
     expect(root.querySelectorAll('[data-testid="card-status"]')).toHaveLength(1);
     expect(root.querySelector('[data-testid="status-line"]')).toBeNull();
@@ -228,12 +228,12 @@ describe('card rows', () => {
     expect(dom(html).querySelector('[data-testid="overlap-chip"]')).toBeNull();
   });
 
-  it('puts the fix marker last in the header, the status just before it, and the ID on the left', () => {
+  it('puts the kind marker last in the header, the status just before it, and the ID on the left', () => {
     const root = dom(markup(stalledByConflict()));
     const header = root.querySelector('[data-testid="card-header"]');
     const corner = header?.querySelector('[data-testid="card-corner"]');
     expect(header?.lastElementChild).toBe(corner);
-    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    expect(corner?.lastElementChild?.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('bug');
     const separator = corner?.lastElementChild?.previousElementSibling;
     expect(separator?.getAttribute('data-testid')).toBe('card-corner-separator');
     expect(separator?.textContent).toBe('·');
@@ -244,7 +244,7 @@ describe('card rows', () => {
     expect(header?.querySelectorAll('[role="img"]')).toHaveLength(1);
   });
 
-  it('orders the corner: status text, then the status icon, then the fix marker', () => {
+  it('orders the corner: status text, then the status icon, then the kind marker', () => {
     const root = dom(markup(stalledByConflict()));
     const button = root.querySelector('[data-testid="card-status"] button');
     const kids = Array.from(button?.children ?? []);
@@ -733,10 +733,13 @@ describe('an action glob card', () => {
   const action = (patch: Partial<GlobView> = {}): GlobView =>
     view({ id: 's1a1', category: 'action', type: null, pr: null, attributes: { assignee: null, outcome: null }, ...patch });
 
-  it('shows the human icon, the category word instead of a type, and who is meant to do it', () => {
+  it('shows the running person, the category word instead of a type, and who is meant to do it', () => {
     const root = dom(markup(action({ attributes: { assignee: 'sam@example.com', outcome: null } })));
     expect(root.querySelector('[data-testid="card-type"]')?.textContent).toBe('action');
-    expect(root.querySelector('[data-testid="card-corner"] svg.lucide-user-round')).not.toBeNull();
+    const icon = root.querySelector('[data-testid="card-corner"] [role="img"]');
+    expect(icon?.getAttribute('data-icon')).toBe('person-running');
+    expect(icon?.getAttribute('aria-label')).toBe('action');
+    expect(root.querySelector('[data-testid="card-corner"] svg.lucide-user-round')).toBeNull();
     expect(root.querySelector('[data-testid="action-chip"]')?.textContent).toBe('sam@example.com');
     expect(root.querySelector('[data-testid="card-corner-separator"]')).toBeNull();
   });
@@ -749,15 +752,34 @@ describe('an action glob card', () => {
     expect(dom(markup(dismissed)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('dismissed');
   });
 
-  it('writes the mode beside the ID and marks a fix, but nothing for other machine work', () => {
+  it('writes the mode beside the ID and shows a kind icon on every card', () => {
+    const icon = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"] [role="img"]');
     const plain = dom(markup(view({ category: 'feature', type: 'sub' })));
     expect(plain.querySelector('[data-testid="card-type"]')?.textContent).toBe('sub');
-    expect(plain.querySelector('[data-testid="card-corner"] [role="img"]')).toBeNull();
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('aria-label')).toBe('task');
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('class')).toContain('lucide-list-checks');
+    expect(icon(view({ category: 'task', type: 'super' }))?.getAttribute('aria-label')).toBe('task');
     const fix = dom(markup(view({ category: 'task', type: 'same', fix: true })));
     expect(fix.querySelector('[data-testid="card-type"]')?.textContent).toBe('same');
-    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('fix');
+    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('aria-label')).toBe('bug');
+    expect(fix.querySelector('[data-testid="card-corner"] [role="img"]')?.getAttribute('class')).toContain('text-red');
     // The stored flag wins over the old category.
-    expect(dom(markup(view({ category: 'bug', type: 'same', fix: false }))).querySelector('[data-testid="card-corner"] [role="img"]')).toBeNull();
+    expect(icon(view({ category: 'bug', type: 'same', fix: false }))?.getAttribute('aria-label')).toBe('task');
+  });
+
+  it('shows the scale for a decision and a dot before it', () => {
+    const decision = dom(markup(view({ id: 's1k1', category: 'decision', type: null, pr: null })));
+    const icon = decision.querySelector('[data-testid="card-corner"] [role="img"]');
+    expect(icon?.getAttribute('aria-label')).toBe('decision');
+    expect(icon?.getAttribute('class')).toContain('lucide-scale');
+  });
+
+  it('puts a dot before the kind icon after a status, and shows the icon alone without one', () => {
+    const calm = dom(markup(view({ status: 'planning', category: 'feature' })));
+    expect(calm.querySelector('[data-testid="card-corner"] [role="img"]')).not.toBeNull();
+    expect(calm.querySelector('[data-testid="card-corner-separator"]')).toBeNull();
+    const busy = dom(markup(stalledByConflict()));
+    expect(busy.querySelector('[data-testid="card-corner-separator"]')).not.toBeNull();
   });
 
   it('shows a decision with its category word, not a type', () => {
