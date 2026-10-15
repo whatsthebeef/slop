@@ -23,14 +23,12 @@ const APP_SETTINGS_TTL_MS = 5 * 60_000;
 const PR_BODY_PLAN_CHARS = 4000;
 
 /** GitHub's refusal of a merge when branch protection requires the branch to be up to date. */
-const OUT_OF_DATE = /out of date|not up to date|behind the base/i;
 
 const status = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number'
     ? error.status
     : null;
 
-const refusalReason = (error: unknown): string => (error instanceof Error ? error.message : 'GitHub refused the merge');
 
 const isStatus = (error: unknown, ...codes: number[]) => {
   const code = status(error);
@@ -299,7 +297,7 @@ export class GitHub implements CodeHost, CommitGraph {
   }
 
   /** GitHub's view of whether the PR's head can merge: required checks, conflicts, up to date. */
-  async mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState }> {
+  async mergeState(repo: Repo, prNumber: number): Promise<{ sha: string; state: MergeState; behind: boolean }> {
     const gh = await this.octokit(repo);
     const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
       owner: repo.owner,
@@ -307,7 +305,7 @@ export class GitHub implements CodeHost, CommitGraph {
       pull_number: prNumber,
     });
     let runs: { status: string; conclusion: string | null }[] = [];
-    if (['unstable', 'blocked', 'clean', 'has_hooks'].includes(data.mergeable_state)) {
+    if (['unstable', 'blocked', 'clean', 'has_hooks', 'behind'].includes(data.mergeable_state)) {
       const checks = await gh.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
         owner: repo.owner,
         repo: repo.name,
@@ -330,7 +328,7 @@ export class GitHub implements CodeHost, CommitGraph {
       });
       if (base.data.check_runs.every((run) => run.name === REVIEW_CHECK)) state = 'passed';
     }
-    return { sha: data.head.sha, state };
+    return { sha: data.head.sha, state, behind: data.mergeable_state === 'behind' };
   }
 
   async prState(repo: Repo, prNumber: number): Promise<PrSnapshot> {
@@ -404,10 +402,10 @@ export class GitHub implements CodeHost, CommitGraph {
 
   async updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'> {
     const gh = await this.octokit(repo);
-    const { state } = await this.mergeState(repo, prNumber);
+    const { state, behind } = await this.mergeState(repo, prNumber);
     if (state === 'conflict') return 'conflict';
     // Only a branch that is behind has anything to take in; its head moved on otherwise.
-    if (state !== 'behind') return 'up_to_date';
+    if (!behind) return 'up_to_date';
     try {
       await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
         owner: repo.owner,
@@ -423,18 +421,21 @@ export class GitHub implements CodeHost, CommitGraph {
   }
 
   /**
-   * Squash-merges the PR at exactly `sha` with the title `<id>: <title>` (`machine.squashTitle`). If the branch is
-   * behind the base, slop updates it instead and the merge resumes when the new head's checks pass. That happens once per
-   * merge request (`updates`): a branch behind again after that merges anyway, as long as there is no conflict.
+   * Squash-merges the PR at exactly `sha` with the title `<id>: <title>` (`machine.squashTitle`). Slop's App bypasses the
+   * repo ruleset, so GitHub won't hold a merge back: slop enforces "green checks on an up-to-date head" itself. It reads the
+   * PR just before merging and merges only a head that is `sha`, not behind the base and whose check runs passed. A behind
+   * head is updated instead (never merged), and the merge resumes when the new head's checks pass.
    */
-  async squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string, updates = 0): Promise<MergeResult> {
+  async squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult> {
     const gh = await this.octokit(repo);
     const r = { owner: repo.owner, repo: repo.name, pull_number: prNumber };
-    const { state } = await this.mergeState(repo, prNumber);
+    const { sha: head, state, behind } = await this.mergeState(repo, prNumber);
     if (state === 'conflict') return { outcome: 'conflict' };
     // Right after a push GitHub is still computing `mergeable`: merging now gets a 405, so wait and look again.
     if (state === 'unknown') return { outcome: 'undecided' };
-    const updateBranch = async (): Promise<MergeResult> => {
+    // The checks were read for another head than the one slop was asked to merge: take the real head first.
+    if (head !== sha) return { outcome: 'refused', reason: 'Head branch was modified' };
+    if (behind) {
       try {
         await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', { ...r, expected_head_sha: sha });
         return { outcome: 'updating' };
@@ -442,8 +443,8 @@ export class GitHub implements CodeHost, CommitGraph {
         if (isStatus(error, 422)) return { outcome: 'conflict' };
         throw error;
       }
-    };
-    if (state === 'behind' && updates < 1) return updateBranch();
+    }
+    if (state !== 'passed') return { outcome: 'checks_not_green', state };
     try {
       const { data } = await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
         ...r,
@@ -454,15 +455,9 @@ export class GitHub implements CodeHost, CommitGraph {
       });
       return { outcome: 'merged', sha: data.sha };
     } catch (error) {
-      // A 405 on a PR that looked clean is GitHub still catching up; with a known reason (checks, blocked) it is final.
-      if (isStatus(error, 405) && state === 'passed') return { outcome: 'undecided' };
-      // The base moved between the check and the merge: GitHub asks to try again, which the outbox retry does.
-      if (isStatus(error, 405) && state === 'behind' && /base branch was modified/i.test(refusalReason(error))) return { outcome: 'undecided' };
-      const reason = refusalReason(error);
-      // Branch protection that requires an up-to-date branch refuses a behind merge: update once more, never loop.
-      if (state === 'behind' && updates < 2 && isStatus(error, 405, 409) && OUT_OF_DATE.test(reason)) {
-        return updateBranch();
-      }
+      // A 405 on a PR that looked green is GitHub still catching up, or the base moving since the read (it is behind
+      // now): look again, which updates the branch or merges.
+      if (isStatus(error, 405)) return { outcome: 'undecided' };
       if (isStatus(error, 405, 409)) {
         return { outcome: 'refused', reason: error instanceof Error ? error.message : 'GitHub refused the merge' };
       }
