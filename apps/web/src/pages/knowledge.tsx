@@ -2,14 +2,16 @@ import { missingCoreAreas, missingCoreDocNotice } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { AgentSetFiles, LineDiff } from '@/components/agent-set-files';
 import { Hotspots } from '@/components/hotspots';
+import { LearnedArea } from '@/components/learned/area';
 import { AgentSetHistory, KnowledgePageView } from '@/components/knowledge-page-view';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { api, RequestError } from '@/lib/api';
 import type { ImportResult } from '@/lib/api';
+import { learnedPanelOf } from '@/lib/learned';
 import { useLiveKnowledge } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { useToast } from '@/toast';
@@ -28,6 +30,8 @@ const summary = (r: ImportResult) =>
 /** The board's knowledge base: its documents, its agent set, and the ways to add to them. Proposals for it are decision globs on the board. */
 export const KnowledgePage = () => {
   const boardId = Number(useParams().boardId);
+  // `?learned=<panel>` opens that panel of "What slop has learned" (old settings links are redirected here).
+  const linkedPanel = learnedPanelOf(useSearchParams()[0].get('learned'));
   const client = useQueryClient();
   const toast = useToast();
   // Documents and the agent set change as proposals are approved: follow the board's KB hints.
@@ -92,6 +96,8 @@ export const KnowledgePage = () => {
       )}
 
       <KnowledgePageView key={boardId} boardId={boardId} admin={admin} canJudge={admin || board.data.role === 'po'} />
+
+      <LearnedArea boardId={boardId} admin={admin} linked={linkedPanel} />
 
       <h2 className='border-t pt-6 text-base font-semibold'>Manage knowledge</h2>
 

@@ -11,7 +11,7 @@ import type { Glob } from './types.js';
  * - a person de-escalating is a strong `unnecessary`; a person turning a merged sub's follow-up into a same, a strong `missed`.
  * Each outcome moves the score of the criterion that escalated (or should have), and a criterion's score gives its
  * stance: `loosened`, `default` or `strengthened`. The stances are the guidance the agents get through the board's KB
- * learnings; the history is shown in board settings, where an admin resets it. Pure: the store is in the service.
+ * learnings; the history is shown on the Knowledge page's "What slop has learned", where an admin resets it. Pure: the store is in the service.
  */
 
 /** The reasons an agent escalates for; `escalate_to_same` names one. */
