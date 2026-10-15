@@ -127,7 +127,7 @@ export class IntakeLearningService {
     return { kind: 'intake_outcome', backfilled, embedded, recorded, refreshed };
   }
 
-  /** The board's intake accuracy, for members (the System page). */
+  /** The board's intake accuracy, for members (the Knowledge page's "What slop has learned"). */
   async accuracy(email: string, boardId: number): Promise<Result<IntakeAccuracy>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);

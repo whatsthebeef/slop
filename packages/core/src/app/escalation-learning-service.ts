@@ -27,7 +27,7 @@ const SUBMITTED_BY = 'slop';
  * Escalation outcome learning (spec, Subs and escalation), the background half: each hour it reads the board's
  * escalations and merged subs, records every outcome once (`escalationCandidates`) with its cause, passes the signal to
  * the board's risk areas, and, when a criterion's stance changes, submits a KB learning for the admins to approve so the
- * agents' escalation guidance moves with it. The history is shown in board settings, with a reset for admins.
+ * agents' escalation guidance moves with it. The history is shown on the Knowledge page's "What slop has learned", with a reset for admins.
  */
 export class EscalationLearningService {
   constructor(

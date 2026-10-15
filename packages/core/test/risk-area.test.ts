@@ -308,7 +308,7 @@ describe('RiskAreaService', () => {
         ['Learned: packages/core/src', 'cleanup', null],
         ['Learned: apps/web/src', 'cleanup', null],
       ]);
-      // The evidence stays in the history for the System page, and a second pass changes nothing.
+      // The evidence stays in the history on the Knowledge page's "What slop has learned", and a second pass changes nothing.
       expect(await service.cleanup(boardId)).toEqual([]);
     });
 
