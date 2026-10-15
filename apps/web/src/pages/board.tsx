@@ -29,6 +29,7 @@ import { withGlob } from '@/lib/glob-list';
 import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
 import type { GlobTarget } from '@/lib/glob-section';
 import { isSlashShortcut } from '@/lib/chat';
+import { LIST_TITLES } from '@/lib/list-titles';
 import { listScrollLeft, visibleListIndex } from '@/lib/list-snap';
 import { cn } from '@/lib/utils';
 import { useCurrentPage, usePageContext } from '@/lib/page-context';
@@ -36,13 +37,6 @@ import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/liv
 import type { LiveState } from '@/lib/live';
 import { useSstorCopy } from '@/components/sstor-notice';
 import { useToast } from '@/toast';
-
-const LIST_TITLES: Record<List, string> = {
-  planning: 'Planning',
-  doing: 'Doing',
-  reviewing: 'Reviewing',
-  signed_off: 'Signed Off',
-};
 
 type Direction = 'left' | 'right';
 

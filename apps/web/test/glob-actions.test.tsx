@@ -718,4 +718,27 @@ describe('glob view: split moves in the action ▾', () => {
     expect(within(panel).getByTestId('oversized-parts').textContent).toContain('apps/two.ts');
     expect(within(panel).queryAllByRole('button')).toHaveLength(0);
   });
+
+  describe('the top bar and the group tag', () => {
+    it('reads "ID · type ▾ · list": the type control sits in the sticky bar, not in the action row', () => {
+      renderGlob(view({ type: 'same', list: 'planning', group: 'glob-view-layout' }));
+      const bar = screen.getByTestId('glob-header');
+      const [id, type, list] = ['glob-id', 'glob-type', 'glob-list'].map((t) => within(bar).getByTestId(t)) as [HTMLElement, HTMLElement, HTMLElement];
+      expect(id.compareDocumentPosition(type) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(type.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(type.textContent).toBe('same');
+      expect(list.textContent).toBe('Planning');
+      expect(within(screen.getByTestId('glob-actions')).queryByTestId('glob-type')).toBeNull();
+      expect(screen.getAllByTestId('glob-type')).toHaveLength(1);
+    });
+
+    it('puts the group tag at the right of the action row and nowhere else, with no label tags under the title', () => {
+      renderGlob(view({ group: 'glob-view-layout', labels: { FR: 'required', CR: 'required' } }));
+      const row = screen.getByTestId('glob-actions');
+      expect(within(row).getByTestId('group-chip').textContent).toBe('glob-view-layout');
+      expect(row.lastElementChild?.contains(within(row).getByTestId('group-chip'))).toBe(true);
+      expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
+      expect(screen.queryByTestId('glob-chips')).toBeNull();
+    });
+  });
 });

@@ -18,12 +18,15 @@ export const TypePopover = ({
   busy,
   failure,
   onChange,
+  compact = false,
 }: {
   readonly type: string;
   readonly options: TypeOption[];
   readonly busy: boolean;
   readonly failure: EditFailure | null;
   readonly onChange: (option: TypeOption) => Promise<void>;
+  /** The top bar's style: no border or box, text-sm, so it reads as part of the line. */
+  readonly compact?: boolean;
 }) => {
   const [open, setOpen] = useState(false);
   const [choosing, setChoosing] = useState<TypeOption | null>(null);
@@ -39,7 +42,10 @@ export const TypePopover = ({
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs hover:bg-muted"
+            className={cn(
+              'inline-flex items-center gap-1 rounded hover:bg-muted',
+              compact ? 'px-1 text-sm font-medium' : 'border px-2 py-0.5 text-xs',
+            )}
             data-testid="glob-type"
           >
             {type}
