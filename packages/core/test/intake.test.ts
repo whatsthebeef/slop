@@ -70,8 +70,8 @@ describe('intake', () => {
     const base = '"title":"T","plan":"P","type":"sub","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null,"files":[]';
     const withQuestions = (qs: unknown) => `{${base},"questions":${JSON.stringify(qs)}}`;
 
-    it('the prompt version is 9 and the prompt asks for narrow questions', () => {
-      expect(INTAKE_PROMPT_VERSION).toBe(9);
+    it('the prompt version is 10 and the prompt asks for narrow questions', () => {
+      expect(INTAKE_PROMPT_VERSION).toBe(10);
       expect(INTAKE_SYSTEM).toMatch(/- questions: usually an empty list/);
       expect(INTAKE_SYSTEM).toMatch(/Never ask about style/);
     });

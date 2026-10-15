@@ -338,7 +338,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
         // A glob the request says to wait for is suggested, never applied: leave a notice to add the relation or not.
-        const applied = new Set([...(input.needs ?? []), ...(input.after ?? [])]);
+        const applied = new Set([
+          ...(input.needs ?? []),
+          ...(input.after ?? []),
+          ...(proposal.value.prerequisites ?? []).map((p) => p.id),
+        ]);
         intakeQuestions = [
           ...proposal.value.questions,
           ...proposal.value.suggestedAfter

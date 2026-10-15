@@ -327,5 +327,41 @@ describe('create_glob relations over MCP (Postgres)', () => {
       expect(classifyCalls).toHaveLength(before + 1);
       expect(classifyCalls.at(-1)?.answered).toEqual(prerequisites);
     });
+
+    it('an id in both suggestedAfter and prerequisites becomes a relation with no stale relation question', async () => {
+      const target = await make('Both');
+      proposal = {
+        title: 'Do it',
+        plan: `Do it only after ${target.id} is in place.`,
+        type: 'same',
+        typeReason: null,
+        category: 'task',
+        fix: false,
+        fixSource: 'inferred',
+        fixReason: null,
+        workKind: 'maintenance',
+        workKindSource: 'inferred',
+        workKindReason: null,
+        group: null,
+        environment: null,
+        autoTrigger: false,
+        autoTriggerReason: null,
+        files: [],
+        suggestedAfter: [target.id],
+        prerequisites: [{ id: target.id, gate: 'sign_off' as const, sentence: `Hand it over only after ${target.id} is in place.` }],
+        questions: [],
+        categoryConfidence: 'high',
+        categoryReason: null,
+        examples: [],
+        needsConfirmation: false,
+        model: 'test',
+        promptVersion: 1,
+      } as unknown as IntakeProposal;
+      const made = await call(spied, 'create_glob', { board: boardId, idempotencyKey: 'mcp-intake-2', input: `Do it only after ${target.id} is in place.` });
+      expect(made.error).toBe(false);
+      const read = await call(admin, 'get_glob', { id: made.body.id });
+      expect(JSON.stringify(read.body)).not.toContain('relation:');
+      expect(JSON.stringify(read.body)).not.toContain('was not added as a relation');
+    });
   });
 });
