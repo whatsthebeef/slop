@@ -88,9 +88,28 @@ describe('whoseMove: priority', () => {
 
   it('waiting: only a rollout step still pending after the merge', () => {
     const rollout: StoredHumanStep = {
-      id: 'hs-1', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Deploy the host stack', detail: null, who: 'admin', due: 'after_merge',
-      state: 'open', blocks: ['sign_off'], check: null, script: null, origin: 'rollout-section', createdBy: dev.email, createdAt: NOW,
-      doneBy: null, doneAt: null, dismissedReason: null,
+      id: 'hs-1',
+      boardId: 1,
+      globId: 's1t1',
+      kind: 'rollout',
+      title: 'Deploy the host stack',
+      detail: null,
+      who: 'admin',
+      due: 'after_merge',
+      state: 'open',
+      blocks: ['sign_off'],
+      check: null,
+      script: null,
+      why: null,
+      permissions: null,
+      commands: [],
+      verify: null,
+      origin: 'rollout-section',
+      createdBy: dev.email,
+      createdAt: NOW,
+      doneBy: null,
+      doneAt: null,
+      dismissedReason: null,
     };
     const g = glob({ status: 'pr_open', type: 'sub', runs: [], pr: { number: 1, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' } });
     expect(move(g, {}, { stored: [rollout] })).toMatchObject({ holder: 'waiting', reason: 'waiting for Deploy the host stack' });
@@ -98,9 +117,28 @@ describe('whoseMove: priority', () => {
 
   it('a predicted rollout placeholder is not a wait in Planning: the glob is free to start', () => {
     const placeholder: StoredHumanStep = {
-      id: 'hs-2', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Rollout: steps to be written', detail: null, who: 'admin', due: 'after_merge',
-      state: 'open', blocks: ['sign_off'], check: null, script: null, origin: 'investigation', createdBy: dev.email, createdAt: NOW,
-      doneBy: null, doneAt: null, dismissedReason: null,
+      id: 'hs-2',
+      boardId: 1,
+      globId: 's1t1',
+      kind: 'rollout',
+      title: 'Rollout: steps to be written',
+      detail: null,
+      who: 'admin',
+      due: 'after_merge',
+      state: 'open',
+      blocks: ['sign_off'],
+      check: null,
+      script: null,
+      why: null,
+      permissions: null,
+      commands: [],
+      verify: null,
+      origin: 'investigation',
+      createdBy: dev.email,
+      createdAt: NOW,
+      doneBy: null,
+      doneAt: null,
+      dismissedReason: null,
     };
     const g = glob({ status: 'planning', type: 'same', runs: [run({ state: 'ended', outcome: 'completed' })] });
     expect(move(g, {}, { stored: [placeholder] }).holder).toBe('idle');

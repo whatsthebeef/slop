@@ -540,6 +540,13 @@
       "when": 1792067573349,
       "tag": "0076_no_size_escalation",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1792075386397,
+      "tag": "0077_human_step_fields",
+      "breakpoints": true
     }
   ]
 }

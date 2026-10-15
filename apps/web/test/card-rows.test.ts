@@ -292,9 +292,28 @@ describe('cornerStatus text stays a word or two', () => {
 describe('a startable same in Planning', () => {
   // The server's move for a Planning same carrying the investigation's predicted rollout placeholder.
   const stored: StoredHumanStep = {
-    id: 'hs-1', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Rollout: steps to be written', detail: null, who: 'admin', due: 'after_merge',
-    state: 'open', blocks: ['sign_off'], check: null, script: null, origin: 'investigation', createdBy: 'dev@example.com', createdAt: NOW,
-    doneBy: null, doneAt: null, dismissedReason: null,
+    id: 'hs-1',
+    boardId: 1,
+    globId: 's1t1',
+    kind: 'rollout',
+    title: 'Rollout: steps to be written',
+    detail: null,
+    who: 'admin',
+    due: 'after_merge',
+    state: 'open',
+    blocks: ['sign_off'],
+    check: null,
+    script: null,
+    why: null,
+    permissions: null,
+    commands: [],
+    verify: null,
+    origin: 'investigation',
+    createdBy: 'dev@example.com',
+    createdAt: NOW,
+    doneBy: null,
+    doneAt: null,
+    dismissedReason: null,
   };
   const withPlaceholder = (): Partial<GlobView> => {
     const g = glob({ status: 'planning', type: 'same' });

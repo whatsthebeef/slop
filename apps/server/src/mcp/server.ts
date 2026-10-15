@@ -1187,6 +1187,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     blocks: step.blocks,
     check: step.check,
     script: step.script,
+    why: step.why,
+    permissions: step.permissions,
+    commands: step.commands,
+    verify: step.verify,
     doneBy: step.doneBy,
     doneAt: step.doneAt,
     dismissedReason: step.dismissedReason,
@@ -1196,13 +1200,25 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'add_human_step',
     {
       description:
-        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env>. `script`: {artifact: label} or {path: repo path}. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
+        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env>. `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
       inputSchema: {
         id: z.string(),
         version: z.number().int().optional(),
         title: z.string().min(1).describe('Short: the action ("Roll out the host stack")'),
         kind: z.enum(HUMAN_STEP_KINDS).optional(),
-        detail: z.string().optional().describe('Markdown, when the title is not enough'),
+        detail: z
+          .string()
+          .optional()
+          .describe('Plain text, for anything the fields below do not cover'),
+        why: z.string().optional().describe('One sentence: why the step is needed'),
+        permissions: z.string().optional().describe('The access a person needs, plain text'),
+        commands: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'The command lines a person runs, in order, one per entry, no backticks or Markdown; never repeat the script path here',
+          ),
+        verify: z.string().optional().describe('How to tell it worked, one line'),
         who: z.string().optional(),
         due: z.string().optional(),
         blocks: z.array(z.enum(HUMAN_STEP_BLOCKS)).optional(),

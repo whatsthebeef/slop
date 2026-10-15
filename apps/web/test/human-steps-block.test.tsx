@@ -51,6 +51,50 @@ describe('due steps block', () => {
     expect(h.onDismiss).toHaveBeenCalledWith('a', 'wrong');
   });
 
+  it('lays a structured step out as Why, Before you start, Run (script command once, then each command in a copy box) and Check it worked', async () => {
+    const write = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
+    show([
+      step({
+        id: 'a',
+        state: 'due',
+        why: 'The buildspec declares an atf report group',
+        permissions: 'An AWS session in the prod account',
+        script: { path: 'scripts/x.sh' },
+        commands: ['aws sso login', 'aws codebuild list-report-groups'],
+        verify: 'The list shows the atf group',
+      }),
+    ]);
+    const card = screen.getByTestId('due-step');
+    const text = card.textContent;
+    expect(text).toContain('Why: The buildspec declares an atf report group');
+    expect(text).toContain('Before you start: An AWS session in the prod account');
+    expect(text).toContain('Check it worked: The list shows the atf group');
+    expect(card.querySelectorAll('[data-testid="step-script-path"]')).toHaveLength(1);
+    expect(text.split('scripts/x.sh')).toHaveLength(2);
+    const commands = [...card.querySelectorAll('[data-testid="step-command"]')].map(
+      (c) => c.textContent,
+    );
+    expect(commands).toEqual(['aws sso login', 'aws codebuild list-report-groups']);
+    expect(card.querySelectorAll('button[data-testid="step-command-copy"]')).toHaveLength(2);
+    expect(text).not.toContain('`');
+    await userEvent.click(
+      card.querySelectorAll('[data-testid="step-command-copy"]')[1] as HTMLElement,
+    );
+    expect(write).toHaveBeenCalledWith('aws codebuild list-report-groups');
+  });
+
+  it('leaves empty fields out, so an old free-text step still renders as its detail alone', () => {
+    show([step({ id: 'a', state: 'due', detail: 'Just do it', commands: [] })]);
+    const card = screen.getByTestId('due-step');
+    expect(screen.getByTestId('step-detail').textContent).toBe('Just do it');
+    for (const id of ['step-why', 'step-permissions', 'step-run', 'step-verify', 'step-command'])
+      expect(card.querySelector(`[data-testid="${id}"]`)).toBeNull();
+  });
+
   it('renders the step text as plain text, not Markdown', () => {
     show([step({ id: 'a', state: 'due', detail: '**Why** `code`' })]);
     expect(screen.getByTestId('step-detail').textContent).toBe('**Why** `code`');
