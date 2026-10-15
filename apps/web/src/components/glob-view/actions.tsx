@@ -13,8 +13,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { actionPresentation, presentedActions } from '@/lib/action-presentation';
-import { mainAction, mainVariant, promotedAction } from '@/lib/main-action';
+import { actionPresentation } from '@/lib/action-presentation';
+import { mainVariant, promotedAction, viewActions, viewMainAction } from '@/lib/main-action';
 import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
 import { api } from '@/lib/api';
 import { copyOrSelect } from '@/lib/plan-text';
@@ -130,9 +130,7 @@ export const useGlobActions = ({
     });
 
   // deescalate and make_super are reached through the type popover.
-  const shownActions = presentedActions(glob.allowedActions ?? []).filter(
-    (a) => a !== 'delete' && actionPresentation(a, glob, false, email).placement !== 'none',
-  );
+  const shownActions = viewActions(glob, email);
   // Decide has its own panel with the five outcomes: it can be the main button (which goes to
   // the panel), never a More entry.
   const allActions = shownActions.filter((a) => a !== 'decide');
@@ -142,10 +140,8 @@ export const useGlobActions = ({
   const [stepsSignal, setStepsSignal] = useState(0);
   // A stalled glob's step names the one action to lead with and one alternative to follow it.
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
-  const leading =
-    stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
   // With no natural main (and no due step) a menu item is promoted, so the ▾ never stands alone.
-  const natural = mainAction(shownActions, glob, human, stepTurn !== null, email, leading);
+  const natural = viewMainAction(glob, viewer);
   const main = natural ?? (stepTurn === null ? promotedAction(allActions, glob) : null);
   // A stalled glob's step (nobody moving it) makes Pick up the black main; while a sub's machine progresses it stays quiet.
   const variant = mainVariant(main, glob, stall !== undefined);

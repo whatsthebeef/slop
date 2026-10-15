@@ -35,4 +35,27 @@ describe('card moves', () => {
     expect(actions(planning({ list: 'doing', status: 'implementing', allowedActions: ['retrigger', 'start_anyway'] }))).toEqual([]);
     expect(actions(planning({ provisioning: 'pending', allowedActions: ['start'] }))).toEqual([]);
   });
+
+  describe('Fix conflict outside Planning', () => {
+    const doing = (patch: Partial<GlobView> = {}): GlobView =>
+      planning({ list: 'doing', status: 'pr_open', type: 'sub', allowedActions: ['resolve_conflict', 'merge', 'take_over'], ...patch });
+
+    it('offers it in place, with a confirming second click, when it is the glob view\'s main action', () => {
+      const [fix, ...rest] = cardMoves(doing());
+      expect(rest).toEqual([]);
+      expect(fix?.move).toMatchObject({ action: 'resolve_conflict', direction: 'none', confirm: true, label: 'Fix conflict' });
+      expect(fix?.target).toBe('doing');
+    });
+
+    it('offers nothing when the main action is something else, or Fix conflict is not allowed', () => {
+      expect(actions(doing({ allowedActions: ['merge', 'take_over'] }))).toEqual([]);
+      expect(actions(doing({ status: 'implementing', type: 'same', allowedActions: ['take_over'] }))).toEqual([]);
+      expect(actions(doing({ provisioning: 'pending' }))).toEqual([]);
+    });
+
+    it('keeps Planning moves as they were', () => {
+      const moves = cardMoves(planning({ type: 'sub', allowedActions: ['start', 'resolve_conflict'] }));
+      expect(moves.map((m) => [m.move.action, m.move.direction, m.move.confirm])).toEqual([['start', 'right', false]]);
+    });
+  });
 });
