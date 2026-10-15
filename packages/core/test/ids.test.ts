@@ -6,9 +6,10 @@ type Case = [WorkActor, Mode, boolean, WorkKind, string];
 
 describe('letterFor', () => {
   it.each<Case>([
-    ['machine', 'sub', false, 'rnd', 'f'],
-    ['machine', 'same', false, 'rnd', 'f'],
-    ['machine', 'super', false, 'rnd', 'f'],
+    // R&D work is a task with the R&D work kind: `f` is no longer issued.
+    ['machine', 'sub', false, 'rnd', 't'],
+    ['machine', 'same', false, 'rnd', 't'],
+    ['machine', 'super', false, 'rnd', 't'],
     ['machine', 'sub', false, 'maintenance', 't'],
     ['machine', 'same', false, 'maintenance', 't'],
     ['machine', 'super', false, 'maintenance', 't'],
@@ -23,8 +24,9 @@ describe('letterFor', () => {
     expect(letterFor({ actor, mode, fix, workKind })).toBe(letter);
   });
 
-  it('agrees with the legacy letter for each legacy category', () => {
-    expect(letterFor({ actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' })).toBe(letterOf('feature'));
+  it('keeps the legacy letters readable, but issues f no more', () => {
+    expect(letterOf('feature')).toBe('f');
+    expect(letterFor({ actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' })).toBe(letterOf('task'));
     expect(letterFor({ actor: 'machine', mode: 'same', fix: false, workKind: 'maintenance' })).toBe(letterOf('task'));
     expect(letterFor({ actor: 'machine', mode: 'same', fix: true, workKind: 'maintenance' })).toBe(letterOf('bug'));
     expect(letterFor({ actor: 'human', mode: 'decision', fix: false, workKind: 'maintenance' })).toBe(letterOf('decision'));

@@ -57,6 +57,22 @@ describe('catalog agent-set hash', () => {
     }
   });
 
+  it('has the orchestrator choose the approach from the investigation, with the category and fix flag as hints', async () => {
+    const set = await new FsCatalog(new URL('../../../catalog', import.meta.url).pathname).agentSet();
+    const text = (name: string): string => set.files.find((f) => f.path === `agents/${name}.md`)?.content ?? '';
+    expect(text('investigator')).toMatch(/^## Fixing broken behaviour\?$/m);
+    expect(text('investigator')).not.toMatch(/\*\*Features and tasks:\*\*/);
+    expect(text('investigator')).not.toMatch(/\*\*Bugs:\*\*/);
+    const orchestrator = text('orchestrator');
+    expect(orchestrator).toMatch(/`reproduce-first`/);
+    expect(orchestrator).toMatch(/`straight build`/);
+    expect(orchestrator).toMatch(/## Decisions/);
+    expect(orchestrator).toMatch(/hints only/);
+    expect(orchestrator).not.toMatch(/with the fix flag/);
+    const edited = set.files.map((f) => (f.path === 'agents/orchestrator.md' ? { ...f, content: f.content.replace('straight build', 'plain build') } : f));
+    expect(hashAgentSet(edited)).not.toBe(set.hash);
+  });
+
   it('tells the investigator, implementer and change reviewer about hotspots', async () => {
     const set = await new FsCatalog(new URL('../../../catalog', import.meta.url).pathname).agentSet();
     const text = (name: string): string => set.files.find((f) => f.path === `agents/${name}.md`)?.content ?? '';

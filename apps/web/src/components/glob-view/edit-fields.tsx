@@ -102,13 +102,13 @@ export const EditFieldsSection = ({
             </Select>
           </Label>
         )}
-        {!decision && (
+        {!decision && canEditWorkKind && (
           <Label>
             Work kind
             <Select
               value={workKind}
-              disabled={busy || !canEditWorkKind}
-              title={canEditWorkKind ? (glob.workKindSource === 'person' ? 'Set by a person' : 'Inferred from the plan') : 'Only board admins change the work kind'}
+              disabled={busy}
+              title={glob.workKindSource === 'person' ? 'Set by a person' : 'Inferred from the plan'}
               data-testid="work-kind"
               onChange={(e) => void run(() => changeWorkKind(e.target.value as WorkKind, workKind))}
             >

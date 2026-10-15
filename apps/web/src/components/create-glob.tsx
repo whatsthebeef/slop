@@ -309,8 +309,8 @@ export const CreateGlobDialog = ({
           {insight !== null && insight.needsConfirmation && !confirmed && (
             <div className='grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-xs' data-testid='intake-unsure'>
               <p>
-                Intake is not sure what kind of work this is ({insight.fix ? 'a fix' : 'not a fix'}, {insight.workKind === 'rnd' ? 'R&D' : 'maintenance'}
-                {insight.categoryReason === null ? '' : `: ${insight.categoryReason}`}). Check the chips below, then confirm.
+                Intake is not sure whether this is a fix ({insight.fix ? 'a fix' : 'not a fix'}
+                {insight.categoryReason === null ? '' : `: ${insight.categoryReason}`}). Check the chip below, then confirm.
               </p>
               <Button type='button' variant='outline' size='sm' className='w-fit' onClick={() => setConfirmed(true)}>
                 Looks right
@@ -329,16 +329,6 @@ export const CreateGlobDialog = ({
                 onClick={() => setForm({ ...form, fix: !form.fix, fixSource: 'person' })}
               >
                 {form.fix ? 'Fix' : 'Not a fix'}
-              </button>
-              <button
-                type='button'
-                aria-pressed={form.workKind === 'rnd'}
-                title={form.workKindSource === 'person' ? 'Set by you' : 'Inferred from the plan: click to flip'}
-                className='inline-flex h-7 items-center rounded-full border border-edge px-2.5 text-muted-foreground hover:text-foreground'
-                data-testid='chip-work-kind'
-                onClick={() => setForm({ ...form, workKind: form.workKind === 'rnd' ? 'maintenance' : 'rnd', workKindSource: 'person' })}
-              >
-                {form.workKind === 'rnd' ? 'R&D' : 'Maintenance'}
               </button>
               {form.inferenceReason != null && <span className='text-muted-foreground'>{form.inferenceReason}</span>}
             </div>

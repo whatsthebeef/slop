@@ -34,7 +34,7 @@ import type {
 import { isAgentSetGlob } from './agent-set.js';
 import { scriptMissingText } from './action-script.js';
 import type { ActionScript } from './action-script.js';
-import { CLOSING_EDGE_KINDS, defaultFix, defaultWorkKind, fixOf, isHumanCategory, SLOP_TYPES, workKindOf } from './types.js';
+import { CLOSING_EDGE_KINDS, defaultFix, defaultWorkKind, fixOf, isHumanCategory, SLOP_TYPES, storedCategory, workKindOf } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
@@ -490,7 +490,7 @@ export interface CreateInput {
   /** Default: the category's (bug fixes, else not). Human work is never a fix. */
   readonly fix?: boolean;
   readonly fixSource?: InferenceSource;
-  /** Default: the category's (feature is R&D, else maintenance). */
+  /** Default: the asked category's (feature is R&D, else maintenance), read before `feature` is stored as a task. */
   readonly workKind?: WorkKind;
   readonly workKindSource?: InferenceSource;
   readonly inferenceReason?: string | null;
@@ -519,13 +519,19 @@ const inferenceFields = (
 });
 
 export const create = (
-  input: CreateInput,
+  asked: CreateInput,
   board: Board,
   ctx: Context,
   /** The relations the new glob starts with (made by the service, already checked) and the state of what they point at. */
   relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  // An asked `feature` means R&D: read that before it is stored as a task.
+  const input: CreateInput = {
+    ...asked,
+    category: storedCategory(asked.category),
+    ...(isHumanCategory(asked.category) ? {} : { workKind: asked.workKind ?? defaultWorkKind(asked.category) }),
+  };
   const fix = isHumanCategory(input.category) ? false : (input.fix ?? defaultFix(input.category));
   if (!isValidCombination(input.type, input.category, fix)) {
     return invalidCombination(`A ${fix ? 'fix' : input.category} cannot be a ${input.type}`);
@@ -1723,13 +1729,15 @@ export const workReinferred = (
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
 export const changeFields = (
   glob: Glob,
-  changes: FieldChanges,
+  asked: FieldChanges,
   board: Board,
   ctx: Context,
   /** The glob's relations as they will be once the change is written (the service has checked and planned them). */
   relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  // An asked `feature` is stored as a task. Its R&D meaning only moves a still-inferred work kind when the category really changes.
+  const changes: FieldChanges = asked.category === 'feature' ? { ...asked, category: storedCategory(asked.category) } : asked;
   if (
     changes.category !== undefined &&
     changes.category !== glob.category &&
@@ -1742,7 +1750,8 @@ export const changeFields = (
   // Fix and work kind: inference never overwrites a person's value; a bare value is a person's; a category alias (one
   // release) moves a still-inferred value to the new category's default.
   const human = isHumanCategory(category);
-  const categoryChanged = changes.category !== undefined && changes.category !== glob.category;
+  // A legacy `feature` glob asked to be a task (or a feature) is not a change: both are the same stored category.
+  const categoryChanged = changes.category !== undefined && storedCategory(changes.category) !== storedCategory(glob.category);
   const currentFixSource = glob.fixSource ?? 'inferred';
   const currentKindSource = glob.workKindSource ?? 'inferred';
   const fixBy: InferenceSource = changes.fixSource ?? (changes.fix === undefined ? currentFixSource : 'person');
@@ -1761,7 +1770,7 @@ export const changeFields = (
     : changes.workKind !== undefined && !kindSticks
       ? changes.workKind
       : categoryChanged && currentKindSource === 'inferred'
-        ? defaultWorkKind(category)
+        ? defaultWorkKind(asked.category ?? category)
         : workKindOf(glob);
   const fixSource = fixSticks ? currentFixSource : changes.fix !== undefined ? fixBy : currentFixSource;
   const workKindSource = kindSticks ? currentKindSource : changes.workKind !== undefined ? kindBy : currentKindSource;
@@ -1802,6 +1811,7 @@ export const changeFields = (
   const diff: { [key: string]: JsonValue } = {};
   for (const key of ['title', 'type', 'category', 'group', 'environment'] as const) {
     const value = key === 'title' ? changes.title?.trim() : changes[key];
+    if (key === 'category' && !categoryChanged) continue;
     if (value !== undefined && value !== glob[key]) {
       Object.assign(patch, { [key]: value });
       diff[key] = { from: glob[key], to: value };

@@ -14,12 +14,11 @@ export const letterOf = (category: Category): IdLetter =>
 
 /**
  * The letter for a new glob, from the model: human decisions `k`, human actions `a`; machine work with the fix flag `b`,
- * otherwise `t` when the work kind is maintenance and `f` when it is R&D. Existing IDs never change.
+ * otherwise `t`: `f` is no longer issued (R&D work is a task with the R&D work kind), though old `f` IDs still parse. Existing IDs never change.
  */
 export const letterFor = (g: { readonly actor: WorkActor; readonly mode: Mode; readonly fix: boolean; readonly workKind: WorkKind }): IdLetter => {
   if (g.actor === 'human') return g.mode === 'decision' ? 'k' : 'a';
-  if (g.fix) return 'b';
-  return g.workKind === 'maintenance' ? 't' : 'f';
+  return g.fix ? 'b' : 't';
 };
 
 export const formatId = (boardId: number, letter: IdLetter, n: number): string =>
