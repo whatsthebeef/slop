@@ -7,8 +7,10 @@ import { api } from '@/lib/api';
 import type { GlobView, ListedHumanStep } from '@/lib/api';
 import {
   defaultStepsOpen,
+  dismissalText,
   dismissReason,
   EMPTY_DRAFT,
+  isDismissedStep,
   isWorkStep,
   PREDICTED_ROLLOUT_TEXT,
   readStepsOpen,
@@ -128,6 +130,32 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
   );
 };
 
+/** Dismissed steps behind one quiet line, collapsed until asked for; read-only. */
+const DismissedSteps = ({ steps }: { steps: readonly ListedHumanStep[] }) => {
+  const [shown, setShown] = useState(false);
+  if (steps.length === 0) return null;
+  return (
+    <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 text-[11px] text-muted-foreground' data-testid='dismissed-steps'>
+      <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='dismissed-toggle' onClick={() => setShown(!shown)}>
+        {steps.length} dismissed {shown ? '▾' : '▸'}
+      </button>
+      {shown && (
+        <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1'>
+          {steps.map((s) => (
+            <li key={s.id} className='min-w-0 break-words [overflow-wrap:anywhere]' data-testid='dismissed-step'>
+              <span className='line-through' data-testid='dismissed-title'>
+                {s.title}
+              </span>
+              <span data-testid='dismissed-reason'>{s.dismissedReason == null || s.dismissedReason === '' ? '' : `: ${s.dismissedReason}`}</span>
+              {dismissalText(s) !== '' && <span data-testid='dismissed-who'> ({dismissalText(s)})</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 const AddStep = ({ busy, onAdd, onClose }: { busy: boolean; onAdd: StepActions['onAdd']; onClose: () => void }) => {
   const [draft, setDraft] = useState<StepDraft>(EMPTY_DRAFT);
   const input = stepInput(draft);
@@ -204,14 +232,16 @@ export const HumanSteps = ({
   /** Starts collapsed whatever is still to do (a decision glob: the steps sit below the assessments). */
   collapsed?: boolean;
 } & StepActions) => {
-  const steps = glob.humanSteps ?? [];
+  const all = glob.humanSteps ?? [];
+  const steps = all.filter((s) => !isDismissedStep(s));
+  const dismissed = all.filter(isDismissedStep);
   const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : collapsed ? false : readStepsOpen()));
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   useEffect(() => {
     if (openSignal > 0) setToggled(true);
   }, [openSignal]);
-  if (steps.length === 0 && !canAdd) return null;
+  if (all.length === 0 && !canAdd) return null;
   const open = toggled ?? defaultStepsOpen(steps);
   const toggle = () => {
     setToggled(!open);
@@ -272,6 +302,7 @@ export const HumanSteps = ({
               ))}
             </ul>
           )}
+          <DismissedSteps steps={dismissed} />
           {canAdd && adding && <AddStep busy={busy} onAdd={wrapped.onAdd} onClose={() => setAdding(false)} />}
         </>
       )}
