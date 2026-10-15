@@ -511,6 +511,7 @@ export const createApp = (deps: AppDeps) => {
     const oversized = await globs.oversizedOf(boardId);
     const steps = await globs.humanStepsOf(boardId);
     const dismissed = await globs.dismissedKeysOf(email, boardId);
+    const gateCheck = await globs.gateCheckOf(boardId);
     const now = new Date().toISOString();
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
@@ -528,6 +529,7 @@ export const createApp = (deps: AppDeps) => {
           humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
           dismissedKeys: dismissed.get(glob.id) ?? [],
+          gateCheck,
           machineSteps: facts,
           ...splitField(splits.get(glob.id)),
           ...workstreamsField(workstreams.get(glob.id)),
@@ -592,7 +594,8 @@ export const createApp = (deps: AppDeps) => {
     const split = (await globs.splitsOf(view.value.glob.boardId)).get(view.value.glob.id);
     const workstreams = (await globs.workstreamsOf(view.value.glob.boardId)).get(view.value.glob.id);
     // The same machine steps as the board list, so the glob view's header and the card agree (e.g. a deploy still running).
-    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob), ...splitField(split), ...workstreamsField(workstreams) }));
+    const gateCheck = await globs.gateCheckOf(view.value.glob.boardId);
+    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob), ...splitField(split), ...workstreamsField(workstreams) }));
   });
 
   app.patch('/api/globs/:id', async (c) => {

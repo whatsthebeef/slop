@@ -100,6 +100,8 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       glob={ctx.glob}
       {...(actions.viewer === undefined ? {} : { viewer: actions.viewer })}
       canAdd
+      repo={ctx.board.repo}
+      baseBranch={ctx.board.baseBranch}
       startOpen={section === 'human-steps'}
       collapsed={actions.decision}
       openSignal={actions.stepsSignal}

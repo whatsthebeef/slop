@@ -106,6 +106,8 @@ export interface GlobView extends Glob {
   readonly handover?: Handover | null;
   /** The status messages the viewer dismissed on this glob (see `lib/dismissals.ts`); absent on an older API. */
   readonly dismissedKeys?: readonly string[];
+  /** The check a sub on the board waits for (the merge policy's `subGateCheck`); absent on an older API, read as `checks`. */
+  readonly gateCheck?: string;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly ListedHumanStep[];
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
