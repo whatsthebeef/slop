@@ -90,8 +90,9 @@ describe('submit_learning', () => {
     );
     expect([first.id, second.id]).toEqual([`s${boardId}k1`, `s${boardId}k2`]);
     // Glob counters are untouched by KB items.
-    expect(await createGlob(boardId, 'task')).toBe(`s${boardId}t2`);
-    expect(await createGlob(boardId, 'feature')).toBe(`s${boardId}f2`);
+    // An asked feature is stored as a task, so both share the t counter (no f ID is issued).
+    expect(await createGlob(boardId, 'task')).toBe(`s${boardId}t3`);
+    expect(await createGlob(boardId, 'feature')).toBe(`s${boardId}t4`);
   });
 
   it('records an open, submitted item with its submitter, provenance and source glob', async () => {

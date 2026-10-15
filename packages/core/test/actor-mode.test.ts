@@ -91,9 +91,9 @@ describe('create sets fix and work kind', () => {
     expect(m.create(input({ type: 'super', category: 'bug' }), board, ctx()).ok).toBe(false);
   });
 
-  it('records them on the GlobCreated event', () => {
+  it('records them on the GlobCreated event (an asked feature is stored as a task, R&D)', () => {
     const t = value(m.create(input({ category: 'feature' }), board, ctx()));
-    expect(t.events[0]?.data).toMatchObject({ category: 'feature', fix: false, workKind: 'rnd' });
+    expect(t.events[0]?.data).toMatchObject({ category: 'task', fix: false, workKind: 'rnd' });
   });
 });
 

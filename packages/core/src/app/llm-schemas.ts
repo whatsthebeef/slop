@@ -133,7 +133,7 @@ export const INTAKE_SCHEMA = named(
     plan: str,
     type: oneOf('sub', 'same', 'super'),
     typeReason: str,
-    category: oneOf('feature', 'task', 'bug'),
+    category: oneOf('task', 'bug'),
     group: nullable(str),
     categoryConfidence: oneOf('high', 'medium', 'low'),
     categoryReason: str,
