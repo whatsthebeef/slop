@@ -39,15 +39,20 @@ export const CodeBlock = ({ children }: { children?: ReactNode }) => {
 /** Every markdown view's default: code blocks get a copy button. */
 const COPY_COMPONENTS: Components = { pre: ({ children }) => <CodeBlock>{children}</CodeBlock> };
 
+/** What may appear inside a sentence: phrasing elements only, so a block (a fence, a list, a heading) can't nest in a `<p>` or `<span>`; its text stays. */
+const INLINE_ELEMENTS = ['p', 'strong', 'em', 'del', 'code', 'a', 'br'];
+
 /**
  * Markdown inside a sentence or a one-line slot (a dismissal reason, a note): paragraphs become spans so they
- * sit inline, and a code block still gets its copy button.
+ * sit inline, and blocks (fences, lists, headings) are flattened to their text.
  */
 export const InlineMarkdown = ({ text, className }: { text: string; className?: string }) => (
   <span className={className} data-testid="inline-markdown">
     <Markdown
       remarkPlugins={[remarkGfm]}
-      components={{ ...COPY_COMPONENTS, p: ({ children }) => <span>{children}</span> }}
+      allowedElements={INLINE_ELEMENTS}
+      unwrapDisallowed
+      components={{ p: ({ children }) => <span>{children}</span> }}
     >
       {text}
     </Markdown>

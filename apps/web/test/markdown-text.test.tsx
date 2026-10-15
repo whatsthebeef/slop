@@ -30,4 +30,11 @@ describe('shared Markdown rendering', () => {
     expect(host.querySelector('p')).toBeNull();
     expect(host.querySelector('strong')?.textContent).toBe('host');
   });
+
+  it('flattens blocks inside an inline slot so nothing block-level nests in a paragraph', () => {
+    render(<p data-testid="host"><InlineMarkdown text={'see:\n\n```\nmake ship\n```\n\n- one\n- two'} /></p>);
+    const host = screen.getByTestId('host');
+    expect(host.querySelector('div, pre, ul, li')).toBeNull();
+    expect(host.textContent).toContain('make ship');
+  });
 });

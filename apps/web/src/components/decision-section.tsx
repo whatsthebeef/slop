@@ -19,6 +19,7 @@ import { SUGGESTION_ACTION_TEXT } from '@/lib/suggestion';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from './ui/tip';
 import { boardGlobHref } from '@/lib/glob-section';
 
@@ -156,7 +157,7 @@ const Why = ({ glob }: { glob: GlobView }) => {
       <h3 className='text-xs font-semibold text-muted-foreground'>Why</h3>
       {plan.isPending ? null : text === '' ? (
         <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
-          {glob.title}
+          {stripMarkdown(glob.title)}
         </p>
       ) : (
         <CollapsibleMarkdown content={text} />
@@ -567,7 +568,7 @@ export const DecisionSection = ({
         {hasItem && <Why glob={glob} />}
         {!hasItem && (
           <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
-            {glob.title}
+            {stripMarkdown(glob.title)}
           </p>
         )}
 

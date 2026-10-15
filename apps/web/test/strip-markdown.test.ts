@@ -22,3 +22,10 @@ describe('stripMarkdown', () => {
     expect(stripMarkdownLines('**a**\n`b`')).toBe('a\nb');
   });
 });
+
+describe('stripMarkdown in the status line', () => {
+  it('oneLine strips the first line', async () => {
+    const { oneLine } = await import('../src/lib/status-line');
+    expect(oneLine('Run **the** `thing`\nsecond')).toBe('Run the thing');
+  });
+});
