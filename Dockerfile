@@ -1,5 +1,5 @@
 # One image: the server serves the API, MCP, SSE and the built board.
-FROM node:24-slim AS build
+FROM public.ecr.aws/docker/library/node:24-slim AS build
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -12,7 +12,7 @@ COPY apps apps
 RUN pnpm --filter @slop/core build && pnpm --filter @slop/server build && pnpm --filter @slop/web build
 RUN pnpm deploy --filter @slop/server --prod --legacy /out
 
-FROM node:24-slim
+FROM public.ecr.aws/docker/library/node:24-slim
 WORKDIR /app
 ENV NODE_ENV=production WEB_DIST=/app/web MIGRATIONS_DIR=/app/drizzle CATALOG_DIR=/app/catalog DOCS_DIR=/app/docs SKILLS_DIR=/app/skills PORT=3000
 COPY --from=build /out .
