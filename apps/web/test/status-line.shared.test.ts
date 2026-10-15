@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { statusLine, waitingFor } from '../src/lib/status-line';
+import { holdLine, statusLine, waitingFor } from '../src/lib/status-line';
+import { cornerStatus } from '../src/lib/card-rows';
 import { positionOf } from '../src/lib/position';
+import type { GlobView } from '../src/lib/api';
 import { NOW, run } from '../../../packages/core/test/fixtures';
-import { failedChecks, head, prOpen, top, view } from './helpers/glob-views';
+import { failedChecks, head, hold, prOpen, top, view } from './helpers/glob-views';
 
 describe('shared status line', () => {
   it('shows checks failed on a sub in the card and the view alike, linking the run and the routine fixing it', () => {
@@ -121,5 +123,67 @@ describe('shared status line', () => {
   it('gives QA and PO no wait', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: [] });
     expect(waitingFor(g, [], 'qa')).toEqual([]);
+  });
+});
+
+describe('an action waiting for its script', () => {
+  const SCRIPT = 'scripts/rollout/s1t1-report-groups.sh';
+  const action = (patch: Partial<GlobView> = {}): GlobView =>
+    view({
+      id: 's1a1',
+      category: 'action',
+      type: null,
+      status: 'planning',
+      holding: [hold('s1t1', { state: 'planning', reason: 'builds its script' })],
+      script: { path: SCRIPT, onBase: false },
+      allowedActions: ['dismiss_action', 'delete'],
+      ...patch,
+    });
+
+  it('says "waiting · s1t1" with the human icon and the script tooltip', () => {
+    expect(holdLine(action())).toEqual({
+      text: 'waiting · s1t1',
+      tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`,
+      icon: 'human',
+    });
+  });
+
+  it('names the glob even when the script path is not on the view, and keeps the generic tip for another hold', () => {
+    expect(holdLine(action({ script: null }))?.tip).toBe("Its script is written by s1t1, which hasn't merged to main yet.");
+    const other = holdLine(action({ script: null, holding: [hold('s1t2', { state: 'planning' })] }));
+    expect(other?.tip).toBe('Waits for s1t2 (Planning)');
+    expect(other?.icon).toBe('human');
+  });
+
+  it('leaves the hourglass for a code glob that waits for another', () => {
+    const code = view({ status: 'planning', holding: [hold('s1t1', { state: 'planning' })] });
+    expect(holdLine(code)?.icon).toBe('hourglass');
+    expect(holdLine(code)?.tip).not.toContain('script');
+  });
+
+  it('shows the hold on the card, and nothing for a free or finished action', () => {
+    expect(cornerStatus(action(), NOW)).toMatchObject({ kind: 'hold', icon: 'human', text: 'waiting · s1t1' });
+    expect(cornerStatus(action({ holding: [], script: null, allowedActions: ['complete_action', 'dismiss_action', 'delete'] }), NOW)).toBeNull();
+  });
+
+  it('disables Done with the reason, for any role, and the status line says what it waits for', () => {
+    const waiting = waitingFor(action(), ['dismiss_action', 'delete'], 'qa');
+    expect(waiting).toMatchObject([
+      { action: 'complete_action', label: 'Done', tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`, why: 'for s1t1 to merge' },
+    ]);
+    expect(top(action())?.full).toBe('Done waits for s1t1 to merge');
+  });
+
+  it('disables Done for a script that is not on main yet when nothing else holds it', () => {
+    const g = action({ holding: [] });
+    expect(waitingFor(g, ['dismiss_action', 'delete'], 'dev')).toMatchObject([
+      { action: 'complete_action', tip: `Script not on main yet: ${SCRIPT}`, why: `: script not on main yet: ${SCRIPT}` },
+    ]);
+  });
+
+  it('shows no wait once Done is allowed, or when the script could not be checked', () => {
+    expect(waitingFor(action({ holding: [], script: { path: SCRIPT, onBase: true } }), ['complete_action', 'dismiss_action'], 'dev')).toEqual([]);
+    expect(waitingFor(action({ holding: [], script: { path: SCRIPT, onBase: null } }), ['complete_action', 'dismiss_action'], 'dev')).toEqual([]);
+    expect(waitingFor(action({ status: 'signed_off' }), ['delete'], 'dev')).toEqual([]);
   });
 });

@@ -134,6 +134,8 @@ const globs = new GlobService({
   sizeCheck: { assess: (boardId, plan, title): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan, title), refresh: (globId) => sizeCheck.refresh(globId) },
   // Infers a new glob's relations (needs and decisions) from its plan; `dependencyInference` exists by the time the first glob is created.
   inference: { infer: (input) => dependencyInference.infer(input) },
+  // Reads an action's script on the base branch; `codeView` exists by the time the first action is read.
+  codeView: { read: (boardId, ref, path, range) => codeView.read(boardId, ref, path, range) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -669,7 +671,11 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => codeSync.mark(boardId), subGateCheck: async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).subGateCheck }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => {
+      codeSync.mark(boardId);
+      // Open actions whose script wasn't on the base branch are offered again when it is.
+      void globs.baseMoved(boardId).catch((e: unknown) => logError('base push', e instanceof Error ? e.message : String(e)));
+    }, subGateCheck: async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).subGateCheck }),
 });
 
 app.onError((error, c) => {

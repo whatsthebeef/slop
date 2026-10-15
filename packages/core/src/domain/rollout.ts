@@ -180,7 +180,7 @@ const FENCE_OPEN = /^( *)(`{3,}|~{3,})/;
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const NOTHING = /^(none|n\/a|na|nothing|no rollout|not needed|no)[.!]?$/i;
 /** `script: path`, as a bullet or not, with the label bold and the path in backticks or not. */
-const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)`?\s*$/i;
+export const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)`?\s*$/i;
 /** `Why: …`, `Permissions: …`, `Run: …`, `Check: …` or `Check it worked: …`, as a bullet or not, with the label bold or not. */
 const FIELD_LINE =
   /^\s*(?:[-*+]\s+)?(?:\*\*)?(why|permissions|run|check(?: it worked)?)\s*:(?:\*\*)?\s*(.*)$/i;

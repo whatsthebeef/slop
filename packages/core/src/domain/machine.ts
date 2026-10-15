@@ -32,6 +32,8 @@ import type {
   GlobAttributes,
 } from './attributes.js';
 import { isAgentSetGlob } from './agent-set.js';
+import { scriptMissingText } from './action-script.js';
+import type { ActionScript } from './action-script.js';
 import { CLOSING_EDGE_KINDS, defaultFix, defaultWorkKind, fixOf, isHumanCategory, SLOP_TYPES, workKindOf } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
@@ -143,6 +145,10 @@ export interface ActionFacts {
   readonly recordSha?: string | null;
   /** The glob's relations and the state of every glob they point at (a missing entry reads as deleted); absent when not loaded. */
   readonly relations?: RelationFacts;
+  /** An action's script and whether it is on the base branch (null: it names none); absent where not checked. */
+  readonly script?: ActionScript | null;
+  /** The board's base branch, for the words of a refusal about the script (main when absent). */
+  readonly baseBranch?: string;
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
   readonly rollout?: BlockProgress;
   /** The glob's stored independent reviews, where loaded (Retry review is offered only once they are known). */
@@ -3177,7 +3183,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 
 export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
   if (glob.category === 'decision') return decisionActions(glob, actor);
-  if (glob.category === 'action') return actionActions(glob);
+  if (glob.category === 'action') return actionActions(glob, facts);
   if (isAgentSetGlob(glob)) return agentSetActions(glob, actor);
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
@@ -3483,7 +3489,7 @@ const finishAction = (glob: Glob, outcome: ActionOutcome, ctx: Context, event: D
     .done();
 
 /** Row A2: a person did the action's work. A repeat on a finished action changes nothing. */
-export const completeAction = (glob: Glob, input: { readonly note?: string }, ctx: Context): Result<Transition> => {
+export const completeAction = (glob: Glob, input: { readonly note?: string }, ctx: Context, facts: ActionFacts = {}): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'action') return notAction(glob, actor);
   const { outcome } = actionAttributesOf(glob);
@@ -3491,6 +3497,8 @@ export const completeAction = (glob: Glob, input: { readonly note?: string }, ct
     return outcome.kind === 'done' ? unchanged(glob) : invalidTransition(glob, actor, 'This action was dismissed');
   }
   if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
+  const held = actionHeld(facts);
+  if (held !== null) return invalidTransition(glob, actor, held);
   const note = input.note?.trim() ?? '';
   return finishAction(glob, { kind: 'done', by: actor.email, at: ctx.now, ...(note === '' ? {} : { note }) }, ctx, 'ActionDone');
 };
@@ -3509,9 +3517,19 @@ export const dismissAction = (glob: Glob, input: { readonly reason: string }, ct
   return finishAction(glob, { kind: 'dismissed', by: actor.email, at: ctx.now, reason }, ctx, 'ActionDismissed');
 };
 
-/** What a person can do with an action: finish it while it is open, and delete it. */
-const actionActions = (glob: Glob): Action[] =>
-  glob.status === 'planning' ? ['complete_action', 'dismiss_action', 'delete'] : ['delete'];
+/**
+ * Why an open action can't be done yet, or null: a start relation that has not been met (the glob that builds its script has
+ * not merged) or a script that is not on the base branch. Dismissing stays allowed.
+ */
+const actionHeld = (facts: ActionFacts): string | null => {
+  const awaited = facts.relations === undefined ? [] : awaitedOf(facts.relations);
+  if (awaited.length > 0) return `${waitSummary(awaited)} (it can be done when ${awaited.length === 1 ? 'it has' : 'they have'} merged)`;
+  return facts.script == null ? null : scriptMissingText(facts.script, facts.baseBranch ?? 'main');
+};
+
+/** What a person can do with an action: finish it while it is open (and nothing holds it), dismiss it, and delete it. */
+const actionActions = (glob: Glob, facts: ActionFacts): Action[] =>
+  glob.status !== 'planning' ? ['delete'] : actionHeld(facts) === null ? ['complete_action', 'dismiss_action', 'delete'] : ['dismiss_action', 'delete'];
 
 /** A scope edit on a decision (admins and POs): null when it changes nothing. */
 const scopeEdit = (glob: Glob, value: unknown, actor: Actor): Result<DecisionScope | null> => {

@@ -11,10 +11,11 @@ import * as machine from '../src/domain/machine.js';
 import type { Transition } from '../src/domain/machine.js';
 import { needsHuman } from '../src/domain/attention.js';
 import { checkRelationShape, defaultUntil, isMet, toState } from '../src/domain/relations.js';
+import { scriptPathOf } from '../src/domain/action-script.js';
 import type { Actor, Glob } from '../src/domain/types.js';
 import { includes } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
-import { NOW, board, ctx, dev, glob, relation } from './fixtures.js';
+import { NOW, board, ctx, dev, glob, relation, relationFacts } from './fixtures.js';
 
 const unwrap = <T>(result: Result<T>): T => {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -175,7 +176,77 @@ describe('relations to an action', () => {
     expect(checkRelationShape({ id: 's1t2', category: 'task' }, { to: 's1a1', until: 'done' }, { category: 'action' }).ok).toBe(true);
     expect(code(checkRelationShape({ id: 's1t2', category: 'task' }, { to: 's1t1', until: 'done' }, { category: 'task' }))).toBe('invalid_input');
     expect(code(checkRelationShape({ id: 's1t2', category: 'task' }, { to: 's1a1', until: 'merged' }, { category: 'action' }))).toBe('invalid_input');
-    expect(code(checkRelationShape({ id: 's1a1', category: 'action' }, { to: 's1t1', until: 'merged' }, { category: 'task' }))).toBe('invalid_input');
+    expect(code(checkRelationShape({ id: 's1d1', category: 'decision' }, { to: 's1t1', until: 'merged' }, { category: 'task' }))).toBe('invalid_input');
+  });
+
+  it('lets an action wait at its start for a code glob, and for nothing at another gate', () => {
+    const from = { id: 's1a1', category: 'action' } as const;
+    expect(checkRelationShape(from, { to: 's1t1', until: 'merged' }, { category: 'task' }).ok).toBe(true);
+    expect(checkRelationShape(from, { to: 's1t1', until: 'merged', gate: 'start' }, { category: 'task' }).ok).toBe(true);
+    expect(code(checkRelationShape(from, { to: 's1t1', until: 'merged', gate: 'merge' }, { category: 'task' }))).toBe('invalid_input');
+    expect(code(checkRelationShape(from, { to: 's1t1', until: 'merged', gate: 'sign_off' }, { category: 'task' }))).toBe('invalid_input');
+  });
+});
+
+describe('an action waits for the glob that builds its script', () => {
+  const held = (state: 'planning' | 'open' | 'merged') => relationFacts('s1a1', [['s1t1', state]], { reason: 'builds its script' });
+
+  it('is refused Done while a start relation is unmet, and says what it waits for', () => {
+    for (const state of ['planning', 'open'] as const) {
+      const r = machine.completeAction(action(), {}, ctx(dev), { relations: held(state) });
+      expect(code(r)).toBe('invalid_transition');
+      expect(!r.ok && r.error.message).toContain('Waits for s1t1 to merge');
+    }
+  });
+
+  it('can be done once that glob has merged, and an unmet relation of another gate holds nothing', () => {
+    expect(unwrap(machine.completeAction(action(), {}, ctx(dev), { relations: held('merged') })).glob.status).toBe('signed_off');
+    const other = relationFacts('s1a1', [['s1t1', 'planning']], { gate: 'merge' });
+    expect(unwrap(machine.completeAction(action(), {}, ctx(dev), { relations: other })).glob.status).toBe('signed_off');
+  });
+
+  it('can still be dismissed while held', () => {
+    const t = unwrap(machine.dismissAction(action(), { reason: 'not needed' }, ctx(dev)));
+    expect(t.glob.status).toBe('signed_off');
+    expect(machine.allowedActions(action(), dev, { relations: held('planning') })).toEqual(['dismiss_action', 'delete']);
+  });
+
+  it('offers Done again when the glob has merged', () => {
+    expect(machine.allowedActions(action(), dev, { relations: held('merged') })).toEqual(['complete_action', 'dismiss_action', 'delete']);
+    expect(machine.allowedActions(action(), dev)).toEqual(['complete_action', 'dismiss_action', 'delete']);
+  });
+
+  it('is refused Done while its script is not on the base branch, with or without a relation', () => {
+    const script = { path: 'scripts/rollout/s1t1-x.sh', onBase: false };
+    const r = machine.completeAction(action(), {}, ctx(dev), { script });
+    expect(code(r)).toBe('invalid_transition');
+    expect(!r.ok && r.error.message).toBe('script not on main yet: scripts/rollout/s1t1-x.sh');
+    const named = machine.completeAction(action(), {}, ctx(dev), { script, baseBranch: 'master' });
+    expect(!named.ok && named.error.message).toBe('script not on master yet: scripts/rollout/s1t1-x.sh');
+    expect(machine.allowedActions(action(), dev, { script })).toEqual(['dismiss_action', 'delete']);
+    expect(machine.allowedActions(action(), dev, { script: { ...script, onBase: true } })).toContain('complete_action');
+  });
+
+  it('fails open when the base branch could not be read, and when the plan names no script', () => {
+    const unknown = { path: 'scripts/x.sh', onBase: null };
+    expect(unwrap(machine.completeAction(action(), {}, ctx(dev), { script: unknown })).glob.status).toBe('signed_off');
+    expect(unwrap(machine.completeAction(action(), {}, ctx(dev), { script: null })).glob.status).toBe('signed_off');
+  });
+});
+
+describe('the script an action runs', () => {
+  it('reads the first script line of the plan, as a bullet or not, bold label and backticks fine', () => {
+    expect(scriptPathOf('## Do this\n\nscript: scripts/rollout/s1t1-x.sh\nbash scripts/rollout/s1t1-x.sh')).toBe('scripts/rollout/s1t1-x.sh');
+    expect(scriptPathOf('- **script:** `scripts/a.sh`')).toBe('scripts/a.sh');
+    expect(scriptPathOf('Script: scripts/a.sh\nscript: scripts/b.sh')).toBe('scripts/a.sh');
+  });
+
+  it('ignores prose, a script line inside a code fence and a path that could leave the repo', () => {
+    expect(scriptPathOf('Run the script: scripts/a.sh please')).toBeNull();
+    expect(scriptPathOf('```\nscript: scripts/a.sh\n```')).toBeNull();
+    expect(scriptPathOf('script: ../etc/passwd.sh')).toBeNull();
+    expect(scriptPathOf('script: /etc/passwd.sh')).toBeNull();
+    expect(scriptPathOf('')).toBeNull();
   });
 });
 
@@ -228,12 +299,12 @@ describe('work commands on human globs', () => {
     expect(unwrap(await globs.create(DEV, input({ title: 'Work', type: 'same', category: 'task' }))).id).toBe(`s${boardId}t1`);
   });
 
-  it('keeps a caller-given plan, is idempotent, and refuses a type, relations and non-members', async () => {
+  it('keeps a caller-given plan, is idempotent, and refuses a type, an unknown glob to wait for and non-members', async () => {
     const made = unwrap(await globs.create(DEV, input({ plan: '# Rotate\n\nDo it.', idempotencyKey: 'k1' })));
     expect(unwrap(await globs.create(DEV, input({ plan: 'other', idempotencyKey: 'k1' }))).id).toBe(made.id);
     expect((await store.transaction((tx) => tx.artifactVersions(made.id, 'plan', ''))).at(-1)?.content).toBe('# Rotate\n\nDo it.');
     expect(code(await globs.create(DEV, input({ type: 'same' })))).toBe('invalid_input');
-    expect(code(await globs.create(DEV, input({ after: [made.id] })))).toBe('invalid_input');
+    expect(code(await globs.create(DEV, input({ after: ['s9t9'] })))).toBe('invalid_input');
     expect(code(await globs.create(DEV, input({ files: ['src/a.ts'] })))).toBe('invalid_input');
     expect(code(await globs.create('nobody@example.com', input()))).not.toBeNull();
   });
@@ -334,11 +405,43 @@ describe('work commands on human globs', () => {
     expect(unwrap(await globs.completeAction(DEV, a.id, a.version)).status).toBe('signed_off');
   });
 
-  it('lets a person relate to an action but never relates an action to anything', async () => {
+  it('lets a person relate to an action, and relate an action to a code glob at its start only', async () => {
     const a = unwrap(await globs.create(DEV, input()));
     const work = unwrap(await globs.create(DEV, input({ title: 'Work', type: 'same', category: 'task' })));
     expect(code(await globs.addRelation(DEV, work.id, work.version, { to: a.id, gate: 'merge', until: 'merged' }))).toBe('invalid_input');
-    expect(code(await globs.addRelation(DEV, a.id, a.version, { to: work.id, gate: 'start' }))).toBe('invalid_input');
-    expect(code(await globs.addRelation(DEV, work.id, work.version, { to: a.id, gate: 'merge' }))).toBeNull();
+    expect(code(await globs.addRelation(DEV, a.id, a.version, { to: work.id, gate: 'merge' }))).toBe('invalid_input');
+    expect(code(await globs.addRelation(DEV, a.id, a.version, { to: work.id, gate: 'start' }))).toBeNull();
+  });
+
+  it('refuses a cycle between an action and a glob that waits for it', async () => {
+    const a = unwrap(await globs.create(DEV, input()));
+    unwrap(await globs.create(DEV, input({ title: 'Work', type: 'same', category: 'task', after: [a.id] })));
+    expect(code(await globs.addRelation(DEV, a.id, a.version, { to: `s${boardId}t1`, gate: 'start' }))).toBe('invalid_input');
+  });
+
+  it('creates an action that waits for a glob, can not be done until it merges, and is told when it does', async () => {
+    const work = unwrap(await globs.create(DEV, input({ title: 'Builds the script', type: 'same', category: 'task' })));
+    const made = unwrap(await globs.create(DEV, input({ after: [work.id], relations: [{ to: work.id, reason: 'builds its script' }] })));
+    expect(made.status).toBe('planning');
+    expect(made.waiting ?? null).toBeNull();
+    const view = unwrap(await globs.get(DEV, made.id));
+    expect(view.relations.map((r) => [r.to, r.gate, r.until])).toEqual([[work.id, 'start', 'merged']]);
+    expect(view.waitingFor.map((w) => w.id)).toEqual([work.id]);
+    expect(view.allowedActions).toEqual(['dismiss_action', 'delete']);
+    expect(code(await globs.completeAction(DEV, made.id, made.version))).toBe('invalid_transition');
+    expect((await current(made.id)).status).toBe('planning');
+    // The merge releases nothing for an action (it has no start), but tells the board so the row offers Done again.
+    unwrap(await globs.applyEvent(work.id, (g, c) => machine.merged(g, { sha: 'abc1234' }, c)));
+    expect(await globs.releaseDependents(work.id, boardId)).toEqual([]);
+    expect(unwrap(await globs.get(DEV, made.id)).allowedActions).toContain('complete_action');
+    expect(unwrap(await globs.completeAction(DEV, made.id, made.version)).status).toBe('signed_off');
+  });
+
+  it('does not record a wait for a glob that has merged already, and refuses a non-start relation', async () => {
+    const work = unwrap(await globs.create(DEV, input({ title: 'Work', type: 'same', category: 'task' })));
+    unwrap(await globs.applyEvent(work.id, (g, c) => machine.merged(g, { sha: 'abc1234' }, c)));
+    const free = unwrap(await globs.create(DEV, input({ after: [work.id] })));
+    expect(unwrap(await globs.get(DEV, free.id)).relations).toEqual([]);
+    expect(code(await globs.create(DEV, input({ relations: [{ to: work.id, gate: 'merge' }] })))).toBe('invalid_input');
   });
 });
