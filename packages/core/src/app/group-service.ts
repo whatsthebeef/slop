@@ -4,7 +4,7 @@ import { isArchivedDecision } from '../domain/decision-glob.js';
 import { normaliseGroup } from '../domain/group.js';
 import { RESERVED_GROUP_NAMES, groupSummaries, groupView, inGroup } from '../domain/group-view.js';
 import type { GroupSummary, GroupView } from '../domain/group-view.js';
-import { humanSteps } from '../domain/human-steps.js';
+import { humanSteps, openRolloutSteps } from '../domain/human-steps.js';
 import * as machine from '../domain/machine.js';
 import { machineSteps, stallThresholds } from '../domain/machine-steps.js';
 import { whoseMove } from '../domain/whose-move.js';
@@ -58,7 +58,12 @@ export class GroupService {
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
     const members = read.value.map(({ glob, artifacts, relations, holding }) => {
-      const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, steps.get(glob.id) ?? []);
+      const own = steps.get(glob.id) ?? [];
+      const human = humanSteps(
+        glob,
+        { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }), rolloutSteps: openRolloutSteps(own) },
+        own,
+      );
       const move = whoseMove(glob, human, machineSteps(glob), holding, now, { viewer, thresholds, complete: false });
       return { glob, move, relations: relations.relations, states: relations.states, holding };
     });
