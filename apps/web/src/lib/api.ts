@@ -87,7 +87,23 @@ import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
 
 /** A step on the board list is compact; a single-glob read adds the rest (read each with `?.`). */
-export type ListedHumanStep = CompactHumanStep & Partial<Pick<HumanStep, 'detail' | 'script' | 'check' | 'source' | 'doneBy' | 'doneAt' | 'dismissedReason'>>;
+export type ListedHumanStep = CompactHumanStep &
+  Partial<
+    Pick<
+      HumanStep,
+      | 'detail'
+      | 'script'
+      | 'check'
+      | 'why'
+      | 'permissions'
+      | 'commands'
+      | 'verify'
+      | 'source'
+      | 'doneBy'
+      | 'doneAt'
+      | 'dismissedReason'
+    >
+  >;
 
 export interface GlobView extends Glob {
   /** Who works on the glob and how (derived on the server; read through `actorOf` and `modeOf` where a fixture may lack them). */
@@ -757,9 +773,25 @@ export const api = {
   updateGlob: (id: string, version: number, changes: GlobChanges) =>
     request<GlobView>('PATCH', `/api/globs/${id}`, { ...changes, version }),
   /** Human steps answer with the glob's view, steps included. A step change leaves the glob's version alone. */
-  addHumanStep: (id: string, step: { title: string; detail?: string; who?: string; due?: string }) =>
-    request<GlobView>('POST', `/api/globs/${id}/human-steps`, step),
-  completeHumanStep: (id: string, stepId: string) => request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`, {}),
+  addHumanStep: (
+    id: string,
+    step: {
+      title: string;
+      detail?: string;
+      why?: string;
+      permissions?: string;
+      commands?: string[];
+      verify?: string;
+      who?: string;
+      due?: string;
+    },
+  ) => request<GlobView>('POST', `/api/globs/${id}/human-steps`, step),
+  completeHumanStep: (id: string, stepId: string) =>
+    request<GlobView>(
+      'POST',
+      `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`,
+      {},
+    ),
   dismissHumanStep: (id: string, stepId: string, reason: string) =>
     request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/dismiss`, { reason }),
   /** A script artifact's text, or null when there is none (the kind is served from a later part). */

@@ -4,9 +4,10 @@ import type { Result } from '../domain/errors.js';
 import { suggestEffect } from '../domain/events.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
-import { isLearning, learningAssessmentFacts, learningDraft, learningEvidence, learningStatement, learningTarget } from '../domain/learning.js';
+import { isLearning, learningAssessmentFacts, learningDraft, learningDocument, learningEvidence, learningFacts, learningStatement, learningTarget } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
 import { markdownHeadings, sectionText } from '../domain/sections.js';
+import { plainSignal } from '../domain/signals.js';
 import {
   checkSuggestion,
   learningPromptFacts,
@@ -60,7 +61,7 @@ export interface SuggestDeps {
   readonly store: Store;
   readonly clock: Clock;
   readonly notifier: Notifier;
-  readonly knowledge: Pick<KnowledgeService, 'previewFor' | 'targetStateFor'>;
+  readonly knowledge: Pick<KnowledgeService, 'previewFor' | 'targetStateFor' | 'signalsToWatch'>;
   readonly llm: Llm;
   readonly model: string;
   /** Deadline for the model call; defaults to LLM_TIMEOUT_MS. */
@@ -137,13 +138,16 @@ export class SuggestService {
     };
     const base = { glob: { id: glob.id, title: glob.title } };
     if (learning === null) {
-      return { inputs: { ...base, learning: null, siblings: [], merges: [], outcomes: [], flags: flagsOf(null) }, stamp: { draftVersion: null, targetVersion: null, promptVersion: SUGGEST_PROMPT_VERSION } };
+      return { inputs: { ...base, learning: null, siblings: [], merges: [], outcomes: [], flags: flagsOf(null), signals: [] }, stamp: { draftVersion: null, targetVersion: null, promptVersion: SUGGEST_PROMPT_VERSION } };
     }
-    const [preview, state, all, merged] = await Promise.all([
+    // A learning mined from a signal watches that one, and a document proposal watches none: neither gets a check to choose.
+    const choosable = learningFacts(glob).signal === null && learningDocument(glob, learning.artifacts) === null;
+    const [preview, state, all, merged, watchable] = await Promise.all([
       this.deps.knowledge.previewFor(tx, learning),
       this.deps.knowledge.targetStateFor(tx, learning),
       boardLearnings(tx, glob.boardId),
       tx.listGlobs(glob.boardId, { include: 'work', status: MERGED_STATUSES }),
+      choosable ? this.deps.knowledge.signalsToWatch(tx, glob.boardId) : Promise.resolve([]),
     ]);
     const target = learningTarget(glob).routed;
     const draft = learningDraft(learning.artifacts)?.draft ?? null;
@@ -171,6 +175,7 @@ export class SuggestService {
       merges: overlappingMerges(glob, area, merged),
       outcomes: recentOutcomes(learning, all),
       flags: flagsOf(preview),
+      signals: watchable.map((g) => ({ key: g.key, text: plainSignal(g) })),
     };
     return { inputs, stamp: { draftVersion: learning.artifacts.draft?.version ?? null, targetVersion: state?.version ?? null, promptVersion: SUGGEST_PROMPT_VERSION } };
   }
@@ -206,7 +211,7 @@ export class SuggestService {
       throw error;
     }
     this.busy.clear(glob.id);
-    const checked = checkSuggestion(parseJson(answer), { siblingIds: inputs.siblings.map((s) => s.id), learning: read.learning });
+    const checked = checkSuggestion(parseJson(answer), { siblingIds: inputs.siblings.map((s) => s.id), learning: read.learning, signalKeys: inputs.signals.map((g) => g.key) });
     if (!checked.ok) throw new Error(`Unusable suggestion: ${checked.error.message}`);
     const stored: StoredSuggestion = { suggestion: checked.value, model: this.deps.model, at: this.deps.clock.now(), stamp };
     await this.deps.store.transaction(async (tx) => {

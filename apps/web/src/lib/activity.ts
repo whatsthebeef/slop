@@ -1,5 +1,6 @@
 import type { MachineStep } from '@slop/core';
 import type { GlobView } from './api';
+import { stripMarkdown, stripMarkdownLines } from './markdown-text';
 import { firstNameOf } from './person';
 import { stepLabel } from './position';
 
@@ -37,7 +38,7 @@ const entry = (
   link: string | null = null,
   linkLabel = 'open',
   title = text,
-): ActivityEntry => ({ id, actor, text, at, link, linkLabel, title, count: 1 });
+): ActivityEntry => ({ id, actor, text: stripMarkdown(text), at, link, linkLabel, title: stripMarkdownLines(title), count: 1 });
 
 /** A reason on one line: its first line, cut at `LINE_MAX`. */
 const oneLine = (reason: string): string => {

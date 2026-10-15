@@ -829,6 +829,7 @@ describe('glob view: split moves in the action ▾', () => {
       renderGlob(view({ group: 'glob-view-layout', labels: { FR: 'required', CR: 'required' } }));
       const row = screen.getByTestId('glob-actions');
       expect(within(row).getByTestId('group-chip').textContent).toBe('glob-view-layout');
+      expect(within(row).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
       expect(row.lastElementChild?.contains(within(row).getByTestId('group-chip'))).toBe(true);
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();

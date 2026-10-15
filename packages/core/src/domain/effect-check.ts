@@ -331,8 +331,8 @@ export const basisText = (basis: EffectBasis): string =>
     ? `agent set v${String(basis.fromVersion)} or later`
     : `work started after ${basis.since.slice(0, 10)}`;
 
-const rateText = (figures: EffectFigures): string =>
-  `${percent(figures.rate)} (${String(figures.affected)}/${String(figures.eligible)})`;
+/** Effect checks compare globs, so figures are always "a of b globs (x%)". */
+const rateText = (figures: EffectFigures): string => `${String(figures.affected)} of ${String(figures.eligible)} globs (${percent(figures.rate)})`;
 
 /**
  * The raised item's statement. Not improved: "Revise or revert s15kN (<statement, cut>): after N globs with <basis>

@@ -11,7 +11,7 @@ import { listOf } from '../domain/matrix.js';
 import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, humanSteps, isHumanStepDue, isMerged, storedBlockProgress } from '../domain/human-steps.js';
 import { isCapabilityName } from '../domain/capabilities.js';
 import type { Capabilities } from '../domain/capabilities.js';
-import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
+import { ROLLOUT_NONE_LABEL, ROLLOUT_NONE_PREFIX, ROLLOUT_NOT_WRITTEN_TITLE, ROLLOUT_PATHS_ORIGIN, ROLLOUT_SCRIPT_KIND, ROLLOUT_SECTION_ORIGIN, matchStoredTitles, parseRollout, rolloutScriptLabel } from '../domain/rollout.js';
 import type { RolloutAnswer } from '../domain/rollout.js';
 import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredHumanStep } from '../domain/human-steps.js';
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
@@ -368,6 +368,9 @@ const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
 const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
   ARTIFACT_KINDS.indexOf(a.kind) - ARTIFACT_KINDS.indexOf(b.kind) || a.label.localeCompare(b.label);
 
+const stepFields = (s: Pick<StoredHumanStep, 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>) =>
+  [s.detail, s.check, s.script, s.why, s.permissions, s.commands, s.verify];
+
 type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
 
 /** A work step as a person or agent writes it; what is left out gets the kind's defaults. */
@@ -380,6 +383,10 @@ export interface NewHumanStep {
   readonly blocks?: readonly HumanStepBlock[];
   readonly check?: string;
   readonly script?: HumanStepScript;
+  readonly why?: string;
+  readonly permissions?: string;
+  readonly commands?: readonly string[];
+  readonly verify?: string;
 }
 
 interface CommandOptions {
@@ -621,6 +628,10 @@ export class GlobService {
         blocks: [...new Set(blocks)],
         check: input.check ?? null,
         script: input.script ?? null,
+        why: input.why?.trim() || null,
+        permissions: input.permissions?.trim() || null,
+        commands: (input.commands ?? []).map((c) => c.trim()).filter((c) => c !== ''),
+        verify: input.verify?.trim() || null,
         origin,
         createdBy: email,
         createdAt: now,
@@ -708,6 +719,10 @@ export class GlobService {
           blocks: ['sign_off', 'dependants'],
           check: null,
           script: null,
+          why: null,
+          permissions: null,
+          commands: [],
+          verify: null,
           origin: 'investigation',
           createdBy: 'investigation',
           createdAt: this.deps.clock.now(),
@@ -722,7 +737,7 @@ export class GlobService {
   }
 
   /** A rollout work step in the shape every system writer uses: after the merge, holding back sign-off and dependants. */
-  private rolloutStep(glob: Glob, origin: string, createdBy: string, now: string, fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script'>): StoredHumanStep {
+  private rolloutStep(glob: Glob, origin: string, createdBy: string, now: string, fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>): StoredHumanStep {
     return {
       id: `hs_${this.deps.ids.runId()}`,
       boardId: glob.boardId,
@@ -744,10 +759,11 @@ export class GlobService {
 
   /**
    * An implementation record arrived: its `## Rollout` section becomes the glob's rollout steps. The steps this section
-   * wrote before are matched by title: a still-open one that is gone is dismissed, one that is still there is updated in
-   * place, a done or dismissed one stays as it is, and a new one is added. Real steps replace the investigator's
-   * placeholder. A script step's body is stored as a `rollout_script` artifact (one label per step). Reading the same
-   * record again changes nothing.
+   * wrote before are matched by title, or by the title as the parser writes it now (`matchStoredTitles`: a step stored
+   * as `**Do x**` before titles dropped their emphasis is `Do x`): a still-open one that is gone is dismissed, one that
+   * is still there is updated in place, a done or dismissed one keeps its state and detail (only a changed title is
+   * saved), and a new one is added. Real steps replace the investigator's placeholder. A script step's body is stored as a `rollout_script` artifact (one
+   * label per step). Reading the same record again changes nothing.
    */
   async reconcileRollout(
     email: string,
@@ -767,7 +783,12 @@ export class GlobService {
       const note = (step: StoredHumanStep, change: string) =>
         events.push({ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change } });
       let scripts = false;
-      for (const step of parsed) {
+      const matches = matchStoredTitles(
+        parsed.map((p) => p.title),
+        own.map((s) => s.title),
+      );
+      const matched = new Set<string>();
+      for (const [i, step] of parsed.entries()) {
         let script: HumanStepScript | null = null;
         if (step.scriptPath !== null) {
           script = { path: step.scriptPath };
@@ -780,20 +801,24 @@ export class GlobService {
             scripts = true;
           }
         }
-        const fields = { title: step.title, detail: step.detail, check: step.check, script };
-        const existing = own.find((s) => s.title === step.title);
+        const fields = { title: step.title, detail: step.detail, check: step.check, script, why: step.why, permissions: step.permissions, commands: step.commands, verify: step.verify };
+        const existing = own[matches[i] ?? -1];
         if (existing === undefined) {
           const added = this.rolloutStep(glob, ROLLOUT_SECTION_ORIGIN, email, now, fields);
           save.push(added);
           note(added, 'added');
-        } else if (existing.state === 'open' && (existing.detail !== step.detail || existing.check !== step.check || JSON.stringify(existing.script) !== JSON.stringify(script))) {
-          const updated = { ...existing, detail: step.detail, check: step.check, script };
+          continue;
+        }
+        matched.add(existing.id);
+        const refresh = existing.state === 'open' && JSON.stringify(stepFields(existing)) !== JSON.stringify(stepFields(fields));
+        if (refresh || existing.title !== step.title) {
+          const updated = refresh ? { ...existing, ...fields } : { ...existing, title: step.title };
           save.push(updated);
           note(updated, 'updated');
         }
       }
       for (const step of own) {
-        if (step.state !== 'open' || parsed.some((p) => p.title === step.title)) continue;
+        if (step.state !== 'open' || matched.has(step.id)) continue;
         const dismissed: StoredHumanStep = { ...step, state: 'dismissed', dismissedReason: 'No longer in the implementation record', doneBy: 'slop', doneAt: now };
         save.push(dismissed);
         note(dismissed, 'dismissed');
@@ -896,7 +921,7 @@ export class GlobService {
         });
         artifacts = true;
       } else if (answer.decision === 'ask') {
-        const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: answer.question, detail: null, check: null, script: null });
+        const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: answer.question, detail: null, check: null, script: null, why: null, permissions: null, commands: [], verify: null });
         save.push(step);
         note(step, 'added');
       } else {
@@ -910,7 +935,7 @@ export class GlobService {
             await addArtifact(tx, this.deps.clock, glob, 'slop', { kind: ROLLOUT_SCRIPT_KIND, label, content: written.script, link: null, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
             artifacts = true;
           }
-          const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script });
+          const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script, why: written.why, permissions: written.permissions, commands: written.commands, verify: written.verify });
           save.push(step);
           note(step, 'added');
         }

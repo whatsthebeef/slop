@@ -66,6 +66,11 @@ export interface HumanStep {
   /** A capability slop can verify (checked in a later part); null for steps only a person can confirm. */
   readonly check: string | null;
   readonly script: HumanStepScript | null;
+  /** Structured fields of a work step, all plain text: why it is needed (one sentence), the access a person needs, the command lines to run, and how to tell it worked. */
+  readonly why: string | null;
+  readonly permissions: string | null;
+  readonly commands: readonly string[];
+  readonly verify: string | null;
   /** `machine`: derived from the glob's state; `work`: stored (added by an agent or a person). */
   readonly source: 'machine' | 'work';
   /** Who ticked it; for a dismissed step, who dismissed it (`slop` for a re-sync). */
@@ -99,6 +104,10 @@ export interface StoredHumanStep {
   readonly blocks: readonly HumanStepBlock[];
   readonly check: string | null;
   readonly script: HumanStepScript | null;
+  readonly why: string | null;
+  readonly permissions: string | null;
+  readonly commands: readonly string[];
+  readonly verify: string | null;
   /** What wrote it (`rollout-section`, `investigation`, `person`), so a later write can replace its own steps only. */
   readonly origin: string;
   readonly createdBy: string;
@@ -155,6 +164,10 @@ const derived = (
   blocks: rest.blocks ?? [],
   check: null,
   script: null,
+  why: null,
+  permissions: null,
+  commands: [],
+  verify: null,
   source: 'machine',
   doneBy: null,
   doneAt: null,
@@ -222,6 +235,10 @@ const fromStored = (glob: Glob, s: StoredHumanStep): HumanStep => ({
   blocks: s.blocks,
   check: s.check,
   script: s.script,
+  why: s.why,
+  permissions: s.permissions,
+  commands: s.commands,
+  verify: s.verify,
   source: 'work',
   doneBy: s.doneBy,
   doneAt: s.doneAt,

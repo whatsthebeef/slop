@@ -1519,6 +1519,18 @@ describe('checks and merging (slice 2)', () => {
     expect(fail.glob.status).toBe('failed');
   });
 
+  it('slop updating a behind branch is counted for the merge request, and a new Merge press starts the count again', () => {
+    const merging = { ...ready, status: 'merging' as const };
+    const once = value(m.mergeBranchUpdated(merging, ctx(null)));
+    expect(once.glob.mergeUpdates).toBe(1);
+    expect(once.events.map((e) => e.type)).toContain('MergeBranchUpdated');
+    expect(value(m.mergeBranchUpdated(once.glob, ctx(null))).glob.mergeUpdates).toBe(2);
+    // Outside a merge nothing is counted.
+    expect(value(m.mergeBranchUpdated(ready, ctx(null))).changed).toBe(false);
+    const pressed = value(m.retryMerge({ ...once.glob, status: 'failed', failure: { reason: 'x', at: NOW, kind: 'merge' }, headChecks: { sha: 'bbb', state: 'passed' } }, ctx(dev)));
+    expect(pressed.glob.mergeUpdates).toBe(0);
+  });
+
   it('a conflict after updating the branch returns the glob to pr_open with the conflict recorded, no failure', () => {
     const merging = { ...ready, status: 'merging' as const };
     const conflict = { base: 'main', files: ['a.ts', 'b.ts'] };
