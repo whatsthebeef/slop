@@ -1329,7 +1329,7 @@ export const requestMerge = (
     return b.done();
   }
   return new Builder(glob, ctx)
-    .set({ mergeMode: options.continue ? 'continue' : null })
+    .set({ mergeMode: options.continue ? 'continue' : null, mergeUpdates: 0 })
     .status('merging', options.continue ? { mode: 'continue' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
     .done();
@@ -1343,6 +1343,16 @@ export const cancelMerge = (glob: Glob, ctx: Context): Result<Transition> => {
     .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
     .event('MergeDisarmed', { reason: 'cancelled' })
     .done();
+};
+
+/**
+ * Slop updated a behind branch for the merge in progress. The merge chases the base once per request: the next
+ * `squash_merge` (on the updated head's passed checks) merges even if the base moved again, unless GitHub reports a conflict.
+ */
+export const mergeBranchUpdated = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (glob.status !== 'merging') return unchanged(glob);
+  const updates = (glob.mergeUpdates ?? 0) + 1;
+  return new Builder(glob, ctx).set({ mergeUpdates: updates }).event('MergeBranchUpdated', { updates }).done();
 };
 
 /** A failed merge slop can try again without a new run or push: no conflict, the PR is ready and its head passed. */
@@ -1367,7 +1377,7 @@ export const retryMerge = (glob: Glob, ctx: Context, relations?: RelationFacts):
   const held = mergeGate(relations);
   if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
   return new Builder(glob, ctx)
-    .set({ failure: null, mergeMode: null })
+    .set({ failure: null, mergeMode: null, mergeUpdates: 0 })
     .status('merging', { retry: true })
     .effect({
       kind: 'squash_merge',
@@ -2399,7 +2409,7 @@ export const checksCompleted = (
     // Merge when checks pass stays armed while a merge relation is unmet; the release resumes it (`gateReleased`).
     if (held.length > 0) return holdMerge(b, glob, checks.sha, held, ctx).done();
     return b
-      .set({ mergeMode: null, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
+      .set({ mergeMode: null, mergeUpdates: 0, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: checks.sha })
       .done();
@@ -2760,7 +2770,7 @@ export const subGateCompleted = (
     // The sub stays in pr_open with its passed gate: `gateReleased` merges it once the relations are met.
     if (held.length > 0) return holdMerge(b, glob, gate.sha, held, ctx).done();
     return b
-      .set(glob.mergeHold == null ? {} : { mergeHold: null })
+      .set({ mergeUpdates: 0, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: gate.sha })
       .done();
@@ -3608,7 +3618,7 @@ export const gateReleased = (
     if ((!armed && !subPassed) || glob.conflict != null || !headChecksPassed(glob)) return unchanged(glob);
     if (mergeGate(relations).length > 0) return unchanged(glob);
     return new Builder(glob, ctx)
-      .set({ mergeMode: null, mergeHold: null })
+      .set({ mergeMode: null, mergeHold: null, mergeUpdates: 0 })
       .event('MergeResumed', { sha: head })
       .status('merging')
       .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
