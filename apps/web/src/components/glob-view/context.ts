@@ -1,5 +1,6 @@
 import type { Action, EditFailure } from '@slop/core';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
+import type { DecideFlow } from '@/components/decision-outcomes';
 import type { GlobTarget } from '@/lib/glob-section';
 
 /** What every section of the glob view gets, instead of a dozen separate props. */
@@ -16,4 +17,6 @@ export interface GlobViewContext {
   onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
   /** Scrolls to a section (or opens an artifact in it). */
   onOpenSection: (target: GlobTarget) => void;
+  /** A decision glob's decide flow, shared by the header's Approve change and the proposal block's controls. */
+  decide?: DecideFlow | null;
 }
