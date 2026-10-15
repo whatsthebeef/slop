@@ -86,6 +86,12 @@ export interface HostStackProps extends StackProps {
    * production's data disk, it only attaches this one. Other stages create a fresh volume when it is absent.
    */
   readonly dataVolumeId?: string;
+  /**
+   * The Cognito user pool (`-c cognitoUserPoolId=us-east-1_...`, the auth stack's UserPoolId output). With it the instance
+   * role may create, describe and delete the app clients slop issues to ATF runners with client credentials, on that pool
+   * only. Without it slop can't issue them. The CDK app remembers no context: repeat it on every host deploy or the grant is removed.
+   */
+  readonly cognitoUserPoolId?: string;
 }
 
 const APP_PORT = 3000;
@@ -149,6 +155,22 @@ export class HostStack extends Stack {
         resources: ['arn:aws:bedrock:*::foundation-model/*', `arn:aws:bedrock:*:${this.account}:inference-profile/*`],
       }),
     );
+
+    // ATF runners' client credentials (apps/server/src/atf-cognito.ts): one Cognito app client per runner, on this pool only.
+    // DescribeResourceServer lets /api/health report `atfClientCredentials` only once the auth stack's scopes exist too.
+    if (props.cognitoUserPoolId !== undefined) {
+      role.addToPolicy(
+        new PolicyStatement({
+          actions: [
+            'cognito-idp:CreateUserPoolClient',
+            'cognito-idp:DeleteUserPoolClient',
+            'cognito-idp:DescribeUserPoolClient',
+            'cognito-idp:DescribeResourceServer',
+          ],
+          resources: [this.formatArn({ service: 'cognito-idp', resource: 'userpool', resourceName: props.cognitoUserPoolId })],
+        }),
+      );
+    }
 
     // Boards' branch deploys (apps/server/src/deployer.ts): StartBuild on the named projects only.
     const deployProjects = props.deployProjects ?? [];

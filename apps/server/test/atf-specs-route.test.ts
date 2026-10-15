@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto';
 import {
   ArtifactService,
+  AtfRunnerService,
   BoardService,
   DeployService,
   EnvironmentService,
   IntegrationTokenService,
   TestRunService,
 } from '@slop/core';
-import type { Board, Glob } from '@slop/core';
+import type { AtfCredentialMethod, AtfRunner, Board, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createRunnerAuthenticator } from '../src/atf-auth.js';
+import type { ResolvedRunner, RunnerVerifier } from '../src/atf-auth.js';
 import { PgStore } from '../src/db/store.js';
 import type { Env } from '../src/http/app.js';
 import { mountAtfSpecs } from '../src/http/atf-specs.js';
@@ -57,6 +60,16 @@ const glob = (id: string, boardId: number): Glob => ({
 const plan = (specs: string[], grep?: string): string =>
   `| Name | Status | Location | Description |\n|---|---|---|---|\n\n\`\`\`atf-specs\nspecs:\n${specs.map((s) => `  - ${s}`).join('\n')}\n${grep === undefined ? '' : `grep: "${grep}"\n`}\`\`\`\n`;
 
+/** Stands in for the OIDC, AWS and Cognito verifiers of later parts: a bearer `<method>:<runner id>` names that runner. */
+const fakeVerifier =
+  (method: AtfCredentialMethod): RunnerVerifier =>
+  (boardId, bearer): Promise<ResolvedRunner | null> => {
+    const [kind, id] = bearer.split(':');
+    const runnerId = Number(id);
+    if (kind !== method || !Number.isSafeInteger(runnerId)) return Promise.resolve(null);
+    return Promise.resolve({ runnerId, boardId, name: 'fake', method, environments: null });
+  };
+
 const readyBody = z.object({
   status: z.literal('ready'),
   environment: z.string(),
@@ -75,6 +88,8 @@ describe('the ATF spec list endpoint', () => {
   let artifacts: ArtifactService;
   let board: Board;
   let other: Board;
+  let runners: AtfRunnerService;
+  const logs: string[] = [];
   let token = '';
   let otherToken = '';
   let clock = Date.parse('2026-10-05T13:00:00.000Z');
@@ -99,6 +114,13 @@ describe('the ATF spec list endpoint', () => {
       newSecret: () => `slopit_${Math.random().toString(36).slice(2)}${Date.now()}`,
       hashSecret: (secret) => createHash('sha256').update(secret).digest('hex'),
     });
+    runners = new AtfRunnerService({ store, clock: clockPort });
+    const authenticate = createRunnerAuthenticator({
+      store,
+      tokens,
+      verifiers: [fakeVerifier('oidc'), fakeVerifier('aws_iam'), fakeVerifier('client_credentials')],
+      log: (task, message) => logs.push(`${task}: ${message}`),
+    });
     app = new Hono<Env>();
     app.use('/api/*', async (c, next) => {
       c.set('email', c.req.header('x-test-email') ?? DEV);
@@ -118,7 +140,7 @@ describe('the ATF spec list endpoint', () => {
       awsWebhookKeys: [KEY],
       log: () => undefined,
     });
-    mountAtfSpecs(app, { testRuns, boards, tokens });
+    mountAtfSpecs(app, { testRuns, boards, authenticate, runners, log: (task, message) => logs.push(`${task}: ${message}`) });
     const makeBoard = async (name: string, repo: string): Promise<Board> =>
       store.transaction(async (tx) => {
         const inserted = await tx.insertBoard({
@@ -320,4 +342,107 @@ describe('the ATF spec list endpoint', () => {
         .status,
     ).toBe(403);
   });
+
+  describe('with runner credentials', () => {
+    const register = async (name: string, method: AtfRunner['method'], environments: string[], boardId = board.id): Promise<AtfRunner> => {
+      const created = await runners.create(DEV, boardId, {
+        name,
+        method,
+        config: method === 'oidc' ? { issuer: 'https://ci.example.com', claims: { project: ['p'] } } : method === 'aws_iam' ? { roleArns: ['arn:aws:iam::123456789012:role/atf'] } : {},
+        environments,
+      });
+      if (!created.ok) throw new Error(created.error.message);
+      return created.value;
+    };
+    const as = (method: string, runner: AtfRunner, sha = D3, boardId = board.id) =>
+      app.request(`/integrations/boards/${String(boardId)}/atf-specs?${query(sha)}`, {
+        headers: { authorization: `Bearer ${method}:${String(runner.id)}` },
+      });
+
+    it('answers every method alike, with the same 200, 202 and 409 as the legacy token and no Deprecation header', async () => {
+      const oidc = await register('GH', 'oidc', ['staging']);
+      const aws = await register('CB', 'aws_iam', ['staging']);
+      const client = await register('Vendor', 'client_credentials', ['staging']);
+      for (const [method, runner] of [['oidc', oidc], ['aws_iam', aws], ['client_credentials', client]] as const) {
+        const answer = await as(method, runner);
+        expect(answer.status).toBe(200);
+        expect(answer.headers.get('deprecation')).toBeNull();
+        expect(readyBody.parse(await answer.json()).sha).toBe(D3);
+      }
+      expect((await as('oidc', oidc, D1)).status).toBe(409);
+      expect((await as('oidc', oidc, 'e1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0')).status).toBe(202);
+    });
+
+    it('notes when a runner was last seen', async () => {
+      const runner = await register('Seen', 'oidc', ['staging']);
+      expect(runner.lastSeenAt).toBeNull();
+      await as('oidc', runner);
+      const stored = await store.transaction((tx) => tx.getAtfRunner(board.id, runner.id));
+      expect(stored?.lastSeenAt).toBe(now());
+    });
+
+    it('refuses a disabled or revoked runner, another board’s runner, and a credential of the wrong kind, all with the same plain 401', async () => {
+      const runner = await register('Off', 'oidc', ['staging']);
+      await runners.update(DEV, board.id, runner.id, { enabled: false });
+      const disabled = await as('oidc', runner);
+      expect(disabled.status).toBe(401);
+      expect(await disabled.json()).toEqual({ code: 'unauthenticated', message: 'Unauthenticated' });
+      await runners.update(DEV, board.id, runner.id, { enabled: true });
+      expect((await as('oidc', runner)).status).toBe(200);
+      await runners.revoke(DEV, board.id, runner.id);
+      expect((await as('oidc', runner)).status).toBe(401);
+      // A runner of the other board, presented on this board (and on its own board's URL for this board's runner).
+      const theirs = await register('Theirs', 'oidc', ['staging'], other.id);
+      expect((await as('oidc', theirs)).status).toBe(401);
+      const mine = await register('Mine', 'oidc', ['staging']);
+      expect((await as('oidc', mine, D3, other.id)).status).toBe(401);
+      // The method must match the registered runner's.
+      expect((await as('aws_iam', mine)).status).toBe(401);
+    });
+
+    it('refuses an environment the runner does not serve with 403', async () => {
+      const serving = await register('Serving', 'oidc', ['staging']);
+      const narrow = await register('Narrow', 'client_credentials', ['staging']);
+      // The registry won't save an empty list, but a list narrowed after the fact must still hold at the door.
+      await store.transaction((tx) => tx.updateAtfRunner(board.id, narrow.id, { environments: [] }));
+      const get = (bearer: string) => app.request(`/integrations/boards/${String(board.id)}/atf-specs?${query(D3)}`, { headers: { authorization: `Bearer ${bearer}` } });
+      expect((await get(`client_credentials:${String(narrow.id)}`)).status).toBe(403);
+      expect((await get(`oidc:${String(serving.id)}`)).status).toBe(200);
+    });
+
+    it('refuses a credential that two verifiers resolve to different runners', async () => {
+      const a = await register('A', 'oidc', ['staging']);
+      const b = await register('B', 'oidc', ['staging']);
+      const both: RunnerVerifier[] = [
+        (boardId) => Promise.resolve({ runnerId: a.id, boardId, name: a.name, method: 'oidc', environments: null }),
+        (boardId) => Promise.resolve({ runnerId: b.id, boardId, name: b.name, method: 'oidc', environments: null }),
+      ];
+      const ambiguous = createRunnerAuthenticator({ store, tokens: { authenticate: () => Promise.resolve({ ok: false, error: { code: 'forbidden', message: 'no' } }) }, verifiers: both, log: () => undefined });
+      expect(await ambiguous(board.id, 'anything')).toBeNull();
+      const one = createRunnerAuthenticator({ store, tokens: { authenticate: () => Promise.resolve({ ok: false, error: { code: 'forbidden', message: 'no' } }) }, verifiers: [both[0] ?? fakeVerifier('oidc')], log: () => undefined });
+      expect(await one(board.id, 'anything')).toMatchObject({ runnerId: a.id, name: 'A', method: 'oidc', environments: ['staging'] });
+    });
+
+    it('tells a pipeline on the legacy token to move, and logs the use by board without the token', async () => {
+      const used = () => logs.filter((l) => l.startsWith(`atf legacy token: Board ${String(board.id)} `)).length;
+      const before = used();
+      const answer = await viaToken(D3);
+      expect(answer.headers.get('deprecation')).toBe('true');
+      expect(answer.headers.get('link')).toContain('rel="deprecation"');
+      expect(answer.headers.get('link')).toContain('catalog/scripts/README.md');
+      // Logged at most once an hour per board: the earlier tests' calls already logged this board's use.
+      expect(used()).toBe(before);
+      expect(before).toBe(1);
+      // Neither tokens nor credentials ever reach a log line.
+      expect(logs.some((l) => l.includes(token) || l.includes('oidc:'))).toBe(false);
+    });
+
+    it('keeps the legacy 401s plain too', async () => {
+      const refused = await viaToken(D3, 'slopit_wrong');
+      expect(refused.status).toBe(401);
+      expect(await refused.json()).toEqual({ code: 'unauthenticated', message: 'Unauthenticated' });
+      expect(refused.headers.get('deprecation')).toBeNull();
+    });
+  });
 });
+

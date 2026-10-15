@@ -17,7 +17,16 @@
 # Where it asks, and with what (set by the project's environment variables; nothing here names a board):
 #   SLOP_URL       slop's address, e.g. https://slop.example.com
 #   SLOP_BOARD     the board's number
-#   SLOP_TOKEN     the board's integration token (a bearer credential that can read this list)
+#   Identity (SLOP_ATF_AUTH=oidc|client|aws|token forces one; otherwise the first that applies, in this order). Register it on the board as an ATF
+#   runner (README.md); a token is never printed:
+#   SLOP_OIDC_TOKEN  a JWT from the CI system (GitHub Actions: github-actions-atf.yml), sent as the bearer
+#   SLOP_CLIENT_ID, SLOP_CLIENT_SECRET, SLOP_TOKEN_URL   a client-credentials runner's client (shown once when an admin
+#                    registers it): the script exchanges them for an access token (scope slop/atf.read-specs, or SLOP_ATF_SCOPE)
+#                    with the secret in a mode-600 file, never on the command line. The secret and token are never printed.
+#   AWS credentials  when SLOP_TOKEN is not set and the environment has AWS credentials: a JWT from AWS outbound identity
+#                    federation (STS GetWebIdentityToken; audience SLOP_OIDC_AUDIENCE, else SLOP_URL). Needs the aws CLI
+#                    with `sts get-web-identity-token`, or python3 with a boto3 that has it.
+#   SLOP_TOKEN       the board's integration token (deprecated for ATF: slop answers with a Deprecation header)
 #   SLOP_ENVIRONMENT, SLOP_SHA   the environment tested and the commit it runs (the first argument overrides the
 #                  environment; the commit falls back to CODEBUILD_RESOLVED_SOURCE_VERSION when that is a SHA)
 #   SLOP_ATF_ENDPOINT      the full URL to ask, instead of $SLOP_URL/integrations/boards/$SLOP_BOARD/atf-specs
@@ -27,6 +36,77 @@
 # When slop starts the build itself (a push-mode board) the list is already in SLOP_ATF_SPECS (even if empty), and
 # this script asks for nothing. It never fails the pipeline: any problem is a warning, the list stays empty and
 # the default suite runs. No `set -e` and no `exit`, so sourcing it can't end the caller's shell.
+
+slop_atf_have_aws() {
+  command -v aws >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || return 1
+  [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}${AWS_WEB_IDENTITY_TOKEN_FILE:-}${AWS_PROFILE:-}" ]
+}
+
+# A JWT from AWS outbound identity federation for slop's audience, on stdout; fails quietly when AWS can't issue one.
+slop_atf_aws_token() {
+  local audience="${SLOP_OIDC_AUDIENCE:-${SLOP_URL:-}}" token=""
+  audience="${audience%/}"
+  [ -n "$audience" ] || return 1
+  if command -v aws >/dev/null 2>&1; then
+    token="$(aws sts get-web-identity-token --audience "$audience" --signing-algorithm RS256 --duration-seconds 300 \
+      --query WebIdentityToken --output text 2>/dev/null)" || token=""
+  fi
+  if { [ -z "$token" ] || [ "$token" = "None" ]; } && command -v python3 >/dev/null 2>&1; then
+    token="$(SLOP_AUD="$audience" python3 -c 'import os, boto3
+print(boto3.client("sts").get_web_identity_token(Audience=[os.environ["SLOP_AUD"]], SigningAlgorithm="RS256", DurationSeconds=300)["WebIdentityToken"])' 2>/dev/null)" || token=""
+  fi
+  [ -n "$token" ] && [ "$token" != "None" ] || return 1
+  printf '%s' "$token"
+}
+
+# An access token for a client-credentials runner on stdout (SLOP_CLIENT_ID, SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, asking
+# for scope $1, or SLOP_ATF_SCOPE when set); fails quietly. The secret reaches curl through a mode-600 config file, never the
+# command line, and is never printed. The token is requested once per script run (the credential is chosen once).
+slop_atf_client_token() {
+  local scope="${SLOP_ATF_SCOPE:-$1}" cfg="" out="" code="" token=""
+  [ -n "${SLOP_CLIENT_ID:-}" ] && [ -n "${SLOP_CLIENT_SECRET:-}" ] && [ -n "${SLOP_TOKEN_URL:-}" ] || return 1
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 1
+  # Characters that would break out of a curl config string are not in any client id, secret or scope.
+  case "${SLOP_CLIENT_ID}${SLOP_CLIENT_SECRET}${scope}" in
+    *'"'* | *\\* | *$'\n'* | *$'\r'*) return 1 ;;
+  esac
+  cfg="$(mktemp 2>/dev/null)" || return 1
+  out="$(mktemp 2>/dev/null)" || { rm -f "$cfg"; return 1; }
+  chmod 600 "$cfg" "$out" 2>/dev/null
+  printf 'user = "%s:%s"\ndata-urlencode = "grant_type=client_credentials"\ndata-urlencode = "scope=%s"\n' \
+    "$SLOP_CLIENT_ID" "$SLOP_CLIENT_SECRET" "$scope" >"$cfg"
+  code="$(curl -sS --max-time 20 -K "$cfg" -o "$out" -w '%{http_code}' "$SLOP_TOKEN_URL" 2>/dev/null)" || code="000"
+  if [ "$code" = "200" ]; then
+    token="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("access_token", ""))
+except Exception:
+    pass' "$out" 2>/dev/null)" || token=""
+  fi
+  rm -f "$cfg" "$out"
+  [ -n "$token" ] || return 1
+  printf '%s' "$token"
+}
+
+# Prints the method on the first line and the bearer on the second, or fails when no identity is available.
+slop_atf_credential() {
+  local want="${SLOP_ATF_AUTH:-}" token=""
+  if [ -z "$want" ]; then
+    if [ -n "${SLOP_OIDC_TOKEN:-}" ]; then want=oidc
+    elif [ -n "${SLOP_CLIENT_ID:-}" ] && [ -n "${SLOP_CLIENT_SECRET:-}" ]; then want=client
+    elif [ -z "${SLOP_TOKEN:-}" ] && slop_atf_have_aws; then want=aws
+    elif [ -n "${SLOP_TOKEN:-}" ]; then want=token
+    fi
+  fi
+  case "$want" in
+    oidc) token="${SLOP_OIDC_TOKEN:-}" ;;
+    client) token="$(slop_atf_client_token slop/atf.read-specs)" || token="" ;;
+    aws) token="$(slop_atf_aws_token)" || token="" ;;
+    token) token="${SLOP_TOKEN:-}" ;;
+  esac
+  [ -n "$token" ] || return 1
+  printf '%s\n%s\n' "$want" "$token"
+}
 
 # Seconds slop asked to wait before the next ask (15 when it didn't say), at most 30.
 slop_atf_retry_after() {
@@ -61,20 +141,31 @@ slop_atf_specs() {
   if [ -z "$endpoint" ] && [ -n "${SLOP_URL:-}" ] && [ -n "${SLOP_BOARD:-}" ]; then
     endpoint="${SLOP_URL%/}/integrations/boards/${SLOP_BOARD}/atf-specs"
   fi
-  if [ -z "$endpoint" ] || [ -z "${SLOP_TOKEN:-}" ] || [ -z "$environment" ] || [ -z "$sha" ]; then
-    echo "atf-specs: needs SLOP_URL, SLOP_BOARD, SLOP_TOKEN, an environment and the deployed commit (SLOP_SHA); running the default suite" >&2
+  if [ -z "$endpoint" ] || [ -z "$environment" ] || [ -z "$sha" ]; then
+    echo "atf-specs: needs SLOP_URL, SLOP_BOARD, an environment and the deployed commit (SLOP_SHA); running the default suite" >&2
     return 0
   fi
+  local cred method bearer
+  cred="$(slop_atf_credential)" || {
+    echo "atf-specs: no identity (set SLOP_OIDC_TOKEN, SLOP_CLIENT_ID with SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, or SLOP_TOKEN, or run with AWS credentials); running the default suite" >&2
+    return 0
+  }
+  method="$(printf '%s\n' "$cred" | sed -n '1p')"
+  bearer="$(printf '%s\n' "$cred" | sed -n '2p')"
   command -v curl >/dev/null 2>&1 || { echo "atf-specs: curl isn't installed; running the default suite" >&2; return 0; }
   command -v python3 >/dev/null 2>&1 || { echo "atf-specs: python3 isn't installed; running the default suite" >&2; return 0; }
 
-  local body answer code deadline wait_s poll
+  local body answer code deadline wait_s poll headers
   body="$(mktemp 2>/dev/null)" || { echo "atf-specs: couldn't create a temporary file; running the default suite" >&2; return 0; }
+  headers="$(mktemp 2>/dev/null)" || { rm -f "$body" "$headers"; echo "atf-specs: couldn't create a temporary file; running the default suite" >&2; return 0; }
+  chmod 600 "$headers" 2>/dev/null
+  # The bearer goes through a header file, not the command line, so it isn't visible in the process list.
+  printf 'Authorization: Bearer %s\n' "$bearer" >"$headers"
   wait_s="${SLOP_ATF_WAIT:-120}"
   deadline=$(( $(date +%s) + wait_s ))
   while :; do
     code="$(curl -sS --max-time 20 -G -o "$body" -w '%{http_code}' \
-      -H "Authorization: Bearer ${SLOP_TOKEN}" \
+      -H "@$headers" \
       --data-urlencode "environment=${environment}" --data-urlencode "sha=${sha}" \
       "$endpoint" 2>/dev/null)" || code="000"
     case "$code" in
@@ -87,19 +178,24 @@ slop_atf_specs() {
         [ -n "$poll" ] || poll=15
         if [ "$(date +%s)" -ge "$deadline" ]; then
           echo "atf-specs: slop hadn't finished checking the deploy after ${wait_s}s; running the default suite" >&2
-          rm -f "$body"
+          rm -f "$body" "$headers"
           return 0
         fi
         sleep "$poll"
         ;;
       409)
         echo "atf-specs: a newer deploy replaced $sha in $environment; running the default suite" >&2
-        rm -f "$body"
+        rm -f "$body" "$headers"
+        return 0
+        ;;
+      401)
+        echo "atf-specs: slop didn't accept the ${method} identity (is the runner registered, enabled and serving $environment?); running the default suite" >&2
+        rm -f "$body" "$headers"
         return 0
         ;;
       *)
         echo "atf-specs: slop answered ${code} (not 200); running the default suite" >&2
-        rm -f "$body"
+        rm -f "$body" "$headers"
         return 0
         ;;
     esac
@@ -116,10 +212,10 @@ greps = [g["grep"] for g in body.get("greps", []) if isinstance(g, dict) and isi
 print("\x1f".join(specs))
 print(greps[0] if len(greps) == 1 else "|".join("(?:%s)" % g for g in greps))
 PY
-)" || { echo "atf-specs: couldn't read slop's answer; running the default suite" >&2; rm -f "$body"; return 0; }
+)" || { echo "atf-specs: couldn't read slop's answer; running the default suite" >&2; rm -f "$body" "$headers"; return 0; }
 
   mkdir -p "$reports" 2>/dev/null && cp "$body" "$reports/specs.json" 2>/dev/null
-  rm -f "$body"
+  rm -f "$body" "$headers"
   local specs_line grep_line
   specs_line="$(printf '%s\n' "$answer" | sed -n '1p')"
   grep_line="$(printf '%s\n' "$answer" | sed -n '2p')"
@@ -135,4 +231,4 @@ PY
 }
 
 slop_atf_specs "$@"
-unset -f slop_atf_specs slop_atf_retry_after
+unset -f slop_atf_specs slop_atf_retry_after slop_atf_have_aws slop_atf_aws_token slop_atf_client_token slop_atf_credential

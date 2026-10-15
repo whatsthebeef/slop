@@ -1,12 +1,11 @@
-import type { Board, Effect, EffectKind, TestRunService } from '@slop/core';
-import { AtfRefusedError } from './atf-starter.js';
-import type { AtfStarter } from './atf-starter.js';
+import { AtfRefusedError } from '@slop/core';
+import type { Board, Effect, EffectKind, RunnerStarter, TestRunService } from '@slop/core';
 import type { Outcome, SettledExecutor } from './jobs/outbox.js';
 
 /** What `start_atf` needs to run; split from the executor table so it can be exercised without the outbox. */
 export interface AtfStartDeps {
   readonly testRuns: Pick<TestRunService, 'atfBatch'>;
-  readonly starter: AtfStarter;
+  readonly starter: RunnerStarter;
   readonly boardOf: (id: number) => Promise<Pick<Board, 'atf'> | null>;
   readonly log: (task: string, message: string) => void;
 }

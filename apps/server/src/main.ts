@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -34,7 +34,11 @@ import { HostBranchFiles } from './branch-files.js';
 import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
+import { createRunnerAuthenticator } from './atf-auth.js';
+import { AwsCognitoClients, cognitoRunnerCredentials, createCognitoRunnerVerifier } from './atf-cognito.js';
+import { createOidcRunnerVerifier } from './atf-oidc.js';
 import { atfExecutors } from './atf-executors.js';
+import { WebhookSecrets, atfWebhookExecutors, dnsResolver, httpsTransport, runnerWebhooks } from './atf-webhooks.js';
 import { CodeBuildAtfStarter } from './atf-starter.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
@@ -45,6 +49,8 @@ import { CapabilityReader, CapabilityWatch } from './capabilities.js';
 import { reviewExecutors } from './review-executors.js';
 import { makeRunReview } from './review-runner.js';
 import { mountArtifactUploads } from './http/artifact-upload.js';
+import { mountAtfResults } from './http/atf-results.js';
+import { mountAtfRunners } from './http/atf-runners.js';
 import { mountAtfSpecs } from './http/atf-specs.js';
 import { mountDeploys } from './http/deploys.js';
 import { mountWeb } from './http/web.js';
@@ -151,6 +157,8 @@ const github = new GitHub(githubCredentials, integrations);
 const boardOf = (id: number) => store.transaction((tx) => tx.getBoard(id));
 // Signs agent-set download links, the board sign-in state and deploy callbacks.
 const links = new SignedLinks(config.SIGNING_SECRET);
+// Deploy-live webhooks seal each runner's signing secret under a key derived from SIGNING_SECRET: without it (local development) they are off.
+const webhookSecrets = (config.SIGNING_SECRET ?? '') === '' ? null : new WebhookSecrets(config.SIGNING_SECRET ?? '');
 const deploys = new DeployService({
   store,
   notifier: hub,
@@ -172,6 +180,9 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
     ),
     ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(atfPolicy), boardOf, log: logError }),
+    ...(webhookSecrets === null
+      ? {}
+      : atfWebhookExecutors({ store, secrets: webhookSecrets, resolve: dnsResolver, transport: httpsTransport(), clock: { now: () => new Date().toISOString() }, log: logError })),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
     // `rolloutService` is built below and only called once a job runs.
     ...rolloutExecutors(
@@ -549,7 +560,34 @@ mountSkillZip(app, {
   uploadHost: config.ATTACHMENTS_BUCKET === undefined ? null : `${config.ATTACHMENTS_BUCKET}.s3.${config.ATTACHMENTS_REGION}.amazonaws.com`,
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
-mountAtfSpecs(app, { testRuns, boards, tokens: integrationTokens });
+// ATF runners (spec, ATF runners): each identity method adds a verifier here; the board's integration token is the legacy way in.
+// Client credentials need slop's own Cognito pool; without its settings (local development) that method can't authenticate or be issued.
+const cognitoClients =
+  config.AUTH_MODE === 'cognito' && config.COGNITO_USER_POOL_ID !== undefined && config.COGNITO_REGION !== undefined
+    ? new AwsCognitoClients({ userPoolId: config.COGNITO_USER_POOL_ID, region: config.COGNITO_REGION })
+    : null;
+const atfRunners = new AtfRunnerService({
+  store,
+  clock,
+  ...(cognitoClients === null ? {} : { issuer: cognitoRunnerCredentials(cognitoClients, `https://${config.COGNITO_DOMAIN ?? ''}/oauth2/token`) }),
+  ...(webhookSecrets === null ? {} : { webhooks: runnerWebhooks(webhookSecrets) }),
+  log: logError,
+});
+const oidcRunnerVerifier = createOidcRunnerVerifier({
+  store,
+  oidcIssuers: config.ATF_OIDC_ALLOWED_ISSUERS,
+  awsIssuers: config.ATF_AWS_ALLOWED_ISSUERS,
+  awsAccounts: config.ATF_AWS_ALLOWED_ACCOUNTS,
+  audience: config.ATF_OIDC_AUDIENCE ?? config.PUBLIC_URL,
+});
+const atfVerifiers = [
+  ...(oidcRunnerVerifier === null ? [] : [oidcRunnerVerifier]),
+  ...(cognitoClients === null || config.COGNITO_USER_POOL_ID === undefined ? [] : [createCognitoRunnerVerifier({ store, userPoolId: config.COGNITO_USER_POOL_ID })]),
+];
+const authenticateRunner = createRunnerAuthenticator({ store, tokens: integrationTokens, verifiers: atfVerifiers, log: logError });
+mountAtfSpecs(app, { testRuns, boards, authenticate: authenticateRunner, runners: atfRunners, log: logError });
+mountAtfResults(app, { testRuns, runners: atfRunners, authenticate: authenticateRunner, log: logError });
+mountAtfRunners(app, { runners: atfRunners });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
 mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, contextTuning, hotspots, contextReport, knowledgePage, agentSetCommit, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
@@ -579,6 +617,7 @@ const capabilities = new CapabilityReader({
   slackConfigured: config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined,
   codeIndexRuns: config.SLOP_JOBS.has('code'),
   deployResultsConfigured: config.AWS_WEBHOOK_KEY.length > 0,
+  atfClients: cognitoClients,
 });
 const outboxBacklog = async (): Promise<Record<string, number>> => {
   const rows = await db

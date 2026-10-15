@@ -1,0 +1,81 @@
+# Example GitHub Actions workflow that runs a board's acceptance tests (ATF) and reports to slop with GitHub's OIDC token:
+# no slop secret is stored. Copy it to the application repository's .github/workflows/ (it is kept here, not under
+# .github/workflows, so it doesn't run in the repository that holds the catalog). Adjust the trigger, the Node setup and
+# the test command; the slop steps stay.
+#
+# One-time setup (README.md, "OIDC runner"): a server admin lists https://token.actions.githubusercontent.com in
+# ATF_OIDC_ALLOWED_ISSUERS; a board admin registers an OIDC runner on the board with the issuer above and claim rules that
+# pin this repository (and optionally the branch or workflow), serving the environment the workflow tests.
+#
+# Repository variables: SLOP_URL (e.g. https://slop.example.com) and SLOP_BOARD (the board's number). The audience of the
+# token is SLOP_URL unless the repository variable SLOP_OIDC_AUDIENCE says otherwise (it must equal the server's ATF_OIDC_AUDIENCE,
+# which defaults to its public URL). The scripts .sstor/atf-specs.sh and .sstor/atf-report.sh come from slop's setup.
+#
+# Reporting never fails the job: the scripts warn and exit 0 when slop can't be reached or doesn't accept the token.
+name: ATF
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: The slop environment under test
+        required: true
+        default: staging
+  # Add the trigger that fits your pipeline, e.g. `workflow_run` after your deploy workflow, or `deployment_status`.
+
+permissions:
+  contents: read
+  id-token: write # lets the job ask GitHub for an OIDC token
+
+jobs:
+  atf:
+    runs-on: ubuntu-latest
+    env:
+      SLOP_URL: ${{ vars.SLOP_URL }}
+      SLOP_BOARD: ${{ vars.SLOP_BOARD }}
+      SLOP_ENVIRONMENT: ${{ inputs.environment || github.event.deployment.environment || 'staging' }}
+      SLOP_SHA: ${{ github.event.deployment.sha || github.sha }}
+      SLOP_OIDC_AUDIENCE: ${{ vars.SLOP_OIDC_AUDIENCE || vars.SLOP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SLOP_SHA }}
+
+      - name: Get a token for slop
+        # The token is short-lived and only for slop's audience. Masked so it never shows in logs.
+        run: |
+          url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["SLOP_OIDC_AUDIENCE"], safe=""))')"
+          token="$(curl -sS --max-time 20 -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$url" | python3 -c 'import json, sys; print(json.load(sys.stdin)["value"])')" || token=""
+          if [ -n "$token" ]; then
+            echo "::add-mask::$token"
+            echo "SLOP_OIDC_TOKEN=$token" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Could not get an OIDC token; slop will not hear about this run"
+          fi
+
+      - name: Ask slop which specs to run
+        run: |
+          mkdir -p reports/atf
+          . .sstor/atf-specs.sh "$SLOP_ENVIRONMENT" reports/atf
+          # The values come from people's test plans: a random delimiter, as GitHub advises, so no line can end the block early.
+          delimiter="slop_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          {
+            echo "SLOP_ATF_SPECS<<$delimiter"; printf '%s\n' "$SLOP_ATF_SPECS"; echo "$delimiter"
+            echo "SLOP_ATF_GREP<<$delimiter"; printf '%s\n' "$SLOP_ATF_GREP"; echo "$delimiter"
+          } >> "$GITHUB_ENV"
+
+      - name: Run the acceptance tests
+        # Must write JUnit XML under reports/atf/. Your project's command goes here.
+        run: bash .sstor/atf.sh "$SLOP_ENVIRONMENT"
+        continue-on-error: true
+
+      - name: Tell slop how it went
+        if: always()
+        # Needs a fresh token when the tests ran long: GitHub's token lasts about 5 minutes after it is issued, and slop
+        # allows 30 s of clock skew, so this step asks again.
+        run: |
+          url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["SLOP_OIDC_AUDIENCE"], safe=""))')"
+          token="$(curl -sS --max-time 20 -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$url" | python3 -c 'import json, sys; print(json.load(sys.stdin)["value"])')" || token=""
+          if [ -n "$token" ]; then echo "::add-mask::$token"; export SLOP_OIDC_TOKEN="$token"; fi
+          export SLOP_ATF_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          bash .sstor/atf-report.sh "$SLOP_ENVIRONMENT" reports/atf || true

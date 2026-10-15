@@ -4,6 +4,7 @@ import type { StoredHumanStep } from './domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DecisionOrigin } from './domain/attributes.js';
 import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
+import type { AtfRunner, AtfRunnerPatch, NewAtfRunner } from './domain/atf-runners.js';
 import type { AtfBatch, EnvironmentCommit, NewAtfBatch, NewTestRun, StoredRunSpec, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
@@ -31,7 +32,7 @@ import type { LlmSpend, SpendSummary } from './domain/spend.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
-import type { BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
+import type { AtfIntegration, BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
 
 import type { GlobInclude } from './domain/types.js';
 export type { GlobInclude };
@@ -322,6 +323,14 @@ export interface Tx {
   insertAtfBatch(batch: NewAtfBatch): Promise<AtfBatch>;
   /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
   listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
+
+  /** The board's ATF runners, oldest first; revoked ones only when asked (their runs keep pointing at them). */
+  listAtfRunners(boardId: number, options?: { readonly includeRevoked?: boolean }): Promise<AtfRunner[]>;
+  getAtfRunner(boardId: number, id: number): Promise<AtfRunner | null>;
+  /** Registers a runner; null when an active runner of the board already has the name (compared without regard to case). */
+  insertAtfRunner(runner: NewAtfRunner): Promise<AtfRunner | null>;
+  /** Replaces the patch's fields; null when the board has no such runner, or a rename collides with an active runner's name. */
+  updateAtfRunner(boardId: number, id: number, patch: AtfRunnerPatch): Promise<AtfRunner | null>;
 
   /** Records a review to split into findings; null when its artifact or external ID is already recorded. */
   insertReviewSource(source: NewReviewSource): Promise<ReviewSource | null>;
@@ -666,6 +675,32 @@ export interface ObjectStore {
   head(key: string): Promise<ObjectInfo | null>;
   /** Removes the object; fine when it isn't there. */
   delete(key: string): Promise<void>;
+}
+
+/** What a push-mode ATF start needs: where, at which commit, and what to run (empty: the board's default suite). */
+export interface AtfStart {
+  readonly boardId: number;
+  readonly integration: AtfIntegration;
+  readonly environment: string;
+  readonly sha: string;
+  /** Repo-relative spec paths, one per line in `SLOP_ATF_SPECS`. */
+  readonly specs: readonly string[];
+  /** Playwright `--grep` patterns of the batch; combined into one alternation in `SLOP_ATF_GREP`. */
+  readonly greps: readonly string[];
+}
+
+export interface StartedAtf {
+  readonly buildId: string;
+  readonly url: string | null;
+}
+
+/**
+ * Starts a run on a system that can't pull its specs (spec, ATF runners: push is only for those). One adapter per kind of
+ * system, in the server (CodeBuild today). Throws `AtfRefusedError` when the server's allow-list refuses the start, which a
+ * retry can't fix; any other throw is retried by the outbox.
+ */
+export interface RunnerStarter {
+  start(job: AtfStart): Promise<StartedAtf>;
 }
 
 export interface Clock {
