@@ -9,7 +9,8 @@ describe('glob view section registry', () => {
   });
 
   it('lists every section a deep link can open', () => {
-    expect([...GLOB_VIEW_SECTIONS].sort()).toEqual([...GLOB_SECTIONS].sort());
+    // 'due-steps' is not in the fixed order: viewSections adds it while a step is due.
+    expect([...GLOB_VIEW_SECTIONS].sort()).toEqual(GLOB_SECTIONS.filter((s) => s !== 'due-steps').sort());
   });
 
   it('lists the blocks above the actions in one order: problems, then what needs a person, then information', () => {
@@ -27,8 +28,9 @@ describe('glob view section registry', () => {
   it('puts the due Human steps after the labels and before the information blocks', () => {
     for (const decision of [false, true]) {
       const order = viewSections(decision, true);
-      expect(order.indexOf('human-steps')).toBeGreaterThan(order.indexOf('labels'));
-      expect(order.indexOf('human-steps')).toBeLessThan(order.indexOf('escalation'));
+      expect(order.indexOf('due-steps')).toBeGreaterThan(order.indexOf('labels'));
+      expect(order.indexOf('due-steps')).toBeLessThan(order.indexOf('escalation'));
+      expect(order.indexOf('human-steps')).toBeGreaterThan(order.indexOf('actions'));
       expect(new Set(order).size).toBe(order.length);
     }
   });
