@@ -116,7 +116,7 @@ describe('Human steps with a repo script', () => {
   });
 
   it('links the file at the recorded squash commit when slop has one', () => {
-    show({ ...withScript('merged'), prs: [{ number: 3, mergeSha: 'feed42', mergedAt: '2026-10-15T00:00:00Z' }] } as unknown as GlobView);
+    show({ ...withScript('merged'), prs: [{ number: 3, mergeSha: 'feed42', mergedAt: '2026-10-15T00:00:00Z' }] });
     expect(screen.getByTestId('step-script-source').getAttribute('href')).toBe('https://github.com/acme/app/blob/feed42/scripts/rollout/s1t1-ruleset.sh');
   });
 
