@@ -1661,6 +1661,23 @@ describe('conflicts flagged after a merge', () => {
     expect(by({ state: 'ended', outcome: 'superseded' })).toMatchObject({ by: 'human' });
   });
 
+  it('clears the failure of a failed conflict-fix run when the conflict clears, and keeps failures of other kinds', () => {
+    const failed = (failure: Record<string, unknown>) => {
+      const g = glob({
+        status: 'pr_open',
+        pr,
+        conflict: { ...found, at: NOW },
+        failure: failure as never,
+        runs: [run({ purpose: 'resolve_conflict', state: 'ended', outcome: 'failed' })],
+      });
+      return value(m.conflictCleared(g, ctx(null))).glob;
+    };
+    expect(failed({ reason: 'Merge of origin/main conflicts in the same logic', at: NOW }).failure).toBeNull();
+    expect(failed({ reason: 'x', at: NOW, kind: 'needs_pairing' }).failure).not.toBeNull();
+    expect(failed({ reason: 'x', at: NOW, kind: 'merge' }).failure).not.toBeNull();
+    expect(failed({ reason: 'x', at: NOW, kind: 'provisioning' }).failure).not.toBeNull();
+  });
+
   it('a push rechecks a flagged conflict; merging clears it', () => {
     const flagged = glob({ status: 'in_progress', pr, conflict: { ...found, at: NOW } });
     const pushed = value(m.commitPushed(flagged, { sha: 'def5678', runId: null }, ctx(null)));
