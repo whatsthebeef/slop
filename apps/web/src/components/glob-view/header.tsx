@@ -2,10 +2,8 @@ import { decisionOf } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
-import { GroupChip } from '../glob-card';
-import { LabelChips } from '../labels';
 import { Tip } from '../ui/tip';
-import { groupPath } from '@/lib/group-page';
+import { LIST_TITLES } from '@/lib/list-titles';
 import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
 import { EscalationChip } from './escalation';
@@ -16,15 +14,25 @@ import type { NowState } from './status';
 /** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
 export const HEADER_HEIGHT_VAR = '--glob-header-height';
 
-/** The sticky bar, a compact single row (small vertical padding, no fixed height): back to the board, the glob's ID, and the status at the top right. */
+/** The dot between the top bar's left-hand parts. */
+const Dot = () => (
+  <span aria-hidden className="-mx-1 shrink-0 text-muted-foreground">
+    ·
+  </span>
+);
+
+/** The sticky bar, a compact single row (small vertical padding, no fixed height): back to the board, then "ID · type ▾ · list", and the status at the top right. */
 export const GlobHeader = ({
   ctx,
   onClose,
   state,
+  actions,
 }: {
   ctx: GlobViewContext;
   onClose: () => void;
   state: NowState;
+  /** The actions state the type control works from; without it (or for a decision) the type shows as plain text. */
+  actions?: GlobActionsState;
 }) => {
   const { glob } = ctx;
   const decision = decisionOf(glob) !== null;
@@ -80,34 +88,30 @@ export const GlobHeader = ({
         <span className="shrink-0 self-center font-mono text-base font-semibold text-muted-foreground" data-testid="glob-id">
           {glob.id}
         </span>
+        <Dot />
+        {decision || actions === undefined ? (
+          <span className="shrink-0 text-sm font-medium" data-testid="glob-type">
+            {decision ? 'decision' : glob.type}
+          </span>
+        ) : (
+          <span className="shrink-0">
+            <TypeChip ctx={ctx} state={actions} />
+          </span>
+        )}
+        <Dot />
+        <span className="min-w-0 truncate text-sm text-muted-foreground" data-testid="glob-list">
+          {LIST_TITLES[glob.list]}
+        </span>
         <HeaderStatus glob={glob} decision={decision} state={state} />
       </div>
     </>
   );
 };
 
-/** The chips under the title: type, escalation, group and labels. */
-export const GlobChips = ({
-  ctx,
-  actions,
-}: {
-  ctx: GlobViewContext;
-  actions: GlobActionsState;
-}) => {
-  const { glob } = ctx;
-  const decision = decisionOf(glob) !== null;
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      {decision ? (
-        <span className="rounded border px-2 py-0.5 text-xs" data-testid="glob-type">
-          decision
-        </span>
-      ) : (
-        <TypeChip ctx={ctx} state={actions} />
-      )}
+/** The needs-a-person chip under the title, only while it applies, so no empty line is left there; type, group and labels live elsewhere. */
+export const GlobChips = ({ ctx }: { ctx: GlobViewContext }) =>
+  ctx.glob.escalation == null || ctx.glob.status !== 'planning' ? null : (
+    <div className="flex items-center gap-2 text-sm">
       <EscalationChip ctx={ctx} />
-      {glob.group !== null && <GroupChip name={glob.group} to={groupPath(glob.boardId, glob.group)} />}
-      {!decision && <LabelChips glob={glob} />}
     </div>
   );
-};

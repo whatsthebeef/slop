@@ -29,6 +29,8 @@ import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-l
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
+import { GroupChip } from '../glob-card';
+import { groupPath } from '@/lib/group-page';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
 import { splittable } from './size';
@@ -284,6 +286,7 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
     busy={state.busy}
     failure={state.typeFailure}
     onChange={(option) => state.run(() => state.changeType(option))}
+    compact
   />
 );
 
@@ -636,9 +639,15 @@ export const GlobActions = ({
       </DropdownMenuContent>
     </DropdownMenu>
   ) : undefined;
+  const group =
+    glob.group === null ? null : (
+      <span className="ml-auto min-w-0 max-w-full" data-testid="glob-group">
+        <GroupChip name={glob.group} to={groupPath(glob.boardId, glob.group)} />
+      </span>
+    );
   return (
     <>
-      {hasMain && (
+      {(hasMain || group !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {main === null && stepTurn !== null && (
@@ -686,6 +695,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
+            {group}
           </div>
           {state.confirmingReady && (
             <div
