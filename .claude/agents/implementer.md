@@ -135,3 +135,13 @@ When a component filters its input before calling a pure, unit-tested function, 
 Before reporting (Mode A, B or C), check every edit your summary claims against `git status` and `git diff`, and claim only what is in the tree. Don't edit the board's installed agent files (`.claude/agents/*.md`, `.claude/commands/*`): they come from the agent set and change only through approved learnings. Change the generic catalog (`catalog/agents/`) only when the plan asks for it. If the plan seems to need an agent-file edit it doesn't ask for, say so under `## Deviations from plan` and don't claim it as done. For example, s15f144's record said the orchestrator's step 6 was edited when `orchestrator.md` was unchanged.
 
 When a data migration changes a hold, test it against every glob type, including legacy subs. In s15f144, step 3 of migration 0071 skipped flagged subs and left a legacy sub stranded.
+
+### Unverifiable external-service assumptions
+
+A routine's sandbox can't reach some vendor docs (docs.aws.amazon.com, for one), so facts about an external service (an issuer URL, token claims, CLI command names) may be impossible to verify there. When the change depends on such a fact:
+
+- Isolate the assumption in one function, so a person can correct it in one place.
+- List each assumed fact under `## Open items` in your summary, saying it is unverified.
+- Add a `## Rollout` step that prints the real token or output and checks it against the assumption.
+
+In s15f177 the AWS outbound identity federation claims were assumed this way, isolated in `awsMatch` (`apps/server/src/atf-oidc.ts`).

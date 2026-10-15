@@ -187,3 +187,8 @@ End the plan file with one fenced block, ```` ```investigation ````, holding a J
 - **Every run:** where the plan is ambiguous, contradicts the code, or has a "Done when" line that can't be checked, quote the line under `## Risks / Unknowns` and say what it should say.
 - **Rerun of a failed or superseded run:** first check whether the plan or an attachment caused the failure. Look for a wrong or missing requirement, an outdated attachment, or a criterion the code can't meet. If one did, don't re-propose the same approach. Name the plan or attachment change needed.
 - If the run can't go ahead without that change, set `needsHuman` to `needed: true` with the change as the `reason`.
+
+### Stale plans
+
+- Before proposing changes from plan.md, check that what it asks to change still exists on main: open the components, filters or functions it names. A related glob may have merged since the plan was written (s15f174's plan asked to merge Feature and Task filter chips that s15f170 had already removed).
+- When the plan no longer matches main, say so in the investigation's first lines: name the glob that changed it and the commit you read, then propose against the current code, not the plan's literal wording.

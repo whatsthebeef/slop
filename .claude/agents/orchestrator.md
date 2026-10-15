@@ -664,10 +664,15 @@ On this board, "more than 3 independent parts" in `risk_and_size` means the work
 
 - When `oversized` / `sizeCheck` flags a glob, or plan.md clearly holds more independent parts than `risk_and_size` allows, have the investigator list the parts under `## Workstreams` in the plan file.
 - Fan the implementation out across those workstreams in worktrees, and land them all on the glob's own branch and PR.
+- **In a routine, `isolation: worktree` branches from main, not from the glob's branch.** The worktree lacks W0 and every earlier workstream's commits, and the implementer may be denied a `git merge` of the glob branch. Run a workstream that needs W0 (or another integrated workstream) in the main checkout, told not to commit or switch branches, and commit its work yourself as `<id>: <workstream>`, or tell its implementer to base its worktree on the glob's tip first. Only workstreams that need nothing on the glob's branch (e.g. catalog) go in worktrees.
+- **From a worktree, the Write tool refuses paths in the main checkout's `.reviews/`.** Say so in each worktree brief and give the implementer an absolute scratchpad path for its summary instead of `.reviews/<id>-implementation-<workstream>.md`; copy the summary into `.reviews/` yourself when it returns.
+- **Plan an integration pass.** Parallel workstreams that both touch an interface (a shared dependency's type, a trigger, a classification step) can build it in different shapes. Tell their implementers up front, and add an explicit step after integrating them that reconciles those interfaces and runs the fast checks.
 - Don't call `split_glob` to keep a glob under the limit, either before it starts or in Phase 1. Don't create its parts as follow-up globs either.
 - A scope cut is offered to a person only in an interactive session: if the work still looks too big as workstreams, propose the cut with `AskUserQuestion`. Unattended, don't cut scope. Carry out every workstream and record any size concern in the `Assumptions` attachment.
 
 In s15f143 (ec8af97, bbf45b8), the orchestrator, investigator and implementer were changed to cut work into workstreams and fan out in worktrees instead of splitting globs.
+
+In s15t228, W1 found no W0 code in its worktree (branched from main) and its `git merge --ff-only s15t228` was denied. In s15b148, W5 could not write `.reviews/s15b148-implementation-W5.md` from its worktree, and W1 and W2 built the `relationScan` dependency in different shapes, needing an integration commit (5dac2be).
 
 ### Specs that name missing infrastructure
 
