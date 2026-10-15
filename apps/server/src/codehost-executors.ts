@@ -239,7 +239,8 @@ export const codeHostExecutors = (
         await waitForCancelledChecks(repo, sha);
         return 'done';
       }
-      const passed = state === 'passed' || state === 'behind';
+      // A behind head counts only by its own check runs: `behind` is not a pass.
+      const passed = state === 'passed';
       // A conflict after slop updated the branch is its own failure, not a failing check.
       const conflict = state === 'conflict' ? { base: repo.base, files: await host.conflictFiles(repo, glob.pr.number) } : undefined;
       // Say what failed, and whether the base branch fails the same way (then it isn't this glob's change).
@@ -406,16 +407,24 @@ export const codeHostExecutors = (
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       const prNumber = glob.pr.number;
-      const result = await host.squashMerge(repo, glob, prNumber, effect.sha, glob.mergeUpdates ?? 0);
+      const result = await host.squashMerge(repo, glob, prNumber, effect.sha);
       switch (result.outcome) {
         case 'merged':
           // Slop's own merge response; the `closed` webhook that follows is a no-op (rows 15 and 31).
           await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha, number: prNumber }, ctx));
           break;
         case 'updating':
-          // The update pushes a new head; its checks resume the merge. Count it: the next pass merges even if behind.
-          if ((glob.mergeUpdates ?? 0) >= 1) log('merge', `${glob.id} refused a behind merge (branch must be up to date); updated the branch again`);
+          // The update pushes a new head; its checks resume the merge. A behind head is never merged as it is.
+          if ((glob.mergeUpdates ?? 0) >= 1) log('merge', `${glob.id} was behind ${repo.base} again; updated the branch again`);
           await globs.applyEvent(glob.id, (g, ctx) => machine.mergeBranchUpdated(g, ctx));
+          break;
+        case 'checks_not_green':
+          // Slop's own gate (its App bypasses the ruleset): the head's checks aren't green, so it isn't merged. Pending ones
+          // are retried; the outbox's last attempt, and a failed head, hand the glob back.
+          if (result.state !== 'failed' && attempt?.final !== true) throw new Error('The PR head\'s checks are not green yet');
+          await globs.applyEvent(glob.id, (g, ctx) =>
+            machine.mergeFailed(g, `Not merged: the head's checks ${result.state === 'failed' ? 'failed' : 'have not passed'}`, ctx),
+          );
           break;
         case 'conflict':
           {

@@ -34,15 +34,16 @@ export const classifyMergeState = (
     case 'has_hooks':
       return noSuccessfulRun(runs) ? 'pending' : 'passed';
     case 'unstable':
-    case 'blocked': {
+    case 'blocked':
+    case 'behind': {
       if (runs.some((r) => r.status === 'completed' && r.conclusion !== null && FAILED_CONCLUSIONS.has(r.conclusion))) {
         return 'failed';
       }
       if (runs.some(isUnfinished)) return 'pending';
-      return mergeableState === 'unstable' ? 'failed' : 'pending';
+      if (mergeableState === 'unstable') return 'failed';
+      // A behind head is judged by its own runs, like a clean one: a run that is still going, or none yet, is not a pass.
+      return mergeableState === 'behind' && !noSuccessfulRun(runs) ? 'passed' : 'pending';
     }
-    case 'behind':
-      return 'behind';
     case 'dirty':
       return 'conflict';
     case 'draft':
