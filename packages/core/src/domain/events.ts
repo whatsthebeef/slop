@@ -30,6 +30,8 @@ export const DOMAIN_EVENT_TYPES = [
   'MergeResumed',
   /** Slop updated a behind branch while merging (data: how many times for this merge request). */
   'MergeBranchUpdated',
+  /** The code host's merge queue took the PR, or its place in the queue changed (data: `position`, `state`, `sha`). */
+  'MergeQueued',
   'MergeReverted',
   'MergeRevertFailed',
   'MergeRevertDeclined',
@@ -157,6 +159,13 @@ export type Effect =
       readonly checkPrerequisites?: true;
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /**
+   * The code host's merge queue changed (a webhook hint, or a reconcile): re-read the PR's queue entry and state from the
+   * host and apply the truth. `reason` is the dequeue reason the webhook gave; `groupSha` the merge group commit it named.
+   */
+  | { readonly kind: 'read_merge_queue'; readonly globId: string; readonly generation: number; readonly reason?: string; readonly groupSha?: string }
+  /** Take the PR out of the host's merge queue (Cancel merge while queued). */
+  | { readonly kind: 'dequeue_merge'; readonly globId: string; readonly generation: number }
   /** Revert a sub's merge commit on the base branch after the checks on it failed. */
   | { readonly kind: 'revert_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   | { readonly kind: 'reopen_pr'; readonly globId: string; readonly generation: number }
