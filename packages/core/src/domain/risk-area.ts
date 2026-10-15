@@ -81,7 +81,7 @@ export interface RiskOutcome {
   readonly at: string;
 }
 
-/** The board's risk areas and history, for board settings. */
+/** The board's risk areas and history, for the Knowledge page's "What slop has learned". */
 export interface RiskAreaView {
   readonly areas: readonly (RiskArea & {
     readonly subSafe: boolean;

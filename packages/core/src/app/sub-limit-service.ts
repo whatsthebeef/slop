@@ -314,7 +314,7 @@ export class SubLimitService {
     };
   }
 
-  /** The board's limit and its history, for members (board settings). */
+  /** The board's limit and its history, for members (the Knowledge page's "What slop has learned"). */
   async view(email: string, boardId: number): Promise<Result<SubLimitView>> {
     return this.deps.store.transaction(async (tx) => {
       const actor = await memberOf(tx, email, boardId);

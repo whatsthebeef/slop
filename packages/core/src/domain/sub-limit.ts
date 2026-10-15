@@ -64,7 +64,7 @@ export interface SubLimitChange {
 
 export type NewSubLimitChange = Omit<SubLimitChange, 'id'>;
 
-/** The board's limit, its bounds and its history (newest first), for board settings. */
+/** The board's limit, its bounds and its history (newest first), for the Knowledge page's "What slop has learned". */
 export interface SubLimitView {
   readonly current: number;
   /** `step` is the board's current step; `startStep` the one a board starts with. */

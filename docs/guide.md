@@ -82,6 +82,12 @@ A decision glob (ID like `s1k4`) is a proposed change to what the project knows,
 
 A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, or a note on how an agent should behave. Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
 
+## Settings and what slop has learned
+
+**Settings** holds what you choose for the board, in six groups you can open and close (the page remembers which, for you): Board and repository, Members and access, Environments and deploys, Automation, Reports, and System at the bottom (collapsed; what the server can do, read-only). Under each setting's name is a line saying what it does.
+
+What slop has worked out for itself is not in Settings. It is on the **Knowledge page**, under **What slop has learned**, one panel per topic: Size, Subs, Risk areas, Escalation criteria, Dependency rules, Intake, Context tuning and Learning jobs. Open a panel to see the current value in plain words, the default it started from and, collapsed, the history of changes with their causes. Everyone on the board can read them; admins can also reset a value to its default or run its learning job now. Old links to these parts on the Settings page take you to the matching panel.
+
 ## Watch signals and effect checks
 
 Slop looks for patterns in how work goes (for example the same kind of review finding appearing again and again) and raises a learning when one is frequent enough. That pattern is a **signal**.

@@ -104,10 +104,10 @@ export const mountKnowledge = (
     typeLearning?: TypeLearningService;
     /** The learned size threshold; absent: its route isn't mounted. */
     sizeCheck?: SizeCheckService;
-    /** The context report and the reset of a context setting (System page); absent: their routes aren't mounted. */
+    /** The context report and the reset of a context setting (the Knowledge page's "What slop has learned"); absent: their routes aren't mounted. */
     contextTuning?: ContextTuningService;
     contextReport?: ContextReportService;
-    /** Intake's accuracy (System page); absent: its route isn't mounted. */
+    /** Intake's accuracy (the Knowledge page's "What slop has learned"); absent: its route isn't mounted. */
     intakeLearning?: IntakeLearningService;
     /** The generated knowledge page; absent: its routes aren't mounted. */
     knowledgePage?: KnowledgePageService;
@@ -243,7 +243,7 @@ export const mountKnowledge = (
     });
   }
 
-  // The board's learned sub size limit, its bounds and its history (board settings), for members.
+  // The board's learned sub size limit, its bounds and its history (the Knowledge page's "What slop has learned"), for members.
   const { subLimit } = deps;
   if (subLimit !== undefined) {
     app.get('/api/boards/:b/sub-limit', async (c) => send(c, await subLimit.view(c.get('email'), Number(c.req.param('b')))));
@@ -308,7 +308,7 @@ export const mountKnowledge = (
     );
   }
 
-  // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (System page), for members.
+  // How often intake's category and type survived to the merge, by month and prompt version, and typical effort by kind (the Knowledge page's "What slop has learned"), for members.
   const { intakeLearning } = deps;
   if (intakeLearning !== undefined) {
     app.get('/api/boards/:b/intake-accuracy', async (c) => send(c, await intakeLearning.accuracy(c.get('email'), Number(c.req.param('b')))));

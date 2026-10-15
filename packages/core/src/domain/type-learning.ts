@@ -125,7 +125,7 @@ export const typeLearningBlock = (corrections: readonly TypeCorrection[]): strin
         ...corrections.slice(0, TYPE_EXAMPLES_MAX).map((c) => `- ${clip(typeCorrectionLine(c))}`),
       ].join('\n');
 
-/** What board settings shows: whether the board has learned, the defaults it falls back on and its recent corrections. */
+/** What the Knowledge page's "What slop has learned" shows: whether the board has learned, the defaults it falls back on and its recent corrections. */
 export interface TypeLearningView {
   readonly learned: boolean;
   readonly defaults: readonly { readonly when: string; readonly type: SlopType }[];
