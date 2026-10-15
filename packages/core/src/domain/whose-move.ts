@@ -174,7 +174,11 @@ export const whoseMove = (
   const held = appliedHolding(glob, holding);
   // A merge that waits for a relation is not the person's to press yet: the Merge step isn't due while the gate holds.
   const mergeWaits = held.some((h) => h.gate === 'merge');
-  const due = humanSteps.filter((s) => s.kind !== 'unstick' && s.state === 'due' && !(mergeWaits && s.kind === 'merge'));
+  // While slop gets its recommendation for a picked-up decision, the status says so rather than "Decide"; Decide is still usable.
+  const recommending = machineSteps.some((s) => s.kind === 'recommendation' && s.holdsBall && isInFlight(s) && !isStale(s, now, thresholds));
+  const due = humanSteps.filter(
+    (s) => s.kind !== 'unstick' && s.state === 'due' && !(mergeWaits && s.kind === 'merge') && !(recommending && s.kind === 'decide'),
+  );
   if (due.length > 0) {
     const mine = options.viewer === undefined ? [] : due.filter((s) => isForViewer(s, glob, options.viewer as HumanStepViewer));
     if (mine.length > 0 && options.viewer !== undefined) return { holder: 'you', reason: mine[0]?.title ?? '', since: null, who: options.viewer.email };

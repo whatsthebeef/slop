@@ -6,6 +6,7 @@
 import { canChooseType } from '../app/access.js';
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
+import { suggestEffect } from './events.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
 import type { ConflictKind, ConflictResolvedBy } from './conflict-record.js';
 import type { ArtifactSummary, IndependentReviewMeta } from './knowledge.js';
@@ -3534,12 +3535,14 @@ export const pickUpDecision = (glob: Glob, ctx: Context): Result<Transition> => 
       .set({ implementer: actor.email })
       .status('in_progress')
       .event('PickedUp', { takeOver: false })
+      .effect(suggestEffect(glob.id))
       .done();
   }
   if (glob.status === 'in_progress') {
     return new Builder(glob, ctx)
       .set({ implementer: actor.email })
       .event('PickedUp', { takeOver: true })
+      .effect(suggestEffect(glob.id))
       .done();
   }
   return invalidTransition(glob, actor, `A decision in ${glob.status} cannot be picked up`);
