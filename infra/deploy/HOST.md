@@ -8,6 +8,9 @@ prevent that:
 - **The data disk is its own volume**, attached to `/dev/sdf` by an `AWS::EC2::VolumeAttachment`. Prod refuses to
   synthesise without `-c hostDataVolumeId=vol-...`, and the stack never creates production's volume.
 
+On 2026-10-15 a handover deploy replaced the instance (the new one had the data volume but no containers) and nothing
+redeployed slop, so prod returned 504s until the deploy project was run by hand. The checks below are now in the script.
+
 ## Deploying
 
 1. Read both values from the running instance (`<id>` is the stack's `InstanceId` output):
@@ -21,6 +24,14 @@ prevent that:
      is **detached**: CloudFormation can't attach a volume that is already attached, so on a host whose volume was
      attached by hand the deploy fails with "already attached" and rolls back. `host-deploy.sh` detects this before
      `cdk diff` and stops; see "Handing over a volume attached by hand".
+   `host-deploy.sh` does this check itself: it creates the change set (`cdk deploy --no-execute`), reads it with
+   `describe-change-set` and **refuses** (exit 4, nothing deployed) when the instance has `Replacement: True` or
+   `Conditional`, or when an `AWS::EC2::Volume` is added in prod. `--allow-replace` overrides it, only for "Changing the
+   AMI" below with the volume already detached. It executes the change set it reviewed, not a new plan. When the change
+   stops and starts the instance (a changed `userData` or instance type) it asks a second time, because prod is down until
+   slop is redeployed. After the deploy, if the `InstanceId` or `LaunchTime` changed, it starts the deploy project
+   (without `SLOP_FIRST_DEPLOY`), waits for it, prints the build's last log lines if it fails, and checks
+   `<PublicUrl>/auth/config`. No manual redeploy is needed.
 3. **The first deploy of this layout is itself a replacement.** CloudFormation treats a change to an instance's
    `BlockDeviceMappings` as a replacement, and this change removes `/dev/sdf` from them. So the first time, `cdk diff`
    will show `Host` replaced: don't deploy it as it is. Follow "Changing the AMI" below (snapshot, stop, detach the
@@ -64,9 +75,9 @@ volume is still attached to the old one, so the new attachment cannot be created
 1. Take a snapshot of the data volume and check it completes.
 2. Stop the app and Postgres on the old instance (see RESTORE.md, step 5), then stop the instance.
 3. Detach the data volume: `aws ec2 detach-volume --volume-id <vol>`.
-4. Deploy with the new `-c hostAmiId=<new ami>`. The new instance boots, waits up to 10 minutes for the volume, and
+4. Deploy with the new `-c hostAmiId=<new ami>` and `--allow-replace`. The new instance boots, waits up to 10 minutes for the volume, and
    `instance-setup.sh` mounts the existing filesystem (it only formats a disk that has no filesystem).
-5. Let the CodeBuild deploy run, or re-run it: `remote-deploy.sh` refuses to start on an empty data disk.
+5. The script starts the CodeBuild deploy itself after a replacement; if it failed, re-run it: `remote-deploy.sh` refuses to start on an empty data disk.
 
 Never deploy with a different `hostDataVolumeId` than the one holding production's data.
 

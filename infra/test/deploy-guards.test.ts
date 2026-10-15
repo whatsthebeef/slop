@@ -136,3 +136,67 @@ describe('needs_volume_handover', () => {
   it('is not needed when the volume is detached', () =>
     expect(sh('needs_volume_handover "" ""').code).toBe(1));
 });
+
+describe('change set checks', () => {
+  const rows = (...r: string[][]) => r.map((x) => x.join('\t')).join('\n');
+  const out = (fn: string, input: string) => {
+    const r = spawnSync('bash', ['-c', `. ${lib}; ${fn} <<<"$IN"`], {
+      env: { PATH: process.env.PATH ?? '', IN: input },
+      encoding: 'utf8',
+    });
+    return r.stdout.trim();
+  };
+  const host = (action: string, repl: string, props: string) => [
+    action,
+    'HostABC',
+    'AWS::EC2::Instance',
+    repl,
+    props,
+  ];
+
+  it('names a replaced instance (True or Conditional) and a volume added in prod', () => {
+    expect(out('change_set_refusals prod', rows(host('Modify', 'True', 'ImageId')))).toContain(
+      'would be replaced',
+    );
+    expect(
+      out('change_set_refusals prod', rows(host('Modify', 'Conditional', 'SubnetId'))),
+    ).toContain('replaced');
+    expect(
+      out('change_set_refusals prod', rows(['Add', 'Vol', 'AWS::EC2::Volume', 'None', 'None'])),
+    ).toContain('data volume');
+  });
+
+  it('allows an in-place change, a new attachment and a volume outside prod', () => {
+    expect(
+      out(
+        'change_set_refusals prod',
+        rows(host('Modify', 'False', 'Tags'), [
+          'Add',
+          'A',
+          'AWS::EC2::VolumeAttachment',
+          'None',
+          'None',
+        ]),
+      ),
+    ).toBe('');
+    expect(
+      out('change_set_refusals dev', rows(['Add', 'Vol', 'AWS::EC2::Volume', 'None', 'None'])),
+    ).toBe('');
+  });
+
+  it('flags an in-place change that stops and starts the instance, not a replacement or a tag change', () => {
+    expect(out('change_set_restarts', rows(host('Modify', 'False', 'UserData,Tags')))).toContain(
+      'stopped and started',
+    );
+    expect(out('change_set_restarts', rows(host('Modify', 'False', 'Tags')))).toBe('');
+    expect(out('change_set_restarts', rows(host('Modify', 'True', 'UserData')))).toBe('');
+  });
+
+  it('instance_restarted compares id and launch time', () => {
+    const t = (a: string) => sh(`instance_restarted ${a}`).code;
+    expect(t('i-1 t1 i-1 t1')).toBe(1);
+    expect(t('i-1 t1 i-1 t2')).toBe(0);
+    expect(t('i-1 t1 i-2 t1')).toBe(0);
+    expect(t('"" "" i-2 t1')).toBe(1);
+  });
+});
