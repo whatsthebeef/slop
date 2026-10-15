@@ -82,15 +82,15 @@ const suggestionOf = (action: 'approve' | 'approve_with_edit' | 'reject', edited
   error: null,
 });
 
-const renderGlob = (glob: GlobView, role: BoardView['role'] = 'admin') => {
+const renderGlob = (glob: GlobView, role: BoardView['role'] = 'admin', decide?: () => Promise<boolean>) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const onDecide = vi.fn(() => Promise.resolve(true));
-  render(
+  const onDecide = vi.fn(decide ?? (() => Promise.resolve(true)));
+  const tree = (shown: GlobView) => (
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <GlobDetail
           board={board(role)}
-          glob={glob}
+          glob={shown}
           initialArtifact={null}
           onClose={vi.fn()}
           onUpdate={vi.fn(() => Promise.resolve(null))}
@@ -107,9 +107,10 @@ const renderGlob = (glob: GlobView, role: BoardView['role'] = 'admin') => {
           onDismissStep={vi.fn(() => Promise.resolve(true))}
         />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
-  return { onDecide };
+  const view = render(tree(glob));
+  return { onDecide, moveTo: (next: GlobView) => view.rerender(tree(next)) };
 };
 
 /** Adds an Element method jsdom lacks, leaving any real one in place. */
@@ -627,5 +628,70 @@ describe('plain figures (s15t201)', () => {
       </MemoryRouter>,
     );
     expect(screen.getAllByTestId('effect-figure').map((c) => c.textContent)).toEqual(['3 of 10 globs (30%)', '1 of 10 globs (10%)']);
+  });
+});
+
+describe('a pressed outcome stays pending until the glob moves (s15b139)', () => {
+  const reject = async (user: ReturnType<typeof userEvent.setup>) => {
+    const menu = await openMenu(user);
+    await user.click(within(menu).getByTestId('outcome-reject'));
+    await user.type(await screen.findByLabelText('Reason (required)'), 'Not a rule');
+    return screen.getByTestId('main-action');
+  };
+
+  it('disables the controls with a working label at once, sends one request however often it is pressed, and stays pending until the version changes', async () => {
+    const user = userEvent.setup();
+    const glob = decision();
+    const { onDecide, moveTo } = renderGlob(glob);
+    const main = await reject(user);
+    await user.dblClick(main);
+    expect(onDecide).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Rejecting…'));
+    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
+    // The request has returned but the glob has not moved: still pending, and a click sends nothing.
+    await user.click(screen.getByTestId('main-action'));
+    expect(onDecide).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
+    moveTo({ ...glob, version: glob.version + 1 });
+    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
+  });
+
+  it('re-enables the controls when the request fails', async () => {
+    const user = userEvent.setup();
+    const { onDecide } = renderGlob(decision(), 'admin', () => Promise.resolve(false));
+    const main = await reject(user);
+    await user.click(main);
+    await waitFor(() => expect(onDecide).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
+    expect(screen.getByTestId('main-action').textContent).not.toContain('Rejecting…');
+  });
+
+  it('holds a recommended outcome\'s Save the same way', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('approve_with_edit', 'Better wording'));
+    const glob = decision();
+    const { onDecide } = renderGlob(glob);
+    await user.click(await screen.findByTestId('main-action'));
+    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toMatch(/^Save/));
+    await user.click(screen.getByTestId('main-action'));
+    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Approving…'));
+    await user.click(screen.getByTestId('main-action'));
+    expect(onDecide).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
+  });
+
+  it('holds Keep as learning pending while it is sent, and frees the controls when it fails', async () => {
+    const user = userEvent.setup();
+    let fail: (e: Error) => void = () => undefined;
+    vi.spyOn(api, 'keepAsLearning').mockImplementation(() => new Promise((_, reject) => (fail = reject)));
+    renderGlob(decision());
+    const menu = await openMenu(user);
+    await user.click(within(menu).getByText('Approve without changing a document'));
+    await user.click(await screen.findByTestId('keep-submit'));
+    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true));
+    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
+    fail(new Error('nope'));
+    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
   });
 });
