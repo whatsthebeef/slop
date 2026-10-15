@@ -32,6 +32,8 @@ export interface RolloutStep {
   readonly permissions: string | null;
   readonly commands: readonly string[];
   readonly verify: string | null;
+  /** Commands named in the `Check:` text (inline code spans that start with a known command), in order, one per line for the UI. */
+  readonly checkCommands: readonly string[];
   /** The environment the step waits for a deploy to (`(env: production)`); null: it is due after the merge. */
   readonly env: string | null;
   /** What the step says it holds back (`(blocks: sign_off, dependants)`); null when it doesn't say, so the default for its due applies. */
@@ -91,6 +93,9 @@ export const parseRollout = (record: string): RolloutStep[] => {
     permissions: string | null;
     commands: string[];
     verify: string | null;
+    checkCommands: string[];
+    /** The labelled field wrapped lines continue until a blank line, a bullet, a label or a fence. */
+    open: 'why' | 'permissions' | 'verify' | 'run' | null;
     env: string | null;
     blocks: readonly HumanStepBlock[] | null;
   } | null = null;
@@ -107,10 +112,11 @@ export const parseRollout = (record: string): RolloutStep[] => {
       why: current.why,
       permissions: current.permissions,
       // The script's own run command is shown from `script`, so a Run line that repeats it is dropped.
-      commands: current.commands.filter(
+      commands: withExports(current.commands).filter(
         (c) => current?.scriptPath == null || !isScriptRun(c, current.scriptPath),
       ),
       verify: current.verify,
+      checkCommands: current.checkCommands,
       env: current.env,
       blocks: current.blocks,
     });
@@ -149,6 +155,8 @@ export const parseRollout = (record: string): RolloutStep[] => {
         permissions: null,
         commands: [],
         verify: null,
+        checkCommands: [],
+        open: null,
         env: parsed.env,
         blocks: parsed.blocks,
       };
@@ -166,16 +174,55 @@ export const parseRollout = (record: string): RolloutStep[] => {
     if (current.scriptPath === null && path === null) current.scriptPath = inlineScript(line);
     const labelled = FIELD_LINE.exec(line);
     if (labelled?.[1] !== undefined && labelled[2] !== undefined) {
-      const value = stripTicks(labelled[2]);
       const label = labelled[1].toLowerCase();
-      if (value !== '') {
-        if (label === 'run') current.commands.push(value);
-        else if (label === 'why') current.why ??= value;
-        else if (label === 'permissions') current.permissions ??= value;
-        else current.verify ??= value;
+      const raw = labelled[2];
+      if (stripTicks(raw) !== '') {
+        if (label === 'do this' && commandsOf(raw.includes('`') ? raw : '').commands.length === 0) {
+          // Prose after `Do this:` stays detail; only one that names commands is split into them.
+          current.open = null;
+          current.detail.push(line.trim());
+          continue;
+        }
+        if (label === 'run' || label === 'do this') {
+          const found = commandsOf(raw);
+          current.commands.push(...found.commands);
+          if (found.rest !== '') current.detail.push(found.rest);
+          current.open = found.commands.length > 0 ? null : 'run';
+        } else if (label === 'why') {
+          current.why ??= stripTicks(raw);
+          current.open = current.why === stripTicks(raw) ? 'why' : null;
+        } else if (label === 'permissions') {
+          current.permissions ??= stripTicks(raw);
+          current.open = current.permissions === stripTicks(raw) ? 'permissions' : null;
+        } else {
+          if (current.verify === null) {
+            current.verify = stripTicks(raw);
+            current.open = 'verify';
+          } else current.open = null;
+          current.checkCommands.push(...checkSpans(raw));
+        }
         continue;
       }
     }
+    // A wrapped line continues the field above it: its value runs to the next label, bullet, fence or blank line.
+    if (current.open !== null && line.trim() !== '' && ITEM.exec(line) === null && FENCE_OPEN.exec(line) === null) {
+      const text = stripTicks(line);
+      if (current.open === 'run') {
+        const found = commandsOf(line);
+        current.commands.push(...found.commands);
+        if (found.rest !== '') current.detail.push(found.rest);
+      } else {
+        const joined = `${current[current.open] ?? ''} ${text}`.trim();
+        if (current.open === 'why') current.why = joined;
+        else if (current.open === 'permissions') current.permissions = joined;
+        else {
+          current.verify = joined;
+          current.checkCommands.push(...checkSpans(line));
+        }
+      }
+      continue;
+    }
+    current.open = null;
     const open = FENCE_OPEN.exec(line);
     if (open !== null && open[2] !== undefined) {
       const marker = open[2];
@@ -211,10 +258,67 @@ const SCRIPT_INLINE = /(?:^|[\s(])(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+?)`?(
 const SCRIPT_LIKE = /\/|\.(?:sh|bash|mjs|js|ts|py)$/;
 /** `Why: …`, `Permissions: …`, `Run: …`, `Check: …` or `Check it worked: …`, as a bullet or not, with the label bold or not. */
 const FIELD_LINE =
-  /^\s*(?:[-*+]\s+)?(?:\*\*)?(why|permissions|run|check(?: it worked)?)\s*:(?:\*\*)?\s*(.*)$/i;
+  /^\s*(?:[-*+]\s+)?(?:\*\*)?(why|permissions|run|do this|check(?: it worked)?)\s*:(?:\*\*)?\s*(.*)$/i;
 const isScriptRun = (command: string, path: string): boolean =>
   command === `bash ${path}` || command === `sh ${path}` || command === `./${path}`;
 const stripTicks = (value: string): string => value.replace(/`/g, '').trim();
+
+/** `VAR=value cmd`: an environment prefix typed in front of a command. */
+const ENV_PREFIX = /^((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+)(\S.*)$/;
+/** An inline span that is a shell command: it starts with a command a person types. */
+const COMMAND_START = /^(?:aws|gh|git|bash|sh|\.\/|curl|psql|pnpm|npm|npx|node|slop|sstor|docker|export|unset|cd|claude-aws-session|[A-Za-z_][A-Za-z0-9_]*=)/;
+const CONNECTORS = /^[\s,;.:()]*(?:(?:then|and|or|first|next|after that)[\s,;.:()]*)*$/i;
+
+/** One command typed by a person; an `AWS_PROFILE=x cmd` prefix is kept here and split by `withExports`. */
+const commandLines = (value: string): string[] => [value.trim()].filter((c) => c !== '');
+
+/**
+ * The commands in a `Run:` / `Do this:` value, in order, and the words around them. With inline code spans, each
+ * span is a command (a `--dry-run` span after a command is that command's preview: it goes before it) and the rest
+ * is prose; without spans the whole value is one command.
+ */
+const commandsOf = (value: string): { commands: string[]; rest: string } => {
+  if (!value.includes('`')) return { commands: commandLines(value), rest: '' };
+  const commands: string[] = [];
+  const rest = value.replace(/`([^`]+)`/g, (_m, span: string) => {
+    const text = span.trim();
+    const prev = commands[commands.length - 1];
+    if (/^--dry-run$/i.test(text) && prev !== undefined) commands.splice(commands.length - 1, 0, `${prev} ${text}`);
+    else if (COMMAND_START.test(text) || ENV_PREFIX.test(text)) commands.push(text);
+    else return span;
+    return '';
+  });
+  return { commands, rest: CONNECTORS.test(rest.replace(/\b(?:preview with|first)\b/gi, '')) ? '' : rest.replace(/\s+/g, ' ').trim() };
+};
+
+/** The command spans named in a `Check:` text. */
+const checkSpans = (value: string): string[] =>
+  [...value.matchAll(/`([^`]+)`/g)].map((m) => (m[1] ?? '').trim()).filter((c) => COMMAND_START.test(c));
+
+/**
+ * Splits `VAR=value cmd` into `export VAR=value` then `cmd`, once per variable, and ends with an `unset VAR` for each
+ * variable the step exported, so a person's shell is left as it was.
+ */
+const withExports = (commands: readonly string[]): string[] => {
+  const out: string[] = [];
+  const exported: string[] = [];
+  for (const command of commands) {
+    const m = ENV_PREFIX.exec(command);
+    if (m?.[1] === undefined || m[2] === undefined) {
+      out.push(command);
+      continue;
+    }
+    for (const pair of m[1].trim().split(/\s+/)) {
+      const name = pair.slice(0, pair.indexOf('='));
+      if (!exported.includes(name)) {
+        out.push(`export ${pair}`);
+        exported.push(name);
+      }
+    }
+    out.push(m[2]);
+  }
+  return [...out, ...exported.map((n) => `unset ${n}`)];
+};
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
 const OPTIONS_SUFFIX = /\s*\(([^()]*)\)\s*$/;
 const KNOWN_OPTIONS: readonly string[] = ['env', 'blocks', 'check'];
