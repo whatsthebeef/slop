@@ -37,6 +37,7 @@ import type { KnowledgeService } from './knowledge-service.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { parseJson } from './llm-json.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
+import { SUGGESTION_SCHEMA } from './llm-schemas.js';
 
 /** Who may ask for a suggestion: the people who decide. */
 const SUGGESTERS: readonly Role[] = ['admin', 'po'];
@@ -193,6 +194,7 @@ export class SuggestService {
         this.deps.llm,
         {
           system: suggestSystem(read.learning),
+          schema: SUGGESTION_SCHEMA,
           prompt: suggestPrompt(inputs),
           maxTokens: ANSWER_MAX_TOKENS,
           spend: { boardId: glob.boardId, source: 'suggest', globId: glob.id },

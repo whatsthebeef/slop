@@ -11,6 +11,7 @@ import { LLM_TIMEOUT_MS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
 import { parseJson } from './llm-json.js';
 import type { GlobService } from './glob-service.js';
+import { ROLLOUT_SCHEMA } from './llm-schemas.js';
 
 const ANSWER_MAX_TOKENS = 3_000;
 const LLM_WAIT_MS = 60_000;
@@ -68,6 +69,7 @@ export class RolloutService {
         this.deps.llm,
         {
           system: ROLLOUT_SYSTEM,
+          schema: ROLLOUT_SCHEMA,
           prompt: rolloutPrompt({ glob: { id: glob.id, title: glob.title }, files: diff.files, patches, record, capabilities: CAPABILITY_NAMES }),
           maxTokens: ANSWER_MAX_TOKENS,
           spend: { boardId: glob.boardId, source: 'rollout', globId: glob.id },

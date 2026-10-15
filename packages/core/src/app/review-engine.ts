@@ -5,6 +5,8 @@ import { completeWithDeadline } from './llm-call.js';
 import { ReviewToolSession } from './review-tools.js';
 import type { CodeAccess } from './review-tools.js';
 import type { Llm } from './intake-service.js';
+import type { LlmSchema } from './intake-service.js';
+import { REVIEW_FINDINGS_SCHEMA, REVIEW_VERDICTS_SCHEMA } from './llm-schemas.js';
 
 /** A findings pass reads a whole diff and writes a list; the verification pass reads it again. */
 export const REVIEW_PASS_TIMEOUT_MS = 120_000;
@@ -82,7 +84,7 @@ export class ReviewEngine {
 
     let first: IndependentReview;
     if (options.access === undefined) {
-      first = await this.ask(REVIEW_FINDINGS_SYSTEM, findingsPrompt(shown), FINDINGS_MAX_TOKENS, 'findings', validateReview);
+      first = await this.ask(REVIEW_FINDINGS_SYSTEM, findingsPrompt(shown), FINDINGS_MAX_TOKENS, 'findings', validateReview, REVIEW_FINDINGS_SCHEMA);
     } else {
       const session = new ReviewToolSession(options.access, options.toolCap);
       const result = await this.findingsWithTools(shown, session);
@@ -101,6 +103,7 @@ export class ReviewEngine {
         const parsed = parseVerdicts(answer, count);
         return parsed.ok ? { ok: true, value: parsed.verdicts } : parsed;
       },
+      REVIEW_VERDICTS_SCHEMA,
     );
     const kept = applyVerdicts(first, verdicts);
     const dropped = verdicts.flatMap((verdict) => {
@@ -155,12 +158,13 @@ export class ReviewEngine {
     maxTokens: number,
     pass: 'findings' | 'verification',
     validate: (answer: string) => { ok: true; value: T } | { ok: false; problem: string },
+    schema: LlmSchema,
   ): Promise<T> {
-    const first = await completeWithDeadline(this.deps.llm, { system, prompt, maxTokens }, this.timeoutMs);
+    const first = await completeWithDeadline(this.deps.llm, { system, prompt, maxTokens, schema }, this.timeoutMs);
     const checked = validate(first);
     if (checked.ok) return checked.value;
     const retry = `${prompt}\n\n## Your previous answer was rejected\n\n${checked.problem}\nAnswer again with the one JSON object the instructions describe, and nothing else.`;
-    const second = validate(await completeWithDeadline(this.deps.llm, { system, prompt: retry, maxTokens }, this.timeoutMs));
+    const second = validate(await completeWithDeadline(this.deps.llm, { system, prompt: retry, maxTokens, schema }, this.timeoutMs));
     if (second.ok) return second.value;
     throw new ReviewAnswerInvalid(pass, second.problem);
   }

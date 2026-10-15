@@ -23,6 +23,7 @@ import { field, isObject, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
 import { boardLearnings, readLearning } from './learning-reads.js';
 import { flagLearningStale, mergeLearnings } from './learning-writes.js';
+import { KB_PAIRS_SCHEMA, KB_VERIFY_SCHEMA } from './llm-schemas.js';
 
 export type ConsolidationResult = Extract<BoardJobResult, { kind: 'consolidation' }>;
 
@@ -380,6 +381,7 @@ export class KbConsolidation {
       for (const b of candidates.slice(i + 1)) if (notSame.has(pairKey(a, b).join(' '))) checked.push([a, b]);
     const answer = await this.complete({
       system: PAIRS_SYSTEM,
+      schema: KB_PAIRS_SCHEMA,
       prompt: pairsPrompt(candidates, checked),
       maxTokens: 1_500,
       spend: { boardId, source: 'kb_consolidate' },
@@ -422,6 +424,7 @@ export class KbConsolidation {
     try {
       answer = await this.complete({
         system: VERIFY_SYSTEM,
+        schema: KB_VERIFY_SCHEMA,
         prompt: verifyPrompt(a, b),
         maxTokens: 600,
         spend: { boardId, source: 'kb_consolidate' },

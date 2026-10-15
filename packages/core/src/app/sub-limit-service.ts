@@ -25,6 +25,7 @@ import { longEnoughQuote, verifiedQuote } from './kb-dedupe.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, isObject, parseJson } from './llm-json.js';
 import { hash } from './text-hash.js';
+import { SUB_LIMIT_SCHEMA } from './llm-schemas.js';
 
 export type SubLimitResult = Extract<BoardJobResult, { kind: 'sub_limit' }>;
 
@@ -213,6 +214,7 @@ export class SubLimitService {
             this.deps.llm,
             {
               system: SYSTEM,
+              schema: SUB_LIMIT_SCHEMA,
               prompt: `Does this bug report say the defect was introduced by ${candidate.globId} (${candidate.title})?\n\nBug report ${candidate.bug.id}:\n<<<\n${shown}\n>>>`,
               maxTokens: 300,
               spend: { boardId, source: 'sub_limit', globId: candidate.globId },
