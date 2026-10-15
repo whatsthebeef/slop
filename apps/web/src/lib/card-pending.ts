@@ -39,6 +39,9 @@ export const mergeOutcomeText = (
   return glob.status === 'reviewing' ? 'Merged' : 'Merging…';
 };
 
+/** Pick up (take_over included, both labelled "Pick up" on the card): once it succeeds, the glob's view opens. */
+export const opensGlobView = (action: Action): boolean => action === 'pick_up' || action === 'take_over';
+
 /** The moves in flight, by glob ID. */
 export type CardPending = Readonly<Record<string, Action>>;
 
