@@ -79,6 +79,7 @@ describe('parseRollout', () => {
         permissions: null,
         commands: [],
         verify: null,
+        checkCommands: [],
         env: null,
         blocks: null,
       },
@@ -93,6 +94,7 @@ describe('parseRollout', () => {
         permissions: null,
         commands: [],
         verify: null,
+        checkCommands: [],
         env: null,
         blocks: null,
       },
@@ -107,6 +109,7 @@ describe('parseRollout', () => {
         permissions: null,
         commands: [],
         verify: null,
+        checkCommands: [],
         env: null,
         blocks: null,
       },
@@ -183,6 +186,7 @@ ${FENCE}
       // The script's own run command is dropped: the step block shows it from `script`.
       commands: ['aws sso login --profile admin', 'aws codebuild list-report-groups'],
       verify: 'the list shows the atf group.',
+      checkCommands: [],
       env: null,
       blocks: null,
     });
@@ -375,6 +379,7 @@ ${FENCE}
       permissions: null,
       commands: [],
       verify: null,
+      checkCommands: [],
       env: null,
       blocks: null,
     });
@@ -955,5 +960,50 @@ describe('steps that tick themselves', () => {
     expect(await globs.tickCapabilitySteps(boardId, { slack: true })).toBe(0);
     expect(store.state.events.length).toBe(events + 1);
     expect([...store.state.humanSteps.values()].filter((s) => s.state === 'open').map((s) => s.title).sort()).toEqual(['By hand', 'Unknown capability']);
+  });
+});
+
+describe('parseRollout wrapped fields and inline commands (s15b147)', () => {
+  const s14t14 = [
+    '## Rollout',
+    '',
+    '- script: Give developers the staging role',
+    '  Why: developers need a role that can reach staging but',
+    "  can't touch prod, so they stop using IAM or Identity Center;",
+    '  today they get a broader role.',
+    '  Permissions: an admin (the AdministratorAccessWithoutProd or',
+    '  a similar role).',
+    '  script: scripts/rollout/s14t14-roles.sh',
+    '  Do this: `aws sso login --profile admin`, then `AWS_PROFILE=admin bash scripts/rollout/s14t14-roles.sh` (preview with `--dry-run` first)',
+    '  Check: `aws iam get-role --role-name dev` matches the stored policy and "no',
+    '  drift" is reported.',
+  ].join('\n');
+
+  it('joins wrapped lines into whole fields and keeps nothing in the detail', () => {
+    const [step] = parseRollout(s14t14);
+    expect(step?.why).toBe("developers need a role that can reach staging but can't touch prod, so they stop using IAM or Identity Center; today they get a broader role.");
+    expect(step?.permissions).toBe('an admin (the AdministratorAccessWithoutProd or a similar role).');
+    expect(step?.verify).toBe('aws iam get-role --role-name dev matches the stored policy and "no drift" is reported.');
+    expect(step?.detail).toBeNull();
+  });
+
+  it('puts every command on its own line: login, export, dry run, run, unset', () => {
+    const [step] = parseRollout(s14t14.replace('  script: scripts/rollout/s14t14-roles.sh\n', ''));
+    expect(step?.commands).toEqual([
+      'aws sso login --profile admin',
+      'export AWS_PROFILE=admin',
+      'bash scripts/rollout/s14t14-roles.sh --dry-run',
+      'bash scripts/rollout/s14t14-roles.sh',
+      'unset AWS_PROFILE',
+    ]);
+    expect(step?.checkCommands).toEqual(['aws iam get-role --role-name dev']);
+  });
+
+  it('still reads single-line fields and Run lines', () => {
+    const [step] = parseRollout('## Rollout\n- manual: Do x\n  Why: because\n  Run: gh auth login\n  Run: git pull\n  Check: it works');
+    expect(step?.why).toBe('because');
+    expect(step?.commands).toEqual(['gh auth login', 'git pull']);
+    expect(step?.verify).toBe('it works');
+    expect(step?.checkCommands).toEqual([]);
   });
 });
