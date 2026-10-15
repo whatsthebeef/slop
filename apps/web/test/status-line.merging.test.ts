@@ -8,23 +8,23 @@ const merging = (patch: Parameters<typeof view>[0] = {}) =>
 const staleRunFailure = { reason: 'Routine run failed', at: NOW };
 
 describe('merging status line', () => {
-  it('says checks are running while the head awaits its checks, never an earlier run failure', () => {
+  it('says it merges when the checks pass while the head awaits its checks, never an earlier run failure', () => {
     for (const headChecks of [null, { sha: head, state: 'pending' as const }]) {
       const g = merging({ failure: staleRunFailure, headChecks });
       expect(statusLine(g, NOW)).toMatchObject({
         kind: 'merging',
-        full: 'merging · checks running',
+        full: 'merging when checks pass',
       });
       expect(top(g)).toMatchObject({ kind: 'merging' });
       expect(JSON.stringify(top(g))).not.toContain('run failed');
     }
   });
 
-  it('says it is updating with the base when the head is newer than the recorded checks', () => {
+  it('says it is merging from the base when the head is newer than the recorded checks', () => {
     const g = merging({ headChecks: { sha: 'aaaaaaa1111', state: 'passed' } });
-    expect(statusLine(g, NOW)).toMatchObject({
+    expect(statusLine(g, NOW, undefined, 'main')).toMatchObject({
       kind: 'merging',
-      full: 'merging · updating with main',
+      full: 'merging from main',
     });
   });
 

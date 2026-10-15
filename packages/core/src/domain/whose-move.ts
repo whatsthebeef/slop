@@ -115,6 +115,15 @@ export const holdingReason = (holding: readonly Holding[]): string => {
   ].join('; ');
 };
 
+/**
+ * The one wording for checks in flight. Slop merges by itself when the checks pass ("merging when checks pass"), or is
+ * catching up with the base first ("merging from main"); every other glob with checks running reads "checks running".
+ * Whose-move uses only `CHECKS_RUNNING_TEXT`; the web composes the two merging variants (`apps/web/src/lib/check-wording.ts`).
+ */
+export const CHECKS_RUNNING_TEXT = 'checks running';
+export const MERGING_WHEN_CHECKS_PASS_TEXT = 'merging when checks pass';
+export const mergingFromBaseText = (base: string): string => `merging from ${base}`;
+
 /** The `human` move's reasons when a person holds a glob: picked up (no machine run), or pairing on a super. */
 export const PICKED_UP_REASON = 'Picked up';
 export const PAIRING_REASON = 'Pairing';
@@ -210,7 +219,7 @@ export const whoseMove = (
         : stepWaits
             .map((s) =>
               s.kind === 'checks'
-                ? `checks running on ${s.detail ?? 'the head'}`
+                ? CHECKS_RUNNING_TEXT
                 : s.kind === 'deploy'
                   ? `deploying to ${s.detail ?? 'an environment'}`
                   : s.kind === 'merge_held'

@@ -583,6 +583,7 @@ export const GlobCard = ({
   atf,
   viewer,
   waitingOnThis = 0,
+  base,
   onFilterGroup,
 }: {
   glob: GlobView;
@@ -622,6 +623,8 @@ export const GlobCard = ({
   viewer?: HumanStepViewer;
   /** How many globs in Planning wait for this one to merge. */
   waitingOnThis?: number;
+  /** The board's base branch, for "merging from <base>". */
+  base?: string;
 }) => {
   // A person implementing shows; otherwise (unassigned, or the machine implementing) the planner. Slop-created globs show the robot head.
   const person = glob.implementer ?? glob.planner;
@@ -632,7 +635,7 @@ export const GlobCard = ({
   // Decision globs have their own look (an accent edge, the outcome in the corner) and no labels, branch or routine status; neither do actions.
   const decision = decisionOf(glob) !== null;
   const human = isHumanCategory(glob.category);
-  const status = cornerStatus(glob, now, viewer, repo, waitingOnThis);
+  const status = cornerStatus(glob, now, viewer, repo, waitingOnThis, base);
   const blocked = hasBlocker(glob, now, viewer);
   const arming = human ? null : armLabel(glob);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
