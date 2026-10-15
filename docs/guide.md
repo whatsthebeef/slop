@@ -47,6 +47,16 @@ These buttons answer "who works on this now?".
 - **Start again** (shown as Discard and restart) throws the current attempt away, closing the pull request and deleting the branch, and starts the glob from scratch. Use it when the existing attempt is the problem.
 - **Start now** overrides a hold: use it to start a glob that is waiting for another glob when you know it is safe. An oversized flag is only advice and never holds a glob, so there is nothing to override for it.
 
+## How slop merges
+
+Slop squash-merges with the glob's ID in the title. How it gets there depends on the repository.
+
+- **With a merge queue** (what `setup-repo.sh --protect` sets up; the repository needs the checks workflow with `on: merge_group` on its base branch before you run it, or queued pull requests never get a `checks` result): slop doesn't merge the pull request itself. Once its checks pass, it puts the pull request in GitHub's merge queue. GitHub tests it on top of the base branch plus the pull requests ahead of it, and merges them in order, so nothing has to be updated from the base branch by hand. The glob stays in Doing, reads "in merge queue · N ahead" (N pull requests are in front of it; just "in merge queue" when the position isn't known) and then "merging" once its group is being merged. It moves to Reviewing when GitHub has merged it.
+- **Without a merge queue**: slop updates the branch from the base branch if it is behind, waits for the checks on the new head and squash-merges. A conflict sends the glob back to the pull request as a conflict to resolve.
+- **Cancel merge** stops a merge that waits for checks, and takes a queued pull request out of the merge queue. The pull request stays open and Merge comes back.
+- **If the queue removes the pull request:** a conflict with the base branch is a conflict to resolve, as above. Anything else (failed checks, a timeout) fails the glob with the queue's reason and the failing check's lines. **Retry merge** puts it in the queue again.
+- **Emergencies:** slop's GitHub App is on the ruleset's bypass list for emergencies only. Slop never bypasses the queue, so main only receives commits whose checks passed on the combined result.
+
 ## Relations and gates
 
 A relation holds one glob back until another reaches a state. Each relation has a gate, which says what it guards:
