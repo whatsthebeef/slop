@@ -183,7 +183,10 @@ export class GitHub implements CodeHost, CommitGraph {
       this.queueRulesCache.set(key, { at: Date.now(), value });
       return value;
     } catch (error) {
-      throw new QueueDetectionError(`Could not read the merge rules of ${repo.base} to tell whether it has a merge queue: ${errorText(error)}`);
+      const code = status(error);
+      throw new QueueDetectionError(
+        `Could not read the merge rules of ${repo.base} to tell whether it has a merge queue${code === null ? '' : ` (HTTP ${String(code)})`}: ${errorText(error)}`,
+      );
     }
   }
 

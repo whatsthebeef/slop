@@ -50,7 +50,7 @@ const mergeGroupPayload = z.object({
 });
 
 /** The merge queue's refs: `gh-readonly-queue/<base branch>/pr-<number>-<sha>`. */
-const QUEUE_REF = /^(?:refs\/heads\/)?gh-readonly-queue\/(.+)\/pr-\d+-[0-9a-f]+$/;
+const QUEUE_REF = /^(?:refs\/heads\/)?gh-readonly-queue\/(.+)\/pr-(\d+)-[0-9a-f]+$/;
 
 const checkPayload = z.object({
   check_suite: z.object({ head_branch: z.string().nullable(), status: z.string().nullable().optional() }).optional(),
@@ -278,7 +278,9 @@ const handle = async (
       await refreshQueued(base, event.repository.full_name, {
         kind: 'group',
         ...(event.merge_group?.head_sha == null ? {} : { groupSha: event.merge_group.head_sha }),
-        ...(event.reason == null ? {} : { reason: event.reason }),
+        // Only `merged` says something about every glob (the merge is in flight). Other group reasons describe the group,
+        // not each PR in it; `pull_request.dequeued` carries a PR's own reason.
+        ...(event.reason?.toLowerCase() === 'merged' ? { reason: event.reason } : {}),
       });
       return true;
     }
@@ -289,12 +291,19 @@ const handle = async (
       const branch = event.check_suite?.head_branch ?? event.check_run?.check_suite.head_branch;
       const finished = event.check_run?.status === 'completed' || event.check_suite?.status === 'completed';
       // A check on a merge group's ref belongs to no glob's branch: it tells the queued globs to re-read their entries.
-      const queueBase = branch == null ? null : QUEUE_REF.exec(branch)?.[1];
+      const queueRef = branch == null ? null : QUEUE_REF.exec(branch);
+      const queueBase = queueRef?.[1];
       if (queueBase != null) {
         const run = event.check_run;
         if (finished) {
           const failed = run?.status === 'completed' && run.conclusion !== null && FAILED_CONCLUSIONS.has(run.conclusion);
-          await refreshQueued(queueBase, event.repository.full_name, failed ? { kind: 'checks_failed', groupSha: run.head_sha } : { kind: 'group' });
+          // The ref names the group's last PR; only that PR's glob records the failure.
+          const prNumber = Number(queueRef?.[2]);
+          await refreshQueued(
+            queueBase,
+            event.repository.full_name,
+            failed ? { kind: 'checks_failed', groupSha: run.head_sha, prNumber } : { kind: 'group' },
+          );
         }
         return true;
       }

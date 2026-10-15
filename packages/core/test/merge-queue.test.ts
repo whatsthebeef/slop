@@ -63,10 +63,15 @@ describe('mergeQueueEvent', () => {
     expect(t.glob.status).toBe('merging');
   });
 
-  it('records the failing merge group on a failed queue check', () => {
-    const t = value(m.mergeQueueEvent(queued(), { kind: 'checks_failed', groupSha: 'g9' }, ctx(null)));
+  it('records the failing merge group on the glob whose PR the group names, and on no other', () => {
+    const t = value(m.mergeQueueEvent(queued(), { kind: 'checks_failed', groupSha: 'g9', prNumber: 7 }, ctx(null)));
     expect(t.glob.mergeQueue?.failedSha).toBe('g9');
     expect(t.effects.map((e) => e.kind)).toEqual(['read_merge_queue']);
+    const other = value(m.mergeQueueEvent(queued(), { kind: 'checks_failed', groupSha: 'g9', prNumber: 8 }, ctx(null)));
+    expect(other.glob.mergeQueue?.failedSha).toBeUndefined();
+    expect(other.effects.map((e) => e.kind)).toEqual(['read_merge_queue']);
+    const unnamed = value(m.mergeQueueEvent(queued(), { kind: 'checks_failed', groupSha: 'g9' }, ctx(null)));
+    expect(unnamed.glob.mergeQueue?.failedSha).toBeUndefined();
   });
 
   it('is ignored when the glob is not merging (a person queued the PR in the host UI)', () => {
@@ -137,8 +142,20 @@ describe('leaving the queue', () => {
     expect(t.glob.mergeQueue).toBeNull();
   });
 
-  it('a closed PR clears it', () => {
-    expect(value(m.prClosed(queued(), ctx(null))).glob.mergeQueue).toBeNull();
+  it('a PR closed while queued fails the glob and ends its run, instead of leaving it merging', () => {
+    const g = queued({ mergeMode: 'when_green' });
+    const t = value(m.prClosed(g, ctx(null)));
+    expect(t.glob).toMatchObject({ status: 'failed', mergeQueue: null, mergeMode: null, pr: { state: 'closed' } });
+    expect(t.glob.failure?.reason).toBe('PR closed without merging');
+  });
+
+  it('a PR closed while merging directly (not queued) is left to its in-flight merge', () => {
+    expect(value(m.prClosed(merging(), ctx(null))).glob.status).toBe('merging');
+  });
+
+  it('Start again clears a queue entry', () => {
+    const t = value(m.startAgain(queued(), ctx()));
+    expect(t.glob.mergeQueue).toBeNull();
   });
 
   it('head check events on a queued glob do not enqueue again, but do on a merging one', () => {

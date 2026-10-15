@@ -93,7 +93,7 @@ describe('merge queue: following the host queue through executors and webhooks',
   const current = async (id: string) => unwrap(await globs.get(DEV, id)).glob;
 
   /** A same whose PR is being merged; `queue` records it in the host's merge queue. */
-  const mergingGlob = async (title: string, options: { queue?: boolean; since?: string; boardId?: number } = {}): Promise<string> => {
+  const mergingGlob = async (title: string, options: { queue?: boolean; since?: string; boardId?: number; prNumber?: number } = {}): Promise<string> => {
     const created = unwrap(
       await globs.create(DEV, { boardId: options.boardId ?? 1, title, type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }),
     );
@@ -103,7 +103,7 @@ describe('merge queue: following the host queue through executors and webhooks',
       const next: Glob = {
         ...g,
         status: 'merging',
-        pr: { number: 7, state: 'ready', headSha: HEAD },
+        pr: { number: options.prNumber ?? 7, state: 'ready', headSha: HEAD },
         headChecks: { sha: HEAD, state: 'passed' },
         ...(options.queue === true && { mergeQueue: { since: options.since ?? clock(), sha: HEAD, position: 2, state: 'queued' as const } }),
         version: g.version + 1,
@@ -167,6 +167,55 @@ describe('merge queue: following the host queue through executors and webhooks',
     expect(after.failure?.reason).toContain('Error: boom');
     expect(host.checked).toContain('g1');
     host.entry = { position: 2, state: 'queued' };
+  });
+
+  it('a failed queue check is recorded only on the glob whose PR the group names, so another PR\'s failure is not shown on this one', async () => {
+    const since = new Date(nowMs - 10 * 60_000).toISOString();
+    const failing = await mergingGlob('Names the group', { queue: true, since, prNumber: 41 });
+    const bystander = await mergingGlob('Queued behind', { queue: true, since, prNumber: 42 });
+    host.entry = null;
+    host.checked.length = 0;
+    await handle(checkRun('gh-readonly-queue/main/pr-41-abc123', 'failure'));
+    expect((await current(failing)).mergeQueue?.failedSha).toBe('g1');
+    expect((await current(bystander)).mergeQueue?.failedSha).toBeUndefined();
+    // The bystander is then removed for no stated reason: it must not read as a check failure with the other PR's lines.
+    await run(bystander, 'read_merge_queue');
+    const after = await current(bystander);
+    expect(after.failure?.reason).toBe('Left the merge queue without merging');
+    expect(after.failure?.checks).toBeUndefined();
+    expect(host.checked).not.toContain('g1');
+    host.entry = { position: 2, state: 'queued' };
+  });
+
+  it('merge_group reasons: `merged` (any case) means the merge is in flight; other group reasons are not a per-PR dequeue reason', async () => {
+    const since = new Date(nowMs - 10 * 60_000).toISOString();
+    host.entry = null;
+    const id = await mergingGlob('Group merged', { queue: true, since });
+    await handle(queueDelivery('merge_group', { action: 'destroyed', reason: 'merged', merge_group: { head_sha: 'g4', base_ref: 'refs/heads/main' } }));
+    const [row] = await pending(id, 'read_merge_queue');
+    expect(row?.effect).toMatchObject({ reason: 'merged' });
+    // The PR still reads open: wait and retry rather than fail the glob.
+    await expect(run(id, 'read_merge_queue')).rejects.toThrow(/not merged yet/);
+    expect((await current(id)).status).toBe('merging');
+    // Once it reads merged, the merged path takes it.
+    host.pr = { state: 'merged', draft: false, headSha: HEAD, mergeSha: 'm5' };
+    await globs.applyEvent(id, (g, ctx) => machine.mergeQueueEvent(g, { kind: 'group', reason: 'merged' }, ctx));
+    await run(id, 'read_merge_queue');
+    expect((await current(id)).status).toBe('reviewing');
+    host.pr = { state: 'open', draft: false, headSha: HEAD, mergeSha: null };
+
+    // An `invalidated` group says nothing about this PR: no reason travels, so it is not a dequeue.
+    const other = await mergingGlob('Group invalidated', { queue: true, since });
+    await handle(queueDelivery('merge_group', { action: 'destroyed', reason: 'invalidated', merge_group: { head_sha: 'g5', base_ref: 'refs/heads/main' } }));
+    const [invalidated] = await pending(other, 'read_merge_queue');
+    expect(invalidated?.effect).not.toHaveProperty('reason');
+    host.entry = { position: 2, state: 'queued' };
+  });
+
+  it('a PR closed while queued fails the glob', async () => {
+    const id = await mergingGlob('Closed in queue', { queue: true });
+    await handle(prEvent(id, 'closed'));
+    expect(await current(id)).toMatchObject({ status: 'failed', mergeQueue: null, failure: { reason: 'PR closed without merging' } });
   });
 
   it('a dequeue for a conflict returns the glob to pr_open with the conflict', async () => {
@@ -286,6 +335,21 @@ describe('merge queue: following the host queue through executors and webhooks',
     expect((await current(late)).status).toBe('reviewing');
     host.dequeueResult = 'dequeued';
     host.pr = { state: 'open', draft: false, headSha: HEAD, mergeSha: null };
+  });
+
+  it('a delayed dequeue does not remove the entry of a merge started again after Cancel merge', async () => {
+    host.dequeued = 0;
+    const id = await mergingGlob('Cancel then merge again', { queue: true });
+    unwrap(await globs.cancelMerge(DEV, id, (await current(id)).version));
+    // The gate merged it again before the dequeue ran.
+    await store.transaction(async (tx) => {
+      const g = await tx.getGlob(id);
+      if (g === null) throw new Error('missing');
+      await tx.updateGlob({ ...g, status: 'merging', version: g.version + 1 }, g.version);
+    });
+    expect((await current(id)).status).toBe('merging');
+    expect(await run(id, 'dequeue_merge')).toEqual(['dropped']);
+    expect(host.dequeued).toBe(0);
   });
 
   it('when the host cannot say whether there is a queue, the merge retries and at the last attempt hands the glob back', async () => {

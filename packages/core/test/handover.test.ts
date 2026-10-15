@@ -177,6 +177,10 @@ describe('handoverBrief', () => {
       }),
     ];
     for (const g of waiting) expect(handoverBrief(g, facts())).toBeNull();
+    // A glob that left Merging but still carries a stale queue entry is stalled like any other.
+    expect(
+      handoverBrief(open({ runs: watching, mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' } }), facts())?.why,
+    ).toEqual(['The run has made no progress for 26 minutes.']);
     // The same quiet run on a plain open PR still shows.
     expect(handoverBrief(open({ runs: watching }), facts())?.why).toEqual(['The run has made no progress for 26 minutes.']);
     expect(

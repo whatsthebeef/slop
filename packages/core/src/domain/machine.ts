@@ -1280,6 +1280,7 @@ export const startAgain = (
     mergeMode: null,
     headChecks: null,
     provisioning: 'none',
+    ...leavesQueue(glob),
     ...(glob.waiting == null ? {} : { waiting: null }),
   })
     .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
@@ -3060,6 +3061,8 @@ export interface MergeQueueHint {
   readonly reason?: string;
   /** The merge group commit the event named; for `checks_failed`, the commit whose check failed. */
   readonly groupSha?: string;
+  /** For `checks_failed`: the PR the failing group ref names (`pr-N-sha`); only that PR's glob records the failure. */
+  readonly prNumber?: number;
 }
 
 /**
@@ -3070,7 +3073,14 @@ export interface MergeQueueHint {
 export const mergeQueueEvent = (glob: Glob, hint: MergeQueueHint, ctx: Context): Result<Transition> => {
   if (glob.status !== 'merging') return unchanged(glob);
   const b = new Builder(glob, ctx);
-  if (hint.kind === 'checks_failed' && glob.mergeQueue != null && hint.groupSha !== undefined && glob.mergeQueue.failedSha !== hint.groupSha) {
+  if (
+    hint.kind === 'checks_failed' &&
+    glob.mergeQueue != null &&
+    hint.groupSha !== undefined &&
+    hint.prNumber !== undefined &&
+    glob.pr?.number === hint.prNumber &&
+    glob.mergeQueue.failedSha !== hint.groupSha
+  ) {
     b.set({ mergeQueue: { ...glob.mergeQueue, failedSha: hint.groupSha } });
   }
   return b
@@ -3278,14 +3288,16 @@ export const reportFailure = (
 export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
   const b = new Builder(glob, ctx);
   if (glob.pr !== null) b.set({ pr: { ...glob.pr, state: 'closed' } });
-  if (glob.mergeQueue != null) b.set({ mergeQueue: null });
+  // A queued PR has no merge effect in flight to fail, so its closing is the failure.
+  const queued = isMergeQueued(glob);
+  b.set({ ...leavesQueue(glob) });
   b.event('PRClosed', {});
-  if (glob.status !== 'pr_open') return b.done();
+  if (glob.status !== 'pr_open' && !queued) return b.done();
   return b
     .endRun('superseded', null, { cause: 'pr_closed' })
     .set({
       failure: { reason: 'PR closed without merging', at: ctx.now },
-      ...(isMergeArmed(glob) && { mergeMode: null }),
+      ...((isMergeArmed(glob) || queued) && { mergeMode: null }),
     })
     .status('failed')
     .done();

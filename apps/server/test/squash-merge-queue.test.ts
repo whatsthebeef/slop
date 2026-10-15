@@ -115,9 +115,11 @@ describe('GitHub.squashMerge on a branch with a merge queue', () => {
   });
 
   it('fails closed when the rules cannot be read: no merge, no update, no enqueue', async () => {
-    for (const error of [httpError(403, 'Forbidden'), httpError(500, 'boom')]) {
+    for (const [code, message] of [[403, 'Forbidden'], [500, 'boom']] as const) {
+      const error = httpError(code, message);
       const { gh, calls } = client({ rules: error });
-      await expect(gh.squashMerge(REPO, GLOB, 7, 'h')).rejects.toBeInstanceOf(QueueDetectionError);
+      await expect(gh.squashMerge(REPO, GLOB, 7, 'h')).rejects.toThrow(QueueDetectionError);
+      await expect(gh.squashMerge(REPO, GLOB, 7, 'h')).rejects.toThrow(new RegExp(`HTTP ${String(code)}`));
       expect(writes(calls)).toEqual([]);
       expect(calls.some((c) => c.startsWith('graphql'))).toBe(false);
     }

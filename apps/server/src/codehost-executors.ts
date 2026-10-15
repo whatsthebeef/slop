@@ -521,9 +521,10 @@ export const codeHostExecutors = (
       // Not recorded as queued: the enqueue is still in flight, so there is nothing to have been removed from.
       const queued = glob.mergeQueue;
       if (queued == null) return 'done';
-      const reason = effect.reason;
+      // Webhook reasons come in both cases (`merge_group` is lowercase, GraphQL and `pull_request` upper).
+      const reason = effect.reason?.toUpperCase();
       // The host reports the merge itself a moment before the PR reads as merged, and the entry a moment after the enqueue.
-      const merging = reason === 'SUCCEEDED' || reason === 'ALREADY_MERGED';
+      const merging = reason === 'SUCCEEDED' || reason === 'ALREADY_MERGED' || reason === 'MERGED';
       const fresh = reason === undefined && Date.parse(now()) - Date.parse(queued.since) < QUEUE_GRACE_MS;
       if ((merging || fresh) && attempt?.final !== true) throw new Error('The merge queue entry is gone but the PR has not merged yet');
       if (reason === 'MERGE_CONFLICT') {
@@ -531,9 +532,9 @@ export const codeHostExecutors = (
         await globs.applyEvent(glob.id, (g, ctx) => machine.mergeQueueDequeued(g, { reason: machine.conflictReason(conflict), conflict }, ctx));
         return 'done';
       }
-      const failedSha = queued.failedSha ?? effect.groupSha;
+      // `failedSha` is only ever recorded on the glob whose PR the failing group names, so it is this PR's failure.
       const failed = reason === 'CI_FAILURE' || reason === 'CI_TIMEOUT' || queued.failedSha !== undefined;
-      const checks = failed && failedSha !== undefined ? await explainFailure(repo, failedSha) : null;
+      const checks = failed && queued.failedSha !== undefined ? await explainFailure(repo, queued.failedSha) : null;
       const text =
         reason !== undefined && QUEUE_REASON_TEXT[reason] !== undefined
           ? QUEUE_REASON_TEXT[reason]
@@ -548,7 +549,8 @@ export const codeHostExecutors = (
 
     /** Cancel merge on a queued PR: the glob is already back in pr_open, so only the host's queue entry is left to remove. */
     dequeue_merge: async (effect, glob, { globs }) => {
-      if (effect.kind !== 'dequeue_merge' || glob?.pr == null) return 'dropped';
+      // A later merge may have queued the PR again (Cancel merge, then the gate re-merges): a delayed dequeue must not remove it.
+      if (effect.kind !== 'dequeue_merge' || glob?.pr == null || glob.status === 'merging') return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       const prNumber = glob.pr.number;
