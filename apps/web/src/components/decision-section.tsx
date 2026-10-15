@@ -1,5 +1,5 @@
 import { channelLabel, channelSource, decisionOf, readSuggestion, SCOPE_KINDS, scopeLabel } from '@slop/core';
-import type { ChannelSource, DecisionAttributes, DecisionLearning, DecisionOutcomeKind, DecisionScope, EditFailure, ScopeKind } from '@slop/core';
+import type { ChannelSource, DecisionAttributes, DecisionLearning, DecisionScope, EditFailure, ScopeKind } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
-import { changeHeading, changeKindOf, SCOPE_EXPLAINED, scopeMatters } from '@/lib/decide-flow';
+import { changeHeading, changeKindOf, OUTCOME_TEXT, SCOPE_EXPLAINED, scopeMatters } from '@/lib/decide-flow';
 import { flagsOf } from '@/lib/assessment-flags';
 import { SUGGESTION_ACTION_TEXT } from '@/lib/suggestion';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
@@ -22,14 +22,6 @@ import { useToast } from '@/toast';
 import { Tip } from './ui/tip';
 import { boardGlobHref } from '@/lib/glob-section';
 
-export const OUTCOME_TEXT: Record<DecisionOutcomeKind, string> = {
-  accept: 'Accepted',
-  accept_with_edits: 'Accepted with edits',
-  retarget: 'Retargeted',
-  needs_work: 'Needs work',
-  reject: 'Rejected',
-  closed: 'Closed by the pipeline',
-};
 
 /** What the scope's reference means for each kind: null when the kind takes none. */
 const REF_HINT: Record<ScopeKind, string | null> = {

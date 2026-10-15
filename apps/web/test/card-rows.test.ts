@@ -214,6 +214,16 @@ describe('cornerStatus', () => {
     expect(at(view({ status: 'planning', decision: { scope: { kind: 'board' }, outcome: null } } as Partial<GlobView>))).toBeNull();
   });
 
+  it('says a decided learning\'s outcome, with who decided, why and any contradiction in the tooltip', () => {
+    const learning = (outcome: unknown, extra: object = {}) =>
+      view({ category: 'decision', type: null, attributes: { scope: { kind: 'project', ref: null }, outcome, ...extra } } as unknown as Partial<GlobView>);
+    expect(at(learning(null))).toBeNull();
+    const decided = at(learning({ kind: 'accept_with_edits', by: 'a@b.c', at: 'now', reason: 'clearer' }, { conflictsWith: ['s1k2'] }));
+    expect(decided).toMatchObject({ kind: 'decided', text: 'accepted with edits' });
+    expect(decided?.tip).toContain('Accepted with edits by a@b.c: clearer');
+    expect(decided?.tip).toContain('Contradicts s1k2');
+  });
+
   it('keeps the specifics helper stripping the icon\'s word', () => {
     expect(specifics('stalled · merge conflict')).toBe('merge conflict');
     expect(specifics('stalled')).toBe('');

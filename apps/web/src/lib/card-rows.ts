@@ -1,6 +1,7 @@
 import { decisionOf, feedbackText, isHumanCategory, labelsWaiting, openFeedback, signOffText } from '@slop/core';
-import type { HumanStepViewer } from '@slop/core';
+import type { DecisionAttributes, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
+import { OUTCOME_TEXT } from './decide-flow';
 import { cardTargets } from './card-targets';
 import { clickTip, positionClick, sentence, statusClick, tipLines, yourTurnClick } from './chip-actions';
 import type { ChipClick } from './chip-actions';
@@ -112,7 +113,7 @@ const feedbackTip = (glob: GlobView): string =>
 
 /**
  * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
- * sign-off, an escalation in Planning). A decision glob has no corner status, so its turn is the status line's.
+ * sign-off, an escalation in Planning). A decision glob's turn is the status line's.
  */
 export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
   // An action waits for a person until it is done or dismissed.
@@ -123,11 +124,31 @@ export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewe
 };
 
 /**
+ * A decided learning's status: the outcome in the corner, with who decided and why (and a contradiction of a broader-scope
+ * decision) in the tooltip. Scope and contradictions are shown in the glob view; the card carries no tags for them.
+ */
+const decidedStatus = (glob: GlobView, decision: DecisionAttributes): CornerStatus => {
+  const { outcome } = decision;
+  if (outcome === null) throw new Error(`${glob.id} has no outcome`);
+  const text = OUTCOME_TEXT[outcome.kind].toLowerCase();
+  const conflicts = decision.conflictsWith ?? [];
+  const tip = tipLines([
+    `${OUTCOME_TEXT[outcome.kind]} by ${outcome.by}${outcome.reason === undefined ? '' : `: ${outcome.reason}`}`,
+    ...(conflicts.length === 0 ? [] : [`Contradicts ${conflicts.join(', ')}, which apply more broadly and win where they disagree`]),
+    'Opens the decision',
+  ]);
+  const tone = outcome.kind === 'reject' || outcome.kind === 'closed' ? 'text-muted-foreground' : 'text-signal-strong';
+  return { kind: 'decided', icon: 'check', text, label: text, tip, tone, click: { kind: 'section', target: cardTargets.decision() } };
+};
+
+/**
  * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
  * words, the rest go in the tooltip: a stall, an escalation in Planning, your turn, a problem, the machine running, the
- * prerequisites it waits on, any other waiting, standby. Decision globs have none.
+ * prerequisites it waits on, any other waiting, standby. A decision glob has one only once decided: its outcome.
  */
 export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepViewer, repo?: string): CornerStatus | null => {
+  const decision = decisionOf(glob);
+  if (decision !== null) return decision.outcome === null ? null : decidedStatus(glob, decision);
   if (isHumanCategory(glob.category)) return null;
   // Signed off is the glob's whole state: nothing else shows, and the date lives in the tooltip.
   if (glob.status === 'signed_off') {
