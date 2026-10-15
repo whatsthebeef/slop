@@ -12,10 +12,11 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { Tip } from '@/components/ui/tip';
 import { api } from '@/lib/api';
 import type { BoardView, DecideInput, GlobView } from '@/lib/api';
-import { adminOnlyReason, approveBlockedText, approveLabel, conflictNote, headerMenu, submitLabel, watchMode } from '@/lib/decide-flow';
+import { acceptConfirm, adminOnlyReason, approveBlockedText, approveLabel, conflictNote, headerMenu, submitLabel, watchMode } from '@/lib/decide-flow';
 import type { Choice, FlowMode, MenuEntry, MenuKey } from '@/lib/decide-flow';
 import { globDiffKey } from '@/lib/live';
 import { boardGlobHref } from '@/lib/glob-section';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { applyPrefill, recommendedLabel, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 
 /** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */
@@ -179,7 +180,7 @@ export const useDecideFlow = ({
     target,
     draftText: diff.data?.draft?.content ?? '',
     waiting: hasItem && !isDocument && learning !== null && inPipeline(learning) && diff.data?.draft == null,
-    approve: { ...text, blocked: approveBlockedText(adminOnly, canDecide), run: () => (mode === 'accept' ? submit() : pick('accept')) },
+    approve: { ...text, blocked: approveBlockedText(adminOnly, canDecide), run: () => (mode === 'accept' ? undefined : pick('accept')) },
     menu,
     mode,
     applied,
@@ -251,13 +252,19 @@ const OutcomeForm = ({ flow, choice }: { flow: DecideFlow; choice: Choice }) => 
       ? "Edited text (the new document's whole body)"
       : "Edited text (a section's new text)";
   const note = conflictNote(attributes.conflictsWith ?? []);
+  const confirm = acceptConfirm({
+    hotspot: attributes.origin.kind === 'hotspot',
+    learning: isLearning(attributes),
+    document: attributes.document !== undefined,
+    target,
+    title: stripMarkdown(flow.glob.title),
+    label: flow.approve.label,
+  });
   return (
     <div className='grid gap-2 rounded border p-3' data-testid={`outcome-form-${choice}`}>
       {choice === 'accept' && (
-        <p className='text-xs text-muted-foreground'>
-          {!isLearning(attributes)
-            ? 'Records the decision as approved; there is no knowledge change to apply.'
-            : 'Applies the proposed change to its target, then moves this decision to Reviewing.'}
+        <p className='text-xs text-muted-foreground' data-testid='accept-confirm-text'>
+          {confirm.text}
         </p>
       )}
       {choice === 'accept_with_edits' && (
@@ -314,6 +321,16 @@ const OutcomeForm = ({ flow, choice }: { flow: DecideFlow; choice: Choice }) => 
           {choice === 'reject' ? 'Reason (required)' : 'Why it needs work (optional)'}
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} />
         </Label>
+      )}
+      {choice === 'accept' && (
+        <div className='flex gap-2'>
+          <Button size='sm' disabled={flow.busy || flow.input === null || flow.approve.blocked !== null} data-testid='accept-confirm' onClick={flow.submit}>
+            {confirm.button}
+          </Button>
+          <Button size='sm' variant='ghost' data-testid='accept-cancel' onClick={flow.close}>
+            Cancel
+          </Button>
+        </div>
       )}
       {choice === 'reject' && note !== null && (
         <p className='text-xs text-amber-800 dark:text-amber-200' data-testid='conflict-note-reject'>
@@ -375,7 +392,8 @@ const mainState = (flow: DecideFlow) => {
   // A recommended reject or merge is not an approval: it needs only decide, as in the ▾.
   const blocked = acceptMode && !(recommended && suggest.prefill?.outcome === 'reject') ? approve.blocked : flow.canDecide ? null : "You can't decide this";
   const label = outcomeMode !== null ? submitLabel(outcomeMode, approve.label) : recommended ? recommendedLabel(suggest.stored, approve.label) : approve.label;
-  const off = busy || blocked !== null || (outcomeMode !== null && input === null);
+  // An approval is confirmed in its own form (Confirm / Cancel), so the row's button isn't a second way to confirm it.
+  const off = busy || blocked !== null || outcomeMode === 'accept' || (outcomeMode !== null && input === null);
   const apply = flow.applySuggestion;
   const press = () => (recommended && apply !== null ? apply() : outcomeMode === null || mode === 'keep' ? approve.run() : flow.submit());
   return { outcomeMode, blocked, label, off, press };
