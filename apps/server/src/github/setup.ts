@@ -24,6 +24,8 @@ export const REQUIRED_APP_EVENTS = [
   'issue_comment',
   'check_run',
   'check_suite',
+  // A merge queue entry's `checks` run: slop follows the queue.
+  'merge_group',
 ] as const;
 
 /** Events and permissions from the spec's GitHub App section. */

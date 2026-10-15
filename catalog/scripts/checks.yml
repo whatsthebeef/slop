@@ -1,7 +1,8 @@
 # Slop checks: the repo's own checks on every ready PR (sub, same or super), reported as the
 # `checks` check run, including on the head after slop updates the branch. A sub waits for this
 # run on its head (the board's merge policy `subGateCheck`, `checks` by default), then slop applies
-# the board's policy (size, sensitive paths) and merges it. Make `checks` a required status check on
+# the board's policy (size, sensitive paths) and merges it. The `merge_group` trigger gives each merge queue
+# entry (setup-repo.sh --protect turns the queue on) its own `checks` result. Make `checks` a required status check on
 # the base branch (setup-repo.sh --protect). Copy to .github/workflows/checks.yml and adjust the
 # check steps to the project's build doc.
 name: checks
@@ -9,6 +10,9 @@ name: checks
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Merge queue entries: tested on the base plus the PRs ahead of it. The queue needs a `checks` result on each.
+  merge_group:
+    types: [checks_requested]
   # After every merge: a sub merges as soon as it's ready, so its checks run here, and a red result reverts it.
   push:
     branches: [main]
