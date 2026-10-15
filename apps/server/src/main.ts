@@ -144,13 +144,10 @@ const globs = new GlobService({
   // Reads an action's script on the base branch; `codeView` exists by the time the first action is read.
   codeView: { read: (boardId, ref, path, range) => codeView.read(boardId, ref, path, range) },
   // The automatic relation pass (`relationScan` is built below): a changed text that names a glob queues a pass; `classifyAtCreate` and `remember` are the create-time path.
-  // Spread, so this compiles before and after GlobService declares the dependency.
-  ...{
-    relationScan: {
-      request: (input: Parameters<RelationScanService['request']>[0]): Promise<void> => relationScan.request(input),
-      classifyAtCreate: (input: Parameters<RelationScanService['classifyAtCreate']>[0]): ReturnType<RelationScanService['classifyAtCreate']> => relationScan.classifyAtCreate(input),
-      remember: (...args: Parameters<RelationScanService['remember']>): Promise<void> => relationScan.remember(...args),
-    },
+  relationScan: {
+    request: (input: Parameters<RelationScanService['request']>[0]): Promise<void> => relationScan.request(input),
+    classifyAtCreate: (input: Parameters<RelationScanService['classifyAtCreate']>[0]): ReturnType<RelationScanService['classifyAtCreate']> => relationScan.classifyAtCreate(input),
+    remember: (globId: string, boardId: number, decided: Parameters<RelationScanService['remember']>[2]): Promise<void> => relationScan.remember(globId, boardId, decided),
   },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.

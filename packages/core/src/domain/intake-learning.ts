@@ -4,7 +4,7 @@ import { markdownHeadings } from './sections.js';
 import { gateVerdictOf, namesGlob } from './sub-limit.js';
 import { inheritedFromBase } from './signals.js';
 import { SLOP_TYPES, WORK_CATEGORIES } from './types.js';
-import type { Category, SlopType, WorkKind } from './types.js';
+import type { Category, RelationGate, SlopType, WorkKind } from './types.js';
 
 /**
  * Learned task categorisation (spec, Intake): every glob keeps a frozen snapshot of what intake saw and decided when it was
@@ -184,6 +184,8 @@ export interface IntakeRecord {
   readonly promptVersion: number | null;
   /** The globs whose examples intake was shown. */
   readonly examples: readonly string[];
+  /** What intake decided the request waits for (`IntakeProposal.prerequisites`, none as an absent key): the create-time path makes no second model call. */
+  readonly prerequisites?: readonly { readonly id: string; readonly gate: RelationGate; readonly sentence: string }[];
 }
 
 /** One row of the frozen record: never edited (a plan rewritten before start adds the next version). */

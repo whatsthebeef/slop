@@ -37,7 +37,7 @@ import type { CodeView } from './code-view.js';
 import { CodeViewUnavailable } from '../domain/code-view.js';
 import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, UNTIL_WORDS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, normaliseUntil, pickUpWarning, startIds, toState, wouldCycle } from '../domain/relations.js';
 import type { AwaitedDependency, DoneRelation, ExternalGlob, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, Supersession, TitleInfo, ToState } from '../domain/relations.js';
-import { quoteReason, reverseCuesIn, sentenceHash, supersedeCuesIn } from '../domain/relation-scan.js';
+import { globIdsIn, idSentences, quoteReason, reverseCuesIn, sentenceHash, supersedeCuesIn } from '../domain/relation-scan.js';
 import type { AutomaticAdd, AutomaticRelations, AutomaticResult, RelationListExtras, RelationScanRow, RelationSuggestion } from '../domain/relation-scan.js';
 import { suggestionIdOf } from '../domain/relation-scan.js';
 import type { InboxItem } from '../domain/inbox.js';
@@ -55,6 +55,7 @@ import { AttachConflict, linkInboxItem } from './inbox-service.js';
 import { findHolds } from './hold-service.js';
 import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
+import type { ClassifyAtCreateInput, CreateDecision, CreatePrerequisite } from './relation-scan-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { inferenceReasonOf } from './intake-service.js';
 import type { WorkInference } from './intake-service.js';
@@ -91,6 +92,10 @@ export interface GlobServiceDeps {
 /** What `GlobService` tells the automatic relation pass: a glob gained text that may name other globs (best effort, never throws into a write). */
 export interface RelationScanTrigger {
   request(input: { readonly globId: string; readonly newText: string }): Promise<void> | void;
+  /** The create-time path (`RelationScanService.classifyAtCreate`): the prerequisites a new glob's text states, decided before it is written. Never throws. */
+  classifyAtCreate?(input: ClassifyAtCreateInput): Promise<{ readonly prerequisites: readonly CreatePrerequisite[]; readonly decided: readonly CreateDecision[] }>;
+  /** Remembers what `classifyAtCreate` decided under the new glob's ID, so the pass the create queues does not ask again. Never throws. */
+  remember?(globId: string, boardId: number, decided: readonly CreateDecision[]): Promise<void>;
 }
 
 /** plan.md v1 of a new glob: the caller's plan, else what intake was given, else the title. */
@@ -1845,13 +1850,15 @@ export class GlobService implements AutomaticRelations {
     // own deadline) rather than their sum. The snapshot's embedding; the size check, where a failing model leaves the text
     // estimate; and the dependency tree: needs and overlaps against the open globs, with a reason each (a person's edges win).
     const planText = planOf(input);
-    const [embedding, size, inferred] = await Promise.all([
+    const [embedding, size, inferred, classified] = await Promise.all([
       embedRequest(this.deps.embedder, input.intake?.request ?? planText),
       this.deps.sizeCheck === undefined ? null : this.deps.sizeCheck.assess(input.boardId, planText, input.title),
       this.deps.inference === undefined || input.type === 'super'
         ? []
         : this.deps.inference.infer({ boardId: input.boardId, plan: planText, selfId: null, title: input.title, ...(input.files === undefined ? {} : { files: input.files }) }),
+      this.classifyAtCreate(email, input, planText),
     ]);
+    const autoNeeds = classified.prerequisites;
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
       ignored = [];
       crossBoard.length = 0;
@@ -1885,7 +1892,7 @@ export class GlobService implements AutomaticRelations {
       );
       // Slop's inferred edges: a need (until merged) or an open decision (until decided); a person's statement of the same glob wins.
       const inferredNeeds = inferred.filter((i) => !wanted.includes(i.id) && !stated.some((r) => (r.gate ?? 'start') === 'start' && r.to === i.id));
-      const known = new Map((await tx.getGlobs([...wanted, ...stated.map((r) => r.to), ...inferredNeeds.map((i) => i.id)])).map((g) => [g.id, g]));
+      const known = new Map((await tx.getGlobs([...wanted, ...stated.map((r) => r.to), ...inferredNeeds.map((i) => i.id), ...autoNeeds.map((p) => p.id)])).map((g) => [g.id, g]));
       // Where every target stands, read once: a merged target whose rollout is still open holds its dependants, so it stays a relation.
       const states = await this.statesOf(tx, [...known.keys()]);
       for (const a of [...wanted, ...stated.map((r) => r.to)]) {
@@ -1937,6 +1944,20 @@ export class GlobService implements AutomaticRelations {
         if (target.boardId !== board.id) crossBoard.push(target);
         return true;
       });
+      // Prerequisites the plan states (create-time classification): they join as automatic rows with the quoted sentence, so a sub waits
+      // before it starts. Each is skipped, never refused, when it fails the checks other relation writes make: a target the actor can't
+      // view, a shape that makes no sense, nothing held any more, a pair already related, or a gate already at its limit.
+      for (const p of autoNeeds) {
+        const target = known.get(p.id);
+        if (target === undefined || p.id === id || !(await this.viewableTarget(tx, email, target))) continue;
+        const row: NewRelation = { to: p.id, gate: p.gate, until: p.until, reason: p.reason, evidence: [], source: 'auto' };
+        if (!checkRelationShape({ id, category: input.category }, { to: p.id, until: p.until, gate: p.gate }, target).ok) continue;
+        if (needs.some((r) => r.to === p.id && r.gate === p.gate)) continue;
+        if (p.gate === 'start' && !stillHolds(row, states.get(p.id))) continue;
+        if (needs.filter((r) => r.gate === p.gate).length >= MAX_RELATIONS) continue;
+        if (target.boardId !== board.id) crossBoard.push(target);
+        needs.push(row);
+      }
       // An agent's or the automatic pass's relation says why (rows slop inferred, and a group's inherited ones, are not asked for one).
       if (needsReason(by)) {
         const bare = needs.find((r) => r.source === by && r.reason === null && (r.group ?? null) === null);
@@ -2009,6 +2030,13 @@ export class GlobService implements AutomaticRelations {
     if (result.value.changed) {
       this.publish(result.value.glob);
       for (const target of crossBoard) this.publish(target);
+      if (classified.decided.length > 0) {
+        try {
+          await this.deps.relationScan?.remember?.(result.value.glob.id, input.boardId, classified.decided);
+        } catch (e) {
+          this.deps.log?.('relation scan remember', e instanceof Error ? e.message : String(e));
+        }
+      }
       if (input.inboxItem !== undefined) {
         this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: input.boardId, globId: result.value.glob.id });
         this.deps.notifier.publish({ kind: 'board.inbox', boardId: input.boardId });
@@ -2020,6 +2048,39 @@ export class GlobService implements AutomaticRelations {
       return ok({ glob: (await this.autoInvestigate(result.value.glob.id)) ?? result.value.glob, ...notes });
     }
     return ok({ glob: result.value.glob, ...notes });
+  }
+
+  /**
+   * The create-time classification: the prerequisites the new glob's text states beyond what the caller stated itself. Asked only
+   * when the text names a glob that `needs`/`after`/`relations`/`holds`/`supersedes` do not; an input-only create (intake ran) passes
+   * intake's own answer, so no second model call is made. No usable answer (or no classifier) is no automatic relation: the pass
+   * the create queues decides later. Never fails the create.
+   */
+  private async classifyAtCreate(email: string, input: CodeCreateInput, planText: string): Promise<{ readonly prerequisites: readonly CreatePrerequisite[]; readonly decided: readonly CreateDecision[] }> {
+    const none = { prerequisites: [], decided: [] } as const;
+    const scan = this.deps.relationScan;
+    if (scan?.classifyAtCreate === undefined) return none;
+    try {
+      const answered = input.intake === undefined || input.intake === null ? undefined : (input.intake.prerequisites ?? []);
+      // Intake's answer is about the request it read, so that is the text its sentences are checked against.
+      const text = answered === undefined ? planText : input.intake?.request ?? planText;
+      const stated = new Set(
+        [...(input.after ?? []), ...(input.relations ?? []).map((r) => r.to), ...(input.holds ?? []).map((h) => (typeof h === 'string' ? h : h.id)), ...(input.supersedes ?? []).map((h) => (typeof h === 'string' ? h : h.id))].map((id) => id.trim()),
+      );
+      const named = idSentences(null, text).flatMap((sentence) => globIdsIn(sentence));
+      if (!named.some((id) => !stated.has(id))) return none;
+      return await scan.classifyAtCreate({
+        boardId: input.boardId,
+        planText: text,
+        explicitIds: [...stated],
+        actorEmail: email,
+        title: input.title,
+        ...(answered === undefined ? {} : { answered }),
+      });
+    } catch (e) {
+      this.deps.log?.('relation scan classify', e instanceof Error ? e.message : String(e));
+      return none;
+    }
   }
 
   /** Tells the automatic relation pass a glob gained text (it prefilters, queues and debounces); best effort: never fails the write. */

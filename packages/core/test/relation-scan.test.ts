@@ -195,7 +195,7 @@ describe('relation scan', () => {
     it('a start gate for work that has begun is odd: a suggestion, not a relation', async () => {
       const me = await create('Mine');
       const target = await create('Early');
-      setStatus(me.id, 'doing');
+      setStatus(me.id, 'implementing');
       await plan(me.id, `Needs ${target.id} before it can begin.`);
       reply = answering(() => ({ verdict: 'prerequisite', gate: 'start' }));
 
@@ -408,7 +408,7 @@ describe('relation scan', () => {
       const me = await create('Unblocker');
       const waiting = await create('Waiting');
       const running = await create('Running');
-      setStatus(running.id, 'doing');
+      setStatus(running.id, 'implementing');
       await plan(me.id, `It unblocks ${waiting.id}. It also unblocks ${running.id}.`);
 
       await scan.run(me.id);
