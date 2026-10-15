@@ -1,4 +1,4 @@
-import { isHumanCategory } from '@slop/core';
+import { isHumanCategory, modeOf } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
@@ -91,7 +91,7 @@ export const GlobHeader = ({
         </span>
         {human || actions === undefined || glob.type === null ? (
           <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" data-testid="glob-type">
-            {glob.type ?? glob.category}
+            {modeOf(glob)}
           </span>
         ) : (
           <span className="hidden shrink-0 sm:inline">

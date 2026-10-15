@@ -18,7 +18,7 @@ describe('knowledge page helpers', () => {
     expect(globHref(3, 's3f1')).toBe('/boards/3?glob=s3f1');
   });
   it('links to the board with the Decision category selected', () => {
-    expect(decisionsHref(3)).toBe('/boards/3?category=decision');
+    expect(decisionsHref(3)).toBe('/boards/3?mode=decision');
   });
   it('labels decision links without showing ids', () => {
     expect(decisionLinks({ text: 't', globIds: ['s1f1'] })).toEqual([{ id: 's1f1', label: 'decision' }]);

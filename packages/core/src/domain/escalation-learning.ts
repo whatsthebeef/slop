@@ -1,6 +1,6 @@
 import type { DomainEvent } from './events.js';
 import { namesGlob, SUB_LIMIT_WINDOW_DAYS } from './sub-limit.js';
-import type { Glob } from './types.js';
+import { fixOf, type Glob } from './types.js';
 
 /**
  * Escalation outcome learning (spec, Subs and escalation). Every escalation of a sub to a same (`escalate_to_same`) is
@@ -271,7 +271,7 @@ export const escalationCandidates = (facts: EscalationFacts): EscalationCandidat
     }
     const bug = facts.globs.find(
       (b) =>
-        b.category === 'bug' &&
+        fixOf(b) &&
         Date.parse(b.createdAt) >= mergedMs &&
         Date.parse(b.createdAt) <= windowEnd &&
         namesGlob(b.title, glob.id),

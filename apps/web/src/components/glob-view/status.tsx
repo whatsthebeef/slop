@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { CategoryIcon } from '@/components/glob-card';
+import { KindMarker, hasKindMarker } from '@/components/glob-card';
 import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
@@ -88,7 +88,7 @@ export const useNowState = (glob: GlobView, decision: boolean, disabled: readonl
 export type NowState = ReturnType<typeof useNowState>;
 
 /**
- * The header's top right, as on the card: the status, a dot, then the category icon. The status is exactly the card's corner
+ * The header's top right, as on the card: the status, a dot, then the fix marker (or a human glob's person icon; nothing for other machine work). The status is exactly the card's corner
  * (`cornerStatus`: text, icon, tooltip) and is left out, with its dot, when the card has none; the list is never shown here
  * (it sits by the ID). Clicking the status opens a live run's session, else scrolls to the Activity log.
  */
@@ -120,12 +120,14 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
             </span>
             <StatusIconView icon={corner.icon} />
           </button>
-          <Dot />
+          {hasKindMarker(glob) && <Dot />}
         </>
       )}
-      <span className="ml-1.5 inline-flex">
-        <CategoryIcon category={glob.category} />
-      </span>
+      {hasKindMarker(glob) && (
+        <span className="ml-1.5 inline-flex">
+          <KindMarker glob={glob} />
+        </span>
+      )}
     </span>
   );
 };

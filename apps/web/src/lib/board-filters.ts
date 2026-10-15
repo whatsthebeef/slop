@@ -1,5 +1,5 @@
-import { isHumanCategory } from '@slop/core';
-import type { Category, HumanStepViewer } from '@slop/core';
+import { fixOf, isHumanCategory, modeOf } from '@slop/core';
+import type { HumanStepViewer, Mode } from '@slop/core';
 import type { GlobView } from './api';
 import { needsPerson } from './card-rows';
 import { needsRelease } from './human-steps';
@@ -56,20 +56,28 @@ export type BoardFilter = ChipsFilter | TextFilter | TagFilter | ToggleFilter;
 /** Splits a comma or space separated list, dropping empties. */
 const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !== '');
 
-const CATEGORIES: Category[] = ['feature', 'task', 'bug', 'action', 'decision'];
+const MODES: Mode[] = ['sub', 'same', 'super', 'action', 'decision'];
 
 /** The board's filters. Adding one is one entry here: the pane renders this list and the board applies it. */
 export const BOARD_FILTERS: BoardFilter[] = [
   {
-    key: 'category',
-    label: 'Category',
+    key: 'mode',
+    label: 'Mode',
     hideLabel: true,
-    defaultValue: 'feature,task,bug,action',
+    defaultValue: 'sub,same,super,action',
     control: 'chips',
-    options: CATEGORIES.map((value) => ({ value, label: value })),
+    options: MODES.map((value) => ({ value, label: value })),
     // Kept in the options' order and without repeats, so equal selections give equal URLs.
-    normalize: (raw) => CATEGORIES.filter((c) => tokens(raw.toLowerCase()).includes(c)).join(','),
-    matches: (glob, value) => tokens(value).includes(glob.category),
+    normalize: (raw) => MODES.filter((m) => tokens(raw.toLowerCase()).includes(m)).join(','),
+    matches: (glob, value) => tokens(value).includes(modeOf(glob)),
+  },
+  {
+    key: 'fix',
+    label: 'Fixes',
+    control: 'toggle',
+    normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
+    // The fix flag the card's marker shows (a record without one reads through its old category).
+    matches: (glob) => fixOf(glob),
   },
   {
     key: 'id',

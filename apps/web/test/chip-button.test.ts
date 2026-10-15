@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
-import { ArmSystemLabel, CategoryIcon, ChipButton } from '../src/components/glob-card';
+import { ArmSystemLabel, ChipButton, KindMarker } from '../src/components/glob-card';
 import { Tip } from '../src/components/ui/tip';
 
 /** The id of the Tip's hidden description and the `aria-describedby` on the chip it wraps. */
@@ -60,14 +60,21 @@ describe('ArmSystemLabel inside a Tip', () => {
   });
 });
 
-describe('CategoryIcon', () => {
+describe('KindMarker', () => {
   it('links the tooltip to the action icon and labels it action, not human', () => {
-    const html = renderToStaticMarkup(createElement(CategoryIcon, { category: 'action' }));
+    const html = renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'action', type: null } }));
     const { describedBy, descriptionId } = link(html);
     expect(describedBy).toBeDefined();
     expect(describedBy).toBe(descriptionId);
     expect(html).toContain('aria-label="action"');
     expect(html).toContain('role="img"');
     expect(html).not.toContain('human');
+  });
+
+  it('shows the bug for a fix, and nothing for other machine work', () => {
+    expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'task', type: 'same', fix: true } }))).toContain('aria-label="fix"');
+    expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'bug', type: 'sub' } }))).toContain('aria-label="fix"');
+    expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'bug', type: 'sub', fix: false } }))).toBe('');
+    expect(renderToStaticMarkup(createElement(KindMarker, { glob: { category: 'feature', type: 'same' } }))).toBe('');
   });
 });

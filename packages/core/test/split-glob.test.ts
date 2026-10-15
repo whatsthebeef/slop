@@ -66,6 +66,27 @@ describe('split a glob into parts', () => {
     );
   });
 
+  it('allocates the ID letter from fix and work kind, and a part inherits them from the original', async () => {
+    const create = async (patch: Record<string, unknown>) =>
+      unwrap(await globs.create(ADMIN, { boardId, title: 'T', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'p', ...patch }));
+    expect((await create({ category: 'feature' })).id).toMatch(/^s\d+f\d+$/);
+    expect((await create({})).id).toMatch(/^s\d+t\d+$/);
+    expect((await create({ category: 'bug' })).id).toMatch(/^s\d+b\d+$/);
+    // The fields drive the letter, not the category.
+    const fix = await create({ category: 'task', fix: true });
+    expect(fix.id).toMatch(/^s\d+b\d+$/);
+    expect(fix).toMatchObject({ fix: true, workKind: 'maintenance' });
+    const rnd = await create({ category: 'task', workKind: 'rnd', workKindSource: 'person', inferenceReason: 'new capability' });
+    expect(rnd.id).toMatch(/^s\d+f\d+$/);
+    expect(rnd).toMatchObject({ workKindSource: 'person', inferenceReason: 'new capability' });
+    const [, second] = unwrap(await globs.split(DEV, fix.id, fix.version, input([part({ title: 'A' }), part({ title: 'B', after: [0] })])));
+    expect(second).toMatchObject({ fix: true, workKind: 'maintenance' });
+    expect(second?.id).toMatch(/^s\d+b\d+$/);
+    const [, other] = unwrap(await globs.split(DEV, rnd.id, rnd.version, input([part({ title: 'A' }), part({ title: 'B', fix: true, after: [0] })])));
+    expect(other).toMatchObject({ fix: true, workKind: 'rnd' });
+    expect(other?.id).toMatch(/^s\d+b\d+$/);
+  });
+
   it('keeps part 1 on the original and creates the others with their plans and group, and the needs they name', async () => {
     unwrap(await artifacts.attach(DEV, original.id, { label: 'Spec', text: null, link: 'https://example.com/spec' }));
     unwrap(await artifacts.attach(DEV, original.id, { label: 'Notes', text: 'private notes', link: null }));

@@ -1,4 +1,4 @@
-import { ArtifactService, BoardService, GlobService } from '@slop/core';
+import { ArtifactService, BoardService, GlobService, IntakeService, LlmUnavailable } from '@slop/core';
 import type { Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -96,7 +96,7 @@ describe('action globs over REST and MCP (Postgres)', () => {
       outbox,
       onBoardCreated: () => Promise.resolve(),
     });
-    const server = buildServer({ artifacts, globs, outbox, boards, deploys: { history: () => Promise.resolve({ ok: true as const, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
+    const server = buildServer({ artifacts, globs, intake: new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('off', 'none')) } }), outbox, boards, deploys: { history: () => Promise.resolve({ ok: true as const, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);
@@ -137,6 +137,32 @@ describe('action globs over REST and MCP (Postgres)', () => {
     expect(made.body.humanSteps?.map((s) => [s.kind, s.title, s.who])).toEqual([['action', 'Do: Rotate token', DEV]]);
     const refused = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Rotate', category: 'action', type: 'same', group: null });
     expect(refused.status).toBe(422);
+  });
+
+  it('REST create and update speak actor, mode, fix and workKind, with category and type as aliases', async () => {
+    type Kind = Body & { actor: string; mode: string; fix: boolean; fixSource: string; workKind: string; workKindSource: string };
+    const post = async (body: Record<string, unknown>) => rest('POST', `/api/boards/${boardId}/globs`, { group: null, plan: 'p', ...body });
+    const human = await post({ title: 'Do it by hand', actor: 'human' });
+    expect(human.body).toMatchObject({ actor: 'human', mode: 'action', category: 'action', type: null });
+    const aliased = await post({ title: 'Old caller', category: 'bug', type: 'same' });
+    expect(aliased.body).toMatchObject({ actor: 'machine', mode: 'same', fix: true, fixSource: 'person', workKind: 'maintenance' });
+    const modern = await post({ title: 'New caller', actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' });
+    expect(modern.body).toMatchObject({ mode: 'same', fix: false, workKind: 'rnd', workKindSource: 'person', category: 'feature' });
+    // No category given and no intake wired: a same, not a fix, maintenance, inferred.
+    const bare = await post({ title: 'Plain' });
+    expect(bare.body).toMatchObject({ actor: 'machine', mode: 'same', category: 'task', fix: false, fixSource: 'inferred', workKind: 'maintenance', workKindSource: 'inferred' });
+    expect((await post({ title: 'Mixed', actor: 'machine', mode: 'action' })).status).toBe(422);
+    expect((await post({ title: 'Mixed', actor: 'human', mode: 'same' })).status).toBe(422);
+    // A person flips the fix flag; only an admin changes the work kind.
+    const flipped = await rest('PATCH', `/api/globs/${bare.body.id}`, { version: bare.body.version, fix: true });
+    expect(flipped.status).toBe(200);
+    expect(flipped.body).toMatchObject({ fix: true, fixSource: 'person' });
+    const refused = await rest('PATCH', `/api/globs/${bare.body.id}`, { version: (flipped.body as Kind).version, workKind: 'rnd' });
+    expect(refused.status).toBe(403);
+    const allowed = await rest('PATCH', `/api/globs/${bare.body.id}`, { version: (flipped.body as Kind).version, workKind: 'rnd' }, ADMIN);
+    expect(allowed.body).toMatchObject({ workKind: 'rnd', workKindSource: 'person' });
+    const mode = await rest('PATCH', `/api/globs/${modern.body.id}`, { version: modern.body.version, mode: 'same' });
+    expect(mode.body).toMatchObject({ actor: 'machine', mode: 'same' });
   });
 
   it('REST done and dismiss: note and reason, repeats, and version checks', async () => {

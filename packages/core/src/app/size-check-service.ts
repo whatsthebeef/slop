@@ -3,6 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { isInvestigateEvent } from '../domain/events.js';
 import type { GlobOutcome } from '../domain/intake-learning.js';
 import type { DomainEvent } from '../domain/events.js';
+import { fixOf } from '../domain/types.js';
 import { parseInvestigation } from '../domain/investigation.js';
 import { parseWorkstreams } from '../domain/workstreams.js';
 import type { WorkstreamsBlock } from '../domain/workstreams.js';
@@ -537,7 +538,7 @@ export class SizeCheckService implements SizeAssessor {
     const byGlob = new Map<string, DomainEvent[]>();
     for (const e of read.events) byGlob.set(e.globId, [...(byGlob.get(e.globId) ?? []), e]);
     const checks = new Map(read.checks.map((c) => [c.globId, c]));
-    const categories = new Map(read.globs.map((g) => [g.id, g.category]));
+    const fixes = new Map(read.globs.map((g) => [g.id, fixOf(g)]));
     const range = prRangeOf(
       read.outcomes.flatMap((o) => {
         const hours = prHoursOf(byGlob.get(o.globId) ?? []);
@@ -545,7 +546,7 @@ export class SizeCheckService implements SizeAssessor {
       }),
     );
     const due = read.outcomes
-      .filter((o) => o.final && checks.has(o.globId) && !read.recorded.has(o.globId) && categories.get(o.globId) !== 'bug')
+      .filter((o) => o.final && checks.has(o.globId) && !read.recorded.has(o.globId) && fixes.get(o.globId) !== true)
       .sort((a, b) => a.mergedAt.localeCompare(b.mergedAt) || a.globId.localeCompare(b.globId));
     const changes: SizeThresholdResult['changes'][number][] = [];
     for (const outcome of due) {
@@ -568,7 +569,7 @@ export class SizeCheckService implements SizeAssessor {
     if (changes.some((c) => thresholdMoved(c.from, c.to)))
       this.deps.notifier.publish({ kind: 'board.changed', boardId });
     const threshold = await this.deps.store.transaction((tx) => tx.getSizeThreshold(boardId));
-    const calibration = await this.learnCalibration(boardId, read.outcomes, byGlob, categories);
+    const calibration = await this.learnCalibration(boardId, read.outcomes, byGlob, fixes);
     return { kind: 'size_threshold', threshold, changes, ...(calibration === null ? {} : { calibration }) };
   }
 
@@ -581,12 +582,12 @@ export class SizeCheckService implements SizeAssessor {
     boardId: number,
     outcomes: readonly GlobOutcome[],
     byGlob: ReadonlyMap<string, readonly DomainEvent[]>,
-    categories: ReadonlyMap<string, string>,
+    fixes: ReadonlyMap<string, boolean>,
   ): Promise<NonNullable<SizeThresholdResult['calibration']> | null> {
     const moves: { globId: string; cause: string }[] = [];
     let records = 0;
     const due = outcomes
-      .filter((o) => o.final && categories.get(o.globId) !== 'bug')
+      .filter((o) => o.final && fixes.get(o.globId) !== true)
       .sort((a, b) => a.mergedAt.localeCompare(b.mergedAt) || a.globId.localeCompare(b.globId));
     for (const outcome of due) {
       const gathered = await this.deps.store.transaction(async (tx) => {

@@ -1,7 +1,7 @@
 import type { DomainEvent, DomainEventType, JsonValue } from './events.js';
 import { isRnd, listOf } from './matrix.js';
-import { CATEGORIES, isHumanCategory, SLOP_TYPES, STATUSES } from './types.js';
-import type { Category, SlopType, Status } from './types.js';
+import { CATEGORIES, isHumanCategory, SLOP_TYPES, STATUSES, WORK_KINDS } from './types.js';
+import type { Category, SlopType, Status, WorkKind } from './types.js';
 
 /**
  * Time tracking (spec, Time tracking and reports): hours are derived from the event log, never recorded as they happen.
@@ -13,7 +13,7 @@ import type { Category, SlopType, Status } from './types.js';
 /** The events the replay reads; the rest of the log says nothing about who works on what. */
 export const TIME_EVENT_TYPES = ['GlobCreated', 'StatusChanged', 'PickedUp', 'FieldsChanged'] as const satisfies readonly DomainEventType[];
 /** The only event `data` keys `deriveSegments` reads, so the store can leave the rest of each payload behind. */
-export const TIME_EVENT_DATA_KEYS = ['status', 'to', 'category', 'type'] as const;
+export const TIME_EVENT_DATA_KEYS = ['status', 'to', 'category', 'type', 'fix', 'workKind'] as const;
 
 export const WORK_START_HOUR = 9;
 export const WORK_END_HOUR = 17;
@@ -23,6 +23,8 @@ export interface GlobFacts {
   readonly planner: string;
   readonly category: Category;
   readonly type: SlopType | null;
+  /** The row's work kind; absent for a legacy row (then the category decides). */
+  readonly workKind?: WorkKind;
 }
 
 /** A glob's facts plus where it lives, as the store reads them for a report (no whole glob). */
@@ -31,11 +33,12 @@ export interface GlobReportFacts extends GlobFacts {
   readonly boardId: number;
 }
 
-/** A stretch of time counted for one person on one glob, in one category (`from` < `to`, ISO instants). */
+/** A stretch of time counted for one person on one glob, in one category and work kind (`from` < `to`, ISO instants). */
 export interface Segment {
   readonly person: string;
   readonly globId: string;
   readonly category: Category;
+  readonly workKind: WorkKind;
   readonly from: string;
   readonly to: string;
 }
@@ -43,6 +46,8 @@ export interface Segment {
 interface GlobState {
   status: Status | null;
   category: Category;
+  /** Stored work kind, or null while only the category says (events written before work kinds). */
+  workKind: WorkKind | null;
   type: SlopType;
   planner: string;
   implementer: string | null;
@@ -50,6 +55,8 @@ interface GlobState {
 
 const statusOf = (value: JsonValue | undefined): Status | null => STATUSES.find((s) => s === value) ?? null;
 const categoryOf = (value: JsonValue | undefined): Category | null => CATEGORIES.find((c) => c === value) ?? null;
+const workKindOfValue = (value: JsonValue | undefined): WorkKind | null => WORK_KINDS.find((k) => k === value) ?? null;
+const kindOf = (g: Pick<GlobState, 'category' | 'workKind'>): WorkKind => (isRnd({ category: g.category, workKind: g.workKind ?? undefined }) ? 'rnd' : 'maintenance');
 const typeOf = (value: JsonValue | undefined): SlopType | null => SLOP_TYPES.find((t) => t === value) ?? null;
 const inDoing = (status: Status | null): boolean => status !== null && listOf(status) === 'doing';
 
@@ -73,14 +80,14 @@ export const deriveSegments = (
 ): Segment[] => {
   const state = new Map<string, GlobState>();
   const active = new Map<string, string | null>();
-  const open = new Map<string, { globId: string; category: Category; from: string }>();
+  const open = new Map<string, { globId: string; category: Category; workKind: WorkKind; from: string }>();
   const segments: Segment[] = [];
 
   const close = (person: string, at: string) => {
     const current = open.get(person);
     if (current === undefined) return;
     open.delete(person);
-    if (current.from < at) segments.push({ person, globId: current.globId, category: current.category, from: current.from, to: at });
+    if (current.from < at) segments.push({ person, globId: current.globId, category: current.category, workKind: current.workKind, from: current.from, to: at });
   };
   const clearActive = (globId: string) => {
     for (const [person, id] of active) if (id === globId) active.set(person, null);
@@ -89,9 +96,9 @@ export const deriveSegments = (
     for (const person of new Set([...active.keys(), ...open.keys()])) {
       const globId = active.get(person) ?? null;
       const g = globId === null ? undefined : state.get(globId);
-      const want = globId !== null && g !== undefined && inDoing(g.status) && attributed(g) === person ? { globId, category: g.category } : null;
+      const want = globId !== null && g !== undefined && inDoing(g.status) && attributed(g) === person ? { globId, category: g.category, workKind: kindOf(g) } : null;
       const current = open.get(person);
-      if (current?.globId === want?.globId && current?.category === want?.category) continue;
+      if (current?.globId === want?.globId && current?.category === want?.category && current?.workKind === want?.workKind) continue;
       close(person, at);
       if (want !== null) open.set(person, { ...want, from: at });
     }
@@ -110,7 +117,8 @@ export const deriveSegments = (
       // Decisions are board knowledge and actions are a person's own: no segment is ever opened for one.
       if (isHumanCategory(category)) continue;
       if (type === undefined || type === null) continue;
-      g = { status: null, category, type, planner, implementer: null };
+      const workKind = workKindOfValue(e.type === 'GlobCreated' ? e.data.workKind : undefined) ?? (e.type === 'GlobCreated' ? null : (facts?.workKind ?? null));
+      g = { status: null, category, workKind, type, planner, implementer: null };
       state.set(e.globId, g);
     }
     const before = attributed(g);
@@ -144,6 +152,7 @@ export const deriveSegments = (
         break;
       case 'FieldsChanged':
         g.category = categoryOf(changedTo(e.data.category)) ?? g.category;
+        g.workKind = workKindOfValue(changedTo(e.data.workKind)) ?? g.workKind;
         g.type = typeOf(changedTo(e.data.type)) ?? g.type;
         break;
       default:
@@ -336,7 +345,7 @@ export const reportRows = (segments: readonly Segment[], period: Period, zone: s
       .reduce((sum, d) => sum + d.ms, 0);
     if (ms === 0) continue;
     const t = totals.get(s.person) ?? { rnd: 0, maintenance: 0 };
-    if (isRnd(s.category)) t.rnd += ms;
+    if (s.workKind === 'rnd') t.rnd += ms;
     else t.maintenance += ms;
     totals.set(s.person, t);
   }

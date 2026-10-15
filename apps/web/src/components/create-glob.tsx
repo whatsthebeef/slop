@@ -1,5 +1,5 @@
-import { canChooseType, isValidCombination, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
-import type { Category, SlopType } from '@slop/core';
+import { canChooseType, SLOP_TYPES } from '@slop/core';
+import type { SlopType, WorkActor } from '@slop/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { useState } from 'react';
@@ -16,24 +16,40 @@ import { FileDropZone } from './file-drop';
 import { GroupInput } from './group-input';
 import type { BoardView, IntakeProposalView, NewGlob } from '@/lib/api';
 
-/** What the form offers: code work and the human action (decisions come from learnings, never from this form). */
-const CREATE_CATEGORIES: readonly Category[] = [...WORK_CATEGORIES, 'action'];
+/** Who can do the work, and how (decisions come from learnings, never from this form). */
+const ACTORS: readonly { readonly value: WorkActor; readonly label: string }[] = [
+  { value: 'machine', label: 'Machine' },
+  { value: 'human', label: 'Human' },
+];
 
-/** A category change keeps the form valid: an action has no type, code work needs one (a same until chosen). */
-export const withCategory = (form: NewGlob, category: Category): NewGlob => {
-  if (category === 'action') {
-    const next: NewGlob = { ...form, category, type: null, environment: null, autoTrigger: false };
+/** The modes an actor offers on this form: a machine's types, a human's action. */
+const modesOf = (actor: WorkActor): readonly NewGlob['mode'][] => (actor === 'human' ? ['action'] : SLOP_TYPES);
+
+/** Choosing who keeps the form valid: an action has no environment, files or run to start; a machine is a same until chosen. */
+export const withActor = (form: NewGlob, actor: WorkActor): NewGlob => {
+  if (actor === form.actor) return form;
+  if (actor === 'human') {
+    const next: NewGlob = { ...form, actor, mode: 'action', environment: null, autoTrigger: false };
     delete next.start;
     delete next.files;
+    delete next.fix;
+    delete next.fixSource;
+    delete next.workKind;
+    delete next.workKindSource;
+    delete next.inferenceReason;
     return next;
   }
-  return { ...form, category, type: form.type ?? 'same' };
+  return { ...form, actor, mode: 'same' };
 };
+
+/** A mode change keeps the fix flag valid: a fix is never a super. */
+export const withMode = (form: NewGlob, mode: NewGlob['mode']): NewGlob =>
+  mode === 'super' && form.fix === true ? { ...form, mode, fix: false, fixSource: 'person' } : { ...form, mode };
 
 const empty = (): NewGlob => ({
   title: '',
-  type: 'same',
-  category: 'task',
+  actor: 'machine',
+  mode: 'same',
   group: null,
   environment: null,
   autoTrigger: false,
@@ -89,7 +105,8 @@ export const CreateGlobDialog = ({
   const restricted = board.role === 'qa' || board.role === 'po';
   const types = SLOP_TYPES.filter((t) => !(restricted && t === 'super'));
   const chooses = (t: SlopType) => canChooseType(board.role, t);
-  const valid = isValidCombination(form.type, form.category) && form.title.trim() !== '';
+  const human = form.actor === 'human';
+  const valid = form.title.trim() !== '' && !(form.mode === 'super' && form.fix === true);
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
 
   /** Intake: the LLM proposes the fields from free text; the person checks them before Create. */
@@ -98,11 +115,18 @@ export const CreateGlobDialog = ({
     setError(null);
     try {
       const proposal = await api.intake(board.id, request);
+      const reasons = [...new Set([proposal.fixReason, proposal.workKindReason].filter((r): r is string => r !== null && r.trim() !== ''))];
       setForm({
         title: proposal.title,
         plan: proposal.plan,
-        type: chooses(proposal.type) ? proposal.type : 'same',
-        category: proposal.category,
+        actor: 'machine',
+        mode: chooses(proposal.type) ? proposal.type : 'same',
+        // Inferred, shown as chips the person can flip (a flip is theirs and sticks).
+        fix: proposal.fix && proposal.type !== 'super',
+        fixSource: proposal.fixSource,
+        workKind: proposal.workKind,
+        workKindSource: proposal.workKindSource,
+        ...(reasons.length === 0 ? {} : { inferenceReason: reasons.join(' ').slice(0, 500) }),
         group: proposal.group,
         // An environment the person already chose wins over one the request names.
         environment: form.environment ?? proposal.environment,
@@ -146,7 +170,7 @@ export const CreateGlobDialog = ({
       const created = await onCreate({
         ...form,
         ...(fromInbox === undefined ? {} : { inboxItem: fromInbox.id, idempotencyKey: fromInbox.key }),
-        ...(form.category === 'action' ? { assignee: (form.assignee ?? '').trim() === '' ? null : (form.assignee ?? '').trim() } : {}),
+        ...(human ? { assignee: (form.assignee ?? '').trim() === '' ? null : (form.assignee ?? '').trim() } : {}),
         // A blank group after intake means none; typed by hand with no request, it is left for slop to choose.
         ...((form.group ?? '').trim() === '' ? (insight === null ? { group: undefined } : { group: null }) : { group: form.group ?? null }),
         ...(insight === null
@@ -220,37 +244,35 @@ export const CreateGlobDialog = ({
             <Textarea value={form.plan ?? ''} onChange={(e) => setForm({ ...form, plan: e.target.value })} />
           </Label>
           <div className='grid grid-cols-2 gap-3'>
-            {/* An action is human work: it has no type, so the control is not offered. */}
-            {form.type !== null && (
-              <Label>
-                Type
-                <Select
-                  value={form.type}
-                  title={types.some((t) => !chooses(t)) ? CHOOSE_TYPE_TOOLTIP : undefined}
-                  onChange={(e) => setForm({ ...form, type: e.target.value as SlopType })}
-                >
-                  {types.map((t) => (
-                    <option key={t} disabled={!chooses(t)} title={chooses(t) ? undefined : CHOOSE_TYPE_TOOLTIP}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
-              </Label>
-            )}
             <Label>
-              Category
-              <Select
-                value={form.category}
-                onChange={(e) => setForm(withCategory(form, e.target.value as Category))}
-              >
-                {CREATE_CATEGORIES.map((c) => (
-                  <option key={c} disabled={!isValidCombination(c === 'action' ? null : (form.type ?? 'same'), c)}>
-                    {c}
+              Who
+              <Select value={form.actor} data-testid='actor' onChange={(e) => setForm(withActor(form, e.target.value as WorkActor))}>
+                {ACTORS.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
                   </option>
                 ))}
               </Select>
             </Label>
-            {form.category === 'action' && (
+            {/* How: only the modes of the chosen actor. */}
+            <Label>
+              How
+              <Select
+                value={form.mode}
+                data-testid='mode'
+                title={!human && types.some((t) => !chooses(t)) ? CHOOSE_TYPE_TOOLTIP : undefined}
+                onChange={(e) => setForm(withMode(form, e.target.value as NewGlob['mode']))}
+              >
+                {modesOf(form.actor)
+                  .filter((m) => m === 'action' || types.includes(m))
+                  .map((m) => (
+                    <option key={m} disabled={m !== 'action' && !chooses(m)} title={m === 'action' || chooses(m) ? undefined : CHOOSE_TYPE_TOOLTIP}>
+                      {m}
+                    </option>
+                  ))}
+              </Select>
+            </Label>
+            {human && (
               <Label>
                 Assignee (optional)
                 <Input
@@ -269,7 +291,7 @@ export const CreateGlobDialog = ({
                 onChange={(e) => setForm({ ...form, group: e.target.value })}
               />
             </Label>
-            {form.category !== 'action' && (
+            {!human && (
               <Label>
                 Environment
                 <Select
@@ -287,12 +309,38 @@ export const CreateGlobDialog = ({
           {insight !== null && insight.needsConfirmation && !confirmed && (
             <div className='grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-xs' data-testid='intake-unsure'>
               <p>
-                Intake is not sure about the category ({insight.category}
-                {insight.categoryReason === null ? '' : `: ${insight.categoryReason}`}). Check it, then confirm.
+                Intake is not sure what kind of work this is ({insight.fix ? 'a fix' : 'not a fix'}, {insight.workKind === 'rnd' ? 'R&D' : 'maintenance'}
+                {insight.categoryReason === null ? '' : `: ${insight.categoryReason}`}). Check the chips below, then confirm.
               </p>
               <Button type='button' variant='outline' size='sm' className='w-fit' onClick={() => setConfirmed(true)}>
-                Category is right
+                Looks right
               </Button>
+            </div>
+          )}
+          {!human && form.fix !== undefined && form.workKind !== undefined && (
+            <div className='flex flex-wrap items-center gap-2 text-xs' data-testid='kind-chips'>
+              <button
+                type='button'
+                aria-pressed={form.fix}
+                disabled={form.mode === 'super'}
+                title={form.mode === 'super' ? 'A fix is never a super' : form.fixSource === 'person' ? 'Set by you' : 'Inferred from the request: click to flip'}
+                className={`inline-flex h-7 items-center rounded-full border px-2.5 ${form.fix ? 'border-foreground bg-muted font-medium' : 'border-edge text-muted-foreground hover:text-foreground'}`}
+                data-testid='chip-fix'
+                onClick={() => setForm({ ...form, fix: !form.fix, fixSource: 'person' })}
+              >
+                {form.fix ? 'Fix' : 'Not a fix'}
+              </button>
+              <button
+                type='button'
+                aria-pressed={form.workKind === 'rnd'}
+                title={form.workKindSource === 'person' ? 'Set by you' : 'Inferred from the plan: click to flip'}
+                className='inline-flex h-7 items-center rounded-full border border-edge px-2.5 text-muted-foreground hover:text-foreground'
+                data-testid='chip-work-kind'
+                onClick={() => setForm({ ...form, workKind: form.workKind === 'rnd' ? 'maintenance' : 'rnd', workKindSource: 'person' })}
+              >
+                {form.workKind === 'rnd' ? 'R&D' : 'Maintenance'}
+              </button>
+              {form.inferenceReason != null && <span className='text-muted-foreground'>{form.inferenceReason}</span>}
             </div>
           )}
           {insight !== null && insight.typeReason != null && (
@@ -308,7 +356,7 @@ export const CreateGlobDialog = ({
                 .join('; ')}
             </p>
           )}
-          {form.type === 'super' && (
+          {form.mode === 'super' && (
             <label className='flex items-center gap-2 text-sm'>
               <input
                 type='checkbox'
@@ -318,7 +366,7 @@ export const CreateGlobDialog = ({
               Park in Planning until someone picks it up to pair
             </label>
           )}
-          {form.type === 'same' && (
+          {form.mode === 'same' && (
             <label className='flex items-center gap-2 text-sm'>
               <input
                 type='checkbox'
@@ -328,14 +376,10 @@ export const CreateGlobDialog = ({
               Start a routine run straight away
             </label>
           )}
-          {form.type === 'same' && form.autoTrigger && reason !== null && (
+          {form.mode === 'same' && form.autoTrigger && reason !== null && (
             <p className='text-xs text-muted-foreground'>{reason}</p>
           )}
-          {!isValidCombination(form.type, form.category) && (
-            <p className='text-xs text-red'>
-              A {form.category} cannot be a {form.type}.
-            </p>
-          )}
+          {form.mode === 'super' && form.fix === true && <p className='text-xs text-red'>A fix cannot be a super.</p>}
           <div className='grid gap-1.5' data-testid='create-files'>
             <FileDropZone onFiles={stage} disabled={busy} hint='They upload to the glob once it is created.' />
             {fileError !== null && (

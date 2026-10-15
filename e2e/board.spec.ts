@@ -79,13 +79,13 @@ test('the filter pane narrows the cards by category and glob ID, and Clear resto
   const planning = page.getByTestId('list-planning');
   await filter.click();
   await expect(page.getByTestId('filter-pane')).toHaveAttribute('data-open', 'true');
-  await page.getByTestId('filter-category-bug').click();
-  await expect(page).toHaveURL(/category=bug/);
+  await page.getByTestId('filter-fix').click();
+  await expect(page).toHaveURL(/fix=1/);
   await expect(planning.getByText('Alpha glob')).toHaveCount(0);
   await expect(planning.getByTestId('no-match')).toBeVisible();
   await expect(filter.getByTestId('filter-active')).toBeVisible();
 
-  await page.getByTestId('filter-category-bug').click();
+  await page.getByTestId('filter-fix').click();
   await page.getByTestId('filter-id').fill('zzz');
   await expect(planning.getByText('Alpha glob')).toHaveCount(0);
 
