@@ -222,7 +222,7 @@ export const cornerStatus = (glob: GlobView, now: string, viewer?: HumanStepView
     return make('machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
   if (status !== null) {
-    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' || status.kind === 'start-queued' ? 'hourglass' : status.kind === 'rollout' ? 'human' : 'alert';
+    const icon = status.kind === 'base-red' || status.kind === 'merge-waits' || status.kind === 'start-queued' ? 'hourglass' : status.kind === 'rollout' ? 'human' : status.kind === 'merging' ? 'machine' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
   // Open feedback on a label is the developer's turn (a run fixing it shows as the machine), and outranks sign-off.
