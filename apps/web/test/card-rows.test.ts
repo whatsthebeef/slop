@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
 import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts } from '../src/lib/card-rows';
-import { humanSteps as deriveHumanSteps, whoseMove } from '@slop/core';
+import { humanSteps as deriveHumanSteps, signOffText, whoseMove } from '@slop/core';
 import type { StoredHumanStep } from '@slop/core';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
@@ -77,7 +77,11 @@ describe('cornerStatus', () => {
 
   it('shows the human outline and "sign off" for a merged glob awaiting sign-off', () => {
     const g = view({ status: 'reviewing', labels: { CR: 'required', QA: 'approved' } });
-    expect(at(g)).toMatchObject({ kind: 'sign-off', icon: 'human', text: 'sign off' });
+    expect(at(g)).toMatchObject({ kind: 'sign-off', icon: 'human', text: 'sign off · CR' });
+    expect(at(g)?.tip).toContain('Merged; CR is waiting for a person to approve it.');
+    const many = { status: 'reviewing', labels: { QA: 'required', FR: 'added', CR: 'required' } } as const;
+    expect(at(view(many))?.text).toBe('sign off · FR, CR, QA');
+    expect(signOffText(many.labels)).toBe('sign off · FR, CR, QA');
     expect(at(view({ status: 'reviewing', labels: { CR: 'approved' } }))?.kind).not.toBe('sign-off');
   });
 
