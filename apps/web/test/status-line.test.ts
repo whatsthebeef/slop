@@ -134,6 +134,14 @@ describe('shared status line', () => {
     expect(top(g)).toEqual(card);
   });
 
+  it("names the board's own gate check in the stuck hint, `checks` by default", () => {
+    const patch = { type: 'sub' as const, headChecks: null, updatedAt: '2026-10-05T10:00:00.000Z' };
+    const own = statusLine(prOpen({ ...patch, gateCheck: 'sub-gate' }), NOW);
+    expect(own?.full).toMatch(/`sub-gate`/);
+    expect(own?.full).not.toMatch(/checks\.yml/);
+    expect(statusLine(prOpen(patch), NOW)?.full).toMatch(/`checks`/);
+  });
+
   it('shows a same that is ready as ready, with no wait', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'] });
     expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge' });

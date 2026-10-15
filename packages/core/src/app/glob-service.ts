@@ -34,6 +34,8 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
+import { readMergePolicy } from './knowledge-service.js';
+import { subGateCheckOf } from '../domain/merge-policy.js';
 import { fileKeysOf } from './attachment-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
 import { AttachConflict, linkInboxItem } from './inbox-service.js';
@@ -405,6 +407,11 @@ export class GlobService {
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
       });
     });
+  }
+
+  /** The check a sub on the board waits for (its merge policy's `subGateCheck`, `checks` by default), for the card's stuck hint. */
+  async gateCheckOf(boardId: number): Promise<string> {
+    return subGateCheckOf(await this.deps.store.transaction((tx) => readMergePolicy(tx, boardId)));
   }
 
   /** The viewer's dismissed message keys on each of the board's globs, for the board list. */
