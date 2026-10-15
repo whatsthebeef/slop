@@ -115,7 +115,7 @@ const Control = ({
           placeholder={filter.placeholder}
           aria-label={filter.label}
           aria-keyshortcuts={filter.key === 'id' ? '/' : undefined}
-          className="h-7 w-44 rounded border border-edge bg-card pr-6 pl-2 text-sm"
+          className="h-7 w-64 rounded border border-edge bg-card pr-6 pl-2 text-sm"
           data-testid={`filter-${filter.key}`}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
@@ -229,7 +229,11 @@ export const FilterPane = ({
         >
           <X className="h-4 w-4" aria-hidden />
         </button>
-        {BOARD_FILTERS.filter((filter) => filter.control !== 'tag').map((filter) => (
+        {/* The text filter goes last, to the right of the chips and toggles. */}
+        {[
+          ...BOARD_FILTERS.filter((filter) => filter.control !== 'tag' && filter.control !== 'text'),
+          ...BOARD_FILTERS.filter((filter) => filter.control === 'text'),
+        ].map((filter) => (
           <div key={filter.key} className="flex items-center gap-2 text-xs text-muted-foreground">
             {!filter.hideLabel && filter.control !== 'toggle' && <span>{filter.label}</span>}
             <Control
