@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { GLOB_VIEW_SECTIONS, LEARNING_VIEW_SECTIONS } from '../src/components/glob-view/sections';
+import { DECISION_VIEW_SECTIONS, GLOB_VIEW_SECTIONS, LEARNING_VIEW_SECTIONS, viewSections } from '../src/components/glob-view/sections';
 import { GLOB_SECTIONS } from '../src/lib/glob-section';
+import type { GlobSection } from '../src/lib/glob-section';
 
 describe('glob view section registry', () => {
   it('has a unique data-section id per section', () => {
@@ -9,6 +10,27 @@ describe('glob view section registry', () => {
 
   it('lists every section a deep link can open', () => {
     expect([...GLOB_VIEW_SECTIONS].sort()).toEqual([...GLOB_SECTIONS].sort());
+  });
+
+  it('lists the blocks above the actions in one order: problems, then what needs a person, then information', () => {
+    for (const order of [GLOB_VIEW_SECTIONS, DECISION_VIEW_SECTIONS]) {
+      const at = (name: GlobSection) => order.indexOf(name);
+      expect(at('conflict')).toBeLessThan(at('problem'));
+      expect(at('problem')).toBeLessThan(at('decision'));
+      expect(at('decision')).toBeLessThan(at('labels'));
+      expect(at('labels')).toBeLessThan(at('escalation'));
+      expect(at('escalation')).toBeLessThan(at('size'));
+      expect(at('size')).toBeLessThan(at('actions'));
+    }
+  });
+
+  it('puts the due Human steps after the labels and before the information blocks', () => {
+    for (const decision of [false, true]) {
+      const order = viewSections(decision, true);
+      expect(order.indexOf('human-steps')).toBeGreaterThan(order.indexOf('labels'));
+      expect(order.indexOf('human-steps')).toBeLessThan(order.indexOf('escalation'));
+      expect(new Set(order).size).toBe(order.length);
+    }
   });
 
   it('renders Related directly below Artifacts', () => {

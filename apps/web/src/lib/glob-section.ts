@@ -10,6 +10,7 @@ export const GLOB_SECTIONS = [
   'related',
   'escalation',
   'conflict',
+  'problem',
   'size',
   'deploys',
   'environments',

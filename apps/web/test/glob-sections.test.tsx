@@ -192,12 +192,12 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     // The header chip is Planning-only (s15b86); this glob is pr_open, so the reason lives in the disclosure.
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
     expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
-    expect(screen.getByTestId('activity-pinned').textContent).toContain('Error: boom');
-    // Escalation reason appears only in the escalation line, never in Now.
+    expect(screen.getByTestId('problem-block').textContent).toContain('Error: boom');
+    // Escalation reason appears only in the escalation block, never in Now.
     expect(screen.getByTestId('activity').textContent).not.toContain('Touches auth');
   });
 
-  it('puts the status in the header, not in a Now panel, and the details in the Activity log below the actions', () => {
+  it('puts the status in the header, not in a Now panel, and the details in the problem block above the actions', () => {
     renderGlob(fixing);
     expect(screen.queryByTestId('now-panel')).toBeNull();
     expect(screen.getByTestId('glob-header').contains(screen.getByTestId('header-status'))).toBe(true);
@@ -205,7 +205,12 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('glob-header').textContent).not.toMatch(/branch|v\d/);
     const log = screen.getByTestId('activity');
     expect(log.id).toBe('glob-activity');
-    expect(log.textContent).toContain('Error: boom');
+    const problem = screen.getByTestId('problem-block');
+    expect(problem.textContent).toContain('Error: boom');
+    expect(log.textContent).not.toContain('Error: boom');
+    const actions = document.querySelector('[data-section="actions"]');
+    expect(actions).not.toBeNull();
+    if (actions !== null) expect(problem.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("the viewer's turn: the headline and the handover brief inside the details", () => {
@@ -221,7 +226,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     );
     // The header's top right mirrors the card, which has no status for this glob; the turn is the Activity log's.
     expect(screen.queryByTestId('header-status')).toBeNull();
-    const details = screen.getByTestId('activity-pinned');
+    const details = screen.getByTestId('problem-block');
     expect(details.textContent).toContain("Why you're needed");
     expect(details.textContent).toContain('Reproduce and fix');
     expect(screen.getAllByText(/Why you're needed/)).toHaveLength(1);
@@ -422,7 +427,7 @@ describe('glob view: dismissable status messages', () => {
     renderGlob(failed({ dismissedKeys: [`failure:${AT}`] }));
     const line = screen.getByTestId('status-line');
     expect(line.getAttribute('data-dismissed')).toBe('true');
-    expect(line.textContent).toContain('Run failed');
+    expect(screen.getByTestId('block-head').textContent).toContain('Run failed');
     expect(document.body.textContent).not.toContain('whole paragraph');
     expect(before.length).toBeGreaterThan(0);
     expect(buttons().filter((b) => b !== '' && b !== 'Show again')).toEqual(before);
@@ -454,7 +459,7 @@ describe('glob view: dismissable status messages', () => {
         ...patch,
       });
     const cb = renderGlob(turn());
-    await userEvent.click(within(screen.getByTestId('handover-box')).getByRole('button', { name: /Got it/ }));
+    await userEvent.click(within(screen.getByTestId('problem-block')).getByTestId('handover-acknowledge'));
     expect(cb.onDismiss).toHaveBeenCalledWith(handoverKey(brief), true);
     cleanup();
     renderGlob(turn({ dismissedKeys: [handoverKey(brief)] }));
@@ -476,6 +481,9 @@ describe('glob view: Now panel for a stalled failure', () => {
       handover: brief,
     });
 
+  /** The problem block and the Activity log together: where the failure may show. */
+  const panelText = () => `${screen.getByTestId('problem-block').textContent}${screen.getByTestId('activity').textContent}`;
+
   it('headlines a needs_pairing failure with the short label and shows the decision and the reason once', () => {
     renderGlob(
       stalledView(
@@ -492,7 +500,7 @@ describe('glob view: Now panel for a stalled failure', () => {
     expect(headline).toContain('needs your decision');
     expect(headline).not.toMatch(/stalled/i);
     expect(headline).not.toContain('Needs a decision before');
-    const panel = screen.getByTestId('activity').textContent;
+    const panel = panelText();
     expect(panel.split(DECISION).length - 1).toBe(1);
     expect(panel).not.toContain('Decision needed:');
     expect(panel.split('MARKER').length - 1).toBe(1);
@@ -509,7 +517,7 @@ describe('glob view: Now panel for a stalled failure', () => {
     );
     expect(screen.getByTestId('header-status').textContent).toContain('run failed');
     expect(screen.getByTestId('header-status').textContent).not.toMatch(/stalled/i);
-    const panel = screen.getByTestId('activity').textContent;
+    const panel = panelText();
     expect(panel.split('Could not reproduce the bug').length - 1).toBe(1);
   });
 });
