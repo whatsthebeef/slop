@@ -59,6 +59,7 @@ export interface SectionProps {
   onCompleteStep: (stepId: string) => Promise<boolean>;
   onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
+  onFailStep?: (stepId: string, note: string) => Promise<boolean>;
 }
 
 /** Renders one section of the glob page (the content inside its anchor). */
@@ -95,7 +96,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
   environments: ({ ctx }) => <EnvironmentsPanel ctx={ctx} />,
   tests: ({ ctx }) => <TestsPanel ctx={ctx} />,
-  'due-steps': ({ ctx, actions, onAddStep, onCompleteStep, onDismissStep }) => (
+  'due-steps': ({ ctx, actions, onAddStep, onCompleteStep, onDismissStep, onFailStep }) => (
     <HumanSteps
       part='due'
       glob={ctx.glob}
@@ -106,9 +107,10 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       onAdd={onAddStep}
       onComplete={onCompleteStep}
       onDismiss={onDismissStep}
+      {...(onFailStep === undefined ? {} : { onFailStep })}
     />
   ),
-  'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep, onMarkDeployed }) => (
+  'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep, onFailStep, onMarkDeployed }) => (
     <HumanSteps
       part='rest'
       glob={ctx.glob}
@@ -124,6 +126,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       onAdd={onAddStep}
       onComplete={onCompleteStep}
       onDismiss={onDismissStep}
+      {...(onFailStep === undefined ? {} : { onFailStep })}
     />
   ),
   artifacts: ({ ctx, artifact, onSelectArtifact }) => (

@@ -1,6 +1,6 @@
 import { isForViewer } from '@slop/core';
 import type { HumanStepScript, HumanStepViewer } from '@slop/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
@@ -62,6 +62,8 @@ interface StepActions {
   readonly onAdd: (step: { title: string; detail?: string; who?: string; due?: string }) => Promise<boolean>;
   readonly onComplete: (stepId: string) => Promise<boolean>;
   readonly onDismiss: (stepId: string, reason: string) => Promise<boolean>;
+  /** A rollout step failed: the note starts a new run on a fresh branch. Without it the Failed… button is hidden. */
+  readonly onFailStep?: (stepId: string, note: string) => Promise<boolean>;
 }
 
 const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
@@ -305,12 +307,69 @@ const DismissForm = ({ busy, onDismiss, onClose }: { busy: boolean; onDismiss: (
   );
 };
 
+export const FAILED_WARNING = 'Paste only what is needed; remove keys, tokens and passwords. Slop masks common ones, not all.';
+export const FAILED_CONSEQUENCE = 'This starts a new run on a fresh branch from master.';
+
+/** The note form a failed rollout step needs: what went wrong, with the output. One submit at a time. */
+const FailForm = ({ busy, onFail, onClose }: { busy: boolean; onFail: (note: string) => Promise<boolean>; onClose: () => void }) => {
+  const [note, setNote] = useState('');
+  const sending = useRef(false);
+  const text = note.trim();
+  return (
+    <form
+      className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'
+      data-testid='fail-form'
+      onSubmit={(e) => {
+        e.preventDefault();
+        // State updates lag a second click, so the ref is what ignores a double submit.
+        if (text === '' || sending.current) return;
+        sending.current = true;
+        void onFail(text)
+          .then((ok) => {
+            if (ok) onClose();
+          })
+          .finally(() => {
+            sending.current = false;
+          });
+      }}
+    >
+      <Label>
+        What failed? Include the error output.
+        <textarea
+          className='mt-1 min-h-24 w-full rounded border bg-background p-2 font-mono text-xs'
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          data-testid='fail-note'
+        />
+      </Label>
+      <span className='text-[11px] text-muted-foreground' data-testid='fail-warning'>
+        {FAILED_WARNING}
+      </span>
+      <span className='text-[11px] text-muted-foreground' data-testid='fail-consequence'>
+        {FAILED_CONSEQUENCE}
+      </span>
+      <div className='flex flex-wrap gap-2'>
+        <Button size='sm' type='submit' disabled={busy || text === ''} data-testid='fail-confirm'>
+          Report failure
+        </Button>
+        <Button size='sm' type='button' variant='ghost' onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+};
+
 /**
  * A due step as a full card in the top block: title, who, the step's text as Markdown (Why / Do this / Permissions / Check it
  * worked), the script's command with a copy button, and Done and Dismiss…. A step slop ticks itself (a capability check) has Done disabled with why.
  */
 const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
   const [dismissing, setDismissing] = useState(false);
+  const [failing, setFailing] = useState(false);
+  const { onFailStep } = actions;
+  // Only a rollout step can fail into a new run; the server refuses other kinds.
+  const canFail = onFailStep !== undefined && step.kind === 'rollout';
   const waits = step.check != null && step.check !== '';
   return (
     <li className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border bg-background p-3 text-sm' data-testid='due-step' data-kind={step.kind}>
@@ -331,7 +390,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
           waits for {step.check} to turn on; slop ticks this itself
         </span>
       )}
-      {!dismissing && (
+      {!dismissing && !failing && (
         <div className='flex flex-wrap gap-2'>
           <Button size='sm' disabled={busy || waits} data-testid='due-done' onClick={() => void actions.onComplete(step.id)}>
             Done
@@ -339,9 +398,15 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
           <Button size='sm' variant='outline' disabled={busy} data-testid='due-dismiss' onClick={() => setDismissing(true)}>
             Dismiss…
           </Button>
+          {canFail && (
+            <Button size='sm' variant='outline' disabled={busy} data-testid='due-failed' onClick={() => setFailing(true)}>
+              Failed…
+            </Button>
+          )}
         </div>
       )}
       {dismissing && <DismissForm busy={busy} onDismiss={(text) => actions.onDismiss(step.id, text)} onClose={() => setDismissing(false)} />}
+      {failing && canFail && <FailForm busy={busy} onFail={(note) => onFailStep(step.id, note)} onClose={() => setFailing(false)} />}
     </li>
   );
 };
@@ -533,7 +598,12 @@ export const HumanSteps = ({
         setBusy(false);
       }
     };
-  const wrapped: StepActions = { onAdd: guarded(actions.onAdd), onComplete: guarded(actions.onComplete), onDismiss: guarded(actions.onDismiss) };
+  const wrapped: StepActions = {
+    onAdd: guarded(actions.onAdd),
+    onComplete: guarded(actions.onComplete),
+    onDismiss: guarded(actions.onDismiss),
+    ...(actions.onFailStep === undefined ? {} : { onFailStep: guarded(actions.onFailStep) }),
+  };
   const wrappedMark = onMarkDeployed === undefined ? undefined : guarded(onMarkDeployed);
   const left = steps.filter((s) => (s.state === 'due' || s.state === 'pending') && s.predicted !== true).length;
   const stepProps = (s: ListedHumanStep) => ({ glob, source: { repo, baseBranch }, step: s, mine: viewer !== undefined && isForViewer(s, glob, viewer), busy, actions: wrapped });

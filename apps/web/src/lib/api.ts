@@ -846,6 +846,12 @@ export const api = {
       `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`,
       {},
     ),
+  /** A rollout step failed: the note (masked by the server) starts a new run on a fresh branch from master. */
+  failHumanStep: (id: string, stepId: string, note: string, version?: number) =>
+    request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/failed`, {
+      note,
+      ...(version === undefined ? {} : { version }),
+    }),
   /** A person's mark that the glob's change is deployed to the environment: its after-deploy steps fall due. */
   markEnvironmentDeployed: (id: string, env: string) =>
     request<GlobView>('POST', `/api/globs/${id}/environments/${encodeURIComponent(env)}/deployed`, {}),

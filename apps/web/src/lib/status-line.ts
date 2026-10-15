@@ -1,5 +1,6 @@
 import {
   appliedHolding,
+  isOpenStep,
   behindAdvice,
   behindWarning,
   checksExplanation,
@@ -376,7 +377,9 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
               why: `for the checks on ${head.slice(0, 7)}`,
               running: true,
             };
-    waiting.push({ ...named('merge'), ...wait });
+    // A same with open rollout steps merges with Merge and continue, so that is the action that waits.
+    const rolloutSame = glob.type === 'same' && glob.humanSteps?.some((s) => s.kind === 'rollout' && isOpenStep(s)) === true;
+    waiting.push({ ...named(rolloutSame ? 'merge_continue' : 'merge'), ...wait });
     if (glob.type === 'super') waiting.push({ ...named('merge_continue'), ...wait });
   }
   if (glob.type !== 'super') return waiting;

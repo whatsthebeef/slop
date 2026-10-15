@@ -34,6 +34,8 @@ describe('Your turn click', () => {
   it('asks for a confirming click before Merge runs, then runs it once', () => {
     const click = yourTurnClick(turn('merge'), { allowedActions: ['merge'] });
     expect(click).toEqual({ kind: 'act', action: 'merge', confirm: true });
+    // A same with rollout steps is offered Merge and continue instead of Merge.
+    expect(yourTurnClick(turn('merge'), { allowedActions: ['merge_continue'] })).toEqual({ kind: 'act', action: 'merge_continue', confirm: true });
     expect(turnStep(click, false)).toBe('confirm');
     expect(turnStep(click, true)).toBe('run');
   });

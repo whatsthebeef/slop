@@ -35,6 +35,7 @@ const callbacks = () => ({
   onAddStep: vi.fn(() => Promise.resolve(true)),
   onCompleteStep: vi.fn(() => Promise.resolve(true)),
   onDismissStep: vi.fn(() => Promise.resolve(true)),
+  onFailStep: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),
 });
 

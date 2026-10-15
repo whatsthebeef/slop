@@ -83,9 +83,16 @@ describe('actionPresentation', () => {
       });
     }
     expect(actionPresentation('cancel_merge', g)).toMatchObject({ label: 'Cancel merge', placement: 'more' });
-    expect(actionPresentation('merge_continue', g)).toMatchObject({
+    // A super keeps Merge & keep working in the menu; a same's Merge and continue replaces Merge.
+    expect(actionPresentation('merge_continue', { ...g, type: 'super' })).toMatchObject({
       label: 'Merge & keep working',
       placement: 'more',
+    });
+    expect(actionPresentation('merge_continue', g)).toMatchObject({
+      label: 'Merge and continue',
+      icon: 'machine',
+      placement: 'main',
+      tip: 'Squash-merges; the glob stays open while you run the rollout steps from master, and sign-off waits',
     });
     expect(actionPresentation('investigate', g).label).toBe('Investigate plan');
     expect(actionPresentation('review_now', g).label).toBe('Review code');

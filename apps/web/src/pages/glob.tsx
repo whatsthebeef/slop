@@ -129,6 +129,7 @@ export const GlobPage = () => {
       onCompleteStep={(stepId) => change(() => api.completeHumanStep(open.id, stepId))}
       onMarkDeployed={(env) => change(() => api.markEnvironmentDeployed(open.id, env))}
       onDismissStep={(stepId, reason) => change(() => api.dismissHumanStep(open.id, stepId, reason))}
+      onFailStep={(stepId, note) => change(() => api.failHumanStep(open.id, stepId, note, open.version))}
       onDelete={async () => {
         try {
           await api.deleteGlob(open.id, open.version);
