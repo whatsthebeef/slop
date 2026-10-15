@@ -23,6 +23,8 @@ const client = (read: { state: MergeState; behind?: boolean; sha?: string }, mer
         },
       }),
     mergeState: () => Promise.resolve({ sha: read.sha ?? 'h', state: read.state, behind: read.behind ?? false }),
+    // A board without a merge queue: the rules show none, so the merge goes the direct way.
+    queueRules: () => Promise.resolve({ enabled: false, required: [] }),
   });
   return { gh, calls };
 };
@@ -62,6 +64,13 @@ describe('GitHub.squashMerge enforces green checks on an up-to-date head (slop b
   it('retries a 405 (the base moved since the read), so the next look updates the branch', async () => {
     const { gh } = client({ state: 'passed' }, () => httpError(405, 'Base branch was modified. Review and try the merge again.'), none);
     expect(await gh.squashMerge(REPO, GLOB, 7, 'h')).toEqual({ outcome: 'undecided' });
+  });
+
+  it('a board without a merge queue never enqueues: a behind head is updated, a green one merged', async () => {
+    const behind = client({ state: 'passed', behind: true }, ok, none);
+    expect(await behind.gh.squashMerge(REPO, GLOB, 7, 'h')).toEqual({ outcome: 'updating' });
+    const green = client({ state: 'passed' }, ok, none);
+    expect(await green.gh.squashMerge(REPO, GLOB, 7, 'h')).toEqual({ outcome: 'merged', sha: 'm1' });
   });
 
   it('reports a conflict from the update, or from the read', async () => {

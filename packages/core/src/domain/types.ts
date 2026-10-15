@@ -1,5 +1,6 @@
 import type { GlobAttributes } from './attributes.js';
 import type { JsonValue } from './events.js';
+import type { OpenQuestion } from './questions.js';
 import type { ReviewBoardSettings } from './review-settings.js';
 
 /** What an admin's agent may approve through `decide_kb_item`: documentation items only, or agent-set files and contradicting items too. */
@@ -236,6 +237,21 @@ export interface Failure {
   readonly kind?: 'merge' | 'reverted' | 'provisioning' | 'needs_pairing';
   /** `needs_pairing`: the decision the routine would have had to guess, for the person who takes it over as a super. */
   readonly decision?: string;
+  /** A merge queue removal for failed checks: the failing check on the queue's combined result. */
+  readonly checks?: CheckFailure;
+}
+
+/** Where a merging PR is in the code host's merge queue. */
+export interface MergeQueueState {
+  /** When slop saw it enqueued. */
+  readonly since: string;
+  /** The PR head that was enqueued. */
+  readonly sha: string;
+  /** The queue's 1-based position (the PRs ahead are `position - 1`); null when unknown. */
+  readonly position: number | null;
+  readonly state: 'queued' | 'merging';
+  /** The merge group commit whose checks failed, when a check run on it said so (the dequeue's failure lines come from it). */
+  readonly failedSha?: string;
 }
 
 export interface MergeConflict {
@@ -420,6 +436,8 @@ export interface Glob {
   readonly mergeMode: MergeMode | null;
   /** Times slop updated a behind branch for the current merge request; a new Merge press starts it again at 0. */
   readonly mergeUpdates?: number;
+  /** Set while the merging PR sits in the code host's merge queue (null or absent: slop merges it directly). */
+  readonly mergeQueue?: MergeQueueState | null;
   readonly headChecks: HeadChecks | null;
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
@@ -448,7 +466,15 @@ export interface Glob {
    * Set while a merge that would have started is held back by an unmet `merge` relation (an armed merge-when-green whose checks
    * passed, or a sub whose gate passed): `sha` is the head it would merge. `gateReleased` resumes it; cleared on merge, disarm or a new head.
    */
-  readonly mergeHold?: { readonly since: string; readonly sha: string; readonly for: readonly string[] } | null;
+  readonly mergeHold?: {
+    readonly since: string;
+    readonly sha: string;
+    readonly for: readonly string[];
+    /** The open `merge` questions that hold it too (IDs). */
+    readonly questions?: readonly string[];
+  } | null;
+  /** Open questions raised on this glob (and the answered or dismissed ones): see `domain/questions.ts`. Absent on older globs. */
+  readonly questions?: readonly OpenQuestion[];
   /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
   readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;

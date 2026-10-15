@@ -1,6 +1,7 @@
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
 import type { Action } from './machine.js';
 import { listOf } from './matrix.js';
+import { MAX_QUESTIONS, questionLine, startQuestions, mergeQuestions } from './questions.js';
 import type { Glob, List, Role } from './types.js';
 
 /**
@@ -12,6 +13,8 @@ import type { Glob, List, Role } from './types.js';
 
 export const HUMAN_STEP_KINDS = [
   'resolve_conflict',
+  /** An open question that holds the glob's start or merge: a person answers or dismisses it. */
+  'answer',
   'merge',
   'done',
   'upload_file',
@@ -224,6 +227,9 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   for (const file of facts.missingUploads ?? [])
     steps.push(derived('upload_file', `Upload ${file.fileName}`, 'anyone', { id: `machine:upload_file:${file.key}` }));
   if (glob.type === 'super' && glob.status === 'planning') steps.push(derived('pair', 'Pair', 'anyone'));
+  // One step per question that holds the start or the merge: answering or dismissing it is only a person's call.
+  for (const q of [...(glob.status === 'planning' ? startQuestions(glob) : []), ...mergeQuestions(glob)].slice(0, MAX_QUESTIONS))
+    steps.push(derived('answer', `Answer: ${questionLine(q)}`, 'anyone', { id: `machine:answer:${q.id}` }));
   return steps;
 };
 

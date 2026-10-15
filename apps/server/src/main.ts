@@ -45,6 +45,7 @@ import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { environmentExecutors } from './environment-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
 import { rolloutExecutors } from './rollout-executors.js';
+import { questionExecutors } from './question-executors.js';
 import { CapabilityReader, CapabilityWatch } from './capabilities.js';
 import { reviewExecutors } from './review-executors.js';
 import { makeRunReview } from './review-runner.js';
@@ -184,6 +185,8 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
       ? {}
       : atfWebhookExecutors({ store, secrets: webhookSecrets, resolve: dnsResolver, transport: httpsTransport(), clock: { now: () => new Date().toISOString() }, log: logError })),
     ...exclusivePathExecutors(store, branchFiles, boardOf),
+    // Plan changed during a run: raises the merge question.
+    ...questionExecutors({ raisePlanChanged: (id, version) => globs.raisePlanChanged(id, version) }),
     // `rolloutService` is built below and only called once a job runs.
     ...rolloutExecutors(
       new CodeHostChanges(github, logError),

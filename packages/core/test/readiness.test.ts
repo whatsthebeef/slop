@@ -89,6 +89,14 @@ describe('branch rules readiness', () => {
     expect(detail({ requiredChecks: ['lint'], integrationBypasses: null })?.detail).toMatch(/not a required status check on main: run catalog\/scripts\/setup-repo\.sh acme\/app .*--protect checks/);
   });
 
+  it('says whether the merge queue is on', () => {
+    expect(detail({ requiredChecks: ['checks'], integrationBypasses: true, mergeQueue: true })?.detail).toMatch(/; merge queue is on$/);
+    expect(detail({ requiredChecks: ['checks'], integrationBypasses: true, mergeQueue: false })?.detail).toMatch(
+      /merge queue is off \(catalog\/scripts\/setup-repo\.sh .*--protect checks turns it on\): subs wait for an up-to-date head instead$/,
+    );
+    expect(detail({ requiredChecks: ['checks'], integrationBypasses: true })?.detail).not.toMatch(/merge queue/);
+  });
+
   it("warns when the App can't bypass", () => {
     expect(detail({ requiredChecks: ['checks'], integrationBypasses: false })?.detail).toMatch(/App can't bypass/);
   });

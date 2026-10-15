@@ -132,6 +132,7 @@ export const CreateGlobDialog = ({
         environment: form.environment ?? proposal.environment,
         autoTrigger: proposal.autoTrigger,
         ...(proposal.files === undefined || proposal.files.length === 0 ? {} : { files: proposal.files }),
+        ...(proposal.questions === undefined || proposal.questions.length === 0 ? {} : { questions: proposal.questions }),
       });
       setReason(proposal.autoTriggerReason);
       setInsight(proposal);

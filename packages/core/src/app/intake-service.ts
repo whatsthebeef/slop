@@ -23,6 +23,8 @@ import { readMergePolicy } from './knowledge-service.js';
 import { recentTypeCorrections } from './type-learning-service.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
 import { field, parseJson, text } from './llm-json.js';
+import { MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT } from '../domain/questions.js';
+import type { NewQuestion } from '../domain/questions.js';
 import type { LlmSpendTag } from '../domain/spend.js';
 import { INTAKE_GROUP_SCHEMA, INTAKE_SCHEMA } from './llm-schemas.js';
 
@@ -148,6 +150,8 @@ export interface IntakeProposal {
   /** The model and prompt version that decided, recorded in the glob's snapshot. */
   readonly model: string | null;
   readonly promptVersion: number;
+  /** Questions intake raises instead of guessing (at most `MAX_INTAKE_QUESTIONS`); the create path passes them to the new glob. */
+  readonly questions: readonly NewQuestion[];
   /** Why the plan looks oversized by its text (more tasks than the board's threshold); empty when it doesn't. Creating the glob judges it again with the model. */
   readonly oversized: readonly string[];
 }
@@ -216,7 +220,7 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
+{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[], "questions": [{"kind": "type" | "environment" | "scope" | "acceptance", "text": string, "options": string[], "blocking": "start" | "none"}]}
 
 - title: a short imperative title, at most 70 characters.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
@@ -233,7 +237,8 @@ Respond with one JSON object and nothing else:
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
 - files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths. List every one you expect: the board's risk-area path patterns are matched against them.
-- autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
+- autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.
+- questions: usually an empty list. Raise one only when a person's answer would change the type, the environment or the scope of the work and the request does not say (kind "type", "environment" or "scope"), or when "Done when" cannot be written (kind "acceptance"). Never ask about style, naming or anything the agents can decide. At most 3, each one sentence with 2 to 4 short options when the choices are clear (otherwise an empty options list). blocking: "start" when the work should not begin before the answer (the default for type, environment and scope), "none" for a notice.`;
 
 const normalise = normaliseGroup;
 
@@ -277,6 +282,43 @@ export const waitedForIn = (request: string, open: ReadonlySet<string>): string[
     if (WAIT_CUE.test(request.slice(Math.max(0, match.index - 60), match.index))) found.push(id);
   }
   return found;
+};
+
+/** The most questions intake may raise on one glob. */
+export const MAX_INTAKE_QUESTIONS = 3;
+const QUESTION_KINDS = ['type', 'environment', 'scope', 'acceptance'] as const;
+
+/**
+ * The questions the model raised, narrowed: a known kind, text and options within the question limits, at most three. A question
+ * about something the request set explicitly (the type, the environment) is dropped. `start` holds the glob; `acceptance` is a
+ * notice unless the model asked for a hold.
+ */
+const questionList = (value: unknown, explicit: IntakeInput['explicit']): NewQuestion[] => {
+  if (!Array.isArray(value)) return [];
+  const made: NewQuestion[] = [];
+  const raws: unknown[] = value;
+  for (const raw of raws) {
+    const kind = oneOf(QUESTION_KINDS, field(raw, 'kind'));
+    const asked = text(field(raw, 'text'))?.trim() ?? '';
+    if (kind === null || asked === '' || asked.length > MAX_QUESTION_TEXT) continue;
+    if ((kind === 'type' && explicit.type !== undefined) || (kind === 'environment' && explicit.environment !== undefined)) continue;
+    const rawOptions = field(raw, 'options');
+    const options = Array.isArray(rawOptions)
+      ? [...new Set(rawOptions.filter((o): o is string => typeof o === 'string').map((o) => o.trim()).filter((o) => o !== '' && o.length <= MAX_QUESTION_OPTION))].slice(0, MAX_QUESTION_OPTIONS)
+      : [];
+    const modelBlocking = field(raw, 'blocking');
+    const blocking = kind === 'acceptance' ? (modelBlocking === 'start' ? 'start' : 'none') : modelBlocking === 'none' ? 'none' : 'start';
+    made.push({
+      key: `intake:${kind}:${String(made.length + 1)}`,
+      text: asked,
+      ...(options.length === 0 ? {} : { options }),
+      blocking,
+      source: 'create',
+      raisedBy: { kind: 'intake', actor: null },
+    });
+    if (made.length >= MAX_INTAKE_QUESTIONS) break;
+  }
+  return made;
 };
 
 /** The model's file guesses: strings that look like repo-relative paths, a few at most. */
@@ -542,6 +584,7 @@ export class IntakeService {
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
       files,
       suggestedAfter: waitedForIn(request, open),
+      questions: questionList(field(answer, 'questions'), input.explicit),
       categoryConfidence: confidence,
       categoryReason: explicitCategory ? null : (fixReason ?? workKindReason),
       examples,

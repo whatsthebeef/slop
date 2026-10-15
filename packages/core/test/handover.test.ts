@@ -162,6 +162,27 @@ describe('handoverBrief', () => {
     );
     expect(stalled?.why).toEqual(['The run has made no progress for 40 minutes.']);
     expect(stalled?.detail).toEqual([`Last progress: ${minutesAgo(40)}`, `Session: ${session}`]);
+
+    // A run that only watches a glob that is merging, armed or queued has nothing to report: no false stall.
+    const watching = [run({ state: 'watching', lastProgressAt: minutesAgo(26) })];
+    const checksPassed = { sha: HEAD, state: 'passed' as const };
+    const waiting = [
+      open({ status: 'merging', runs: watching, headChecks: checksPassed }),
+      open({ mergeMode: 'when_green', runs: watching, headChecks: checksPassed }),
+      open({
+        status: 'merging',
+        runs: watching,
+        headChecks: checksPassed,
+        mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' },
+      }),
+    ];
+    for (const g of waiting) expect(handoverBrief(g, facts())).toBeNull();
+    // A glob that left Merging but still carries a stale queue entry is stalled like any other.
+    expect(
+      handoverBrief(open({ runs: watching, mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' } }), facts())?.why,
+    ).toEqual(['The run has made no progress for 26 minutes.']);
+    // The same quiet run on a plain open PR still shows.
+    expect(handoverBrief(open({ runs: watching }), facts())?.why).toEqual(['The run has made no progress for 26 minutes.']);
     expect(
       handoverBrief(
         open({ runs: [run({ state: 'active', lastProgressAt: minutesAgo(5) })] }),
