@@ -229,7 +229,7 @@ describe('the proposal block of a learning', () => {
     expect(screen.queryByTestId('assessment')).toBeNull();
   });
 
-  it('reads a recommendation the rules made as a leaning, waiting for the draft until there is one', async () => {
+  it('shows nothing for a recommendation the rules made: no Leaning text, waiting line or empty assessment', async () => {
     vi.spyOn(api, 'suggestion').mockResolvedValue({
       ...suggestionOf('approve'),
       suggestion: {
@@ -240,7 +240,30 @@ describe('the proposal block of a learning', () => {
       },
     });
     renderGlob(decision());
-    expect((await screen.findByTestId('suggestion')).textContent).toBe('Leaning: Approve as drafted, waiting for the draft. Judged on the statement alone.');
+    await actionRow();
+    expect(screen.queryByTestId('suggestion')).toBeNull();
+    expect(screen.queryByText(/Leaning/)).toBeNull();
+  });
+
+  it('shows no waiting text while the recommendation runs, and keeps Approve enabled', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
+    vi.spyOn(api, 'suggestion').mockResolvedValue({ ...suggestionOf('approve'), suggestion: null, pending: true });
+    renderGlob(decision());
+    const row = await actionRow();
+    const main = await within(row).findByTestId('main-action');
+    expect((main as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/Getting a recommendation/)).toBeNull();
+    expect(screen.queryByTestId('suggest-working')).toBeNull();
+    expect(screen.queryByTestId('suggestion')).toBeNull();
+  });
+
+  it('offers only Pick up before anyone has picked the learning up', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
+    renderGlob({ ...decision(), status: 'planning', list: 'planning', allowedActions: ['pick_up', 'delete'] satisfies Action[] });
+    const row = await actionRow();
+    expect((await within(row).findByTestId('main-action')).textContent).toMatch(/Pick up/);
+    expect(within(row).queryByText('Approve change')).toBeNull();
+    expect(within(row).queryByTestId('outcome-reject')).toBeNull();
   });
 
   it('does not repeat the title as a heading, show the raw assessment fields or the boilerplate', async () => {
