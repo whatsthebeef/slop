@@ -113,7 +113,7 @@ describe('actionPresentation', () => {
       actionPresentation('pick_up', view({ status: 'planning', type: 'super' })),
     ).toMatchObject({
       placement: 'main',
-      tip: 'You pair on it with the product owner',
+      tip: 'You pair on it with the product owner: copies the sstor command that opens the pairing session',
     });
     expect(
       actionPresentation('pick_up', view({ status: 'planning', type: 'same' }), true).placement,

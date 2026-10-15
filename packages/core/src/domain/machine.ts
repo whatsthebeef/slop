@@ -502,7 +502,7 @@ export interface CreateInput {
   readonly autoTrigger: boolean;
   /** Predicted overlaps found for this glob before it was created (merge-policy holds; they never hold a start). */
   readonly impliedAfter?: readonly ImpliedAfter[];
-  /** Super only: `false` parks it in Planning (no branch, run or implementer) until a person picks it up to pair. */
+  /** Accepted for compatibility and ignored: a super always waits in Planning until a person picks it up to pair. */
   readonly start?: boolean;
 }
 
@@ -559,8 +559,8 @@ export const create = (
   // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
   const held = wantsStart && awaited.length > 0;
   const autoStart = type === 'same' && input.autoTrigger && !held;
-  // A parked super waits in Planning for a person to pick it up; nobody's active glob until then.
-  const parked = type === 'super' && input.start === false;
+  // A super always waits in Planning for a person to pick it up, whatever `start` says; nobody's active glob until then.
+  const parked = type === 'super';
   const status: Status =
     held || parked ? 'planning' : autoStart ? 'implementing' : initialStatus(type);
   const glob: Glob = {
@@ -577,7 +577,7 @@ export const create = (
     generation: 1,
     creator: actor.email,
     planner: actor.email,
-    implementer: type === 'super' && !parked ? actor.email : null,
+    implementer: null,
     labels: {},
     checklists: {},
     pr: null,

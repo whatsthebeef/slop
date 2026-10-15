@@ -174,7 +174,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         start: z
           .boolean()
           .optional()
-          .describe('Super only: false parks it in Planning (no branch, run or implementer) until a person picks it up to pair. Default: parked when intake chose super, else it starts in Doing with you'),
+          .describe('Ignored, kept for compatibility: a super always waits in Planning (no branch, run or implementer) until a person picks it up to pair'),
         needs: z
           .array(z.string().min(1))
           .max(20)
@@ -300,13 +300,10 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         const suggested = await deps.intake.suggestGroup(email, input.board, { title: input.title, plan: input.plan ?? input.input ?? '' });
         if (suggested.ok) fields = { ...fields, group: suggested.value };
       }
-      // A super intake chose waits in Planning for a person; one asked for by type starts in Doing as before.
-      const start = input.start ?? (intakeRecord !== null && askedType === undefined && fields.type === 'super' ? false : undefined);
       const created = await globs.create(email, {
         boardId: input.board,
         ...fields,
         typeChosen: askedType !== undefined,
-        ...(start === undefined ? {} : { start }),
         plan: input.plan ?? proposedPlan ?? input.input ?? '',
         planBy: 'sessionator',
         source: 'mcp',

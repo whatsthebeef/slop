@@ -110,7 +110,8 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
         idempotencyKey: null,
       }),
     );
-    globId = created.id;
+    // A super waits in Planning until a person picks it up.
+    globId = unwrap(await globs.pickUp(DEV, created.id, created.version, false)).id;
     await globs.applyEvent(globId, (g, ctx) =>
       machine.provisioned(g, { branch: g.id, pr: { number: 7, headSha: HEAD } }, ctx),
     );
