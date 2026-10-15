@@ -1,6 +1,6 @@
 import type { Relation, SlopType, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, StoredHumanStep } from '@slop/core';
 import { cleanFileName, inferenceReasonOf, invalidInput, isHumanCategory, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, OUTCOME_REASON_MAX, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, OUTCOME_REASON_MAX, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -15,11 +15,11 @@ import type { SignedLinks } from '../signed-links.js';
 import { parseLabelCommand } from '../http/labels.js';
 import { issueUploadUrl } from '../http/artifact-upload.js';
 import { requestOrigin } from '../http/origin.js';
-import { addRelationSchema, relationInput, relationInputs, relationInputSchema } from '../http/relation-schemas.js';
+import { addRelationSchema, holdInputSchema, holdInputs, relationInput, relationInputs, relationInputSchema, supersedeInputSchema, supersedeInputs } from '../http/relation-schemas.js';
 import { isDate, parseBound, toRequest } from '../search-request.js';
 import { requestMetrics } from '../request-metrics.js';
 import type { CreateKindFields } from '../http/views.js';
-import { compactKbItem, compactSizeProposal, createKindFields, errorBody, globView, globViewOf, kindView, onBoard, resolveKind } from '../http/views.js';
+import { compactKbItem, compactSizeProposal, compactSuggestions, createKindFields, errorBody, globView, globViewOf, kindView, onBoard, resolveKind } from '../http/views.js';
 import type { OutboxRunner } from '../jobs/outbox.js';
 import type { MergeGate, ReadyGate } from '../ready-gate.js';
 
@@ -63,7 +63,15 @@ const json = (value: unknown): CallToolResult => ({
 
 /** What `relations` mean, for the tools that take them. */
 const RELATIONS_HELP =
-  "Relations beside `needs`/`after` (which stay as the shorthand for a start relation until merged): `[{to, gate?, until?, reason?}]`. This glob can't pass `gate` until `to` reaches `until`. `gate`: `start` (the default: can't start), `merge` (can't be merged; an armed merge-when-green waits and goes on by itself) or `sign_off` (can't be signed off). `until`: `merged` (the default), `decided` (`to` is a decision glob whose outcome was accepted or rejected, not needs-work; the default when `to` is a decision) or `signed_off`. `to` must be a glob or decision on the same board, not this glob, with no cycle; at most 20 per gate. Add one only when the work really can't go ahead without it: a glob that merely touches the same files is not a relation. Give a `reason`, one line.";
+  "Relations beside `needs`/`after` (which stay as the shorthand for a start relation until merged): `[{to, gate?, until?, reason}]`. This glob can't pass `gate` until `to` reaches `until`. `gate`: `start` (the default: can't start), `merge` (can't be merged; an armed merge-when-green waits and goes on by itself) or `sign_off` (can't be signed off). `until`: `merged` (the default) means merged AND rolled out: a merged glob with rollout steps still due keeps the relation holding until they are done (`rolled_out` is accepted as another way to write it); `decided` (`to` is a decision glob whose outcome was accepted or rejected, not needs-work; the default when `to` is a decision) or `signed_off`. `to` is a glob or decision on this board or on another board you can view (a glob that waits for another machine or another board's rollout), not this glob, with no cycle across boards; at most 20 per gate. A `to` you cannot view answers `No glob X`. `reason` is required for agents: one line saying what this glob uses from `to` or why it must wait (a person in the web is only prompted); a relation without one is refused. Add one only when the work really can't go ahead without it: a glob that merely touches the same files is not a relation. Slop also adds relations itself from what a plan or record says (source `auto`, shown as added automatically); dismiss a wrong one with `dismiss_relation`.";
+
+/** What `holds` mean, for `create_glob`. */
+const HOLDS_HELP =
+  "IDs of existing globs, on any board you can edit, that this new glob holds back: pass it whenever you create a glob because of another one (a fix for a failed rollout, a continuation of a merged glob, a change on slop's side that a rollout needs). Each is `{id, gate?, until?, reason}` (gate defaults to `sign_off`: the other glob can't be signed off until this one has merged and rolled out; `until` as for relations) or a bare ID that takes the shared `reason`. The relation is written on the existing glob, pointing at the new one, as source `agent`; it needs a reason (required for agents). It is added after the create commits: the reply's `holds` says per ID whether it was written; an invalid one (unknown, not editable, a cycle) creates nothing. Alias: `follows_up`.";
+
+/** What `supersedes` mean, for the tools that take it. */
+const SUPERSEDES_HELP =
+  "IDs of globs this one replaces (`[{id, reason}]` or bare IDs that take the shared `reason`; reason required for agents). The row lands on the superseded glob: its due human steps are dismissed with \"superseded by <this>\", its card says \"superseded by <this>\" and its sign-off is no longer blocked by those steps. Closing or deleting it stays a person's call. Refused for a cycle (A supersedes B while B supersedes A). Dismiss it with `dismiss_relation` on the superseded glob; steps already dismissed stay dismissed.";
 
 /** A deploy as agents see it: enough to tell the developer what's deploying, live or failed. */
 const deployView = (d: Deploy) => ({
@@ -75,6 +83,24 @@ const deployView = (d: Deploy) => ({
   finishedAt: d.finishedAt,
   error: d.error,
   url: d.url,
+});
+
+/**
+ * What a create says about relations: the start relations stored (`after`), what the glob waits for and why (`waitingFor`), the
+ * ones left out because their target holds nothing any more (`ignoredAfter`), how each `holds` and `supersedes` entry went, and
+ * the note when a non-admin's untyped create became a same. Each only when there is something to say.
+ */
+const relationReply = (
+  notes: { readonly ignoredAfter: readonly { id: string; why: string }[]; readonly holds: readonly { id: string; ok: boolean; why: string }[]; readonly supersedes: readonly { id: string; ok: boolean; why: string }[]; readonly typeNote: string | null },
+  relations: readonly Relation[],
+  waitingFor: readonly { readonly id: string; readonly state: string; readonly why: string }[],
+) => ({
+  ...(startIds(relations).length === 0 ? {} : { after: startIds(relations) }),
+  ...(waitingFor.length === 0 ? {} : { waitingFor }),
+  ...(notes.ignoredAfter.length === 0 ? {} : { ignoredAfter: notes.ignoredAfter }),
+  ...(notes.holds.length === 0 ? {} : { holds: notes.holds }),
+  ...(notes.supersedes.length === 0 ? {} : { supersedes: notes.supersedes }),
+  ...(notes.typeNote === null ? {} : { typeNote: notes.typeNote }),
 });
 
 const reply = <T>(result: Result<T>, map: (value: T) => unknown = (v) => v): CallToolResult =>
@@ -126,7 +152,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Returns its ID and branch once provisioned. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Prerequisites: pass `needs`/`after` (globs this one waits for until they have merged and rolled out; a glob that merged but still has rollout steps due keeps holding it) with a `reason` (required for agents: one line, applied to every id), or `relations` for other gates. A sub with unmerged prerequisites waits in Planning with no run, whatever way it was created (with or without `type`); the reply says what it waits for (`waitingFor`), what was ignored (`ignoredAfter`: already merged and rolled out, deleted) and, when you are not an admin and left `type` unset, that it became a same (`typeNote`). `holds` (alias `follows_up`) and `supersedes` cover globs created because of another one. Returns its ID and branch once provisioned, with `after` (the stored start relations), `waitingFor`, `ignoredAfter`, `holds`, `supersedes` and `typeNote` where they apply. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -180,15 +206,19 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .max(20)
           .optional()
           .describe(
-            'IDs of globs on this board whose code this glob needs (it uses what they add). It cannot start until they have merged: a sub waits in Planning, a same is refused Start until then. Alias: `after`. Add one only when the code really is missing without it; a glob that merely touches the same files is not a need.',
+            'IDs of globs on this board (or another board you can view) whose code this glob needs (it uses what they add). It cannot start until they have merged and rolled out (a merged glob with rollout steps due still holds it): a sub waits in Planning, a same is refused Start until then. Alias: `after`. Needs `reason` (required for agents). Add one only when the code really is missing without it; a glob that merely touches the same files is not a need.',
           ),
         after: z
           .array(z.string().min(1))
           .max(20)
           .optional()
           .describe(
-            'Alias of `needs`: IDs of globs on this board to start after, meaning the glob waits for them to merge. A sub waits in Planning (no branch, no run) until they have all merged, then starts by itself on the new main; a same is refused Start until then. Merged ones are ignored; unknown ids and cycles are refused. Use it instead of writing "start only after sXtY" in the plan',
+            'Alias of `needs`: IDs of globs to start after, meaning the glob waits for them to merge and roll out. A sub waits in Planning (no branch, no run) until they have all merged and rolled out, then starts by itself on the new main; a same is refused Start until then. Ones already merged and rolled out are ignored (listed in `ignoredAfter`); unknown ids and cycles are refused. Needs `reason` (required for agents). Use it instead of writing "start only after sXtY" in the plan',
           ),
+        reason: z.string().min(1).max(MAX_RELATION_REASON).optional().describe('One line saying why this glob waits for each id in `needs`/`after` (and the shared reason of bare IDs in `holds`/`supersedes`). Required for agents: a `needs`/`after` without it is refused'),
+        holds: z.array(holdInputSchema).max(20).optional().describe(HOLDS_HELP),
+        follows_up: z.array(holdInputSchema).max(20).optional().describe('Alias of `holds`'),
+        supersedes: z.array(supersedeInputSchema).max(20).optional().describe(SUPERSEDES_HELP),
         relations: z.array(relationInputSchema).max(60).optional().describe(RELATIONS_HELP),
       },
     },
@@ -196,13 +226,24 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const kind = resolveKind(input, true);
       if (!kind.ok) return { ...json({ code: 'invalid_input', message: kind.message }), isError: true };
       const askedType = kind.type ?? undefined;
+      // What the caller says about relations, shared by both creates: always stated by an agent (a reason is required).
+      const heldBy = [...(input.holds ?? []), ...(input.follows_up ?? [])];
+      const reason = input.reason?.trim();
+      const relationFields = {
+        ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
+        ...(reason === undefined || reason === '' ? {} : { afterReason: reason }),
+        ...(input.relations === undefined ? {} : { relations: relationInputs(input.relations) }),
+        ...(heldBy.length === 0 ? {} : { holds: holdInputs(heldBy, reason) }),
+        ...(input.supersedes === undefined || input.supersedes.length === 0 ? {} : { supersedes: supersedeInputs(input.supersedes, reason) }),
+        by: 'agent' as const,
+      };
       if (kind.category === 'action') {
         const refused = (message: string) => ({ ...json({ code: 'invalid_input', message }), isError: true });
         if (input.title === undefined || input.title.trim() === '') return refused('An action needs a title');
         if (askedType !== undefined) return refused('An action has no type');
         if (input.environment !== undefined || input.start !== undefined || input.autoTrigger === true) return refused('An action has no environment, start or autoTrigger: nothing runs for it');
         if ((input.files ?? []).length > 0 || input.inboxItem !== undefined) return refused('An action takes no files or inbox item: put them in the plan or attach them afterwards');
-        const made = await globs.create(email, {
+        const made = await globs.createWithNotes(email, {
           boardId: input.board,
           title: input.title,
           type: null,
@@ -215,12 +256,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           planBy: 'sessionator',
           source: 'mcp',
           idempotencyKey: input.idempotencyKey,
-          ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
-          ...(input.relations === undefined ? {} : { relations: relationInputs(input.relations) }),
-          relationsBy: 'agent' as const,
+          ...relationFields,
         });
         if (!made.ok) return reply(made);
-        return reply(await globs.get(email, made.value.id), ({ glob }) => ({
+        return reply(await globs.get(email, made.value.glob.id), ({ glob, relations, waitingFor }) => ({
+          ...relationReply(made.value.notes, relations, waitingFor),
           id: glob.id,
           version: glob.version,
           status: glob.status,
@@ -228,7 +268,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           category: glob.category,
           ...kindView(glob),
           group: glob.group,
-          assignee: made.value.attributes !== undefined && 'assignee' in made.value.attributes ? made.value.attributes.assignee : null,
+          assignee: made.value.glob.attributes !== undefined && 'assignee' in made.value.glob.attributes ? made.value.glob.attributes.assignee : null,
         }));
       }
       if (input.files !== undefined && input.files.length > 0) {
@@ -291,6 +331,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           model: proposal.value.model,
           promptVersion: proposal.value.promptVersion,
           examples: proposal.value.examples.map((e) => e.globId),
+          ...(proposal.value.prerequisites === undefined ? {} : { prerequisites: proposal.value.prerequisites }),
         };
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
@@ -300,7 +341,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         const suggested = await deps.intake.suggestGroup(email, input.board, { title: input.title, plan: input.plan ?? input.input ?? '' });
         if (suggested.ok) fields = { ...fields, group: suggested.value };
       }
-      const created = await globs.create(email, {
+      const made = await globs.createWithNotes(email, {
         boardId: input.board,
         ...fields,
         typeChosen: askedType !== undefined,
@@ -311,12 +352,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         environment: input.environment ?? suggestedEnvironment,
         idempotencyKey: input.idempotencyKey,
         ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
-        ...(input.needs === undefined && input.after === undefined ? {} : { after: [...new Set([...(input.needs ?? []), ...(input.after ?? [])])] }),
-        ...(input.relations === undefined ? {} : { relations: relationInputs(input.relations) }),
-        relationsBy: 'agent' as const,
+        ...relationFields,
         ...(files.length === 0 ? {} : { files }),
       });
-      if (!created.ok) return reply(created);
+      if (!made.ok) return reply(made);
+      const created = { ok: true as const, value: made.value.glob };
       // The links are minted before the outbox runs, so a sub's first run sees its pending files and waits for them.
       const uploads: ReturnType<typeof uploadView>[] = [];
       const uploadProblems: string[] = [];
@@ -327,7 +367,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         else uploadProblems.push(`${f.fileName}: ${made.error.message}`);
       }
       await deps.outbox.drain(created.value.id);
-      return reply(await globs.get(email, created.value.id), ({ glob, relations }) => ({
+      return reply(await globs.get(email, created.value.id), ({ glob, relations, waitingFor }) => ({
         ...(uploads.length === 0 ? {} : { uploads, next: UPLOAD_NEXT }),
         ...(uploadProblems.length === 0 ? {} : { uploadProblems }),
         id: glob.id,
@@ -341,7 +381,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(glob.inferenceReason == null ? {} : { inferenceReason: glob.inferenceReason }),
         group: glob.group,
         environment: glob.environment,
-        ...(startIds(relations).length === 0 ? {} : { after: startIds(relations) }),
+        ...relationReply(made.value.notes, relations, waitingFor),
         ...(glob.waiting == null ? {} : { waiting: true }),
         // Not applied: pass `after` to wait for them.
         ...(suggestedAfter.filter((id) => !startIds(relations).includes(id)).length === 0
@@ -417,7 +457,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, inferred or learned; older rows may say split), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
+        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why, where `merged` means merged and rolled out; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, auto (added by slop from the text; dismissible), inferred or learned; older rows may say split; a relation to a glob on another board carries `external` (the board's name, or `hidden: true` and the id `another board` when you cannot view it); `supersededBy` and `supersedes` when set; `waitedOnByOtherBoards`: how many relations from boards you cannot see wait for it), `suggestions` (short list of open card suggestions: id, kind, text), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
       inputSchema: {
         id: z.string(),
         runId: z.string().optional(),
@@ -430,7 +470,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       const history = await deps.deploys.history(email, id, 5);
       return reply(view, (v) => ({
         // The proposed workstreams are a summary here (name, goal, files, needs and a short plan share); get_context has them in full.
-        ...compactSizeProposal(globViewOf(v)),
+        ...compactSuggestions(compactSizeProposal(globViewOf(v))),
         deploys: history.ok ? history.value.map(deployView) : [],
       }));
     },
@@ -511,7 +551,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'update_glob',
     {
       description:
-        "Change a glob's title, `mode` (a machine glob's sub, same or super; alias `type`; changing it to sub or super needs a board admin; to same is open to anyone who can edit the glob), `fix` (whether it fixes something broken: anyone who can edit the glob may flip it; a fix is never a super), `workKind` (rnd or maintenance for the time report: board admins only), the old `category` alias, group, environment, `after` (the globs it waits for to merge; only before it has started; a sub changed from a same waits for them) or `relations` (added or changed, any gate; they never remove one: use dismiss_relation). Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
+        "Change a glob's title, `mode` (a machine glob's sub, same or super; alias `type`; changing it to sub or super needs a board admin; to same is open to anyone who can edit the glob), `fix` (whether it fixes something broken: anyone who can edit the glob may flip it; a fix is never a super), `workKind` (rnd or maintenance for the time report: board admins only), the old `category` alias, group, environment, `after` (the globs it waits for to merge and roll out; only before it has started; a sub changed from a same waits for them; needs `reason`, required for agents), `relations` (added or changed, any gate, each with a reason; they never remove one: use dismiss_relation) or `supersedes` (globs this one replaces; see the argument). Relations an agent adds are stored as source `agent`. Pass the version you read. The spec (plan.md) is not a field: edit it with save_plan.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
@@ -523,18 +563,27 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         category: z.enum(WORK_CATEGORIES).optional().describe('Old alias: moves a still-inferred fix flag and work kind to the category\'s meaning'),
         group: z.string().nullable().optional(),
         environment: z.string().nullable().optional(),
-        needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged before it starts (alias: `after`)'),
+        needs: z.array(z.string().min(1)).max(20).optional().describe('IDs of globs this one needs merged and rolled out before it starts (alias: `after`); needs `reason`'),
         after: z.array(z.string().min(1)).max(20).optional().describe('Alias of `needs`'),
+        reason: z.string().min(1).max(MAX_RELATION_REASON).optional().describe('One line saying why this glob waits for each id in `needs`/`after`, and the shared reason of bare IDs in `supersedes`. Required for agents'),
+        supersedes: z.array(supersedeInputSchema).max(20).optional().describe(SUPERSEDES_HELP),
         relations: z.array(relationInputSchema).max(60).optional().describe(RELATIONS_HELP),
       },
     },
-    async ({ id, version, needs, relations, mode, ...changes }) => {
+    async ({ id, version, needs, relations, mode, reason, supersedes, ...changes }) => {
       const kind = resolveKind({ mode, type: changes.type, category: changes.category }, false);
       if (!kind.ok) return { ...json({ code: 'invalid_input', message: kind.message }), isError: true };
       if (kind.type !== undefined) changes.type = kind.type ?? undefined;
       const merged = needs === undefined && changes.after === undefined ? changes : { ...changes, after: [...new Set([...(needs ?? []), ...(changes.after ?? [])])] };
       const clean = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
-      const stated = relations === undefined ? {} : { relations: relationInputs(relations), relationsBy: 'agent' as const };
+      const shared = reason?.trim();
+      // Every relation an agent states through this tool is source `agent` (the reason rule applies), not only `relations`.
+      const stated = {
+        ...(relations === undefined ? {} : { relations: relationInputs(relations) }),
+        ...(shared === undefined || shared === '' ? {} : { afterReason: shared }),
+        ...(supersedes === undefined || supersedes.length === 0 ? {} : { supersedes: supersedeInputs(supersedes, shared) }),
+        ...(relations === undefined && merged.after === undefined && supersedes === undefined ? {} : { by: 'agent' as const }),
+      };
       return reply(await globs.update(email, id, version, { ...clean, ...stated }), (g) => globView(g));
     },
   );
@@ -543,15 +592,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'add_relation',
     {
       description:
-        "Add one relation to a glob. Give `to` (this glob can't pass `gate` until `to` reaches `until`; pass the version you read) or `holdsBack` (a decision glob, or any glob, holds that other glob back until this one reaches `until`; no version). " +
+        "Add one relation to a glob. Give `to` (this glob can't pass `gate` until `to` reaches `until`; pass the version you read), `holdsBack` (a decision glob, or any glob, holds that other glob back until this one reaches `until`; no version: the relation is written on the other glob, which may be on another board you can edit) or `supersedes` (this glob replaces that one: the row lands on it; no version). " +
         RELATIONS_HELP +
-        " Refused: the same glob, another board's glob, a cycle, a 21st relation for one gate, `decided` for a glob that is not a decision, and a decision glob as the one held back. A dismissed relation to the same glob and gate is replaced. Answers with the glob's view (`relations`).",
+        " Refused: the same glob, a glob you cannot view (`No glob X`), a cycle (across boards too), a missing `reason` (required for agents: the refusal names the glob and how to pass it), a 21st relation for one gate, `decided` for a glob that is not a decision, and a decision glob as the one held back. A dismissed relation to the same glob and gate is replaced. Answers with the glob's view (`relations`).",
       inputSchema: {
         id: z.string(),
         version: z.number().int().optional().describe('The version you read: required with `to`'),
         to: z.string().min(1).optional().describe('The glob or decision this glob waits for'),
         holdsBack: z.string().min(1).optional().describe('A glob that waits for this one (this glob is a decision or any glob it must reach `until` first)'),
         holdsBackGroup: z.string().min(1).optional().describe('A group whose globs all wait for this one: one relation per work glob in it (those already past the gate are left out), and a glob that joins the group later gets it too while it is open; no version'),
+        supersedes: z.string().min(1).optional().describe('A glob this one replaces: its due human steps are dismissed as "superseded by" this one. Uses `reason` (required for agents); no version'),
         gate: relationInputSchema.shape.gate,
         until: relationInputSchema.shape.until,
         reason: relationInputSchema.shape.reason,
@@ -560,7 +610,12 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     async ({ id, ...rest }) => {
       const parsed = addRelationSchema.safeParse(Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)));
       if (!parsed.success) return { ...json({ code: 'invalid_input', message: parsed.error.issues.map((i) => i.message).join('; ') }), isError: true };
-      const { to, holdsBack, holdsBackGroup, version, ...fields } = parsed.data;
+      const { to, holdsBack, holdsBackGroup, supersedes, version, ...fields } = parsed.data;
+      if (supersedes !== undefined) {
+        const done = await globs.addSupersession(email, id, supersedes, { reason: fields.reason ?? null }, 'agent');
+        if (done.ok) await deps.outbox.drain(done.value.id);
+        return done.ok ? reply(await globs.get(email, id), (v) => globViewOf(v)) : reply(done);
+      }
       if (holdsBackGroup !== undefined) {
         const held = await globs.holdGroup(email, id, holdsBackGroup, relationInput({ ...fields, to: id }), 'agent');
         if (held.ok) await deps.outbox.drain(id);
@@ -1295,6 +1350,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: { id: z.string(), stepId: z.string(), reason: z.string().min(1), version: z.number().int().optional() },
     },
     async ({ id, stepId, reason, version }) => reply(await globs.dismissHumanStep(email, id, stepId, reason, version ?? null), stepView),
+  );
+
+  server.registerTool(
+    'fail_human_step',
+    {
+      description:
+        "Report that a step's run failed (a rollout that did not provision, a command that errored). The step stays open and keeps holding what it holds; slop writes a suggestion on the glob, \"this step failed: is there a fix glob?\", with one click to link a glob. Pass `note`: what failed, one or two lines. When you create a glob to fix it, pass `holds: [{id: <this glob>, reason}]` on `create_glob`, which also closes the suggestion. Members only; pass the glob version you read to have it checked.",
+      inputSchema: { id: z.string(), stepId: z.string(), note: z.string().min(1).max(2000), version: z.number().int().optional() },
+    },
+    async ({ id, stepId, note, version }) => reply(await globs.failHumanStep(email, id, stepId, note, version ?? null), stepView),
   );
 
   server.registerTool(
