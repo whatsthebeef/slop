@@ -65,7 +65,7 @@ describe('reconcile: catching up on webhooks slop missed', () => {
   const current = async (id: string) => unwrap(await globs.get(DEV, id)).glob;
 
   /** A same in review whose recorded state is what a lost webhook left behind. */
-  const newOpenGlob = async (title: string, pr: { state: 'draft' | 'ready'; headSha: string }, status: 'in_progress' | 'pr_open' = 'pr_open') => {
+  const newOpenGlob = async (title: string, pr: { state: 'draft' | 'ready'; headSha: string }, status: 'in_progress' | 'pr_open' | 'merging' = 'pr_open') => {
     const created = unwrap(await globs.create(DEV, { boardId: 1, title, type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
     await store.transaction(async (tx) => {
       const g = await tx.getGlob(created.id);
@@ -125,6 +125,35 @@ describe('reconcile: catching up on webhooks slop missed', () => {
     const after = await current(id);
     expect({ status: after.status, pr: after.pr, headChecks: after.headChecks }).toEqual({ status: before.status, pr: before.pr, headChecks: before.headChecks });
     expect(await pending(id, 'refresh_checks')).toEqual([]);
+  });
+
+  it('a glob stuck in merging with no result for its head picks up the missed check run', async () => {
+    host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
+    host.mergeStateNow = 'passed';
+    const id = await newOpenGlob('Merging, missed pass', { state: 'ready', headSha: 'h1' }, 'merging');
+    await reconcile(id);
+    expect((await current(id)).headChecks).toMatchObject({ sha: 'h1', state: 'passed' });
+    expect(logged.some((line) => line.includes(`${id} rereading head checks`))).toBe(true);
+  });
+
+  it('a glob stuck in merging records a missed failed check', async () => {
+    host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
+    host.mergeStateNow = 'failed';
+    const id = await newOpenGlob('Merging, missed failure', { state: 'ready', headSha: 'h1' }, 'merging');
+    await reconcile(id);
+    expect((await current(id)).headChecks).toMatchObject({ sha: 'h1', state: 'failed' });
+    host.mergeStateNow = 'passed';
+  });
+
+  it('a glob in merging whose checks are still running is left without a result', async () => {
+    host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
+    host.mergeStateNow = 'pending';
+    const id = await newOpenGlob('Merging, still running', { state: 'ready', headSha: 'h1' }, 'merging');
+    await reconcile(id);
+    const after = await current(id);
+    expect(after.status).toBe('merging');
+    expect(after.headChecks?.state ?? 'pending').toBe('pending');
+    host.mergeStateNow = 'passed';
   });
 
   it('applies a missed merge as the webhook would', async () => {

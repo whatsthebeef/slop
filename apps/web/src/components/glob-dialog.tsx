@@ -173,7 +173,7 @@ export const GlobDetail = ({
   };
 
   return (
-    <article className="mx-auto w-full max-w-[63rem] p-5" data-testid="glob-page">
+    <article className="mx-auto w-full min-w-0 max-w-[63rem] overflow-x-clip p-5" data-testid="glob-page">
       <GlobHeader ctx={ctx} onClose={onClose} state={nowState} actions={actionState} />
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
         <GlobTitle

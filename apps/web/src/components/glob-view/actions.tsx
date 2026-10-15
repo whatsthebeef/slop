@@ -1,4 +1,5 @@
 import { decisionOf, machine } from '@slop/core';
+import { isLearning } from '../decision-outcomes';
 import type { Action, EditFailure, Handover } from '@slop/core';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -561,19 +562,19 @@ export const GlobActions = ({
   const moves = splitMoves(ctx, state, onSplitting);
   // A due step still leads.
   const lead = stepTurn === null ? moves.lead : null;
-  const main = lead === null ? state.main : null;
-  const moreActions = actions.filter((a) => a !== main && tiers.get(a) !== 'destructive');
+  // A decision's one Approve (and its ▾) is in the proposal block, so the header has no main action for it.
+  const inBlock = ctx.decide != null && state.main === 'decide';
+  const main = lead === null && !inBlock ? state.main : null;
+  const moreActions = actions.filter(
+    (a) => a !== main && !(inBlock && a === 'decide') && tiers.get(a) !== 'destructive',
+  );
   // The menu closes on select, so the More button shows the action it started while it runs.
   const moreRunning =
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || stepTurn !== null || lead !== null;
-  // A decision's Approve change and its ▾ run the proposal block's flow, so the header and the block never disagree.
-  const flow = ctx.decide ?? null;
-  const decideFlow = main === 'decide' ? flow : null;
-  const flowItems = decideFlow?.menu ?? [];
-  const hasMenu = hasMain && flowItems.length + moves.menu.length + moreActions.length + disabled.length > 0;
+  const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
   const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -600,20 +601,6 @@ export const GlobActions = ({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-testid="more-menu">
-        {flowItems.map((item) => (
-          <DropdownMenuItem
-            key={item.key}
-            disabled={item.disabled !== null}
-            data-testid={`more-flow-${item.key}`}
-            onSelect={item.run}
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              <HumanIcon decorative />
-              {item.label}
-            </span>
-            <span className="text-xs text-muted-foreground">{item.disabled ?? item.tip}</span>
-          </DropdownMenuItem>
-        ))}
         {moves.menu.map((move) => (
           <DropdownMenuItem
             key={move.id}
@@ -695,23 +682,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
-            {decideFlow !== null && decideFlow.approve.blocked !== null && (
-              <span className="flex flex-wrap items-center gap-2 text-xs" data-testid="approve-blocked">
-                <span className="text-muted-foreground">{decideFlow.approve.blocked}</span>
-                {decideFlow.menu.some((item) => item.key === 'reject' && item.disabled === null) && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    data-testid="header-reject"
-                    onClick={() => decideFlow.menu.find((item) => item.key === 'reject')?.run()}
-                  >
-                    Reject…
-                  </Button>
-                )}
-              </span>
-            )}
-            {main !== null && !(decideFlow !== null && decideFlow.approve.blocked !== null) && (
+            {main !== null && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>
                   <Button
@@ -721,7 +692,7 @@ export const GlobActions = ({
                     disabled={busy}
                     data-testid="main-action"
                     data-variant={state.variant}
-                    onClick={() => (decideFlow === null ? state.begin(main) : decideFlow.approve.run())}
+                    onClick={() => state.begin(main)}
                   >
                     <ActionContent action={main} ctx={ctx} state={state} />
                   </Button>
@@ -837,6 +808,9 @@ export const GlobReset = ({
   const { board, glob } = ctx;
   const { busy, tiers, actions } = state;
   const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
+  // A learning is never deleted: it is rejected, which also suppresses its repeats.
+  const attributes = decisionOf(glob);
+  const learning = attributes !== null && isLearning(attributes);
   return (
     <div className="grid gap-2 rounded border border-destructive/50 p-3" data-testid="reset-area">
       <div className="flex flex-wrap gap-2">
@@ -853,7 +827,7 @@ export const GlobReset = ({
             </Button>
           </Tip>
         ))}
-        {!state.confirmDelete && (
+        {!state.confirmDelete && !learning && (
           <Button variant="danger" size="sm" onClick={() => state.setConfirmDelete(true)}>
             Delete…
           </Button>

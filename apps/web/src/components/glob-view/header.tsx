@@ -17,7 +17,7 @@ import type { NowState } from './status';
 /** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
 export const HEADER_HEIGHT_VAR = '--glob-header-height';
 
-/** The sticky bar, a compact single row (small vertical padding, no fixed height): back to the board, then "ID · type ▾ · list", and the status at the top right. */
+/** The sticky bar (type and list hidden below the sm breakpoint), a compact single row (small vertical padding, no fixed height): back to the board, then "ID · type ▾ · list", and the status at the top right. */
 export const GlobHeader = ({
   ctx,
   onClose,
@@ -85,18 +85,22 @@ export const GlobHeader = ({
         <span className="shrink-0 self-center font-mono text-base font-semibold text-muted-foreground" data-testid="glob-id">
           {glob.id}
         </span>
-        <Dot />
+        <span className="hidden items-center gap-3 sm:flex">
+          <Dot />
+        </span>
         {decision || actions === undefined ? (
-          <span className="shrink-0 text-sm text-muted-foreground" data-testid="glob-type">
+          <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" data-testid="glob-type">
             {decision ? 'decision' : glob.type}
           </span>
         ) : (
-          <span className="shrink-0">
+          <span className="hidden shrink-0 sm:inline">
             <TypeChip ctx={ctx} state={actions} />
           </span>
         )}
-        <Dot />
-        <span className="min-w-0 truncate text-sm text-muted-foreground" data-testid="glob-list">
+        <span className="hidden items-center gap-3 sm:flex">
+          <Dot />
+        </span>
+        <span className="hidden min-w-0 truncate text-sm text-muted-foreground sm:inline" data-testid="glob-list">
           {LIST_TITLES[glob.list]}
         </span>
         {armStep !== null && (
