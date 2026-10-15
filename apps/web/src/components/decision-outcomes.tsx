@@ -323,7 +323,7 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
   const text = stored?.editedDraft ?? stored?.mergedText ?? null;
   return (
     <div className='grid gap-1' data-testid='recommendation'>
-      {suggest.error !== null && (
+      {suggest.error !== null && state !== 'ready' && (
         <p className='text-xs text-muted-foreground' data-testid='suggest-error'>
           {suggest.error}
         </p>
