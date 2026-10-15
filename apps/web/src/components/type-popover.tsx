@@ -44,7 +44,7 @@ export const TypePopover = ({
             type="button"
             className={cn(
               'inline-flex items-center gap-1 rounded hover:bg-muted',
-              compact ? 'px-1 text-sm font-medium' : 'border px-2 py-0.5 text-xs',
+              compact ? 'px-1 text-sm text-muted-foreground hover:text-foreground' : 'border px-2 py-0.5 text-xs',
             )}
             data-testid="glob-type"
           >

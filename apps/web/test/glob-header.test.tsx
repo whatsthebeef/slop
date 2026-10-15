@@ -137,6 +137,24 @@ describe('GlobHeader', () => {
       expect(getByTestId('glob-id').className).toContain('shrink-0');
     });
 
+    it('puts a dot between the status and the category icon', () => {
+      const { getByTestId } = renderBar(view({ status: 'in_progress', ...live('active') }));
+      const corner = getByTestId('header-corner');
+      expect(corner.children).toHaveLength(3);
+      expect(corner.children[1]?.getAttribute('data-testid')).toBe('header-dot');
+    });
+
+    it('shows the type and the list in the same quiet style', () => {
+      const { getByTestId } = renderBar(view({ status: 'in_progress' }));
+      const type = getByTestId('glob-type');
+      const list = getByTestId('glob-list');
+      expect(type.className).toContain('text-sm');
+      expect(type.className).toContain('text-muted-foreground');
+      expect(type.className).not.toContain('font-medium');
+      expect(list.className).toContain('text-muted-foreground');
+      expect(list.className).not.toContain('font-medium');
+    });
+
     it('agrees with the card on the human outline: your turn, awaiting sign-off, escalated Planning', () => {
       const humans: readonly GlobView[] = [
         prOpen({ allowedActions: ['merge'] }),
@@ -207,8 +225,8 @@ describe('GlobHeader', () => {
       const left = getByTestId('glob-header');
       expect(getByTestId('glob-list').textContent).toBe('Planning');
       expect(queryByTestId('header-status')).toBeNull();
-      expect(queryByTestId('header-corner-separator')).toBeNull();
       const corner = getByTestId('header-corner');
+      expect(corner.querySelector('[data-testid="header-dot"]')).toBeNull();
       expect(corner.children).toHaveLength(1);
       expect(corner.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(view().category);
       expect(left.textContent).not.toContain('Planning ');
@@ -219,7 +237,7 @@ describe('GlobHeader', () => {
       const { getByTestId } = renderBar(g);
       const corner = getByTestId('header-corner');
       expect(getByTestId('header-status').textContent).toBe('merging');
-      expect([...corner.children].map((c) => c.getAttribute('data-testid') ?? 'category')).toEqual(['header-status', 'header-corner-separator', 'category']);
+      expect([...corner.children].map((c) => c.getAttribute('data-testid') ?? 'category')).toEqual(['header-status', 'header-dot', 'category']);
       expect(getByTestId('header-status').textContent).not.toContain('Doing');
       expect(getByTestId('glob-list').textContent).toContain('Doing');
     });

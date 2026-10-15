@@ -10,18 +10,11 @@ import type { GlobViewContext } from './context';
 import { TypeChip } from './actions';
 import { EscalationChip } from './escalation';
 import type { GlobActionsState } from './actions';
-import { HeaderStatus } from './status';
+import { Dot, HeaderStatus } from './status';
 import type { NowState } from './status';
 
 /** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
 export const HEADER_HEIGHT_VAR = '--glob-header-height';
-
-/** The dot between the top bar's left-hand parts. */
-const Dot = () => (
-  <span aria-hidden className="-mx-1 shrink-0 text-muted-foreground">
-    ·
-  </span>
-);
 
 /** The sticky bar, a compact single row (small vertical padding, no fixed height): back to the board, then "ID · type ▾ · list", and the status at the top right. */
 export const GlobHeader = ({
@@ -93,7 +86,7 @@ export const GlobHeader = ({
         </span>
         <Dot />
         {decision || actions === undefined ? (
-          <span className="shrink-0 text-sm font-medium" data-testid="glob-type">
+          <span className="shrink-0 text-sm text-muted-foreground" data-testid="glob-type">
             {decision ? 'decision' : glob.type}
           </span>
         ) : (

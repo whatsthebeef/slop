@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { CategoryIcon, DotSeparator } from '@/components/glob-card';
+import { CategoryIcon } from '@/components/glob-card';
 import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
@@ -9,6 +9,13 @@ import { viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
 import type { GlobActionsState } from './actions';
+
+/** The dot between the top bar's parts. */
+export const Dot = () => (
+  <span aria-hidden className="-mx-1 shrink-0 text-muted-foreground" data-testid="header-dot">
+    ·
+  </span>
+);
 
 /** The escalation's own words ("Needs a human: <reason>") are the header chip's job, never the headline's. */
 export const headlineReason = (reason: string): string =>
@@ -91,7 +98,7 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
   // A live run's status opens that run's session; the activity log has no session link of its own beyond its run entries.
   const live = position?.holder === 'machine' ? position.sessionUrl : null;
   return (
-    <span className="ml-auto inline-flex min-w-0 items-center gap-1.5" data-testid="header-corner">
+    <span className="ml-auto inline-flex min-w-0 items-center gap-2" data-testid="header-corner">
       {corner !== null && (
         <>
           <button
@@ -113,7 +120,7 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
             </span>
             <StatusIconView icon={corner.icon} />
           </button>
-          <DotSeparator testId="header-corner-separator" />
+          <Dot />
         </>
       )}
       <CategoryIcon category={glob.category} />
