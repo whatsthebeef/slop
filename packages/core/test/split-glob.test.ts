@@ -69,7 +69,10 @@ describe('split a glob into parts', () => {
   it('allocates the ID letter from fix and work kind, and a part inherits them from the original', async () => {
     const create = async (patch: Record<string, unknown>) =>
       unwrap(await globs.create(ADMIN, { boardId, title: 'T', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'p', ...patch }));
-    expect((await create({ category: 'feature' })).id).toMatch(/^s\d+f\d+$/);
+    // An asked feature is stored as a task: `f` is no longer issued.
+    const asked = await create({ category: 'feature' });
+    expect(asked.id).toMatch(/^s\d+t\d+$/);
+    expect(asked).toMatchObject({ category: 'task', workKind: 'rnd' });
     expect((await create({})).id).toMatch(/^s\d+t\d+$/);
     expect((await create({ category: 'bug' })).id).toMatch(/^s\d+b\d+$/);
     // The fields drive the letter, not the category.
@@ -77,7 +80,7 @@ describe('split a glob into parts', () => {
     expect(fix.id).toMatch(/^s\d+b\d+$/);
     expect(fix).toMatchObject({ fix: true, workKind: 'maintenance' });
     const rnd = await create({ category: 'task', workKind: 'rnd', workKindSource: 'person', inferenceReason: 'new capability' });
-    expect(rnd.id).toMatch(/^s\d+f\d+$/);
+    expect(rnd.id).toMatch(/^s\d+t\d+$/);
     expect(rnd).toMatchObject({ workKindSource: 'person', inferenceReason: 'new capability' });
     const [, second] = unwrap(await globs.split(DEV, fix.id, fix.version, input([part({ title: 'A' }), part({ title: 'B', after: [0] })])));
     expect(second).toMatchObject({ fix: true, workKind: 'maintenance' });
@@ -109,7 +112,8 @@ describe('split a glob into parts', () => {
     expect(first.title).toBe('First');
     expect(first.version).toBe(original.version + 1);
     expect(new Set([first.id, second.id, third.id]).size).toBe(3);
-    expect(second.category).toBe('feature');
+    // Feature and task are one stored category, so the part keeps the original's work kind.
+    expect(second.category).toBe('task');
     expect(second.group).toBe('grp');
     const needs = (id: string) => [...store.state.relations.values()].filter((r) => r.from === id && r.gate === 'start').map((r) => [r.to, r.source]);
     expect(needs(second.id)).toEqual([[first.id, 'person']]);

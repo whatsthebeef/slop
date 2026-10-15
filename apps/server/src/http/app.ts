@@ -152,7 +152,7 @@ export const createGlobSchema = z.object({
   ...kindFields,
   /** Code work: omitted means a same. An action has no type (null or omitted). Alias of `mode`. */
   type: z.enum(SLOP_TYPES).nullable().optional(),
-  /** Old alias: bug is a fix, feature is R&D, task is maintenance, action is actor human. Nobody picks it any more. */
+  /** Old alias: bug is a fix, feature is R&D (stored as a task), task is maintenance, action is actor human. Nobody picks it any more. */
   category: z.enum([...WORK_CATEGORIES, 'action']).optional(),
   /** Who set `fix` and `workKind` (the form passes back intake's chips: `inferred` unless the person flipped one). Default: `person` for a value given. */
   fixSource: z.enum(['inferred', 'person']).optional(),

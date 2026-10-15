@@ -1,5 +1,5 @@
 import type { Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
@@ -65,7 +65,7 @@ export const resolveKind = (input: KindInput, create: boolean): KindResolved => 
     return bad('A glob cannot change between machine and human work');
   }
   if (create && category === undefined && (input.fix !== undefined || input.workKind !== undefined) && type !== null) {
-    category = categoryFor(input.fix ?? false, input.workKind ?? 'maintenance');
+    category = categoryFor(input.fix ?? false);
   }
   if (input.actor === 'machine' && category !== undefined && isHumanCategory(category)) return bad(`A machine glob cannot be a ${category}`);
   // Human work is never a fix and has no work kind to choose.
@@ -86,7 +86,7 @@ export interface CreateKindFields {
 /**
  * The stored category, fix flag and work kind for a create that skipped intake's proposal (a titled create, the CLI): what the
  * caller said is a person's choice (an old `category` alias says both); the rest is inferred from the title and plan with `infer`
- * (absent or a super: not a fix, maintenance). A fix is never a super.
+ * (absent or a super: not a fix, maintenance). A fix is never a super. An asked `feature` means R&D and is stored as a task.
  */
 export const createKindFields = async (
   input: { readonly type?: SlopType | null | undefined; readonly category?: Category | undefined; readonly fix?: boolean | undefined; readonly workKind?: WorkKind | undefined },
@@ -100,7 +100,8 @@ export const createKindFields = async (
   const chosenFix = fix ?? (input.type === 'super' ? false : (found?.fix ?? false));
   const chosenKind = workKind ?? found?.workKind ?? 'maintenance';
   return {
-    category: category ?? categoryFor(chosenFix, chosenKind),
+    // An asked `feature` implied R&D above; it is stored as a task.
+    category: category === undefined ? categoryFor(chosenFix) : storedCategory(category),
     fix: chosenFix,
     fixSource: fix === undefined ? 'inferred' : 'person',
     workKind: chosenKind,

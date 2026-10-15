@@ -35,7 +35,7 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
 import { ACTION_PLAN_TEMPLATE } from '../domain/action-glob.js';
-import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, workKindOf } from '../domain/types.js';
+import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, storedCategory, workKindOf } from '../domain/types.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { readMergePolicy } from './knowledge-service.js';
 import { subGateCheckOf } from '../domain/merge-policy.js';
@@ -173,7 +173,7 @@ export interface SplitPart {
 
 export const MAX_SPLIT_PARTS = 10;
 
-/** The letter inputs of a code glob being created: the fix flag and work kind it was given, else its category's. */
+/** The letter inputs of a code glob being created: the fix flag and work kind it was given, else its asked category's (before `feature` is stored as a task). */
 const inferredOf = (
   input: Pick<CreateGlobInput, 'category' | 'fix' | 'workKind'>,
   type: SlopType,
@@ -181,6 +181,7 @@ const inferredOf = (
   actor: 'machine',
   mode: type,
   fix: input.fix ?? defaultFix(input.category),
+  // Read from the asked category: a `feature` is R&D even though it is stored as a task (the letter ignores the work kind).
   workKind: input.workKind ?? defaultWorkKind(input.category),
 });
 
@@ -189,7 +190,7 @@ const partInference = (
   original: Glob,
   part: SplitPart,
 ): { actor: 'machine'; mode: SlopType; fix: boolean; workKind: WorkKind } => {
-  const sameCategory = part.category === undefined || part.category === original.category;
+  const sameCategory = part.category === undefined || storedCategory(part.category) === storedCategory(original.category);
   const category = part.category ?? original.category;
   return {
     actor: 'machine',

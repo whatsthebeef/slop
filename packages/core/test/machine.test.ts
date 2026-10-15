@@ -1125,10 +1125,34 @@ describe('labels and review checklists (rows 21, 22, 27–30)', () => {
 
 describe('field changes and type changes (row 26)', () => {
   it('changes group and category without moving the glob', () => {
-    const t = value(m.changeFields(glob(), { group: 'Sync', category: 'feature' }, board, ctx()));
+    const t = value(m.changeFields(glob(), { group: 'Sync', category: 'bug' }, board, ctx()));
     expect(t.glob.status).toBe('planning');
-    expect(t.glob.category).toBe('feature');
+    expect(t.glob.category).toBe('bug');
     expect(t.glob.id).toBe('s1t1');
+  });
+
+  it('stores an asked feature as a task; its R&D meaning only moves an inferred work kind when the category changes', () => {
+    // A task asked to be a feature is not a category change: nothing moves.
+    const t = value(m.changeFields(glob(), { category: 'feature' }, board, ctx()));
+    expect(t.glob.category).toBe('task');
+    expect(t.events).toEqual([]);
+    // An explicit work kind wins.
+    const explicit = value(m.changeFields(glob({ workKind: 'rnd' }), { category: 'feature', workKind: 'maintenance' }, board, ctx()));
+    expect(explicit.glob.workKind).toBe('maintenance');
+    // A bug asked to be a feature becomes a task, no longer a fix, with the R&D an inferred kind takes from the asked category.
+    const fromBug = value(m.changeFields(glob({ category: 'bug', fix: true }), { category: 'feature' }, board, ctx()));
+    expect(fromBug.glob).toMatchObject({ category: 'task', fix: false, workKind: 'rnd' });
+    // A legacy feature glob asked to be a feature is a no-op; asked for a task it keeps its stored category.
+    expect(value(m.changeFields(glob({ category: 'feature' }), { category: 'feature' }, board, ctx())).events).toEqual([]);
+    expect(value(m.changeFields(glob({ category: 'feature' }), { group: 'g', category: 'task' }, board, ctx())).glob.category).toBe('feature');
+    // An admin's maintenance correction on a legacy feature glob survives an edit that names feature.
+    const kept = value(
+      m.changeFields(glob({ category: 'feature', workKind: 'maintenance', workKindSource: 'person' }), { group: 'g', category: 'feature' }, board, ctx()),
+    );
+    expect(kept.glob).toMatchObject({ category: 'feature', workKind: 'maintenance', workKindSource: 'person' });
+    // A person-set maintenance kind on a task survives an asked feature.
+    const task = value(m.changeFields(glob({ workKind: 'maintenance', workKindSource: 'person' }), { category: 'feature' }, board, ctx()));
+    expect(task.glob).toMatchObject({ category: 'task', workKind: 'maintenance', workKindSource: 'person' });
   });
 
   it('enforces the matrix on category changes', () => {
