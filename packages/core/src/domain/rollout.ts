@@ -25,6 +25,11 @@ export interface RolloutStep {
   readonly script: string | null;
   /** A script in the repo the step points at (`script: scripts/rollout/<glob>-<slug>.sh` under the title); null when none. It wins over a fenced body. */
   readonly scriptPath: string | null;
+  /** Labelled lines under the step, read into fields (`Why:`, `Permissions:`, `Run:` once per command, `Check:` or `Check it worked:`); they are not part of the detail. */
+  readonly why: string | null;
+  readonly permissions: string | null;
+  readonly commands: readonly string[];
+  readonly verify: string | null;
 }
 
 /**
@@ -52,6 +57,9 @@ export interface RolloutStep {
  *   it says more. The first path found wins.
  * - Titles are plain text: a bold kind (`**manual:** Do x`, `**manual**: Do x`) reads as the kind, emphasis or a code
  *   span around the whole title is dropped (`**Do x**` is `Do x`), and inline code inside it loses its backticks.
+ * - Labelled lines under a step fill its fields: `Why:`, `Permissions:`, `Run:` (one command per line, several allowed, backticks
+ *   stripped) and `Check:` or `Check it worked:` (a bullet, bold label and backticks are fine). The first of each single-valued
+ *   label wins. Lines outside code fences that carry no label (and `Do this:` lines with nothing after them) stay as detail.
  * - The section runs to the next heading of the same or a higher level (headings inside code fences don't count).
  *   "None", "n/a", "nothing" or an empty section, or one with no list items, has no steps.
  * - Titles are made unique (`Title (2)`), because a re-read of the record matches steps by title.
@@ -60,7 +68,19 @@ export const parseRollout = (record: string): RolloutStep[] => {
   const lines = sectionOf(record);
   const steps: RolloutStep[] = [];
   let topIndent: number | null = null;
-  let current: { kind: RolloutStepKind; title: string; check: string | null; detail: string[]; script: string[] | null; scriptPath: string | null; fence: Fence | null } | null = null;
+  let current: {
+    kind: RolloutStepKind;
+    title: string;
+    check: string | null;
+    detail: string[];
+    script: string[] | null;
+    scriptPath: string | null;
+    fence: Fence | null;
+    why: string | null;
+    permissions: string | null;
+    commands: string[];
+    verify: string | null;
+  } | null = null;
   const finish = () => {
     if (current === null) return;
     const detail = trimBlank(current.detail).join('\n');
@@ -71,6 +91,13 @@ export const parseRollout = (record: string): RolloutStep[] => {
       check: current.check,
       script: current.scriptPath === null && current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
       scriptPath: current.scriptPath,
+      why: current.why,
+      permissions: current.permissions,
+      // The script's own run command is shown from `script`, so a Run line that repeats it is dropped.
+      commands: current.commands.filter(
+        (c) => current?.scriptPath == null || !isScriptRun(c, current.scriptPath),
+      ),
+      verify: current.verify,
     });
     current = null;
   };
@@ -95,7 +122,19 @@ export const parseRollout = (record: string): RolloutStep[] => {
       finish();
       const parsed = titleOf(item[2] ?? '');
       if (parsed === null) continue;
-      current = { kind: parsed.kind, title: parsed.title, check: parsed.check, detail: [], script: null, scriptPath: null, fence: null };
+      current = {
+        kind: parsed.kind,
+        title: parsed.title,
+        check: parsed.check,
+        detail: [],
+        script: null,
+        scriptPath: null,
+        fence: null,
+        why: null,
+        permissions: null,
+        commands: [],
+        verify: null,
+      };
       if (parsed.overflow !== null) current.detail.push(parsed.overflow);
       if (parsed.unknownCheck !== null) current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
       continue;
@@ -108,6 +147,18 @@ export const parseRollout = (record: string): RolloutStep[] => {
     }
     // A path named inside a longer line points the step at it too, but the line stays: it carries other text.
     if (current.scriptPath === null && path === null) current.scriptPath = inlineScript(line);
+    const labelled = FIELD_LINE.exec(line);
+    if (labelled?.[1] !== undefined && labelled[2] !== undefined) {
+      const value = stripTicks(labelled[2]);
+      const label = labelled[1].toLowerCase();
+      if (value !== '') {
+        if (label === 'run') current.commands.push(value);
+        else if (label === 'why') current.why ??= value;
+        else if (label === 'permissions') current.permissions ??= value;
+        else current.verify ??= value;
+        continue;
+      }
+    }
     const open = FENCE_OPEN.exec(line);
     if (open !== null && open[2] !== undefined) {
       const marker = open[2];
@@ -141,6 +192,12 @@ const SCRIPT_LINE = /^\s*(?:[-*+]\s+)?(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+)
 const SCRIPT_INLINE = /(?:^|[\s(])(?:\*\*)?script\s*:(?:\*\*)?\s*`?([^\s`]+?)`?(?=[.,;:!)]?(?:\s|$))/gi;
 /** In prose a dotted word isn't a script (`script: e.g.`, `script: README.md`): an inline path needs a `/` or a script's extension. */
 const SCRIPT_LIKE = /\/|\.(?:sh|bash|mjs|js|ts|py)$/;
+/** `Why: …`, `Permissions: …`, `Run: …`, `Check: …` or `Check it worked: …`, as a bullet or not, with the label bold or not. */
+const FIELD_LINE =
+  /^\s*(?:[-*+]\s+)?(?:\*\*)?(why|permissions|run|check(?: it worked)?)\s*:(?:\*\*)?\s*(.*)$/i;
+const isScriptRun = (command: string, path: string): boolean =>
+  command === `bash ${path}` || command === `sh ${path}` || command === `./${path}`;
+const stripTicks = (value: string): string => value.replace(/`/g, '').trim();
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
 /** A bold kind: `**manual:** x`, `**manual**: x` (or with `__`). */
 const BOLD_KIND = /^(\*\*|__)(script|setting|manual)(?:\s*:\s*\1|\1\s*:)\s*/i;
@@ -332,10 +389,10 @@ export const ROLLOUT_SYSTEM = `You decide what a person must do after a change i
 The server image deploys on merge; drizzle migrations run when the server starts; GitHub workflows take effect with the merge.
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
 A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
-Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: '**Why:** <one sentence>', '**Permissions:** <the exact login and rights, for a step run in a terminal>', '**Do this:** <where, then the exact command in a fenced block or the exact clicks>', '**Check it worked:** <what you should see>'. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title; never invent one.
+Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: 'Why: <one sentence>', 'Permissions: <the exact login and rights, for a step run in a terminal>', one 'Run: <command>' line per command (no backticks, no Markdown), 'Check: <what you should see>'. Anything else a person needs goes in plain lines under the title. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
-{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Do this / Check it worked bullets indented under it, a script's command in a fenced block, '(check: <capability>)' at the end of a title only when told that capability exists>"}
+{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Permissions / Run / Check lines indented under it, '(check: <capability>)' at the end of a title only when told that capability exists>"}
 {"decision":"ask","question":"<one specific question a person can answer, e.g. Does SLOP_X need setting in prod? It has no default>"}
 Prefer "none" when the diff only adds settings with defaults, or only changes code the deploy ships. Use "ask" only when the diff doesn't let you tell. Never invent steps.`;
 

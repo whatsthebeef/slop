@@ -547,6 +547,13 @@
       "when": 1792068573349,
       "tag": "0077_actor_mode_fix_workkind",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1792068574349,
+      "tag": "0078_human_step_fields",
+      "breakpoints": true
     }
   ]
 }
