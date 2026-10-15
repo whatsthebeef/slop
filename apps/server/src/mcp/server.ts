@@ -950,7 +950,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .describe('The glob the learning came from; required unless a document is proposed'),
         type: z
           .enum(LEARNING_TYPES)
-          .describe("gotcha, pattern, or agent-behaviour (something an instruction would have prevented). Choices are not learnings: record them in your implementation record's ## Decisions"),
+          .describe("gotcha, pattern, agent-behaviour (something an instruction would have prevented), or fact (how the system is now after this glob: a new component, a moved responsibility, a new data flow or table, a new external service, a changed deploy or ops procedure; name the files and commit as evidence). Choices are not learnings: record them in your implementation record's ## Decisions"),
         statement: z.string().min(1).describe('The learning, as one rule or fact'),
         evidence: z.string().min(1).describe('What showed it: files, review findings, failures, a developer correction'),
         suggestedTarget: z
