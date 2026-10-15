@@ -6,6 +6,7 @@ import type { Action } from '@slop/core';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobDetail } from '../src/components/glob-dialog';
+import { api } from '../src/lib/api';
 import type { BoardView, GlobView } from '../src/lib/api';
 import { startAgainConfirmation } from '../src/lib/start-again';
 import { board as coreBoard, glob as coreGlob } from '../../../packages/core/test/fixtures';
@@ -39,13 +40,13 @@ const callbacks = () => ({
 });
 
 /** Renders the glob view with stubbed callbacks; the server is never reached (every fetch fails and the queries stay empty). */
-const renderGlob = (glob: GlobView) => {
+const renderGlob = (glob: GlobView, as: BoardView = board) => {
   const cb = callbacks();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <GlobDetail board={board} glob={glob} initialArtifact={null} {...cb} />
+        <GlobDetail board={as} glob={glob} initialArtifact={null} {...cb} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -112,6 +113,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -493,8 +495,8 @@ describe('glob view: Reset', () => {
 });
 
 describe('glob view: a decision in Doing', () => {
-  it('has a Decide main button that focuses the first outcome button', async () => {
-    const decision = view({
+  const decision = (patch: Partial<GlobView> = {}) =>
+    view({
       category: 'decision',
       status: 'in_progress',
       list: 'doing',
@@ -508,20 +510,64 @@ describe('glob view: a decision in Doing', () => {
         channel: 'human',
         outcome: null,
       },
+      ...patch,
     });
+
+  it('has an Approve change main button that opens the approval in the block', async () => {
     const user = userEvent.setup();
-    const cb = renderGlob(decision);
+    const cb = renderGlob(decision());
     const main = screen.getByTestId('main-action');
-    expect(main.textContent).toContain('Decide');
-    const outcomes = await screen.findByTestId('outcomes');
+    expect(main.textContent).toContain('Approve change');
+    expect(screen.queryByText('Decide')).toBeNull();
+    await screen.findByTestId('outcomes');
     await user.click(main);
-    const first = within(outcomes)
-      .getAllByRole('button')
-      .find((b) => !b.hasAttribute('disabled'));
-    expect(first).toBeTruthy();
-    expect(document.activeElement).toBe(first);
-    // Decide only moves focus to the panel; it never calls the server by itself.
+    expect(await screen.findByTestId('outcome-form-accept')).toBeTruthy();
+    // Opening the form decides nothing; it never calls the server by itself.
     expect(cb.onAction).not.toHaveBeenCalled();
+    expect(cb.onDecide).not.toHaveBeenCalled();
+  });
+
+  it('lists Reject…, keeping the statement and Suggest again in the ▾ for an admin', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'globDiff').mockResolvedValue({
+      target: null,
+      currentVersion: null,
+      preview: null,
+      draft: null,
+      learning: { status: 'open', processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
+    });
+    renderGlob(decision(), { ...board, role: 'admin' });
+    await user.click(await screen.findByTestId('more-actions'));
+    const menu = await screen.findByTestId('more-menu');
+    await waitFor(() => expect(within(menu).getByText('Approve without changing a document')).toBeTruthy());
+    expect(within(menu).getByText('Reject…')).toBeTruthy();
+    expect(within(menu).getByText('Suggest again')).toBeTruthy();
+    // Nothing the old Decide panel offered is lost.
+    expect(within(menu).getByText('Accept with edits')).toBeTruthy();
+    expect(within(menu).getByText('Retarget')).toBeTruthy();
+    expect(within(menu).getByText('Needs work')).toBeTruthy();
+  });
+
+  it('opens the reject reason in the block from the header menu', async () => {
+    const user = userEvent.setup();
+    renderGlob(decision());
+    await user.click(await screen.findByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-flow-reject'));
+    expect(await screen.findByTestId('outcome-form-reject')).toBeTruthy();
+  });
+
+  it('shows why a PO cannot approve a merge policy instead of the button', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue({
+      target: { kind: 'merge_policy', name: 'merge_policy', section: null, newDocument: null },
+      currentVersion: null,
+      preview: null,
+      draft: null,
+      learning: null,
+    });
+    renderGlob(decision(), { ...board, role: 'po' });
+    const blocked = await screen.findByTestId('approve-blocked');
+    expect(blocked.textContent).toContain('it changes the merge policy');
+    expect(screen.queryByTestId('main-action')).toBeNull();
   });
 });
 
