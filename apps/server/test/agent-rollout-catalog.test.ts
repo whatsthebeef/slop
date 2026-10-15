@@ -18,17 +18,18 @@ describe('catalog agents: human steps and rollout', () => {
     expect(text).toContain('Never run a step that changes paid infrastructure or IAM');
   });
 
-  it('has the implementer write steps as a short title plus Why / Do this / Check it worked, and say what is not a step', async () => {
+  it('has the implementer write steps as a short title plus Why / Permissions / Run / Check lines, and say what is not a step', async () => {
     const text = await agent('implementer');
-    expect(text).toContain('**Why:**');
-    expect(text).toContain('**Do this:**');
-    expect(text).toContain('**Check it worked:**');
+    expect(text).toContain('`Why:`');
+    expect(text).toContain('`Permissions:`');
+    expect(text).toContain('`Run:` one exact command per line');
+    expect(text).toContain('`Check:`');
     expect(text).toContain('What is not a rollout step');
   });
 
   it('has the implementer put each command-sequence step in a script with its permissions, from the template, and never run it', async () => {
     const text = await agent('implementer');
-    expect(text).toContain('**Permissions:**');
+    expect(text).toContain('`Permissions:`');
     expect(text).toContain('Scripts for steps');
     expect(text).toContain('script: <path>');
     expect(text).toContain('scripts/rollout/<glob-id>-<slug>.sh');

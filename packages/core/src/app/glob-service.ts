@@ -367,6 +367,9 @@ const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
 const byKind = (a: ArtifactSummary, b: ArtifactSummary): number =>
   ARTIFACT_KINDS.indexOf(a.kind) - ARTIFACT_KINDS.indexOf(b.kind) || a.label.localeCompare(b.label);
 
+const stepFields = (s: Pick<StoredHumanStep, 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>) =>
+  [s.detail, s.check, s.script, s.why, s.permissions, s.commands, s.verify];
+
 type Step = (glob: Glob, ctx: Context, board: Board, facts: ActionFacts) => Result<Transition>;
 
 /** A work step as a person or agent writes it; what is left out gets the kind's defaults. */
@@ -379,6 +382,10 @@ export interface NewHumanStep {
   readonly blocks?: readonly HumanStepBlock[];
   readonly check?: string;
   readonly script?: HumanStepScript;
+  readonly why?: string;
+  readonly permissions?: string;
+  readonly commands?: readonly string[];
+  readonly verify?: string;
 }
 
 interface CommandOptions {
@@ -620,6 +627,10 @@ export class GlobService {
         blocks: [...new Set(blocks)],
         check: input.check ?? null,
         script: input.script ?? null,
+        why: input.why?.trim() || null,
+        permissions: input.permissions?.trim() || null,
+        commands: (input.commands ?? []).map((c) => c.trim()).filter((c) => c !== ''),
+        verify: input.verify?.trim() || null,
         origin,
         createdBy: email,
         createdAt: now,
@@ -707,6 +718,10 @@ export class GlobService {
           blocks: ['sign_off', 'dependants'],
           check: null,
           script: null,
+          why: null,
+          permissions: null,
+          commands: [],
+          verify: null,
           origin: 'investigation',
           createdBy: 'investigation',
           createdAt: this.deps.clock.now(),
@@ -721,7 +736,7 @@ export class GlobService {
   }
 
   /** A rollout work step in the shape every system writer uses: after the merge, holding back sign-off and dependants. */
-  private rolloutStep(glob: Glob, origin: string, createdBy: string, now: string, fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script'>): StoredHumanStep {
+  private rolloutStep(glob: Glob, origin: string, createdBy: string, now: string, fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>): StoredHumanStep {
     return {
       id: `hs_${this.deps.ids.runId()}`,
       boardId: glob.boardId,
@@ -779,14 +794,14 @@ export class GlobService {
             scripts = true;
           }
         }
-        const fields = { title: step.title, detail: step.detail, check: step.check, script };
+        const fields = { title: step.title, detail: step.detail, check: step.check, script, why: step.why, permissions: step.permissions, commands: step.commands, verify: step.verify };
         const existing = own.find((s) => s.title === step.title);
         if (existing === undefined) {
           const added = this.rolloutStep(glob, ROLLOUT_SECTION_ORIGIN, email, now, fields);
           save.push(added);
           note(added, 'added');
-        } else if (existing.state === 'open' && (existing.detail !== step.detail || existing.check !== step.check || JSON.stringify(existing.script) !== JSON.stringify(script))) {
-          const updated = { ...existing, detail: step.detail, check: step.check, script };
+        } else if (existing.state === 'open' && JSON.stringify(stepFields(existing)) !== JSON.stringify(stepFields(fields))) {
+          const updated = { ...existing, ...fields };
           save.push(updated);
           note(updated, 'updated');
         }
@@ -895,7 +910,7 @@ export class GlobService {
         });
         artifacts = true;
       } else if (answer.decision === 'ask') {
-        const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: answer.question, detail: null, check: null, script: null });
+        const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: answer.question, detail: null, check: null, script: null, why: null, permissions: null, commands: [], verify: null });
         save.push(step);
         note(step, 'added');
       } else {
@@ -909,7 +924,7 @@ export class GlobService {
             await addArtifact(tx, this.deps.clock, glob, 'slop', { kind: ROLLOUT_SCRIPT_KIND, label, content: written.script, link: null, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
             artifacts = true;
           }
-          const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script });
+          const step = this.rolloutStep(glob, ROLLOUT_PATHS_ORIGIN, 'slop', now, { title: written.title, detail: written.detail, check: written.check, script, why: written.why, permissions: written.permissions, commands: written.commands, verify: written.verify });
           save.push(step);
           note(step, 'added');
         }

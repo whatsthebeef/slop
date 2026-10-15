@@ -38,6 +38,10 @@ const legacyFlag = async (store: MemoryStore, glob: Glob): Promise<void> => {
         blocks: ['sign_off', 'dependants'],
         check: null,
         script: null,
+        why: null,
+        permissions: null,
+        commands: [],
+        verify: null,
         origin: 'rollout-paths',
         createdBy: 'slop',
         createdAt: '2026-10-13T12:00:00.000Z',
@@ -63,9 +67,42 @@ describe('parseRollout', () => {
 `),
     );
     expect(steps).toEqual([
-      { kind: 'script', title: 'Deploy the host stack', detail: 'Run it from a laptop with the deploy role.', check: 'fileAttachments', script: 'infra/deploy/host-deploy.sh', scriptPath: null },
-      { kind: 'setting', title: 'Add ATTACHMENTS_BUCKET to /slop/prod/server-env', detail: null, check: 'attachmentEvents', script: null, scriptPath: null },
-      { kind: 'manual', title: 'Turn on the network setting in the Claude app', detail: null, check: null, script: null, scriptPath: null },
+      {
+        kind: 'script',
+        title: 'Deploy the host stack',
+        detail: 'Run it from a laptop with the deploy role.',
+        check: 'fileAttachments',
+        script: 'infra/deploy/host-deploy.sh',
+        scriptPath: null,
+        why: null,
+        permissions: null,
+        commands: [],
+        verify: null,
+      },
+      {
+        kind: 'setting',
+        title: 'Add ATTACHMENTS_BUCKET to /slop/prod/server-env',
+        detail: null,
+        check: 'attachmentEvents',
+        script: null,
+        scriptPath: null,
+        why: null,
+        permissions: null,
+        commands: [],
+        verify: null,
+      },
+      {
+        kind: 'manual',
+        title: 'Turn on the network setting in the Claude app',
+        detail: null,
+        check: null,
+        script: null,
+        scriptPath: null,
+        why: null,
+        permissions: null,
+        commands: [],
+        verify: null,
+      },
     ]);
   });
 
@@ -88,7 +125,7 @@ ${FENCE}
     expect(step?.detail).toContain('select 1;');
   });
 
-  it("keeps a step's Why / Do this / Check it worked bullets as its detail, in order, with their code block", () => {
+  it('reads Why and Check it worked bullets into fields and keeps Do this, with its code block, as the detail', () => {
     const [step] = parseRollout(
       record(`## Rollout
 - manual: Approve s14k3 on the pocketlab-notebook board
@@ -101,16 +138,69 @@ ${FENCE}
 `),
     );
     expect(step?.title).toBe('Approve s14k3 on the pocketlab-notebook board');
+    expect(step?.why).toBe('the board needs the sub-gate rule.');
+    expect(step?.verify).toBe('the item shows Approved.');
     expect(step?.detail).toBe(
-      ['- **Why:** the board needs the sub-gate rule.', "- **Do this:** open the board's Knowledge page, then run:", `${FENCE}bash`, 'echo ok', FENCE, '- **Check it worked:** the item shows Approved.'].join('\n'),
+      [
+        "- **Do this:** open the board's Knowledge page, then run:",
+        `${FENCE}bash`,
+        'echo ok',
+        FENCE,
+      ].join('\n'),
     );
+  });
+
+  it('reads Why, Permissions, Run (one per line, backticks stripped) and Check into fields, none of them in the detail', () => {
+    const [step] = parseRollout(
+      record(`## Rollout
+- script: Create the CodeBuild report groups
+  - Why: since s14f2 the buildspec declares an \`atf\` report group.
+  - Permissions: an AWS session in account 123, able to create report groups
+  - script: scripts/rollout/s14t11-atf-report-groups.sh
+  - Run: aws sso login --profile admin
+  - Run: \`bash scripts/rollout/s14t11-atf-report-groups.sh\`
+  - Run: \`aws codebuild list-report-groups\`
+  - Check: the list shows the atf group.
+  - Note for the person.
+`),
+    );
+    expect(step).toEqual({
+      kind: 'script',
+      title: 'Create the CodeBuild report groups',
+      detail: '- Note for the person.',
+      check: null,
+      script: null,
+      scriptPath: 'scripts/rollout/s14t11-atf-report-groups.sh',
+      why: 'since s14f2 the buildspec declares an atf report group.',
+      permissions: 'an AWS session in account 123, able to create report groups',
+      // The script's own run command is dropped: the step block shows it from `script`.
+      commands: ['aws sso login --profile admin', 'aws codebuild list-report-groups'],
+      verify: 'the list shows the atf group.',
+    });
+  });
+
+  it('has no fields for a step written as free text, and keeps labelled lines inside a code fence as they are', () => {
+    const [step] = parseRollout(
+      record(`## Rollout
+- manual: Do it
+  Do this: first
+  ${FENCE}
+  Run: not a command
+  ${FENCE}
+`),
+    );
+    expect(step).toMatchObject({ why: null, permissions: null, commands: [], verify: null });
+    expect(step?.detail).toContain('Run: not a command');
   });
 
   it('cuts a title over 120 characters at its first sentence and moves the rest into the detail', () => {
     const long = 'Add the setting to the boards still on sub-gate.yml before updating. Blocks that board, not this sign-off. Ask an admin to approve the KB item first so the workflow is found.';
     const [step] = parseRollout(`## Rollout\n- setting: ${long}\n  - **Why:** because.\n`);
     expect(step?.title).toBe('Add the setting to the boards still on sub-gate.yml before updating');
-    expect(step?.detail).toBe('Blocks that board, not this sign-off. Ask an admin to approve the KB item first so the workflow is found.\n- **Why:** because.');
+    expect(step?.detail).toBe(
+      'Blocks that board, not this sign-off. Ask an admin to approve the KB item first so the workflow is found.',
+    );
+    expect(step?.why).toBe('because.');
     const words = 'word '.repeat(40).trim();
     const [word] = parseRollout(`## Rollout\n- manual: ${words}\n`);
     expect(word?.title.length).toBeLessThanOrEqual(120);
@@ -190,7 +280,18 @@ ${FENCE}
 
   it('keeps a step whose check is not a capability, with check null and a note in the detail', () => {
     const [step] = parseRollout('## Rollout\n- setting: Set the thing (check: telepathy)\n');
-    expect(step).toEqual({ kind: 'setting', title: 'Set the thing', detail: 'check: telepathy is not a capability slop knows', check: null, script: null, scriptPath: null });
+    expect(step).toEqual({
+      kind: 'setting',
+      title: 'Set the thing',
+      detail: 'check: telepathy is not a capability slop knows',
+      check: null,
+      script: null,
+      scriptPath: null,
+      why: null,
+      permissions: null,
+      commands: [],
+      verify: null,
+    });
   });
 
   it('makes titles unique and gives a script with no title a name', () => {
@@ -308,6 +409,24 @@ describe('the implementation record becomes rollout steps', () => {
     await put(g.id, record('## Rollout\n- script: Protect the branch\n  - script: scripts/rollout/x-ruleset.sh\n  - **Do this:** run it\n'));
     expect(stepsOf(g.id).map((s) => s.script)).toEqual([{ path: 'scripts/rollout/x-ruleset.sh' }]);
     expect(unwrap(await artifacts.versions(DEV, g.id, 'rollout_script', 'rollout: protect-the-branch'))).toHaveLength(0);
+  });
+
+  it("stores the labelled lines as the step's fields and updates them when the record changes", async () => {
+    const g = await newGlob();
+    const record = (run: string) =>
+      `## Rollout\n- manual: Create the groups\n  - Why: the buildspec needs them\n  - Permissions: an admin session\n  - Run: ${run}\n  - Check: the list shows them\n`;
+    await put(g.id, record('aws sso login'));
+    const [step] = stepsOf(g.id);
+    expect(step).toMatchObject({
+      why: 'the buildspec needs them',
+      permissions: 'an admin session',
+      commands: ['aws sso login'],
+      verify: 'the list shows them',
+      detail: null,
+    });
+    await put(g.id, record('aws sso login --profile admin'));
+    expect(stepsOf(g.id)).toHaveLength(1);
+    expect(stepsOf(g.id)[0]?.commands).toEqual(['aws sso login --profile admin']);
   });
 
   it('is idempotent: the same record twice adds no steps, events or script versions', async () => {
