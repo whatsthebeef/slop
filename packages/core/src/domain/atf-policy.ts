@@ -1,5 +1,8 @@
 import type { AtfIntegration } from './types.js';
 
+/** The server's allow-list refuses this start (or the setting is unusable): retrying can't help. */
+export class AtfRefusedError extends Error {}
+
 /**
  * What the server's own configuration lets push-mode ATF start. Board settings only choose among these: a board admin
  * can't make slop start a project or assume a role the operator didn't list.

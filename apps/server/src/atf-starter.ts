@@ -1,30 +1,8 @@
 import { createHash } from 'node:crypto';
 import { CodeBuildClient, StartBuildCommand } from '@aws-sdk/client-codebuild';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
-import { ATF_PUSH_OFF, atfPushRefusal } from '@slop/core';
-import type { AtfIntegration, AtfPushPolicy } from '@slop/core';
-
-/** What a push-mode ATF start needs: where, at which commit, and what to run (empty: the board's default suite). */
-export interface AtfStart {
-  readonly boardId: number;
-  readonly integration: AtfIntegration;
-  readonly environment: string;
-  readonly sha: string;
-  /** Repo-relative spec paths, one per line in `SLOP_ATF_SPECS`. */
-  readonly specs: readonly string[];
-  /** Playwright `--grep` patterns of the batch; combined into one alternation in `SLOP_ATF_GREP`. */
-  readonly greps: readonly string[];
-}
-
-export interface StartedAtf {
-  readonly buildId: string;
-  readonly url: string | null;
-}
-
-/** Starts a board's ATF project. Slop creates nothing in AWS: a person sets the project (and role) up. */
-export interface AtfStarter {
-  start(job: AtfStart): Promise<StartedAtf>;
-}
+import { ATF_PUSH_OFF, AtfRefusedError, atfPushRefusal } from '@slop/core';
+import type { AtfIntegration, AtfPushPolicy, AtfStart, RunnerStarter, StartedAtf } from '@slop/core';
 
 /** One pattern as it is; several as an alternation, so the build runs the union of the globs' tests. */
 export const combineGreps = (greps: readonly string[]): string => {
@@ -56,9 +34,6 @@ export interface RoleCredentials {
 
 export type AssumeRole = (roleArn: string, region: string, externalId: string) => Promise<RoleCredentials>;
 
-/** The server's allow-list refuses this start (or the setting is unusable): retrying can't help. */
-export class AtfRefusedError extends Error {}
-
 /** `sts:AssumeRole` with slop's own credentials and the board's ExternalId; the session lasts the shortest time STS allows. */
 export const assumeWithSts: AssumeRole = async (roleArn, region, externalId) => {
   const { Credentials: c } = await new STSClient({ region }).send(
@@ -82,11 +57,11 @@ export const assumeWithSts: AssumeRole = async (roleArn, region, externalId) => 
 };
 
 /**
- * CodeBuild: `StartBuild` on the board's ATF project with the spec list in environment variable overrides, under the
- * board's `roleArn` when it names one (else slop's own credentials). Results come back the usual way: the build's own
- * `atf-report.sh`.
+ * The `RunnerStarter` for CodeBuild (the only push adapter so far): `StartBuild` on the board's ATF project with the spec
+ * list in environment variable overrides, under the board's `roleArn` when it names one (else slop's own credentials).
+ * Results come back the usual way: the build's own `atf-report.sh`.
  */
-export class CodeBuildAtfStarter implements AtfStarter {
+export class CodeBuildAtfStarter implements RunnerStarter {
   private readonly clients = new Map<string, CodeBuildClient>();
 
   constructor(
