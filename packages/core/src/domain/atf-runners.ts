@@ -192,3 +192,40 @@ export const validateRunner = (
 /** Names are unique per board among runners that aren't revoked, compared without regard to case. */
 export const sameRunnerName = (a: string, b: string): boolean =>
   a.trim().toLowerCase() === b.trim().toLowerCase();
+
+const ARN_ACCOUNT = /^arn:aws[\w-]*:(?:iam|sts)::(\d{12}):/;
+
+/** The 12-digit account an IAM or STS ARN belongs to, or null when it isn't one. */
+export const arnAccount = (arn: string): string | null => ARN_ACCOUNT.exec(arn)?.[1] ?? null;
+
+/**
+ * The IAM role ARN an identity ARN stands for. An assumed-role ARN (`arn:aws:sts::123456789012:assumed-role/Name/session`)
+ * becomes `arn:aws:iam::123456789012:role/Name`; STS drops a role's path, so a path is kept only when the ARN names the role
+ * itself. Anything else (a user, a federated session) returns null: only roles are runner identities.
+ */
+export const roleArnOf = (arn: string): string | null => {
+  const assumed = /^(arn:aws[\w-]*):sts::(\d{12}):assumed-role\/([\w+=,.@-]+)\/[^/]+$/.exec(arn);
+  if (assumed !== null) return `${assumed[1] ?? ''}:iam::${assumed[2] ?? ''}:role/${assumed[3] ?? ''}`;
+  return /^arn:aws[\w-]*:iam::\d{12}:role\/[\w+=,.@/-]+$/.test(arn) ? arn : null;
+};
+
+/** The role's name without its path, so an ARN with a path still matches the path-less one STS reports. */
+const roleTail = (arn: string): string => arn.slice(arn.lastIndexOf('/') + 1);
+
+/**
+ * Whether a token's identity ARN is one of a runner's allowed role ARNs. Both sides are reduced to a role ARN; an allowed
+ * ARN is exact, or `prefix*`. A role registered with a path also matches the path-less ARN of its assumed sessions
+ * (same account and name).
+ */
+export const roleArnMatches = (allowed: readonly string[], identityArn: string): boolean => {
+  const role = roleArnOf(identityArn);
+  if (role === null) return false;
+  return allowed.some((a) => {
+    if (claimValueMatches(a, role)) return true;
+    if (a.endsWith('*')) return false;
+    const allowedRole = roleArnOf(a);
+    if (allowedRole === null || arnAccount(allowedRole) !== arnAccount(role)) return false;
+    // An assumed-role ARN carries no path, so compare account and name when the registered ARN has one.
+    return roleTail(allowedRole) === roleTail(role) && !role.slice(role.indexOf(':role/') + 6).includes('/');
+  });
+};

@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AtfRunnerService } from '../src/app/atf-runner-service.js';
 import type { RunnerInput } from '../src/app/atf-runner-service.js';
-import { claimValueMatches, claimsMatch, validateRunner } from '../src/domain/atf-runners.js';
+import {
+  arnAccount,
+  claimValueMatches,
+  claimsMatch,
+  roleArnMatches,
+  roleArnOf,
+  validateRunner,
+} from '../src/domain/atf-runners.js';
 import type { AtfRunnerConfig } from '../src/domain/atf-runners.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
@@ -311,5 +318,27 @@ describe('the ATF runner registry', () => {
     expect((await store.transaction((tx) => tx.getAtfRunner(boardId, runner.id)))?.lastSeenAt).toBe(
       now,
     );
+  });
+});
+
+describe('role ARNs', () => {
+  const role = 'arn:aws:iam::123456789012:role/atf';
+  it('reduces an assumed-role ARN to its role and reads the account', () => {
+    expect(roleArnOf('arn:aws:sts::123456789012:assumed-role/atf/session-1')).toBe(role);
+    expect(roleArnOf(role)).toBe(role);
+    expect(roleArnOf('arn:aws:iam::123456789012:user/ann')).toBeNull();
+    expect(roleArnOf('arn:aws:sts::123456789012:federated-user/ann')).toBeNull();
+    expect(arnAccount(role)).toBe('123456789012');
+    expect(arnAccount('nope')).toBeNull();
+  });
+  it('matches exact, prefix*, and a pathed role against its path-less session ARN', () => {
+    expect(roleArnMatches([role], role)).toBe(true);
+    expect(roleArnMatches([role], 'arn:aws:sts::123456789012:assumed-role/atf/s')).toBe(true);
+    expect(roleArnMatches(['arn:aws:iam::123456789012:role/ci/atf'], 'arn:aws:sts::123456789012:assumed-role/atf/s')).toBe(true);
+    expect(roleArnMatches(['arn:aws:iam::123456789012:role/atf-*'], 'arn:aws:iam::123456789012:role/atf-dev')).toBe(true);
+    expect(roleArnMatches([role], 'arn:aws:iam::123456789012:role/other')).toBe(false);
+    expect(roleArnMatches([role], 'arn:aws:iam::210987654321:role/atf')).toBe(false);
+    expect(roleArnMatches([role], 'arn:aws:iam::123456789012:user/atf')).toBe(false);
+    expect(roleArnMatches([], role)).toBe(false);
   });
 });

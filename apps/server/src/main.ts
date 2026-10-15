@@ -35,6 +35,7 @@ import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { createRunnerAuthenticator } from './atf-auth.js';
+import { createOidcRunnerVerifier } from './atf-oidc.js';
 import { atfExecutors } from './atf-executors.js';
 import { CodeBuildAtfStarter } from './atf-starter.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
@@ -552,7 +553,15 @@ mountSkillZip(app, {
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 // ATF runners (spec, ATF runners): each identity method adds a verifier here; the board's integration token is the legacy way in.
 const atfRunners = new AtfRunnerService({ store, clock });
-const authenticateRunner = createRunnerAuthenticator({ store, tokens: integrationTokens, verifiers: [], log: logError });
+const oidcRunnerVerifier = createOidcRunnerVerifier({
+  store,
+  oidcIssuers: config.ATF_OIDC_ALLOWED_ISSUERS,
+  awsIssuers: config.ATF_AWS_ALLOWED_ISSUERS,
+  awsAccounts: config.ATF_AWS_ALLOWED_ACCOUNTS,
+  audience: config.ATF_OIDC_AUDIENCE ?? config.PUBLIC_URL,
+});
+const atfVerifiers = oidcRunnerVerifier === null ? [] : [oidcRunnerVerifier];
+const authenticateRunner = createRunnerAuthenticator({ store, tokens: integrationTokens, verifiers: atfVerifiers, log: logError });
 mountAtfSpecs(app, { testRuns, boards, authenticate: authenticateRunner, runners: atfRunners, log: logError });
 mountAtfResults(app, { testRuns, runners: atfRunners, authenticate: authenticateRunner, log: logError });
 mountAtfRunners(app, { runners: atfRunners });

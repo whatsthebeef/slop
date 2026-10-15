@@ -13,6 +13,24 @@ const list = (v: string | undefined): string[] =>
     .map((s) => s.trim())
     .filter((s) => s !== '');
 
+/** An issuer as a token names it in `iss`: an https origin or path with no credentials, query, fragment or wildcard. */
+const isIssuerUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.hash === '' &&
+      !value.includes('*') &&
+      !value.endsWith('/')
+    );
+  } catch {
+    return false;
+  }
+};
+
 const schema = z.object({
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().default('postgres://slop:slop@localhost:5432/slop'),
@@ -117,6 +135,33 @@ const schema = z.object({
     .optional()
     .transform(list)
     .refine((accounts) => accounts.every((a) => /^\d{12}$/.test(a)), 'ATF_PUSH_ALLOWED_ROLE_ACCOUNTS: 12-digit account IDs'),
+  /**
+   * OIDC issuers whose tokens may identify an ATF runner (spec, ATF runners), comma-separated exact https URLs, e.g.
+   * `https://token.actions.githubusercontent.com`. Unset: OIDC runner identity is off.
+   */
+  ATF_OIDC_ALLOWED_ISSUERS: z
+    .string()
+    .optional()
+    .transform(list)
+    .refine((issuers) => issuers.every(isIssuerUrl), 'ATF_OIDC_ALLOWED_ISSUERS: exact https URLs, no query, fragment or *'),
+  /** The audience an ATF runner's token must carry. Unset: PUBLIC_URL. */
+  ATF_OIDC_AUDIENCE: z.string().optional(),
+  /**
+   * The AWS accounts' outbound-identity-federation issuer URLs (`aws iam get-outbound-web-identity-federation-info`), exact
+   * https URLs, comma-separated. They are a separate list from ATF_OIDC_ALLOWED_ISSUERS: a token from one of these can only
+   * identify an AWS IAM runner, never an OIDC one. Unset: AWS IAM runner identity is off.
+   */
+  ATF_AWS_ALLOWED_ISSUERS: z
+    .string()
+    .optional()
+    .transform(list)
+    .refine((issuers) => issuers.every(isIssuerUrl), 'ATF_AWS_ALLOWED_ISSUERS: exact https URLs, no query, fragment or *'),
+  /** The AWS account IDs (12 digits, comma-separated) whose roles may be ATF runners. Separate from the push setting. Unset: none. */
+  ATF_AWS_ALLOWED_ACCOUNTS: z
+    .string()
+    .optional()
+    .transform(list)
+    .refine((accounts) => accounts.every((a) => /^\d{12}$/.test(a)), 'ATF_AWS_ALLOWED_ACCOUNTS: 12-digit account IDs'),
   /** Emails of the server's admins: the only people who can turn on ATF push mode or change its project or role. */
   SLOP_SERVER_ADMINS: z
     .string()
@@ -243,6 +288,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     for (const key of ['COGNITO_USER_POOL_ID', 'COGNITO_REGION', 'COGNITO_DOMAIN', 'COGNITO_CLIENT_IDS'] as const) {
       if (config[key] === undefined) throw new Error(`${key} is required when AUTH_MODE=cognito`);
     }
+  }
+  const awsIssuers = new Set(config.ATF_AWS_ALLOWED_ISSUERS);
+  if (config.ATF_OIDC_ALLOWED_ISSUERS.some((i) => awsIssuers.has(i))) {
+    throw new Error('ATF_OIDC_ALLOWED_ISSUERS and ATF_AWS_ALLOWED_ISSUERS must not share an issuer');
   }
   return config;
 };
