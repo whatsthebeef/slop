@@ -299,8 +299,7 @@ export const whoseMove = (
     );
   }
   if (glob.implementer !== null && (glob.status === 'implementing' || glob.status === 'in_progress')) {
-    if (options.complete === false) return { holder: 'idle', reason: 'Not enough facts to say', since: null };
-    // A person holds it: a local session is invisible to slop, so it is never "nobody", however long it has been quiet.
+    // A person holds it: a local session is invisible to slop, so it is never "nobody", however long it has been quiet, and missing facts can't change that (live machine steps won above).
     const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000));
     return {
       holder: 'human',
