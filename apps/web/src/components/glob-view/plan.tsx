@@ -33,7 +33,7 @@ export const PlanSection = ({ ctx }: { ctx: GlobViewContext }) => {
             role="tab"
             id={`plan-tab-${id}`}
             aria-selected={tab === id}
-            aria-controls={`${id === TEST_PLAN_TAB ? "test-plan" : "plan"}-tabpanel`}
+            aria-controls={`${id === TEST_PLAN_TAB ? 'test-plan' : 'plan'}-tabpanel`}
             className={`flex items-center gap-1 border-b-2 px-2 py-1 ${tab === id ? 'border-foreground font-semibold' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
             onClick={() => {
               setTab(id);
@@ -45,10 +45,22 @@ export const PlanSection = ({ ctx }: { ctx: GlobViewContext }) => {
           </button>
         ))}
       </div>
-      <div role="tabpanel" id="plan-tabpanel" aria-labelledby="plan-tab-plan" hidden={tab !== 'plan'}>
-        {opened.includes('plan') && <PlanEditor globId={ctx.glob.id} startExpanded={startExpanded} />}
+      <div
+        role="tabpanel"
+        id="plan-tabpanel"
+        aria-labelledby="plan-tab-plan"
+        hidden={tab !== 'plan'}
+      >
+        {opened.includes('plan') && (
+          <PlanEditor globId={ctx.glob.id} startExpanded={startExpanded} />
+        )}
       </div>
-      <div role="tabpanel" id="test-plan-tabpanel" aria-labelledby="plan-tab-test-plan" hidden={tab !== TEST_PLAN_TAB}>
+      <div
+        role="tabpanel"
+        id="test-plan-tabpanel"
+        aria-labelledby="plan-tab-test-plan"
+        hidden={tab !== TEST_PLAN_TAB}
+      >
         {opened.includes(TEST_PLAN_TAB) && (
           <DocEditor
             globId={ctx.glob.id}
@@ -58,6 +70,7 @@ export const PlanSection = ({ ctx }: { ctx: GlobViewContext }) => {
             preview={(p) => <TestPlanPreview globId={ctx.glob.id} {...p} />}
             empty={(write) => (
               <TestPlanEmpty
+                list={ctx.glob.list}
                 onWrite={write}
                 canInvestigate={canInvestigate}
                 busy={ctx.busy}
