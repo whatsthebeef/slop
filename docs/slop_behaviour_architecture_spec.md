@@ -23,9 +23,9 @@ Slop replaces a team's separate planning tool and issue tracker: it owns plannin
 
 ## Globs
 
-A glob is one unit of work on a board. It has a slop type (how the work flows) and a category (what the work is, for time tracking).
+A glob is one unit of work on a board. Code work has a slop type (how the work flows) and a category (what the work is, for time tracking); human work (decision and action globs) has a category and no type.
 
-**IDs** are `s<board><type><n>`: `s1f1` feature, `s1t1` task, `s1b1` bug, `s1h1` hotfix, `s1k1` decision glob, which a knowledge-base item is (a learning's glob; see Decision globs and the knowledge page). Each board has an atomic counter per letter; KB items are decision globs, numbered by the `k` counter, so `s1k3` is one record, the item and the glob that shows it on the board; creation is a conditional write, so a collision errors instead of overwriting. IDs are immutable: the letter reflects the category at creation, even if the category later changes. Hotfixes are deferred; the h type is reserved only.
+**IDs** are `s<board><type><n>`: `s1f1` feature, `s1t1` task, `s1b1` bug, `s1h1` hotfix, `s1k1` decision glob, which a knowledge-base item is (a learning's glob; see Decision globs and the knowledge page), `s1a1` action glob (see Action globs below). Each board has an atomic counter per letter; KB items are decision globs, numbered by the `k` counter, so `s1k3` is one record, the item and the glob that shows it on the board; creation is a conditional write, so a collision errors instead of overwriting. IDs are immutable: the letter reflects the category at creation, even if the category later changes. Hotfixes are deferred; the h type is reserved only.
 
 **Slop types**
 
@@ -33,15 +33,31 @@ A glob is one unit of work on a board. It has a slop type (how the work flows) a
 - **Same:** standard non-pairing tasks. Planned by loading the glob with context (plan.md, meeting notes, Slack threads, designs). Triggered manually unless the input says otherwise. PRs are merged by the developer once satisfied with the reviews and results. A routine can optionally implement a same (chosen at creation or pick-up).
 - **Super:** PO + developer pairing. A super made by hand (`sstor --new --super`, or `create_glob` with `type: super`) is in Doing on creation; a super that intake chose waits in Planning (no branch, run or implementer; `create_glob`'s and the REST create's `start: false`, which the web form sends when intake chose super, and the form's "Park in Planning until someone picks it up to pair" box sets) until a developer picks it up to pair, and it is never started. The developer implements and marks the glob's draft PR ready for review; sessionator maintains the glob's implementation record.
 
-**Categories:** features are RnD; tasks and bugs are maintenance.
+**Categories and families.** Globs come in two families.
+
+- **Code work:** feature, task and bug (ID letters `f`, `t`, `b`), each with a slop type (sub, same or super). Features are RnD; tasks and bugs are maintenance. A bug is never a super; every other combination is allowed (a small feature can be a sub; a sub whose diff exceeds the learned limit is still converted to a same). Sub-to-same conversion is always valid.
+- **Human work:** decision (`k`) and action (`a`). They have no type: `type` is null, and a glob cannot move between the families or between decision and action.
 
 | Category | Sub | Same | Super |
 | --- | --- | --- | --- |
 | Feature (RnD) | Yes | Yes | Yes |
 | Task (maintenance) | Yes | Yes | Yes |
 | Bug (maintenance) | Yes | Yes | No |
+| Decision | no type | no type | no type |
+| Action | no type | no type | no type |
 
-The matrix is a core invariant: bugs are never supers, and every other combination is allowed (a small feature can be a sub; a sub whose diff exceeds the learned limit is still converted to a same). Sub-to-same conversion is always valid.
+The matrix is a core invariant.
+
+**Action globs.** An action is something a person does and then marks done or dismisses (a rollout script to run, a setting in another product, an install). It is not code work: no branch, PR, run, sign-off labels or deploys. Its plan holds Why / Do this (the script path and run command) / Permissions / Check it worked. Lifecycle: open (Planning) to done (who, when and an optional note) or dismissed (a reason), both Signed Off. A relation with `until: done` holds a glob back while the action is open; both done and dismissed meet it. Any board member may act on an action; there is no reopen.
+
+| From | Who and what | To |
+| --- | --- | --- |
+| (none) | create an action (`create_glob` with category `action`, no type) | Planning |
+| Planning | `complete_action` (optional note): records the outcome and releases the globs waiting on it | Signed Off |
+| Planning | `dismiss_action` (a reason is required): the same, recorded as dismissed | Signed Off |
+| Signed Off | `complete_action` or `dismiss_action` again: nothing changes | Signed Off |
+
+**The revert test** decides where a person's work is recorded: if this glob were reverted, would the work still be needed? No: write a rollout step on this glob (a follow-up of this change that gates its sign-off). Yes, or it is about another repo or board, or it is optional setup: create an action glob instead (`create_glob` with category `action`, no type, on the right board, with a relation if this change needs it first). Never file optional setup as a blocking step.
 
 **Group** is a plain string attribute, given in the MCP message or inferred by slop from the input. Inference prefers existing group names. Names are normalised for matching; the label colour is derived from a hash of the name. A group is where a broken-up feature lives (see **Groups** below).
 
@@ -871,6 +887,8 @@ The numbers that decide what search, choices and the inbox hand to agents are pe
 - **Report:** `GET /api/boards/{b}/context-report` (members) returns, for the last 30 days: the share of retrievals by source type and by tier; the 20 most retrieved choices with the globs behind them; choices by source, new this week, replaced (applied automatically, confirmed, undone) and the cards and promoted learnings people decided; the inbox's attaches to a suggested glob against another glob, and the items kept and discarded; every setting with its value, default, bounds, learned flag and effect; and the history. The System page shows it as the Context section, with the `context_tuning` job beneath it. Choices that contradict a knowledge document are not listed: the contradiction checks run on open learnings and their result is not stored against a choice, so the report says so instead of guessing. Known limits: retrievals of knowledge items other than choices are counted by source and tier but not per item, so the half-life rule reads choices only; a retrieval with no glob (a search or chat question) says nothing about citation and is left out of that rule.
 
 ## Decision globs and the knowledge page
+
+A decision glob has no slop type: its `type` is null (existing decision globs, which were stored as `same`, were migrated to null).
 
 A **decision glob** (category `decision`, ID `s<board>k<n>` from the board's `k` counter) is the board's record of a proposed change to what the project knows or decides. A **KB item is its decision glob**: a learning an agent submits (`submit_learning`) or slop mines (mining, effect checks, escalation outcomes) is created as a decision glob in Planning under its own `k` ID, and every KB read and write goes through that one record: reads use the typed helpers in `domain/learning.ts` (and `learningWire` for the wire form agents and the Knowledge page receive), writes use the named glob operations in `app/learning-writes.ts`. There is no separate KB-item type or adapter. Inbox candidates and extracted choices a person promotes are decision globs too, with no learning behind them (a promoted choice is then something a person decides, not a choice any more). A decision is something a person decides, never a thing slop extracts (those are choices, see Choices and replacement), and it is not work: it never has a branch, PR, routine run, time report, size check, intake snapshot or merge-policy hold, and its type is always `same`.
 
