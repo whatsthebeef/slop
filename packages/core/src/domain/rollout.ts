@@ -86,6 +86,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
       const parsed = titleOf(item[2] ?? '');
       if (parsed === null) continue;
       current = { kind: parsed.kind, title: parsed.title, check: parsed.check, detail: [], script: null, fence: null };
+      if (parsed.overflow !== null) current.detail.push(parsed.overflow);
       if (parsed.unknownCheck !== null) current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
       continue;
     }
@@ -155,7 +156,23 @@ const titleOf = (text: string) => {
     else unknownCheck = suffix[1];
   }
   if (title === '') title = kind === 'script' ? 'Run the script' : 'Do this by hand';
-  return { kind, title, check, unknownCheck };
+  const cut = shortTitle(title);
+  return { kind, title: cut.title, check, unknownCheck, overflow: cut.overflow };
+};
+
+/** Longest step title kept as written, in characters; a longer one is cut and its rest moves into the detail. */
+export const ROLLOUT_TITLE_MAX = 120;
+
+/** A title over the limit is cut at its first sentence (or, with none that short, at a word) and the rest becomes detail. */
+const shortTitle = (title: string): { title: string; overflow: string | null } => {
+  if (title.length <= ROLLOUT_TITLE_MAX) return { title, overflow: null };
+  const sentence = /^(.+?)[.!?]\s+(?=\S)/.exec(title);
+  if (sentence?.[1] !== undefined && sentence[1].length <= ROLLOUT_TITLE_MAX) {
+    return { title: sentence[1], overflow: title.slice(sentence[0].length).trim() };
+  }
+  const space = title.lastIndexOf(' ', ROLLOUT_TITLE_MAX - 1);
+  const end = space > 0 ? space : ROLLOUT_TITLE_MAX - 1;
+  return { title: `${title.slice(0, end).trimEnd()}…`, overflow: title };
 };
 
 /** The lines of the Rollout section: after its heading, up to the next heading of the same or a higher level. */
@@ -224,9 +241,11 @@ export const ROLLOUT_TEXT_MAX = 300;
 export const ROLLOUT_SYSTEM = `You decide what a person must do after a change is merged and deployed, beyond the deploy itself.
 The server image deploys on merge; drizzle migrations run when the server starts; GitHub workflows take effect with the merge.
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
+A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
+Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: '**Why:** <one sentence>', '**Do this:** <where, then the exact command in a fenced block or the exact clicks>', '**Check it worked:** <what you should see>'.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
-{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <title>' item per step, detail indented under it, a script's command in a fenced block, '(check: <capability>)' at the end of a title only when told that capability exists>"}
+{"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Do this / Check it worked bullets indented under it, a script's command in a fenced block, '(check: <capability>)' at the end of a title only when told that capability exists>"}
 {"decision":"ask","question":"<one specific question a person can answer, e.g. Does SLOP_X need setting in prod? It has no default>"}
 Prefer "none" when the diff only adds settings with defaults, or only changes code the deploy ships. Use "ask" only when the diff doesn't let you tell. Never invent steps.`;
 

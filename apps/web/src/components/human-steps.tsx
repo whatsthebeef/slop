@@ -24,6 +24,7 @@ import { copyOrSelect } from '@/lib/plan-text';
 import { cn } from '@/lib/utils';
 import { HumanIcon } from './actor-icons';
 import { SectionToggle } from './section-toggle';
+import { StepDetail } from './step-detail';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 
@@ -78,7 +79,7 @@ const Step = ({ glob, step, mine, busy, actions }: { glob: GlobView; step: Liste
         <span data-testid='step-state'>{stateText(step)}</span>
         {step.check != null && step.check !== '' && <span data-testid='step-check'>checked by slop: {step.check}</span>}
       </div>
-      {step.detail != null && step.detail !== '' && <p className='whitespace-pre-wrap break-words [overflow-wrap:anywhere]'>{step.detail}</p>}
+      {step.detail != null && step.detail !== '' && <StepDetail detail={step.detail} />}
       {script !== null && (
         <div className='flex flex-wrap items-center gap-2 text-[11px]'>
           {'path' in script ? (
