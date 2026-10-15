@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
 import { api } from '@/lib/api';
+import { Block } from './glob-view/block';
 import type { GlobView, ListedHumanStep } from '@/lib/api';
 import {
   defaultStepsOpen,
@@ -376,16 +377,18 @@ export const HumanSteps = ({
   return (
     <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2' aria-label='Human steps' data-testid='human-steps'>
       {due.length > 0 && (
-        <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border-2 border-foreground p-3' data-testid='due-steps'>
-          <h3 className='text-sm font-semibold'>
-            {due.length === 1 ? 'A step needs you' : `${String(due.length)} steps need you`}
-          </h3>
+        <Block
+          tone='person'
+          actor='human'
+          testId='due-steps'
+          title={due.length === 1 ? 'A step needs you' : `${String(due.length)} steps need you`}
+        >
           <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
             {due.map((s) => (
               <DueStep key={s.id} {...stepProps(s)} />
             ))}
           </ul>
-        </div>
+        </Block>
       )}
       <div className='flex items-center gap-2'>
         <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>

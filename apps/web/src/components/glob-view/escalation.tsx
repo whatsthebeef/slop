@@ -1,5 +1,6 @@
 import { HumanIcon } from '@/components/actor-icons';
 import { Tip } from '../ui/tip';
+import { Block } from './block';
 import type { GlobViewContext } from './context';
 
 /**
@@ -31,7 +32,10 @@ const inSentence = (reason: string): string => {
   return /^[A-Z][a-z]/.test(text) ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
 };
 
-/** The escalation as one plain line ("Changed from sub to same because …", who and when), with the evidence collapsed under "Details". */
+/**
+ * The escalation as an information block: the head line says the sub became a same and why ("Changed from sub to same because
+ * …"), the why line says who and when, and the evidence is folded under Details. The reason is shown here once and not in Now.
+ */
 export const EscalationSection = ({
   ctx: { glob },
   startOpen = false,
@@ -41,18 +45,17 @@ export const EscalationSection = ({
 }) => {
   const escalation = glob.escalation;
   if (escalation == null) return null;
+  const evidence = escalation.evidence !== undefined && escalation.evidence !== '' ? escalation.evidence : null;
   return (
-    <div className="grid gap-1 text-sm" data-testid="escalation-note">
-      <span>Changed from sub to same because {inSentence(escalation.reason)}.</span>
-      <span className="text-xs text-muted-foreground">
-        By {escalation.by}, {escalation.at.slice(0, 10)}
-      </span>
-      {escalation.evidence !== undefined && escalation.evidence !== '' && (
-        <details open={startOpen || undefined}>
-          <summary className="cursor-pointer text-xs text-muted-foreground">Details</summary>
-          <p className="mt-1 whitespace-pre-line rounded border border-edge p-2 text-xs text-muted-foreground">{escalation.evidence}</p>
-        </details>
-      )}
-    </div>
+    <Block
+      tone="info"
+      actor="human"
+      testId="escalation-note"
+      title={`Changed from sub to same because ${inSentence(escalation.reason)}.`}
+      why={<span className="text-xs text-muted-foreground">By {escalation.by}, {escalation.at.slice(0, 10)}</span>}
+      fold={{ label: 'Details', open: startOpen }}
+    >
+      {evidence !== null && <p className="whitespace-pre-line text-xs text-muted-foreground">{evidence}</p>}
+    </Block>
   );
 };

@@ -9,6 +9,7 @@ import { Tip } from '@/components/ui/tip';
 import type { GlobView } from '@/lib/api';
 import { approveHold } from '@/lib/human-steps';
 import { cn } from '@/lib/utils';
+import { Block } from './glob-view/block';
 
 const LABEL_TITLES: Record<LabelName, string> = {
   FR: 'Functional review',
@@ -584,8 +585,7 @@ export const LabelReviews = ({
   const present = presentLabels(glob);
   if (present.length === 0) return null;
   return (
-    <section className="grid gap-2" aria-label="Sign-off reviews" id={`reviews-${glob.id}`}>
-      <h3 className="text-xs font-semibold text-muted-foreground">Sign-off</h3>
+    <Block tone="person" actor="human" id={`reviews-${glob.id}`} testId="label-reviews" title="Sign-off">
       {present.map((name) => (
         <LabelReview
           key={`${glob.id}-${name}`}
@@ -595,6 +595,6 @@ export const LabelReviews = ({
           open={openLabel === name}
         />
       ))}
-    </section>
+    </Block>
   );
 };
