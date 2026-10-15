@@ -30,7 +30,7 @@ const typecheck: CheckFailure = {
 class FakeHost extends FakeCodeHost {
   baseHead: { sha: string; subject: string; parent: string | null } = { sha: 'm1', subject: 's1f5: Slice 8, part 1', parent: 'm0' };
   checks: Record<string, { state: 'passed' | 'pending' | 'failed'; failure: CheckFailure | null }> = {};
-  mergeStateNow: 'passed' | 'failed' | 'pending' | 'behind' | 'conflict' = 'failed';
+  mergeStateNow: 'passed' | 'failed' | 'pending' | 'conflict' = 'failed';
   cancelled: { id: number; completedAt: string | null }[] = [];
   readonly rerequested: number[] = [];
   rerunResult: 'rerun' | 'already_rerun' | 'unavailable' = 'rerun';
@@ -39,7 +39,8 @@ class FakeHost extends FakeCodeHost {
   readonly updated: { pr: number; sha: string }[] = [];
 
   override provision = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 7, headSha: this.headSha } });
-  override mergeState = () => Promise.resolve({ sha: this.headSha, state: this.mergeStateNow });
+  behindNow = false;
+  override mergeState = () => Promise.resolve({ sha: this.headSha, state: this.mergeStateNow, behind: this.behindNow });
   override cancelledChecks = () => Promise.resolve(this.cancelled);
   override rerequestCheck = (_repo: unknown, id: number) => {
     this.rerequested.push(id);
@@ -430,5 +431,21 @@ describe('a red base branch', () => {
     await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
     await run(id, 'refresh_checks');
     expect((await current(id)).headChecks).toMatchObject({ sha: 'h1', state: 'passed' });
+  });
+
+  it('a head behind the base is recorded by its own checks, never as passed (the s15t214 sequence)', async () => {
+    host.behindNow = true;
+    try {
+      host.mergeStateNow = 'pending';
+      const id = await newOpenGlob('Behind, running');
+      await run(id, 'refresh_checks');
+      expect((await current(id)).headChecks).toBeNull();
+      host.mergeStateNow = 'failed';
+      await globs.applyEvent(id, (g, ctx) => machine.checksChanged(g, ctx));
+      await run(id, 'refresh_checks');
+      expect((await current(id)).headChecks).toMatchObject({ sha: 'h1', state: 'failed' });
+    } finally {
+      host.behindNow = false;
+    }
   });
 });
