@@ -1401,6 +1401,16 @@ describe('checks and merging (slice 2)', () => {
       expect(offered(merged, [review('post_merge')])).toBe(false);
     });
 
+    it('is not offered while merging, and is refused if called, but is offered again once back in pr_open or merged', () => {
+      const merging = glob({ status: 'merging', pr: pr('ready') });
+      expect(offered(merging, [])).toBe(false);
+      expect(m.reviewOffer(merging, [])).toBeNull();
+      expect(errorCode(m.reviewNow(merging, ctx()))).toBe('invalid_transition');
+      expect(m.reviewOffer(ready, [])).toBe('retry');
+      expect(offered(ready, [])).toBe(true);
+      expect(offered(merged, [])).toBe(true);
+    });
+
     it('does not guess the retry case without the reviews loaded', () => {
       expect(offered(ready)).toBe(false);
       expect(offered(merged)).toBe(false);

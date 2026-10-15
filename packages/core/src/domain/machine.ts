@@ -684,10 +684,14 @@ export const investigate = (glob: Glob, ctx: Context, automatic = false): Result
   return new Builder(glob, ctx).queueRun(triggeredBy, undefined, false, 'investigate').done();
 };
 
-/** Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. */
+/**
+ * Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. Not
+ * while it is merging: the change is about to land and the after-merge review runs anyway.
+ */
 export const canReviewNow = (glob: Glob): boolean =>
   glob.pr !== null &&
   glob.pr.state !== 'closed' &&
+  glob.status !== 'merging' &&
   (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
 
 /**
