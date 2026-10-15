@@ -27,7 +27,8 @@ export interface StatusLine {
     | 'behind'
     | 'ready'
     | 'rollout'
-    | 'merge-waits';
+    | 'merge-waits'
+    | 'merging';
   /** One line, cut short: the card's text. */
   readonly text: string;
   /** The whole sentence, for the glob view. */
@@ -80,14 +81,17 @@ const ALSO = {
   ready: '',
   rollout: '',
   'merge-waits': '',
+  merging: '',
 } as const;
 
 /** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
 export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer): StatusLine | null => {
   const hint = stuckHint(glob, now, glob.gateCheck);
   const checks = checksExplanation(glob);
-  const failed = glob.status === 'failed' || glob.failure !== null;
-  const failure = glob.failure;
+  const merging = glob.status === 'merging';
+  // A merge's own failure moves the glob to failed; any other failure on a merging glob predates the merge request.
+  const failure = merging && glob.failure?.kind !== 'merge' ? null : glob.failure;
+  const failed = glob.status === 'failed' || failure !== null;
   const decision = failure?.kind === 'needs_pairing' ? failure.decision?.trim() : undefined;
   // The routine stopped for a decision only a person can make: say which, not just that it failed.
   const reason =
@@ -155,8 +159,29 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       );
     }
   }
+  if (merging) {
+    const sha = glob.pr?.headSha ?? null;
+    const recorded = glob.headChecks;
+    const base = glob.conflict?.base ?? glob.behind?.base ?? 'main';
+    const short = sha === null ? 'the PR head' : sha.slice(0, 7);
+    // The head moved past the checks slop recorded: it just pushed a base merge and waits for the new head's checks.
+    const full =
+      sha !== null && recorded != null && recorded.sha !== sha
+        ? `merging · updating with ${base}`
+        : recorded == null || recorded.state === 'pending'
+          ? 'merging · checks running'
+          : 'merging';
+    candidates.push(
+      make({
+        kind: 'merging',
+        full,
+        tone: 'text-muted-foreground',
+        tip: `Merging ${short}: it merges by itself when the checks pass`,
+      }),
+    );
+  }
   if (failed && !provisioningFailed) {
-    const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(glob.failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
+    const tip = `${reason}${/^(Routine run never started|The run's session never reached slop)/.test(failure?.reason ?? '') && session !== null ? `\nSession: ${session}` : ''}`;
     candidates.push(
       make({
         kind: 'failure',
