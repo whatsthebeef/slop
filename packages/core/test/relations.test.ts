@@ -8,6 +8,7 @@ import {
   applyWrite,
   awaitedOf,
   checkRelation,
+  checkRelationShape,
   holdWords,
   isMet,
   overrideEdits,
@@ -249,6 +250,23 @@ describe('cycles', () => {
       // The limit is per gate, and a repeat of one that exists is not counted twice.
       expect(checkRelation(draft('a', 'new', 'merge'), 1, full, lookup).ok).toBe(true);
       expect(checkRelation(draft('a', 't3'), 1, full, lookup).ok).toBe(true);
+    });
+  });
+
+  describe('the shape of a relation from human work', () => {
+    const message = (result: Result<null>) => (result.ok ? null : result.error.message);
+
+    it('accepts an action waiting at its start for a code glob, and still refuses a decision as the held glob', () => {
+      const action = { id: 's1a1', category: 'action' } as const;
+      expect(checkRelationShape(action, { to: 's1t1', until: 'merged' }, { category: 'task' }).ok).toBe(true);
+      expect(checkRelationShape(action, { to: 's1a2', until: 'done' }, { category: 'action' }).ok).toBe(true);
+      expect(message(checkRelationShape({ id: 's1k1', category: 'decision' }, { to: 's1t1', until: 'merged' }, { category: 'task' }))).toContain('is a decision');
+      expect(message(checkRelationShape(action, { to: 's1t1', until: 'merged', gate: 'sign_off' }, { category: 'task' }))).toContain('only wait before it is done');
+    });
+
+    it('still checks the cycle for an action: a glob that waits for the action can not be waited for by it', () => {
+      const lookup = () => ({ boardId: 1 });
+      expect(message(checkRelation({ ...draft('s1a1', 's1t1') }, 1, [rel('s1t1', 's1a1')], lookup))).toContain('cycle');
     });
   });
 });

@@ -8,6 +8,7 @@ export * from './domain/matrix.js';
 export * from './domain/attributes.js';
 export * from './domain/payload.js';
 export * from './domain/action-glob.js';
+export * from './domain/action-script.js';
 export * from './domain/decision-glob.js';
 export * from './domain/suggestion.js';
 export * from './domain/investigation.js';

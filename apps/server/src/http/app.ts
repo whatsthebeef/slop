@@ -553,6 +553,8 @@ export const createApp = (deps: AppDeps) => {
     const oversized = await globs.oversizedOf(boardId);
     const dismissed = await globs.dismissedKeysOf(email, boardId);
     const gateCheck = await globs.gateCheckOf(boardId);
+    // Open actions that run a script: whether the base branch has it (cached), so the list's Done agrees with the glob's own read.
+    const scripts = await globs.scriptChecksOf(boardId);
     const now = new Date().toISOString();
     const viewer = { email, role: membership.value.role };
     const thresholds = stallThresholds(membership.value.board);
@@ -560,7 +562,7 @@ export const createApp = (deps: AppDeps) => {
     const recommending = result.ok ? await globs.recommendationEffectsOf(result.value.map((r) => r.glob)) : new Map<string, PendingEffect[]>();
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, relations, holding }) => {
-        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id));
+        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id), scripts.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
         const facts = machineSteps(glob, { effects: recommending.get(glob.id) ?? [] });
