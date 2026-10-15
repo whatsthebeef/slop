@@ -209,6 +209,7 @@ describe('card moves (s15f88)', () => {
       return {
         action,
         direction: 'right',
+        confirm: false,
         label: `${label} ▸`,
         description: `${label} ${g.id}: ${tip}`,
         icon,

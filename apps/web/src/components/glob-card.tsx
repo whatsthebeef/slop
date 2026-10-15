@@ -3,7 +3,6 @@ import type { Action, DeployIndicator, EnvironmentIndicator, HumanStepViewer } f
 import { Bug, Loader2, Rocket, Scale, UserRound } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { ActorIcon, HumanIcon, MachineIcon } from '@/components/actor-icons';
-import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView, ListedHumanStep } from '@/lib/api';
@@ -15,8 +14,9 @@ import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
-import { CONFIRM_MS, clickTip, prUrl, tipLines, turnStep } from '@/lib/chip-actions';
+import { clickTip, prUrl, tipLines, turnStep } from '@/lib/chip-actions';
 import type { ChipClick } from '@/lib/chip-actions';
+import { useConfirmClick } from '@/lib/use-confirm-click';
 import { cardTargets } from '@/lib/card-targets';
 import type { GlobTarget } from '@/lib/glob-section';
 import { stripMarkdown } from '@/lib/markdown-text';
@@ -200,12 +200,8 @@ const CornerStatusView = ({
   onOpenSection: (target: GlobTarget) => void;
 }) => {
   const click = status.click;
-  const [confirming, setConfirming] = useState(false);
-  useEffect(() => {
-    if (!confirming) return;
-    const timer = setTimeout(() => setConfirming(false), CONFIRM_MS);
-    return () => clearTimeout(timer);
-  }, [confirming]);
+  const confirm = useConfirmClick();
+  const confirming = confirm.confirming;
   // Merge and Done are run from here: a chip button, with Merge asking for a second click (Esc, blur or the timeout reverts it).
   if (status.kind === 'ready' && click?.kind === 'act') {
     const busy = pending !== undefined;
@@ -227,18 +223,11 @@ const CornerStatusView = ({
             onClick={(e) => {
               e.stopPropagation();
               if (busy) return;
-              if (turnStep(click, confirming) === 'confirm') {
-                setConfirming(true);
-                return;
-              }
-              setConfirming(false);
+              if (!confirm.click(turnStep(click, confirming) === 'confirm')) return;
               (onAct ?? (() => undefined))(click.action);
             }}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Escape') setConfirming(false);
-            }}
-            onBlur={() => setConfirming(false)}
+            onKeyDown={confirm.onKeyDown}
+            onBlur={confirm.cancel}
           >
             <span className='truncate' data-testid='status-text'>
               {label}
@@ -379,33 +368,45 @@ const MoveButton = ({
   disabled: boolean;
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
-}) => (
-  <Tip text={move.description}>
+}) => {
+  const confirm = useConfirmClick();
+  const inPlace = move.direction === 'none';
+  const confirming = move.confirm && confirm.confirming;
+  const tip = confirming ? `${move.description}. Click again to start a conflict-fix run` : move.description;
+  return (
+  <Tip text={tip}>
   <button
     type='button'
     className={cn(
       'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
-      hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
+      confirming ? 'border-current bg-card text-required' : hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
       'disabled:pointer-events-none disabled:opacity-50',
     )}
-    aria-label={move.description}
+    aria-label={tip}
     disabled={disabled}
     data-testid={`move-${move.action}`}
-    onMouseEnter={() => onPreview(move)}
-    onMouseLeave={() => onPreview(null)}
-    onFocus={() => onPreview(move)}
-    onBlur={() => onPreview(null)}
+    data-confirming={confirming ? 'true' : undefined}
+    // An in-place move has no ghost piece to preview.
+    onMouseEnter={() => !inPlace && onPreview(move)}
+    onMouseLeave={() => !inPlace && onPreview(null)}
+    onFocus={() => !inPlace && onPreview(move)}
+    onBlur={() => {
+      confirm.cancel();
+      if (!inPlace) onPreview(null);
+    }}
     onClick={(e) => {
       e.stopPropagation();
+      if (!confirm.click(move.confirm)) return;
       onMove(move);
     }}
-    onKeyDown={(e) => e.stopPropagation()}
+    onKeyDown={confirm.onKeyDown}
   >
     <ActorIcon actor={move.icon} className='h-3 w-3' decorative />
-    {move.label}
+    {confirming ? `Confirm ${move.label.toLowerCase()}` : move.label}
   </button>
   </Tip>
-);
+  );
+};
 
 /** The glob's deploy state on its card: deploying, live, failed, or replaced by another glob. */
 export const DeployChip = ({ deploy, onOpen }: { deploy: DeployIndicator; onOpen?: () => void }) => {
@@ -648,7 +649,8 @@ export const GlobCard = ({
   const blocked = hasBlocker(glob, now, viewer);
   const armStep = human ? null : needsRelease(glob.humanSteps ?? []);
   // The board hands over the glob's card moves (the one common action); a blocker hides them all.
-  const shown = blocked ? [] : moves;
+  // A blocker hides the moves, but not one that runs in place: Fix conflict is the answer to a conflict, which is itself a blocker.
+  const shown = blocked ? moves.filter((m) => m.direction === 'none') : moves;
 
   return (
     <div
@@ -759,7 +761,7 @@ export const GlobCard = ({
                   move={move}
                   hot={move.action === previewing}
                   disabled={pending !== undefined}
-                  primary={mainAction(all.map((m) => m.action), glob, human) === move.action}
+                  primary={move.direction === 'none' || mainAction(all.map((m) => m.action), glob, human) === move.action}
                   onPreview={onPreview}
                   onMove={onMove}
                 />
