@@ -107,7 +107,7 @@ describe('The learned size check in Postgres', () => {
   it('stores the estimate, evidence and proposed workstreams with the glob, and does not hold a flagged sub', async () => {
     const sub = await create('sub', BIG);
     expect(sub.status).toBe('implementing');
-    expect(sub.type).toBe('same');
+    expect(sub.type).toBe('sub');
     const check = await store.transaction((tx) => tx.getSizeCheck(sub.id));
     expect(check).toMatchObject({ flagged: true, decision: null, threshold: { maxTasks: 5, maxParts: 3, minParallel: 2 } });
     expect(check?.estimate).toMatchObject({ tasks: 6, independentParts: 4, partsSource: 'model' });
