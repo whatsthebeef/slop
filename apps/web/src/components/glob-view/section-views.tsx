@@ -22,6 +22,7 @@ import { EnvironmentsPanel } from './environments';
 import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
+import { ProblemSection } from './problem';
 import { RelatedSection } from './related';
 import { SizeSection } from './size';
 import type { OversizedState } from '../oversized-glob';
@@ -65,6 +66,7 @@ type SectionView = (props: SectionProps) => ReactNode;
 /** How each section renders, keyed by its `data-section` id. The order lives in `sections.ts`. */
 export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   conflict: ({ ctx }) => <ConflictSection ctx={ctx} />,
+  problem: ({ ctx, nowState, actions }) => <ProblemSection ctx={ctx} state={nowState} actions={actions} />,
   escalation: ({ ctx, section }) => (
     <EscalationSection ctx={ctx} startOpen={section === 'escalation'} />
   ),

@@ -2,17 +2,20 @@ import type { GlobSection } from '@/lib/glob-section';
 
 /**
  * The sections of the glob view in the order they are rendered, by their `data-section` id
- * (the ids `?section=` deep links use). A new section is a new file plus one entry here.
+ * (the ids `?section=` deep links use). A new section is a new file plus one entry here. Above the actions the blocks come
+ * in one order: problems (conflict, problem), then what needs a person (decision, labels, the due Human steps), then
+ * information (escalation, size).
  */
 export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
   'conflict',
-  'escalation',
+  'problem',
+  'decision',
   'labels',
+  'escalation',
   'size',
   'actions',
   'action',
   'plan',
-  'decision',
   'deploys',
   'environments',
   'tests',
@@ -25,16 +28,17 @@ export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
 ];
 
 /**
- * A decision glob's order: the Decide block first (the way work globs lead with sign-off), the Human steps after the
- * assessments.
+ * A decision glob's order: the same blocks as a work glob (problems, then the Decide block and labels, then information), Holds
+ * back just above the actions, and the Human steps after the assessments.
  */
 export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
-  'decision',
   'conflict',
-  'escalation',
+  'problem',
+  'decision',
   'labels',
-  'related',
+  'escalation',
   'size',
+  'related',
   'actions',
   'plan',
   'deploys',
@@ -65,13 +69,14 @@ export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
 ];
 
 /**
- * The order the glob view renders: while a step is due, the Human steps move to the top, like the Decide and review blocks
- * (after the conflict and escalation notices; a decision glob keeps its Decide block first). Otherwise the fixed order above.
+ * The order the glob view renders: while a step is due, the Human steps move up with the other blocks that need a person,
+ * after the Decide and review blocks and before the information blocks (a learning: right after its Decide block). Otherwise
+ * the fixed order above.
  */
 export const viewSections = (decision: boolean, stepsDue: boolean, learning = false): readonly GlobSection[] => {
   const base = learning ? LEARNING_VIEW_SECTIONS : decision ? DECISION_VIEW_SECTIONS : GLOB_VIEW_SECTIONS;
   if (!stepsDue) return base;
   const rest = base.filter((name) => name !== 'human-steps');
-  const at = rest.indexOf(decision || learning ? 'decision' : 'escalation') + 1;
+  const at = learning ? rest.indexOf('decision') + 1 : rest.indexOf('escalation');
   return [...rest.slice(0, at), 'human-steps', ...rest.slice(at)];
 };

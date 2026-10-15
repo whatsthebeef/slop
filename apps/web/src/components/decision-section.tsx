@@ -380,7 +380,7 @@ const ReplacementCard = ({ board, glob, attributes }: { board: BoardView; glob: 
   const deciders = board.role === 'admin' || board.role === 'po';
   const outcome = attributes.outcome;
   return (
-    <section className='grid gap-3 rounded border border-edge p-3' data-testid='decision-section'>
+    <section className='grid gap-3' data-testid='decision-section'>
       <div className='flex flex-wrap items-center gap-2 text-xs'>
         <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
           Applies to {scopeLabel(attributes.scope)}
@@ -532,7 +532,7 @@ export const DecisionSection = ({
           )}
         </p>
       )}
-      <div className='grid gap-3 rounded border border-edge p-3' data-testid='proposal-block'>
+      <div className='grid gap-3' data-testid='proposal-block'>
         {(hotspotPath !== null || conflicts.length > 0) && (
           <div className='flex flex-wrap items-center gap-2 text-xs'>
             {hotspotPath !== null && (

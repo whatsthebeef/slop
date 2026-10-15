@@ -34,6 +34,14 @@ const show = (humanSteps: ListedHumanStep[], handlers = { onComplete: vi.fn(() =
 };
 
 describe('due steps block', () => {
+  it('is a needs-a-person block of the shared family: head with the count, the steps as its body, no Markdown', () => {
+    show([step({ id: 'a', state: 'due', detail: 'Do this: **run** it' })]);
+    const block = screen.getByTestId('due-steps');
+    expect(block.getAttribute('data-block')).toBe('person');
+    expect(block.querySelector('[data-testid="block-head"]')?.textContent).toBe('A step needs you');
+    expect(block.querySelector('[data-testid="block-body"] [data-testid="due-step"]')).not.toBeNull();
+  });
+
   it('renders each due step as a card with its text, who, script command, Done and Dismiss', async () => {
     const detail = 'Why: the host needs it\nDo this: run the script\nPermissions: admin\nCheck it worked: it prints ok';
     const h = show([step({ id: 'a', state: 'due', detail, script: { path: 'scripts/x.sh' } }), step({ id: 'b', state: 'due' })]);
@@ -124,10 +132,14 @@ describe('due steps block', () => {
 describe('where the steps sit in the glob view', () => {
   it('moves Human steps to the top while a step is due, so a deep link lands on the block', () => {
     const order = viewSections(false, true);
-    expect(order.indexOf('human-steps')).toBe(order.indexOf('escalation') + 1);
-    expect(order.indexOf('human-steps')).toBeLessThan(order.indexOf('labels'));
+    // With the other blocks that need a person (after the labels), before the information blocks.
+    expect(order.indexOf('human-steps')).toBe(order.indexOf('escalation') - 1);
+    expect(order.indexOf('human-steps')).toBeGreaterThan(order.indexOf('labels'));
+    expect(order.indexOf('human-steps')).toBeLessThan(order.indexOf('actions'));
     expect(new Set(order).size).toBe(order.length);
-    expect(viewSections(true, true)[1]).toBe('human-steps');
+    const decision = viewSections(true, true);
+    expect(decision.indexOf('human-steps')).toBeGreaterThan(decision.indexOf('decision'));
+    expect(decision.indexOf('human-steps')).toBe(decision.indexOf('escalation') - 1);
   });
 
   it('keeps the usual place when nothing is due', () => {
