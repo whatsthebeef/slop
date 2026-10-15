@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { Link } from 'react-router';
 import { KeepAsLearning, inPipeline, PIPELINE_POLL_MS, WatchSignal, watching } from '@/components/decision-learning';
-import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
@@ -15,9 +14,9 @@ import { api } from '@/lib/api';
 import type { BoardView, DecideInput, GlobView } from '@/lib/api';
 import { adminOnlyReason, approveBlockedText, approveLabel, conflictNote, headerMenu, submitLabel, watchMode } from '@/lib/decide-flow';
 import type { Choice, FlowMode, MenuEntry, MenuKey } from '@/lib/decide-flow';
-import { artifactKey, globDiffKey } from '@/lib/live';
+import { globDiffKey } from '@/lib/live';
 import { boardGlobHref } from '@/lib/glob-section';
-import { APPLY_HINT_TEXT, applyPrefill, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
+import { applyPrefill, recommendedLabel, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 
 /** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */
 export const isLearning = (attributes: DecisionAttributes): boolean => attributes.origin.kind === 'submitted' || attributes.origin.kind === 'mined';
@@ -153,7 +152,10 @@ export const useDecideFlow = ({
   const asking = suggest.busy || suggest.state === 'working';
   const run = (key: MenuKey) => {
     if (key === 'suggest') suggest.ask();
-    else pick(key);
+    else if (key === 'accept_with_edits' && canSuggest && suggest.state === 'ready' && suggest.prefill?.outcome === 'accept_with_edits') {
+      setApplied(suggest.prefill);
+      setMode(key);
+    } else pick(key);
   };
   const menu = headerMenu({ canDecide, canSuggest, canKeep: admin && hasItem && learning?.status === 'open' && !isDocument, hasItem, adminOnly }).map(
     (entry): FlowMenuItem => ({ ...entry, disabled: entry.key === 'suggest' && asking ? 'The model is already being asked' : entry.disabled, run: () => run(entry.key) }),
@@ -309,50 +311,39 @@ const OutcomeForm = ({ flow, choice }: { flow: DecideFlow; choice: Choice }) => 
   );
 };
 
-/** The latest assessment and suggestion, read before deciding. */
-export const LatestAssessment = ({ glob, suggest, canSuggest }: { glob: GlobView; suggest: Suggest; canSuggest: boolean }) => {
-  const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
-  const versions = useQuery({
-    queryKey: artifactKey(glob.id, 'assessment', ''),
-    queryFn: () => api.artifactVersions(glob.id, 'assessment', ''),
-    enabled: has,
-  });
-  const latest = versions.data?.at(-1);
+/** Slop's recommendation, one line: what it recommends and why. The rule-based assessments and older suggestions are not repeated here. */
+export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Suggest }) => {
   const { state, stored } = suggest;
   const text = stored?.editedDraft ?? stored?.mergedText ?? null;
   return (
-    <div className='grid gap-2' data-testid='assessment'>
-      {latest !== undefined && (
-        <div className='rounded border p-3'>
-          <CollapsibleMarkdown content={latest.content} />
-        </div>
-      )}
-      {latest === undefined && has && <p className='text-sm text-muted-foreground'>Loading…</p>}
-      {canSuggest && state === 'working' && (
+    <div className='grid gap-1' data-testid='recommendation'>
+      {state === 'working' && (
         <p className='text-xs text-muted-foreground' data-testid='suggest-working'>
-          {suggest.error === null ? 'Asking the model…' : suggest.error}
+          {suggest.error === null ? 'Getting a recommendation…' : suggest.error}
         </p>
       )}
-      {suggest.failed && <p className='text-xs text-red'>Could not ask for a suggestion.</p>}
-      {canSuggest && stored !== undefined && (
-        <div className='grid gap-2 rounded border border-edge p-3' data-testid='suggestion'>
-          <div className='flex flex-wrap items-center gap-2'>
-            <span className='rounded bg-muted px-2 py-0.5 text-xs font-medium'>{SUGGESTION_ACTION_TEXT[stored.action]}</span>
-            {state === 'stale' && (
-              <span className='rounded bg-amber-500/15 px-1.5 text-xs text-amber-800 dark:text-amber-200' data-testid='suggestion-stale'>
-                Stale: the draft or its target changed since; suggest again
-              </span>
-            )}
+      {suggest.failed && <p className='text-xs text-red'>Could not get a recommendation.</p>}
+      {stored !== undefined && (
+        <div className='grid gap-1 text-sm' data-testid='suggestion'>
+          <p className='whitespace-pre-wrap break-words'>
+            <span className='font-medium'>Recommends: {SUGGESTION_ACTION_TEXT[stored.action]}.</span> {stored.reason}
             {stored.mergeInto !== null && (
-              <Link className='font-mono text-xs underline' to={boardGlobHref(glob.boardId, stored.mergeInto, { section: 'decision' })}>
-                {stored.mergeInto}
-              </Link>
+              <>
+                {' '}
+                <Link className='font-mono text-xs underline' to={boardGlobHref(glob.boardId, stored.mergeInto, { section: 'decision' })}>
+                  {stored.mergeInto}
+                </Link>
+              </>
             )}
-          </div>
-          <p className='whitespace-pre-wrap break-words text-sm'>{stored.reason}</p>
+          </p>
+          {state === 'stale' && (
+            <span className='w-fit rounded bg-amber-500/15 px-1.5 text-xs text-amber-800 dark:text-amber-200' data-testid='suggestion-stale'>
+              Stale: the draft or its target changed since; get a new recommendation
+            </span>
+          )}
           {text !== null && (
             <details className='text-xs'>
-              <summary className='cursor-pointer text-muted-foreground'>{stored.action === 'merge_into' ? 'Combined text for the other learning' : 'Edited text'}</summary>
+              <summary className='cursor-pointer text-muted-foreground'>{stored.action === 'merge_into' ? 'Combined text for the other learning' : 'Suggested wording'}</summary>
               <pre className='mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono'>{text}</pre>
             </details>
           )}
@@ -363,8 +354,8 @@ export const LatestAssessment = ({ glob, suggest, canSuggest }: { glob: GlobView
 };
 
 /**
- * The outcome controls at the foot of the proposal block: Approve (what it approves), Reject… and the other outcomes in
- * the ▾, the chosen outcome's form beneath, and Suggest's Apply. The same flow drives the header's Approve change.
+ * The outcome controls at the foot of the proposal block: one primary button (the recommended outcome, else Approve), the
+ * other outcomes in the ▾ and the chosen outcome's form beneath. The block holds the learning's only Approve.
  */
 export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
   const { mode, approve, glob, attributes, busy, input, suggest } = flow;
@@ -372,21 +363,23 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
   // Both accept modes carry the admin-only check (a PO can reach accept-with-edits through Apply suggestion); the other outcomes need only decide.
   const acceptMode = outcomeMode === null || outcomeMode === 'accept' || outcomeMode === 'accept_with_edits';
   const blocked = acceptMode ? approve.blocked : flow.canDecide ? null : "You can't decide this";
-  const mainLabel = outcomeMode === null ? approve.label : submitLabel(outcomeMode, approve.label);
+  // The primary button is the recommended outcome; an approval is just the default.
+  const recommended = outcomeMode === null && flow.applySuggestion !== null && suggest.stored !== undefined && suggest.stored.action !== 'approve';
+  const mainLabel =
+    outcomeMode !== null ? submitLabel(outcomeMode, approve.label) : recommended ? recommendedLabel(suggest.stored, approve.label) : approve.label;
   const mainOff = busy || blocked !== null || (outcomeMode !== null && input === null);
   const note = conflictNote(attributes.conflictsWith ?? []);
-  const merge = suggest.stored?.action === 'merge_into';
   return (
     <div className='grid gap-2' data-testid='outcomes'>
       <div className='flex flex-wrap items-center gap-2' role='group' aria-label='Outcome'>
         <div className='flex'>
-          <Tip text={blocked ?? approve.tip}>
+          <Tip text={blocked ?? (outcomeMode === 'accept_with_edits' ? 'Saves your wording and approves the change' : approve.tip)}>
             <Button
               size='sm'
               className='rounded-r-none'
               disabled={mainOff}
               data-testid={`outcome-${outcomeMode ?? 'accept'}`}
-              onClick={() => (outcomeMode === null || mode === 'keep' ? approve.run() : flow.submit())}
+              onClick={() => (recommended ? flow.applySuggestion() : outcomeMode === null || mode === 'keep' ? approve.run() : flow.submit())}
             >
               {mainLabel}
             </Button>
@@ -414,12 +407,10 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
             Cancel
           </Button>
         )}
-        {flow.applySuggestion !== null && (
-          <Tip text={APPLY_HINT_TEXT}>
-            <Button size='sm' variant='outline' disabled={busy} data-testid='apply-suggestion' onClick={flow.applySuggestion}>
-              {merge ? `Apply: reject, merged into ${suggest.stored?.mergeInto ?? 'another learning'}` : 'Apply suggestion'}
-            </Button>
-          </Tip>
+        {blocked !== null && (
+          <span className='text-xs text-muted-foreground' data-testid='approve-blocked'>
+            {blocked}
+          </span>
         )}
         {note !== null && (
           <span className='text-xs text-amber-800 dark:text-amber-200' data-testid='conflict-note'>

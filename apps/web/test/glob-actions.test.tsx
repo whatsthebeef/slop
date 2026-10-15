@@ -513,21 +513,21 @@ describe('glob view: a decision in Doing', () => {
       ...patch,
     });
 
-  it('has an Approve change main button that opens the approval in the block', async () => {
+  it('has no header action: the block holds the one Approve change, which opens the approval', async () => {
     const user = userEvent.setup();
     const cb = renderGlob(decision());
-    const main = screen.getByTestId('main-action');
-    expect(main.textContent).toContain('Approve change');
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
     expect(screen.queryByText('Decide')).toBeNull();
-    await screen.findByTestId('outcomes');
-    await user.click(main);
+    const outcomes = await screen.findByTestId('outcomes');
+    await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
     expect(await screen.findByTestId('outcome-form-accept')).toBeTruthy();
     // Opening the form decides nothing; it never calls the server by itself.
     expect(cb.onAction).not.toHaveBeenCalled();
     expect(cb.onDecide).not.toHaveBeenCalled();
   });
 
-  it('lists Reject…, keeping the statement and Suggest again in the ▾ for an admin', async () => {
+  it('lists Reject…, approve with edits, keeping the statement and a new recommendation in the block ▾ for an admin', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'globDiff').mockResolvedValue({
       target: null,
@@ -537,22 +537,22 @@ describe('glob view: a decision in Doing', () => {
       learning: { status: 'open', processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
     });
     renderGlob(decision(), { ...board, role: 'admin' });
-    await user.click(await screen.findByTestId('more-actions'));
-    const menu = await screen.findByTestId('more-menu');
+    await user.click(await screen.findByTestId('more-outcomes'));
+    const menu = await screen.findByTestId('outcomes-menu');
     await waitFor(() => expect(within(menu).getByText('Approve without changing a document')).toBeTruthy());
     expect(within(menu).getByText('Reject…')).toBeTruthy();
-    expect(within(menu).getByText('Suggest again')).toBeTruthy();
+    expect(within(menu).getByText('Get a new recommendation')).toBeTruthy();
     // Nothing the old Decide panel offered is lost.
-    expect(within(menu).getByText('Accept with edits')).toBeTruthy();
+    expect(within(menu).getByText('Approve with edits…')).toBeTruthy();
     expect(within(menu).getByText('Retarget')).toBeTruthy();
     expect(within(menu).getByText('Needs work')).toBeTruthy();
   });
 
-  it('opens the reject reason in the block from the header menu', async () => {
+  it('opens the reject reason in the block from its menu', async () => {
     const user = userEvent.setup();
     renderGlob(decision());
-    await user.click(await screen.findByTestId('more-actions'));
-    await user.click(await screen.findByTestId('more-flow-reject'));
+    await user.click(await screen.findByTestId('more-outcomes'));
+    await user.click(await screen.findByTestId('outcome-reject'));
     expect(await screen.findByTestId('outcome-form-reject')).toBeTruthy();
   });
 

@@ -1,6 +1,7 @@
 import { decisionOf } from '@slop/core';
 import { useState } from 'react';
 import type { AddRelationInput } from '@/lib/api';
+import { isLearning } from '../decision-outcomes';
 import { DecisionAssessment, DecisionSection as DecisionBody } from '../decision-section';
 import type { GlobViewContext } from './context';
 import { AddRelationForm, RelationsHeader, relatedGroups, Row } from './related';
@@ -17,10 +18,10 @@ export const DecisionPanel = ({ ctx }: { ctx: GlobViewContext }) =>
     />
   );
 
-/** The older assessments of a decision glob that is not a replacement; the latest is in the Decide block. */
+/** The older assessments of a decision glob that is neither a replacement nor a learning (a learning's sit at the foot of its block). */
 export const DecisionAssessmentPanel = ({ ctx }: { ctx: GlobViewContext }) => {
   const decision = decisionOf(ctx.glob);
-  return decision !== null && decision.origin.kind !== 'replacement' ? (
+  return decision !== null && decision.origin.kind !== 'replacement' && !isLearning(decision) ? (
     <DecisionAssessment glob={ctx.glob} />
   ) : null;
 };

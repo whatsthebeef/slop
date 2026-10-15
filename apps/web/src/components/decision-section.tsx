@@ -5,14 +5,14 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { DiffView } from '@/components/diff-view';
 import { DocumentProposal, EffectCheckView, inPipeline, PIPELINE_POLL_MS, ProcessingState, SignalFigures, StaleNote } from '@/components/decision-learning';
-import { isLearning, LatestAssessment, Outcomes } from '@/components/decision-outcomes';
+import { isLearning, Outcomes, Recommendation } from '@/components/decision-outcomes';
 import type { DecideFlow } from '@/components/decision-outcomes';
 import { CollapsibleMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { BoardView, GlobChanges, GlobView } from '@/lib/api';
-import { personOnlyNotice } from '@/lib/decide-flow';
+import { changeHeading, SCOPE_EXPLAINED, scopeMatters } from '@/lib/decide-flow';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
@@ -28,17 +28,10 @@ export const OUTCOME_TEXT: Record<DecisionOutcomeKind, string> = {
   closed: 'Closed by the pipeline',
 };
 
-const SCOPE_TEXT: Record<ScopeKind, string> = {
-  glob: 'One glob',
-  future_work: 'Future work',
-  area_group: 'A group',
-  project: 'The whole project',
-};
-
 /** What the scope's reference means for each kind: null when the kind takes none. */
 const REF_HINT: Record<ScopeKind, string | null> = {
   glob: 'Glob ID, e.g. s15t7',
-  future_work: 'Group (optional)',
+  future_work: 'Only this group (blank: all groups)',
   area_group: 'Group name',
   project: null,
 };
@@ -86,7 +79,7 @@ const ScopeEditor = ({
     <div className='grid gap-2' data-testid='scope-editor'>
       <div className='grid grid-cols-[auto_1fr_auto] items-end gap-2'>
         <Label>
-          Scope
+          Applies to
           <Select
             value={kind}
             data-testid='scope-kind'
@@ -97,7 +90,7 @@ const ScopeEditor = ({
           >
             {SCOPE_KINDS.map((k) => (
               <option key={k} value={k}>
-                {SCOPE_TEXT[k]}
+                {SCOPE_EXPLAINED[k]}
               </option>
             ))}
           </Select>
@@ -122,20 +115,19 @@ const ScopeEditor = ({
   );
 };
 
-/** The proposed change: its target and the diff of what accepting it would do to it. */
+/** The proposed change: headed by its target in words, then the diff of what approving it would do. */
 const ProposedChange = ({ globId }: { globId: string }) => {
   const diff = useQuery({ queryKey: globDiffKey(globId), queryFn: () => api.globDiff(globId) });
   if (diff.isError) return <p className='text-sm text-red'>Could not load the proposed change.</p>;
   if (diff.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the proposed change…</p>;
   const { target, preview } = diff.data;
+  const heading = changeHeading(target, preview !== null && preview.diff.every((l) => l.op !== 'removed'));
   return (
     <div className='grid gap-1' data-testid='proposed-change'>
-      <h3 className='text-xs font-semibold text-muted-foreground'>What approving changes</h3>
-      {target !== null && (
-        <p className='text-xs text-muted-foreground'>
-          Target: <span className='font-mono'>{target.kind}:{target.name}</span>
-          {target.section !== null && <> · section “{target.section}”</>}
-        </p>
+      {heading !== null && (
+        <h3 className='text-xs font-semibold text-muted-foreground' data-testid='change-heading'>
+          {heading}
+        </h3>
       )}
       {preview === null ? (
         <p className='text-sm text-muted-foreground' data-testid='no-change'>
@@ -161,7 +153,72 @@ const ProposedChange = ({ globId }: { globId: string }) => {
   );
 };
 
-/** Older assessments, newest first, collapsed: the latest lives in the Decide block. */
+/** Why the change: the proposal text (the full statement, which the title only abbreviates) and a one-line summary of the evidence, right above the change. */
+const Why = ({ glob, attributes }: { glob: GlobView; attributes: DecisionAttributes }) => {
+  const plan = useQuery({ queryKey: ['plan', glob.id], queryFn: () => api.plan(glob.id) });
+  const text = (plan.data?.current?.content ?? '').trim();
+  const sources = attributes.sourceGlobs ?? [];
+  const seen = attributes.evidenceCount ?? 0;
+  return (
+    <div className='grid gap-1' data-testid='why'>
+      <h3 className='text-xs font-semibold text-muted-foreground'>Why</h3>
+      {plan.isPending ? null : text === '' ? (
+        <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
+          {glob.title}
+        </p>
+      ) : (
+        <CollapsibleMarkdown content={text} />
+      )}
+      {(seen > 0 || sources.length > 0) && (
+        <p className='text-xs text-muted-foreground' data-testid='evidence-summary'>
+          {seen > 0 && `Seen ${String(seen)} time${seen === 1 ? '' : 's'}`}
+          {sources.length > 0 && (
+            <>
+              {seen > 0 ? ' on ' : 'On '}
+              {sources.length} glob{sources.length === 1 ? '' : 's'}:{' '}
+              {sources.map((id, i) => (
+                <span key={id}>
+                  {i > 0 && ', '}
+                  <Link className='font-mono underline' to={boardGlobHref(glob.boardId, id)}>
+                    {id}
+                  </Link>
+                </span>
+              ))}
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
+};
+
+/** One quiet line under the buttons: what the decision applies to, with a "change" link that opens the explained options. */
+const AppliesTo = ({
+  glob,
+  attributes,
+  busy,
+  onUpdate,
+}: {
+  glob: GlobView;
+  attributes: DecisionAttributes;
+  busy: boolean;
+  onUpdate: (changes: GlobChanges) => Promise<EditFailure | null>;
+}) => {
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className='grid gap-2 text-xs text-muted-foreground' data-testid='applies-to'>
+      <p>
+        <span data-testid='decision-scope'>Applies to: {scopeLabel(attributes.scope)}</span>{' '}
+        <button type='button' className='underline' data-testid='change-scope' onClick={() => setEditing(!editing)}>
+          {editing ? 'done' : 'change'}
+        </button>
+      </p>
+      {editing && <ScopeEditor glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
+    </div>
+  );
+};
+
+/** Earlier recommendations, newest first, collapsed at the foot of the block; the latest is the block's recommendation. */
 export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
   const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
   const versions = useQuery({
@@ -173,7 +230,7 @@ export const DecisionAssessment = ({ glob }: { glob: GlobView }) => {
   if (older.length === 0) return null;
   return (
     <details className='grid gap-2' data-testid='assessment-history'>
-      <summary className='cursor-pointer text-xs font-semibold text-muted-foreground'>Earlier assessments ({older.length})</summary>
+      <summary className='cursor-pointer text-xs font-semibold text-muted-foreground'>Earlier recommendations ({older.length})</summary>
       <div className='mt-2 grid gap-2'>
         {older.map((v) => (
           <div key={v.version} className='rounded border p-3'>
@@ -312,7 +369,6 @@ const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attribu
       <p className='text-muted-foreground'>
         {attributes.kind ?? 'learning'}
         {target === null ? '' : ` → ${target}`}
-        {attributes.evidenceCount === undefined ? '' : ` · ${String(attributes.evidenceCount)} occurrence(s)`}
         {attributes.stale?.since != null ? ' · flagged stale' : ''}
       </p>
       {closed !== null && <p data-testid='learning-closed'>{closed}{deciders ? '. An admin can reopen it.' : '.'}</p>}
@@ -329,7 +385,6 @@ const LearningFacts = ({ glob, attributes, deciders }: { glob: GlobView; attribu
           ))}
         </p>
       ))}
-      {deciders && <p className='text-muted-foreground'>A learning is never deleted: reject it instead, so it suppresses its repeats.</p>}
     </div>
   );
 };
@@ -374,9 +429,8 @@ export const DecisionSection = ({
   const conflicts = attributes.conflictsWith ?? [];
   const outcome = attributes.outcome;
   const hasItem = isLearning(attributes);
-  const notice = personOnlyNotice(attributes.document !== undefined, target?.kind);
   const open = (canDecide || deciders) && glob.status !== 'signed_off';
-  const canSuggest = deciders;
+  const showScope = open && deciders && diff.data !== undefined && scopeMatters(attributes.document !== undefined, hotspotPath !== null, target);
   return (
     <section className='grid gap-3' data-testid='decision-section'>
       {outcome !== null && (
@@ -397,9 +451,11 @@ export const DecisionSection = ({
       )}
       <div className='grid gap-3 rounded border border-edge p-3' data-testid='proposal-block'>
         <div className='flex flex-wrap items-center gap-2 text-xs'>
-          <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
-            {hotspotPath === null ? `Applies to ${scopeLabel(attributes.scope)}` : <>Conflict hotspot: <span className='font-mono'>{hotspotPath}</span></>}
-          </span>
+          {hotspotPath !== null && (
+            <span className='rounded bg-muted px-2 py-0.5' data-testid='decision-scope'>
+              Conflict hotspot: <span className='font-mono'>{hotspotPath}</span>
+            </span>
+          )}
           <span className='text-muted-foreground'>via {attributes.channel}</span>
           {conflicts.length > 0 && (
             <Tip text='This decision contradicts a decision with a broader scope, which wins where they disagree'>
@@ -419,16 +475,18 @@ export const DecisionSection = ({
           )}
         </div>
 
-        {deciders && glob.status !== 'signed_off' && <ScopeEditor glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
-
-        <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
-          {glob.title}
-        </p>
         {hasItem && <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />}
         {hasItem && attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
         {hasItem && learning !== null && <ProcessingState glob={glob} learning={learning} routed={target !== null} admin={admin} />}
         {hasItem && learning?.status === 'open' && <StaleNote glob={glob} attributes={attributes} admin={admin} />}
         {learning?.effectCheck != null && <EffectCheckView boardId={glob.boardId} check={learning.effectCheck} />}
+
+        {hasItem && <Why glob={glob} attributes={attributes} />}
+        {!hasItem && (
+          <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
+            {glob.title}
+          </p>
+        )}
 
         {attributes.document !== undefined && diff.data?.draft != null ? (
           <DocumentProposal boardId={glob.boardId} document={attributes.document} content={diff.data.draft.content} />
@@ -436,15 +494,10 @@ export const DecisionSection = ({
           <ProposedChange globId={glob.id} />
         )}
 
-        {open && notice !== null && (
-          <p className='rounded bg-muted px-2 py-1 text-xs' data-testid='person-only-notice'>
-            {notice}
-          </p>
-        )}
-        {open && decide !== null && (canSuggest || (glob.artifacts ?? []).some((a) => a.kind === 'assessment')) && (
-          <LatestAssessment glob={glob} suggest={decide.suggest} canSuggest={canSuggest} />
-        )}
-        {open && decide !== null && (canDecide || canSuggest) && <Outcomes flow={decide} />}
+        {open && decide !== null && decide.canSuggest && <Recommendation glob={glob} suggest={decide.suggest} />}
+        {open && decide !== null && (canDecide || deciders) && <Outcomes flow={decide} />}
+        {showScope && <AppliesTo glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
+        {hasItem && <DecisionAssessment glob={glob} />}
       </div>
     </section>
   );
