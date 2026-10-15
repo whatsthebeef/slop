@@ -8,7 +8,7 @@ import { DiffView } from '@/components/diff-view';
 import { DocumentProposal, EffectCheckView, inPipeline, PIPELINE_POLL_MS, ProcessingState, SignalFigures, StaleNote } from '@/components/decision-learning';
 import { isLearning, OutcomeForms, Outcomes, Recommendation } from '@/components/decision-outcomes';
 import type { DecideFlow } from '@/components/decision-outcomes';
-import { CollapsibleMarkdown } from '@/components/markdown-view';
+import { CollapsibleMarkdown, InlineMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
@@ -19,6 +19,7 @@ import { SUGGESTION_ACTION_TEXT } from '@/lib/suggestion';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
+import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from './ui/tip';
 import { boardGlobHref } from '@/lib/glob-section';
 
@@ -156,7 +157,7 @@ const Why = ({ glob }: { glob: GlobView }) => {
       <h3 className='text-xs font-semibold text-muted-foreground'>Why</h3>
       {plan.isPending ? null : text === '' ? (
         <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
-          {glob.title}
+          {stripMarkdown(glob.title)}
         </p>
       ) : (
         <CollapsibleMarkdown content={text} />
@@ -299,7 +300,7 @@ const EarlierRecommendations = ({ glob }: { glob: GlobView }) => {
                 v.content
               ) : (
                 <>
-                  <span className='font-medium'>{SUGGESTION_ACTION_TEXT[stored.suggestion.action]}.</span> {stored.suggestion.reason}{' '}
+                  <span className='font-medium'>{SUGGESTION_ACTION_TEXT[stored.suggestion.action]}.</span> <InlineMarkdown text={stored.suggestion.reason} />{' '}
                   <span className='text-muted-foreground'>({when(stored.at)})</span>
                 </>
               )}
@@ -413,14 +414,14 @@ const ReplacementCard = ({ board, glob, attributes }: { board: BoardView; glob: 
       )}
       {newer?.reason != null && newer.reason !== '' && (
         <p className='text-xs' data-testid='replacement-reason'>
-          <span className='font-medium'>Why slop thinks so:</span> {newer.reason}
+          <span className='font-medium'>Why slop thinks so:</span> <InlineMarkdown text={newer.reason} />
         </p>
       )}
       {outcome !== null && (
         <p className='text-sm' data-testid='decision-outcome'>
           <span className='font-medium'>{outcome.kind === 'accept' ? 'Confirmed' : outcome.kind === 'reject' ? 'Dismissed' : 'Closed: no longer relevant'}</span>
           {outcome.kind !== 'closed' && <> by {outcome.by}</>} on {when(outcome.at)}
-          {outcome.reason !== undefined && outcome.kind !== 'closed' && <>: {outcome.reason}</>}
+          {outcome.reason !== undefined && outcome.kind !== 'closed' && <>: <InlineMarkdown text={outcome.reason} /></>}
         </p>
       )}
       {open && deciders && (
@@ -519,7 +520,7 @@ export const DecisionSection = ({
       {outcome !== null && (
         <p className='text-sm' data-testid='decision-outcome'>
           <span className='font-medium'>{OUTCOME_TEXT[outcome.kind]}</span> by {outcome.by} on {when(outcome.at)}
-          {outcome.reason !== undefined && <>: {outcome.reason}</>}
+          {outcome.reason !== undefined && <>: <InlineMarkdown text={outcome.reason} /></>}
           {outcome.linkedGlobId !== undefined && (
             <>
               {' '}
@@ -567,7 +568,7 @@ export const DecisionSection = ({
         {hasItem && <Why glob={glob} />}
         {!hasItem && (
           <p className='whitespace-pre-wrap break-words text-sm font-medium' data-testid='proposal-statement'>
-            {glob.title}
+            {stripMarkdown(glob.title)}
           </p>
         )}
 

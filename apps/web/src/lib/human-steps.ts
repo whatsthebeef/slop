@@ -1,6 +1,7 @@
 import { blockProgress, dueText, isInFlight, isMerged, isOpenStep, yourTurn } from '@slop/core';
 import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer, MachineStep } from '@slop/core';
 import type { ListedHumanStep } from './api';
+import { stripMarkdown } from './markdown-text';
 import { globPath } from './glob-section';
 import { readSectionOpen, writeSectionOpen } from './section-open';
 
@@ -24,14 +25,14 @@ export const mainStep = (
   viewer: HumanStepViewer | undefined,
 ): { readonly step: ListedHumanStep; readonly label: string } | null => {
   const step = blockingTurn(glob.humanSteps ?? [], glob, viewer);
-  return step === null ? null : { step, label: step.kind === 'rollout' ? 'Rollout' : step.title };
+  return step === null ? null : { step, label: step.kind === 'rollout' ? 'Rollout' : stripMarkdown(step.title) };
 };
 
 /** What the glob view says in place of a predicted rollout's title, state and actions: the run writes the real steps. */
 export const PREDICTED_ROLLOUT_TEXT = 'Rollout predicted: the run writes the steps';
 
 /** What a step is called in a sentence: a predicted rollout reads as a prediction, not as its placeholder title. */
-const stepName = (step: Pick<ListedHumanStep, 'title' | 'predicted'>): string => (step.predicted === true ? PREDICTED_ROLLOUT_TEXT : step.title);
+const stepName = (step: Pick<ListedHumanStep, 'title' | 'predicted'>): string => (step.predicted === true ? PREDICTED_ROLLOUT_TEXT : stripMarkdown(step.title));
 
 /** What a due step's main button does: copy its command, tick it, or wait (disabled, with why). Never just scroll to the section. */
 export type StepMain =
