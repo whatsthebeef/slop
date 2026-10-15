@@ -1,11 +1,15 @@
 # Slop checks for slop's own repo (from catalog/scripts/checks.yml): lint, type check and tests on
 # the head of every ready PR (sub, same or super), including the head after slop updates the
-# branch from main. Make the `checks` check required on main so nothing merges without it.
+# branch from main, and on every merge queue entry (`merge_group`). Make the `checks` check required on main so
+# nothing merges without it.
 name: checks
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Merge queue entries: tested on the base plus the PRs ahead of it. The queue needs a `checks` result on each.
+  merge_group:
+    types: [checks_requested]
   # After every merge: a sub merges as soon as it's ready, so its checks run here, and a red result reverts it.
   push:
     branches: [main]
@@ -14,7 +18,8 @@ permissions:
   contents: read
   packages: read
 
-# One run per PR: a newer push cancels the one in progress.
+# One run per PR: a newer push cancels the one in progress. A merge_group run has no pull_request object, so the
+# `if:` below passes (it only skips draft PRs) and the group falls back to github.sha, one run per queue entry.
 concurrency:
   group: checks-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
