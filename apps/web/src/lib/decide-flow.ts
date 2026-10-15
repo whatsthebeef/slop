@@ -27,15 +27,15 @@ export const adminOnlyReason = (kind: KnowledgeKind | undefined): string | null 
   return null;
 };
 
-/** The change's heading in words: what it edits and where, from its target and whether the draft only adds text. */
+/** The change's heading in words: what it edits and where, from its target and whether the draft only adds text (never claiming a new section: the diff can't show that). */
 export const changeHeading = (target: KbTarget | null, additive: boolean): string | null => {
   if (target === null) return null;
   if (target.kind === 'merge_policy') return 'Merge policy setting';
   if (target.kind === 'local_run') return 'Local-run spec';
   if (target.newDocument !== null) return `New document ${target.name}`;
   const where = target.section === null ? target.name : `${target.name} › ${target.section}`;
-  if (isAgentSetKind(target.kind)) return additive ? `New board rule in ${where}` : `Edit to ${where}`;
-  return additive && target.section !== null ? `New section in ${where}` : `Edit to ${where}`;
+  // The diff can't say whether the section already existed, so an addition is not called a new section.
+  return additive ? `Addition to ${where}` : `Edit to ${where}`;
 };
 
 /** Whether a scope is worth showing: not for a change routed to a document or a setting, which applies wherever it is written. */

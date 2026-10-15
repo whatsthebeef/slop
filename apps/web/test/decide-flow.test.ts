@@ -19,10 +19,10 @@ describe('the change heading', () => {
   it('names the target in words', () => {
     expect(changeHeading(null, false)).toBeNull();
     expect(changeHeading(doc('apps/web'), false)).toBe('Edit to architecture › apps/web');
-    expect(changeHeading(doc('apps/web'), true)).toBe('New section in architecture › apps/web');
-    expect(changeHeading(doc(null), true)).toBe('Edit to architecture');
+    expect(changeHeading(doc('apps/web'), true)).toBe('Addition to architecture › apps/web');
+    expect(changeHeading(doc(null), true)).toBe('Addition to architecture');
     expect(changeHeading({ kind: 'merge_policy', name: 'merge_policy', section: null, newDocument: null }, false)).toBe('Merge policy setting');
-    expect(changeHeading({ kind: 'agent', name: 'orchestrator', section: null, newDocument: null }, true)).toBe('New board rule in orchestrator');
+    expect(changeHeading({ kind: 'agent', name: 'orchestrator', section: null, newDocument: null }, true)).toBe('Addition to orchestrator');
   });
 });
 

@@ -121,7 +121,7 @@ const ProposedChange = ({ globId }: { globId: string }) => {
   if (diff.isError) return <p className='text-sm text-red'>Could not load the proposed change.</p>;
   if (diff.data === undefined) return <p className='text-sm text-muted-foreground'>Loading the proposed change…</p>;
   const { target, preview } = diff.data;
-  const heading = changeHeading(target, preview !== null && preview.diff.every((l) => l.op !== 'removed'));
+  const heading = changeHeading(target, preview !== null && preview.diff.some((l) => l.op === 'added') && preview.diff.every((l) => l.op !== 'removed'));
   return (
     <div className='grid gap-1' data-testid='proposed-change'>
       {heading !== null && (

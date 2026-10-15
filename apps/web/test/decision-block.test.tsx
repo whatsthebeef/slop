@@ -170,7 +170,7 @@ describe('the proposal block of a learning', () => {
     const outcomes = await screen.findByTestId('outcomes');
     expect(await within(why).findByText(/keep them found/)).toBeTruthy();
     expect(within(why).getByTestId('evidence-summary').textContent).toBe('Seen 3 times on 2 globs: s1t1, s1t2');
-    expect(heading.textContent).toBe('New section in architecture › apps/web');
+    expect(heading.textContent).toBe('Addition to architecture › apps/web');
     const follows = (a: Element, b: Element) => expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     follows(why, heading);
     follows(heading, recommendation);
