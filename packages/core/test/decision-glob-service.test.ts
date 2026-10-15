@@ -243,9 +243,29 @@ describe('decision globs', () => {
       expect(effects.get('s1k1')).toMatchObject([{ kind: 'suggest_decision', state: 'running' }]);
       // Not a decision: ignored whatever its status.
       expect((await globs.recommendationEffectsOf([{ ...picked, category: 'task' }])).size).toBe(0);
-      // A finished job is no longer "getting a recommendation".
-      store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'suggest_decision' ? { ...j, state: 'done' as const } : j));
+      // Claimed (an attempt spent) or waiting to retry: still pending, still in flight.
+      const setJob = (patch: Partial<{ state: 'pending' | 'done' | 'failed'; attempts: number }>) => {
+        store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'suggest_decision' ? { ...j, ...patch } : j));
+      };
+      setJob({ attempts: 1 });
+      expect((await globs.recommendationEffectsOf([picked])).get('s1k1')).toMatchObject([{ state: 'running' }]);
+      setJob({ attempts: 2 });
+      expect((await globs.recommendationEffectsOf([picked])).size).toBe(1);
+      // A job that gave up shows the failure, not a spinner.
+      setJob({ state: 'failed' });
       expect((await globs.recommendationEffectsOf([picked])).size).toBe(0);
+      // A finished job is no longer "getting a recommendation".
+      setJob({ state: 'done' });
+      expect((await globs.recommendationEffectsOf([picked])).size).toBe(0);
+    });
+
+    it('queues a fresh recommendation on pick-up even when the learning already has one', async () => {
+      await submit();
+      await pickUp('s1k1');
+      store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'suggest_decision' ? { ...j, state: 'done' as const } : j));
+      store.state.outbox = store.state.outbox.filter((e) => e.kind !== 'suggest_decision');
+      await pickUp('s1k1', PO);
+      expect(store.state.outbox.filter((e) => e.kind === 'suggest_decision')).toHaveLength(1);
     });
 
     it('is idempotent on its creation key', async () => {

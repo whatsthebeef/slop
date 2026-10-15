@@ -396,16 +396,19 @@ export const isMergeHeld = (glob: Pick<Glob, 'status' | 'mergeHold' | 'mergeMode
 
 /**
  * Whether a relation of this shape makes sense: `decided` only waits for a decision glob and `done` only for an action glob
- * (a work glob has neither outcome), and a human glob is never the one held back (it has no start, merge or sign-off gate a
- * relation could guard).
+ * (a work glob has neither outcome), a decision glob is never the one held back (it has no gate a relation could guard), and
+ * an action is held back only at its start (it can't be done until what builds its script has merged).
  */
 export const checkRelationShape = (
   from: Pick<Glob, 'id' | 'category'>,
-  draft: Pick<RelationDraft, 'to' | 'until'>,
+  draft: Pick<RelationDraft, 'to' | 'until'> & { readonly gate?: RelationGate },
   to: Pick<Glob, 'category'>,
 ): Result<null> => {
-  if (from.category === 'decision' || from.category === 'action') {
-    return invalidInput(`${from.id} is ${from.category === 'action' ? 'an action' : 'a decision'}: human work can hold other globs back, but it is not held back`);
+  if (from.category === 'decision') {
+    return invalidInput(`${from.id} is a decision: human work can hold other globs back, but it is not held back`);
+  }
+  if (from.category === 'action' && (draft.gate ?? 'start') !== 'start') {
+    return invalidInput(`${from.id} is an action: it can only wait before it is done (a start relation)`);
   }
   if (draft.until === 'decided' && to.category !== 'decision') return invalidInput(`${draft.to} is not a decision, so nothing can wait for it to be decided`);
   if (draft.until === 'done' && to.category !== 'action') return invalidInput(`${draft.to} is not an action, so nothing can wait for it to be done`);

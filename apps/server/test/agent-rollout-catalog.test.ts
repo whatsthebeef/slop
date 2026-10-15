@@ -91,3 +91,21 @@ describe('catalog agents: human steps and rollout', () => {
     expect(await agent('investigator')).toContain('revert test');
   });
 });
+
+describe('catalog agents: an action waits for its script', () => {
+  for (const name of ['implementer', 'orchestrator']) {
+    it(`has the ${name} relate an action to the glob that builds its script and name the script`, async () => {
+      const text = await agent(name);
+      expect(text).toContain('An action that runs a script written by this glob or another open glob waits for it');
+      expect(text).toContain('`gate: start`, `until: merged` and the reason "builds its script"');
+      expect(text).toContain('`script: <repo path>`');
+      expect(text).toContain('refuses Done on the action');
+    });
+
+    it(`keeps board-specific paths out of the ${name}'s action rule`, async () => {
+      const rule = (await agent(name)).split('\n').find((l) => l.startsWith('- **An action that runs a script')) ?? '';
+      expect(rule).not.toBe('');
+      expect(rule).not.toMatch(/pocketlab|scripts\/rollout\/s\d+t\d+/i);
+    });
+  }
+});

@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -134,6 +134,8 @@ const globs = new GlobService({
   sizeCheck: { assess: (boardId, plan, title): ReturnType<SizeCheckService['assess']> => sizeCheck.assess(boardId, plan, title), refresh: (globId) => sizeCheck.refresh(globId) },
   // Infers a new glob's relations (needs and decisions) from its plan; `dependencyInference` exists by the time the first glob is created.
   inference: { infer: (input) => dependencyInference.infer(input) },
+  // Reads an action's script on the base branch; `codeView` exists by the time the first action is read.
+  codeView: { read: (boardId, ref, path, range) => codeView.read(boardId, ref, path, range) },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -225,7 +227,7 @@ const outbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'defa
 // A KB job that failed, will retry, or waits for a new reason refreshes the board's Knowledge page; a finished one
 // already did (the pipeline publishes when it writes), and a dropped one changed nothing.
 const llmOutbox = new OutboxRunner(db, outboxDeps, outboxExecutors, logError, 'llm', (effect, state) => {
-  const hint = state === 'done' || state === 'dropped' ? null : kbJobHint(effect);
+  const hint = state === 'done' || state === 'dropped' ? null : (kbJobHint(effect) ?? suggestJobHint(effect));
   if (hint !== null) hub.publish(hint);
 });
 
@@ -669,7 +671,11 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => codeSync.mark(boardId), subGateCheck: async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).subGateCheck }),
+  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => {
+      codeSync.mark(boardId);
+      // Open actions whose script wasn't on the base branch are offered again when it is.
+      void globs.baseMoved(boardId).catch((e: unknown) => logError('base push', e instanceof Error ? e.message : String(e)));
+    }, subGateCheck: async (boardId) => (await store.transaction((tx) => readMergePolicy(tx, boardId))).subGateCheck }),
 });
 
 app.onError((error, c) => {
