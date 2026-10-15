@@ -1,15 +1,42 @@
 #!/usr/bin/env bash
 # Prepares a GitHub repository for slop, using your gh login.
 #   - merge settings: squash only, PR title as the squash commit title, delete merged branches
-#   - optional --protect [<check>...]: branch protection on the base branch (required checks,
-#     up to date before merging, no direct pushes); with no names it requires `checks` (every PR's
-#     lint, type check and tests), the check subs wait for before slop merges them
+#   - optional --protect [<check>...]: a `slop` ruleset on the base branch (required checks on an up-to-date
+#     head, no force push or deletion) with slop's App and repo admins on the bypass list, so slop's own sub
+#     merges aren't blocked (classic branch protection can't exempt an App). Created or updated by name; with
+#     no check names it requires `checks` (every PR's lint, type check and tests), the check subs wait for
 #   - checks slop's GitHub App is subscribed to the events slop needs and, for any it isn't, prints the
 #     App's settings link (GitHub has no API to subscribe: a person ticks them in the UI)
 #   - prints the links to install slop's GitHub App and the Claude GitHub App on the repo
 #     (GitHub only allows that in the browser or with a classic personal access token)
 # Usage: setup-repo.sh <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]]
 set -euo pipefail
+
+# The ruleset body for the base branch: `slop`, active, no deletion or force push, `checks` required on an up-to-date
+# head, with slop's App and repository admins allowed to bypass. Usage: ruleset_json <app-id> <check>...
+ruleset_json() {
+  python3 - "$@" <<'PY'
+import json, sys
+app_id, checks = int(sys.argv[1]), sys.argv[2:]
+print(json.dumps({
+    "name": "slop", "target": "branch", "enforcement": "active",
+    "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+    "bypass_actors": [
+        {"actor_id": app_id, "actor_type": "Integration", "bypass_mode": "always"},
+        {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"},
+    ],
+    "rules": [
+        {"type": "deletion"},
+        {"type": "non_fast_forward"},
+        {"type": "required_status_checks", "parameters": {
+            "strict_required_status_checks_policy": True,
+            "required_status_checks": [{"context": c} for c in checks]}},
+    ],
+}))
+PY
+}
+# Sourced by the shell test (catalog/scripts/setup-repo.test.sh) to reach ruleset_json alone.
+[[ "${SETUP_REPO_SOURCE_ONLY:-}" == 1 ]] && return 0
 
 repo="${1:-}"; shift || true
 app=""; base=""; checks=(); protect=0
@@ -34,17 +61,26 @@ echo "  squash only, PR title as commit title, merged branches deleted"
 
 [[ $protect -eq 1 && ${#checks[@]} -eq 0 ]] && checks=(checks)
 if [[ ${#checks[@]} -gt 0 ]]; then
-  echo "Branch protection on $base (required: ${checks[*]})..."
-  contexts=$(printf '%s\n' "${checks[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
-  gh api -X PUT "repos/$repo/branches/$base/protection" --input - --silent <<JSON
-{"required_status_checks": {"strict": true, "contexts": $contexts},
- "enforce_admins": false, "required_pull_request_reviews": null, "restrictions": null,
- "allow_force_pushes": false, "allow_deletions": false}
-JSON
-  echo "  required checks pass on the current head, branch up to date, no force pushes"
-  echo "  NOTE: subs merge as soon as they're ready, before their PR's checks finish, and slop reverts a sub whose"
-  echo "  merge turns $base red. Add the slop GitHub App to a ruleset bypass list for $base (Settings > Rules)"
-  echo "  or the required checks will refuse those merges. Run the checks workflow on pushes to $base too."
+  echo "Branch ruleset \`slop\` on $base (required: ${checks[*]})..."
+  app_id=$(gh api "apps/$app" --jq .id)
+  body=$(ruleset_json "$app_id" "${checks[@]}")
+  ruleset_id=$(gh api "repos/$repo/rulesets" --jq '.[] | select(.name == "slop") | .id' | head -n1)
+  if [[ -n "$ruleset_id" ]]; then
+    printf '%s' "$body" | gh api -X PUT "repos/$repo/rulesets/$ruleset_id" --input - --silent
+    echo "  updated ruleset $ruleset_id"
+  else
+    printf '%s' "$body" | gh api -X POST "repos/$repo/rulesets" --input - --silent
+    echo "  created ruleset"
+  fi
+  echo "  required checks pass on an up-to-date head, no force pushes or deletion; slop's App ($app) and repo admins"
+  echo "  can bypass, because subs merge as soon as they're ready and slop reverts a sub whose merge turns $base red"
+  echo "  Run the checks workflow on pushes to $base too."
+  if gh api "repos/$repo/branches/$base/protection" --silent 2>/dev/null; then
+    echo "  NOTE: $base also has classic branch protection, which can't exempt slop's App and would block its sub"
+    echo "  merges alongside the ruleset. Remove it: gh api -X DELETE repos/$repo/branches/$base/protection"
+  fi
+  echo "Rules now applying to $base:"
+  gh api "repos/$repo/rules/branches/$base" --jq '.[] | "  " + .type + " (ruleset " + (.ruleset_id|tostring) + ")"'
 fi
 
 # Keep in step with REQUIRED_APP_EVENTS in slop's apps/server/src/github/setup.ts. GitHub applies a manifest's events
