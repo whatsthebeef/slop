@@ -14,6 +14,8 @@ export interface CapabilitySwitches {
   /** The code index's job is running on this server. */
   readonly codeIndexRuns: boolean;
   readonly deployResultsConfigured: boolean;
+  /** The Cognito app-client port for ATF runners; null when the server has no user pool settings. */
+  readonly atfClients: { unavailableReason(signal?: AbortSignal): Promise<string | null> } | null;
 }
 
 /**
@@ -22,6 +24,7 @@ export interface CapabilitySwitches {
  */
 export class CapabilityReader {
   private probe: { readonly at: number; readonly reason: string | null } | null = null;
+  private clientsProbe: { readonly at: number; readonly reason: string | null } | null = null;
 
   constructor(
     private readonly switches: CapabilitySwitches,
@@ -35,13 +38,27 @@ export class CapabilityReader {
       slack: this.switches.slackConfigured,
       codeIndex: this.switches.codeIndexRuns,
       deployResults: this.switches.deployResultsConfigured,
+      atfClientCredentials: (await this.clientsReason()) === null,
     };
   }
 
   /** Why a capability is off, for those that can say (a false "off" is hard to diagnose without it). */
   async reasons(): Promise<Partial<Record<CapabilityName, string>>> {
-    const reason = await this.bucketReason();
-    return reason === null ? {} : { fileAttachments: reason };
+    const [bucket, clients] = [await this.bucketReason(), await this.clientsReason()];
+    return {
+      ...(bucket === null ? {} : { fileAttachments: bucket }),
+      ...(clients === null ? {} : { atfClientCredentials: clients }),
+    };
+  }
+
+  /** ATF client credentials are on only when the pool's ATF scopes and the instance role's permission are in place. */
+  private async clientsReason(): Promise<string | null> {
+    const { atfClients } = this.switches;
+    if (atfClients === null) return 'Cognito user pool not configured';
+    if (this.clientsProbe !== null && this.now() - this.clientsProbe.at < PROBE_TTL_MS) return this.clientsProbe.reason;
+    const reason = await atfClients.unavailableReason(AbortSignal.timeout(PROBE_TIMEOUT_MS)).catch(() => 'timeout');
+    this.clientsProbe = { at: this.now(), reason };
+    return reason;
   }
 
   private async bucketReason(): Promise<string | null> {

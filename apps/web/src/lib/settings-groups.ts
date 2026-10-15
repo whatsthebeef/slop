@@ -1,13 +1,14 @@
 import { readSectionOpen, writeSectionOpen } from './section-open';
 
-export const SETTINGS_GROUP_IDS = ['board', 'members', 'environments', 'automation', 'reports', 'system'] as const;
+export const SETTINGS_GROUP_IDS = ['board', 'members', 'environments', 'runners', 'automation', 'reports', 'system'] as const;
 export type SettingsGroupId = (typeof SETTINGS_GROUP_IDS)[number];
 
-/** The six groups of the settings page: what a person chooses, then what the server can do. */
+/** The seven groups of the settings page: what a person chooses, then what the server can do. */
 export const SETTINGS_GROUPS: Record<SettingsGroupId, { readonly title: string; readonly blurb: string }> = {
   board: { title: 'Board and repository', blurb: 'What this board is called, which repository it works in, and when its working hours count.' },
   members: { title: 'Members and access', blurb: 'Who can use this board, what they may do, and the token an outside script uses.' },
   environments: { title: 'Environments and deploys', blurb: 'Where globs are deployed, how, and how acceptance tests learn what to run.' },
+  runners: { title: 'ATF runners', blurb: 'The systems that run this board\'s acceptance tests, each with its own identity.' },
   automation: { title: 'Automation', blurb: 'What slop does on its own: investigating big globs, reviewing changes and approving knowledge.' },
   reports: { title: 'Reports', blurb: 'The time report: how much of each developer\'s time went to R&D.' },
   system: { title: 'System', blurb: 'What the server can do right now. Read-only.' },

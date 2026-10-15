@@ -70,6 +70,7 @@ new AuthStack(app, `slop-${stage}-auth`, {
  *   cdk deploy slop-prod-secrets -c secrets=true -c stage=prod                the secrets alone
  *   cdk deploy slop-prod-host -c stage=prod -c deployConnectionArn=arn:...    the host, CloudFront and the deploy project
  *     [-c deployProjects=<project>,<project>]                                 boards' CodeBuild deploy projects the server may start
+ *     [-c cognitoUserPoolId=us-east-1_...]                                    lets the server issue ATF runners' client credentials
  */
 const flag = (key: string): boolean => app.node.tryGetContext(key) === 'true' || app.node.tryGetContext(key) === true;
 const wantsHost = flag('host') || app.node.tryGetContext('deployConnectionArn') !== undefined;
@@ -107,6 +108,8 @@ if (flag('secrets') || wantsHost) {
       // Prod only (required there): the running instance's AMI and its data volume; see infra/deploy/HOST.md.
       amiId: (app.node.tryGetContext('hostAmiId') as string | undefined) || undefined,
       dataVolumeId: (app.node.tryGetContext('hostDataVolumeId') as string | undefined) || undefined,
+      // The Cognito pool whose app clients slop issues to ATF runners (-c cognitoUserPoolId=us-east-1_...): the auth stack's UserPoolId.
+      cognitoUserPoolId: (app.node.tryGetContext('cognitoUserPoolId') as string | undefined) || undefined,
       tags: { project: 'slop', stage },
     });
   }
