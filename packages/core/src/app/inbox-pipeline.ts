@@ -15,6 +15,7 @@ import { LlmBusy, LlmUnavailable } from './intake-service.js';
 import type { Llm } from './intake-service.js';
 import { LLM_WAIT_MS, MAX_PROCESSING_ATTEMPTS } from './kb-pipeline.js';
 import { BusyBackoff, busyMessage, completeWithDeadline } from './llm-call.js';
+import { INBOX_SUMMARY_SCHEMA } from './llm-schemas.js';
 
 /** Haiku answers in seconds; a stalled call fails the attempt well inside the lease. */
 export const INBOX_LLM_TIMEOUT_MS = 60_000;
@@ -243,6 +244,7 @@ export class InboxPipeline {
         this.deps.llm,
         {
           system: INBOX_SYSTEM,
+          schema: INBOX_SUMMARY_SCHEMA,
           prompt: promptOf(item, candidates),
           maxTokens: MAX_TOKENS,
           spend: { boardId: item.boardId, source: 'inbox' },

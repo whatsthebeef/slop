@@ -179,14 +179,12 @@ describe('learned size check', () => {
     }
   });
 
-  it('does not hold a flagged sub: it is a same from the start, with the size check\'s reasons, and starts at once', async () => {
+  it('does not hold or escalate a flagged sub: it stays a sub, and starts at once', async () => {
     const sub = await create('sub', BIG);
-    // A glob too big for one clean PR is a same, escalated with the size check's reasons.
-    expect(sub.type).toBe('same');
-    expect(sub.escalation).toMatchObject({ criterion: 'size', by: 'slop' });
-    expect(sub.escalation?.reason).toMatch(/^Flagged oversized: .*more than/);
-    expect(sub.escalation?.evidence).toContain('independent parts');
-    expect(store.state.events.filter((e) => e.globId === sub.id).map((e) => e.type)).toContain('Escalated');
+    // Size is advice for the run (workstreams): it never changes the type the glob was created with.
+    expect(sub.type).toBe('sub');
+    expect(sub.escalation ?? null).toBeNull();
+    expect(store.state.events.filter((e) => e.globId === sub.id).map((e) => e.type)).not.toContain('Escalated');
     // Nothing holds it: it is implementing, with its run queued, and the flag stays as information.
     expect(sub.status).toBe('implementing');
     expect(sub.waiting ?? null).toBeNull();
@@ -201,7 +199,7 @@ describe('learned size check', () => {
     const sub = unwrap(
       await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG, after: [first.id] }),
     );
-    expect([sub.type, sub.status]).toEqual(['same', 'planning']);
+    expect([sub.type, sub.status]).toEqual(['sub', 'planning']);
     expect(sub.waiting).not.toBeNull();
     const view = unwrap(await globs.get(DEV, sub.id));
     expect(view.waitingFor.map((w) => w.id)).toEqual([first.id]);
@@ -217,7 +215,7 @@ describe('learned size check', () => {
     expect([same.type, same.escalation ?? null]).toEqual(['same', null]);
   });
 
-  it('a waiting sub flagged when its plan is saved becomes a same with the reasons', async () => {
+  it('a waiting sub whose plan grows past the size threshold stays a sub, with no escalation', async () => {
     const first = await create('same', SMALL);
     const sub = unwrap(
       await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: SMALL, after: [first.id] }),
@@ -227,37 +225,12 @@ describe('learned size check', () => {
     await service.refresh(sub.id);
     await globs.reconcileSizeCheck(sub.id);
     const flagged = await get(sub.id);
-    expect(flagged.type).toBe('same');
-    expect(flagged.escalation).toMatchObject({ criterion: 'size' });
+    expect((await store.transaction((tx) => tx.getSizeCheck(sub.id)))?.flagged).toBe(true);
+    expect(flagged.type).toBe('sub');
+    expect(flagged.escalation ?? null).toBeNull();
     // Reconciling again changes nothing.
     await globs.reconcileSizeCheck(sub.id);
     expect((await get(sub.id)).version).toBe(flagged.version);
-  });
-
-  it('an admin setting a size-escalated same back to a sub takes the size escalation with it', async () => {
-    const first = await create('same', SMALL);
-    const glob = unwrap(
-      await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG, after: [first.id] }),
-    );
-    const back = unwrap(await globs.update(ADMIN, glob.id, glob.version, { type: 'sub' }));
-    expect(back.type).toBe('sub');
-    expect(back.escalation ?? null).toBeNull();
-  });
-
-  it('splitting a sub the size check made a same makes subs again, without the size escalation', async () => {
-    // Waiting for another glob keeps it in Planning, where it can be cut.
-    const first = await create('same', SMALL);
-    const glob = unwrap(
-      await globs.create(ADMIN, { boardId, title: 'T', type: 'sub', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: BIG, after: [first.id] }),
-    );
-    expect(glob.type).toBe('same');
-    expect(glob.status).toBe('planning');
-    const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    const parts = (check?.proposal?.workstreams ?? []).map((w) => ({ title: w.name, plan: w.plan }));
-    const created = unwrap(await globs.split(DEV, glob.id, glob.version, { parts, idempotencyKey: null }));
-    expect(created.map((g) => g.type)).toEqual(['sub', 'sub', 'sub']);
-    expect(created.map((g) => g.escalation ?? null)).toEqual([null, null, null]);
-    expect((await get(glob.id)).escalation ?? null).toBeNull();
   });
 
   it('auto-triggers a flagged same as usual, and leaves one without auto-trigger alone', async () => {

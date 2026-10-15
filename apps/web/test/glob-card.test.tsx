@@ -634,7 +634,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
   });
 
   it('workstream states show only while the glob is being built, not once merged', () => {
-    expect(corner(mergedWith([], { workstreams: ws([['W1', 'running']]) })).text).toBe('sign off · QA');
+    expect(corner(mergedWith([], { workstreams: ws([['W1', 'running']]) })).text).toBe('sign off');
   });
 
   it('rollout replaces sign off with the human icon, with no upcoming-steps chip lower on the card', () => {
@@ -654,7 +654,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledWith({ section: 'human-steps' });
     const done = mergedWith([step({ state: 'done' })]);
-    expect(corner(done)).toMatchObject({ text: 'sign off · QA', icon: 'human' });
+    expect(corner(done)).toMatchObject({ text: 'sign off', icon: 'human' });
     expect(corner(mergedWith([step({ state: 'done' })], { status: 'signed_off', labels: { QA: 'approved' } })).text).toBe('signed off');
   });
 
@@ -745,5 +745,19 @@ describe('an action glob card', () => {
   it('shows a decision with its category word, not a type', () => {
     const decision = view({ id: 's1k1', category: 'decision', type: null, pr: null });
     expect(dom(markup(decision)).querySelector('[data-testid="card-type"]')?.textContent).toBe('decision');
+  });
+
+  it('gives a learning no scope, outcome or conflict tags; a decided one reads its outcome in the corner', () => {
+    const learning = view({
+      id: 's1k1',
+      category: 'decision',
+      type: null,
+      pr: null,
+      attributes: { scope: { kind: 'project', ref: null }, outcome: { kind: 'accept', by: 'a@b.c', at: NOW }, conflictsWith: ['s1k2'] },
+    } as unknown as Partial<GlobView>);
+    const root = dom(markup(learning));
+    for (const id of ['scope-chip', 'outcome-chip', 'conflict-chip']) expect(root.querySelector(`[data-testid="${id}"]`)).toBeNull();
+    expect(root.querySelector('[data-testid="card-corner"]')?.textContent).toContain('accepted');
+    expect(root.textContent).not.toContain('conflicts with');
   });
 });

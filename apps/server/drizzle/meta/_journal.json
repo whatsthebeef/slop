@@ -537,8 +537,15 @@
     {
       "idx": 76,
       "version": "7",
-      "when": 1792066574349,
-      "tag": "0076_actor_mode_fix_workkind",
+      "when": 1792067573349,
+      "tag": "0076_no_size_escalation",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1792068573349,
+      "tag": "0077_actor_mode_fix_workkind",
       "breakpoints": true
     }
   ]

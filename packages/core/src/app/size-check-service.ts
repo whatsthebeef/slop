@@ -50,6 +50,7 @@ import type { Llm } from './intake-service.js';
 import { completeWithDeadline } from './llm-call.js';
 import { field, list, parseJson, text } from './llm-json.js';
 import { hash } from './text-hash.js';
+import { SIZE_JUDGE_SCHEMA, SIZE_PROPOSE_SCHEMA } from './llm-schemas.js';
 
 export type SizeThresholdResult = Extract<BoardJobResult, { kind: 'size_threshold' }>;
 
@@ -189,6 +190,7 @@ export class SizeCheckService implements SizeAssessor {
           this.deps.llm,
           {
             system: JUDGE_SYSTEM,
+            schema: SIZE_JUDGE_SCHEMA,
             prompt: `Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`,
             maxTokens: 300,
             spend: { boardId, source: 'size_check' },
@@ -229,6 +231,7 @@ export class SizeCheckService implements SizeAssessor {
         this.deps.llm,
         {
           system: PROPOSE_SYSTEM,
+          schema: SIZE_PROPOSE_SCHEMA,
           prompt: `${title === undefined || title.trim() === '' ? '' : `Original title: ${title.trim()}\n\n`}Plan:\n<<<\n${plan.slice(0, MAX_PLAN_CHARS)}\n>>>`,
           maxTokens: 4000,
           spend: { boardId, source: 'size_check' },

@@ -9,7 +9,7 @@ import type { Database } from '../src/db/store.js';
 const ADMIN_URL = process.env.TEST_ADMIN_DATABASE_URL ?? 'postgres://slop:slop@localhost:5432/slop';
 const DB = `slop_test_actormode_${process.pid}`;
 const URL_ = ADMIN_URL.replace(/\/[^/]+$/, `/${DB}`);
-const TAG = '0076_actor_mode_fix_workkind';
+const TAG = '0077_actor_mode_fix_workkind';
 
 interface Data {
   category: string;
@@ -20,8 +20,8 @@ interface Data {
   inferenceReason?: string | null;
 }
 
-/** Migration 0076: fix and work kind are backfilled from the category, once, and a person's values are kept. */
-describe('fix and work kind backfill (migration 0076)', () => {
+/** Migration 0077: fix and work kind are backfilled from the category, once, and a person's values are kept. */
+describe('fix and work kind backfill (migration 0077)', () => {
   let admin: Database;
   let database: Database;
 
@@ -95,7 +95,7 @@ describe('fix and work kind backfill (migration 0076)', () => {
 
   it('changes nothing when its data statement runs again', async () => {
     const before = await all();
-    const sqlText = await readFile(new URL('../drizzle/0076_actor_mode_fix_workkind.sql', import.meta.url), 'utf8');
+    const sqlText = await readFile(new URL('../drizzle/0077_actor_mode_fix_workkind.sql', import.meta.url), 'utf8');
     await database.db.execute(sql.raw(sqlText));
     expect(await all()).toEqual(before);
   });

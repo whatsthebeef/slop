@@ -1,323 +1,44 @@
-import { actorOf, fixOf, isHumanCategory, modeOf, workKindOf } from '../domain/types.js';
 import { missingFileNote } from '../domain/attachment-file.js';
-import type { AttachmentFile, FileState } from '../domain/attachment-file.js';
-import { decisionViews } from '../domain/decisions.js';
-import type { DecisionView } from '../domain/decisions.js';
-import { parseInvestigation, validationNote } from '../domain/investigation.js';
-import { parseTestPlan, testPlanNote, testPlanSpecs } from '../domain/test-plan.js';
-import type { AtfSpecList } from '../domain/test-plan.js';
-import { parseWorkstreams, sameWorkstreams, workstreamsEventData, workstreamsValidationNote } from '../domain/workstreams.js';
 import { err, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import { INBOX_CONTEXT_CHARS, inboxLink, inboxTitle } from '../domain/inbox.js';
 import { ARTIFACT_ROLE } from '../domain/knowledge.js';
-import type { Artifact, ArtifactKind, IndependentReviewMeta, Provenance, ReviewStats } from '../domain/knowledge.js';
-import { applicableDecisions, isArchivedDecision, scopedDecision } from '../domain/decision-glob.js';
-import type { ScopedDecision } from '../domain/decision-glob.js';
+import type { Artifact, ArtifactKind, IndependentReviewMeta, Provenance } from '../domain/knowledge.js';
 import { payloadOf } from '../domain/payload.js';
-import type { Payload } from '../domain/payload.js';
-import type { GlobAttributes } from '../domain/attributes.js';
+import { testPlanSpecs } from '../domain/test-plan.js';
 import { recheckOverlapsEffect } from '../domain/events.js';
-import { handoverBrief, openFindings, resumePhase } from '../domain/handover.js';
-import type { Handover } from '../domain/handover.js';
-import { GROUP_CONTEXT_MAX_GLOBS, contextNeighbours, groupContext, inGroup } from '../domain/group-view.js';
-import type { GroupContext } from '../domain/group-view.js';
 import { humanSteps } from '../domain/human-steps.js';
-import type { HumanStep } from '../domain/human-steps.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
-import type { Glob, Mode, WorkActor, WorkKind } from '../domain/types.js';
+import type { Glob } from '../domain/types.js';
+import { actorOf, fixOf, modeOf, workKindOf } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
+import { addArtifact } from './artifact-write.js';
+import type { Ignored, PutOptions } from './artifact-write.js';
+import { INLINE_LABELS, describe, wanted } from './context/artifact-listing.js';
+import { AUTHORITY_STATEMENT, decisionsOfGlob, governingDecisions } from './context/decision-section.js';
+import type { GlobContext } from './context/glob-context.js';
+import { groupSection, handoverOf } from './context/handover-section.js';
+import { hotspotsOfGlob } from './context/hotspot-section.js';
+import { inboxSection } from './context/inbox-section.js';
+import { investigationSummary } from './context/investigation-section.js';
+import { sizeContext } from './context/size-section.js';
 import type { InvestigationReactor } from './investigation-service.js';
 import type { SizeAssessor } from './size-check-service.js';
-import type { SizeCheck } from '../domain/size-check.js';
-import type { SizeForecast } from '../domain/size-forecast.js';
 
-/** The hand-over brief of a glob as it stands, from its newest local review and uploaded artifacts. */
-export const handoverOf = async (tx: Tx, clock: Clock, glob: Glob): Promise<Handover | null> => {
-  const findings = openFindings(await tx.listFindings(glob.id), await tx.listReviewSources(glob.id));
-  const artifacts = await tx.listArtifactSummaries(glob.boardId, [glob.id]);
-  return handoverBrief(glob, { now: clock.now(), findings, resumePhase: resumePhase(artifacts, glob.pr?.headSha ?? null) });
-};
-
-/** The accepted decisions that govern a work glob, each with its one-line statement read from its plan.md. */
-export const governingDecisions = async (tx: Tx, glob: Glob): Promise<ScopedDecision[]> => {
-  const decisions = applicableDecisions(await tx.listGlobs(glob.boardId, { include: 'decisions' }), glob);
-  const scoped: ScopedDecision[] = [];
-  for (const decision of decisions) {
-    const entry = scopedDecision(decision, (await tx.listArtifacts(decision.id, 'plan'))[0]?.content);
-    if (entry !== null) scoped.push(entry);
-  }
-  return scoped;
-};
-
-/** A hotspot as `get_context` shows it: the path with its counts inside the window. */
-export type GlobHotspot = Pick<Hotspot, 'path' | 'conflicts' | 'real' | 'lastConflictAt'> & {
-  readonly globs: number;
-  readonly windowDays: number;
-};
-
-/** Whether `path` appears in `text` as a whole path (not inside a longer name such as `data.ts` for `a.ts`). */
-const namesPath = (text: string, path: string): boolean => {
-  for (let at = text.indexOf(path); at !== -1; at = text.indexOf(path, at + 1)) {
-    const before = text[at - 1];
-    const after = text[at + path.length];
-    if ((before === undefined || !/[\w./-]/.test(before)) && (after === undefined || !/[\w-]/.test(after) && !/\.\w/.test(text.slice(at + path.length, at + path.length + 2)))) return true;
-  }
-  return false;
-};
-
-/** The board's hotspots that are among the files a glob plans to change, or that it conflicted on itself. */
-const hotspotsOfGlob = (
-  view: { readonly windowDays: number; readonly hotspots: readonly Hotspot[] },
-  globId: string,
-  planned: readonly string[],
-  plan: string,
-): GlobHotspot[] =>
-  view.hotspots
-    .filter((h) => planned.includes(h.path) || namesPath(plan, h.path) || h.globs.includes(globId))
-    .map((h) => ({
-      path: h.path,
-      conflicts: h.conflicts,
-      globs: h.globs.length,
-      real: h.real,
-      lastConflictAt: h.lastConflictAt,
-      windowDays: view.windowDays,
-    }));
-
-export interface GlobContext {
-  readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'> & {
-    readonly actor: WorkActor;
-    readonly mode: Mode;
-    readonly fix: boolean;
-    readonly workKind: WorkKind;
-  };
-  readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
-  /** plan.md: the latest version. */
-  readonly plan: { readonly version: number; readonly content: string } | null;
-  /**
-   * The latest test plan (full text): the matrix of specs that prove the change and the `atf-specs` block the pipeline runs
-   * after the merge. `atfSpecs` is the parsed block (null when there is none); `validation` says what is wrong with it. Null
-   * when none is saved yet.
-   */
-  readonly testPlan: {
-    readonly version: number;
-    readonly content: string;
-    readonly atfSpecs: AtfSpecList | null;
-    readonly validation: string | null;
-  } | null;
-  /** What the glob is about: plan.md for work, the proposal text for a decision. The same as `plan`, which older agent sets read. */
-  readonly payload: Payload | null;
-  /** A decision's scope, source and outcome; absent on work globs. */
-  readonly attributes?: GlobAttributes;
-  /**
-   * The accepted decisions that govern this glob by scope, broadest first (live: one accepted after the glob was created
-   * still reaches it). Empty when none, and for a decision glob.
-   */
-  readonly scopedDecisions: readonly ScopedDecision[];
-  /** The implementation record (every glob type, one format): the latest version, in full; null before the first is pushed. */
-  readonly implementationRecord: { readonly version: number; readonly commitSha: string | null; readonly content: string } | null;
-  /** Attachments in full: Clarifications and Assumptions always (they carry intent), others when asked for with `include`. */
-  readonly attachments: readonly { readonly label: string; readonly content: string; readonly link: string | null }[];
-  /**
-   * File attachments (images, PDFs, documents) with their state. A `stored` one can be downloaded (the MCP layer adds a
-   * fresh `downloadUrl`); `pending` ones are still being uploaded; a `missing` one carries `note`. Don't block on missing files: record the gap.
-   */
-  readonly files: readonly {
-    readonly label: string;
-    readonly fileName: string;
-    readonly contentType: string;
-    readonly size: number | null;
-    readonly state: FileState;
-    readonly note?: string;
-  }[];
-  /** Every other artifact, not in full: fetch one with `get_artifact` or `include` on `get_context`. */
-  readonly available: readonly ArtifactListing[];
-  /**
-   * What the board already knows about this glob's title and plan (current mode, top 5, cited, the glob's own
-   * items left out). Absent when no search is configured.
-   */
-  readonly related?: readonly SearchHit[];
-  /**
-   * The decisions taken on this glob (from its implementation record's Decisions, plan.md, Clarifications and
-   * Assumptions), current ones first, each with its source link; a superseded one says what replaced it and when.
-   */
-  readonly decisions: readonly DecisionView[];
-  /**
-   * Inbox items attached to this glob (pasted meeting notes, threads, documents), with their text up to
-   * `INBOX_CONTEXT_CHARS` (`truncated` beyond it; `search_text` finds the rest).
-   */
-  readonly inbox: readonly InboxContextItem[];
-  /**
-   * The glob's latest investigation, when it has one: what the orchestrator needs to decide reuse vs refresh without fetching
-   * it (the plan hash and base commit it was made against, and the files it expects to change). Fetch the text with
-   * `get_artifact(id, 'investigation')`.
-   */
-  readonly investigation?: InvestigationSummary;
-  /**
-   * Present while an investigate-only run is still working on the glob: the orchestrator waits for it (polling `get_glob`,
-   * every 2 minutes at most, up to 20) and reuses its result, instead of investigating again.
-   */
-  readonly investigationRunning?: { readonly runId: string; readonly since: string; readonly sessionUrl: string | null };
-  /** Why a person is needed on this glob and what to do first (a hand-over brief); null when nothing is wrong. */
-  readonly handover: Handover | null;
-  /** Which source wins when sources disagree (the spec's order of authority). */
-  readonly authority: string;
-  /** Everything only a person can do on the glob (the machine's steps and stored work steps), most pressing first. */
-  readonly humanSteps: readonly HumanStep[];
-  /**
-   * The board's conflict hotspots among the glob's files (the paths its investigation or plan.md names, and files it conflicted on),
-   * hottest first, with their counts. Empty when none; absent when hotspots are not configured.
-   */
-  readonly hotspots?: readonly GlobHotspot[];
-  /**
-   * Present when the glob's group has other open or recently merged globs, or open decisions: what the neighbours do (ID, title,
-   * status, one line of plan) and the decisions still open, so a run needn't read their plans. Absent otherwise.
-   */
-  readonly group?: GroupContext;
-  /** Present when intake judged the glob: the oversized flag (advice only), its reasons and the proposed workstreams. */
-  readonly size?: SizeContext;
-  readonly fetch: string;
-}
-
-export interface SizeContext {
-  readonly oversized: boolean;
-  /** The board's fan-out floor: fan out only when at least this many workstreams can be built at the same time. */
-  readonly minParallel: number;
-  readonly reasons: readonly string[];
-  readonly evidence: readonly string[];
-  /** `split` once the glob's scope was cut into independent globs; null otherwise. */
-  readonly decision: SizeCheck['decision'];
-  /** Workstreams the run can work in parallel inside this glob's one PR (name, goal, files, plan share, `needs` as earlier indexes). */
-  readonly proposal: SizeCheck['proposal'];
-  /** Present once the code forecast was made: predicted files and parts; confirm or correct. */
-  readonly forecast?: SizeForecastContext;
-}
-
-/** The forecast as the investigator receives it: its starting point, to confirm or correct in the investigation. */
-export interface SizeForecastContext {
-  readonly note: string;
-  readonly files: readonly string[];
-  readonly modules: readonly string[];
-  readonly parts: SizeForecast['parts'];
-  readonly expectedLines: SizeForecast['lines'];
-  readonly riskTier: SizeForecast['riskTier'];
-  readonly riskAreas: readonly string[];
-  readonly migration: boolean;
-  readonly publicApi: boolean;
-  readonly confidence: SizeForecast['confidence'];
-  readonly history: string | null;
-}
-
-export const FORECAST_NOTE = 'predicted files and parts; confirm or correct';
-
-const sizeContext = (check: SizeCheck, minParallel: number): SizeContext => ({
-  oversized: check.flagged,
-  minParallel,
-  reasons: check.reasons,
-  evidence: check.evidence,
-  decision: check.decision,
-  proposal: check.proposal,
-  ...(check.estimate.forecast === undefined ? {} : { forecast: forecastContext(check.estimate.forecast) }),
-});
-
-const forecastContext = (f: SizeForecast): SizeForecastContext => ({
-  note: FORECAST_NOTE,
-  files: f.files.paths,
-  modules: f.modules,
-  parts: f.parts,
-  expectedLines: f.lines,
-  riskTier: f.riskTier,
-  riskAreas: f.riskAreas,
-  migration: f.migration,
-  publicApi: f.publicApi,
-  confidence: f.confidence,
-  history: f.reference?.summary ?? null,
-});
-
-export interface InvestigationSummary {
-  readonly version: number;
-  readonly createdAt: string;
-  /** The run that made it (null for a person's push). */
-  readonly runId: string | null;
-  /** Set when the block did not validate: the text is kept but there is nothing to compare, so refresh. */
-  readonly validation: string | null;
-  readonly planHash: string | null;
-  readonly baseCommit: string | null;
-  /** Paths the investigation expects to create, modify or delete (the relevant files to check the base for changes). */
-  readonly files: readonly string[];
-  readonly riskTier: string | null;
-  readonly confidence: string | null;
-  readonly needsHuman: boolean | null;
-}
-
-const investigationSummary = (a: Artifact): InvestigationSummary => {
-  const parsed = parseInvestigation(a.content);
-  return {
-    version: a.version,
-    createdAt: a.createdAt,
-    runId: a.provenance.runId,
-    validation: a.provenance.validation ?? null,
-    planHash: parsed.ok ? parsed.investigation.planHash : null,
-    baseCommit: parsed.ok ? parsed.investigation.baseCommit : null,
-    files: parsed.ok ? parsed.investigation.files.map((f) => f.path) : [],
-    riskTier: parsed.ok ? parsed.investigation.riskTier : null,
-    confidence: parsed.ok ? parsed.investigation.confidence : null,
-    needsHuman: parsed.ok ? parsed.investigation.needsHuman.needed : null,
-  };
-};
-
-export interface InboxContextItem {
-  readonly id: number;
-  readonly title: string;
-  readonly sourceLabel: string;
-  readonly occurredAt: string;
-  readonly summary: string | null;
-  readonly url: string;
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
-/** What `get_context` tells an agent about conflicting sources. */
-export const AUTHORITY_STATEMENT =
-  'When sources disagree: merged code and the implementation record win, then current choices (newest first), then plan.md, then older discussion. Replaced choices are history: read them for why, not for what to do. Accepted decisions in scopedDecisions govern this glob by their scope, broadest first.';
-
-/** The most decisions one context bundle carries. */
-const CONTEXT_DECISIONS = 30;
-
-export interface ArtifactListing {
-  readonly kind: ArtifactKind;
-  readonly label: string;
-  readonly version: number;
-  readonly commitSha: string | null;
-  /** Characters of content. */
-  readonly size: number;
-  /** The first line of the content, or the link. */
-  readonly description: string;
-}
-
-/** Attachments with these labels always come inline: agents must follow them and pass them verbatim. */
-const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
-
-/** `include` entries: a kind (`local_review`, `local_review`, ...), `attachment:<label>`, or `all`. */
-const wanted = (include: readonly string[], a: Artifact): boolean =>
-  include.includes('all') ||
-  include.includes(a.kind) ||
-  (a.kind === 'attachment' && include.some((i) => i.toLowerCase() === `attachment:${a.label}`.toLowerCase()));
-
-const describe = (a: Artifact): string => {
-  const line = a.content.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find((l) => l !== '');
-  const text = line ?? a.link ?? '';
-  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
-};
-
-/** A result from a superseded routine run: recorded as ignored, not stored. */
-export interface Ignored {
-  readonly ignored: true;
-  readonly reason: string;
-}
+// The pieces moved out of this file stay importable from here.
+export { addArtifact, addAttachment } from './artifact-write.js';
+export type { Ignored, NewArtifact, PutOptions } from './artifact-write.js';
+export { handoverOf } from './context/handover-section.js';
+export { AUTHORITY_STATEMENT, governingDecisions } from './context/decision-section.js';
+export { FORECAST_NOTE } from './context/size-section.js';
+export type { SizeContext, SizeForecastContext } from './context/size-section.js';
+export type { ArtifactListing } from './context/artifact-listing.js';
+export type { GlobHotspot } from './context/hotspot-section.js';
+export type { InboxContextItem } from './context/inbox-section.js';
+export type { InvestigationSummary } from './context/investigation-section.js';
+export type { GlobContext } from './context/glob-context.js';
 
 /** A versioned document (plan.md, the test plan) with its history, newest as `current`. */
 export interface VersionedDoc {
@@ -325,141 +46,6 @@ export interface VersionedDoc {
   readonly current: Artifact | null;
   readonly versions: { version: number; createdAt: string; by: string }[];
 }
-
-export interface PutOptions {
-  readonly commitSha: string | null;
-  readonly runId: string | null;
-  readonly agentSetVersion: number | null;
-  /** Local reviews: the review cycle's figures, kept in the provenance (other kinds ignore them). */
-  readonly reviewStats?: ReviewStats | null;
-  /** plan.md and the test plan: the version the writer read (0 before the first is saved); a later one is refused. */
-  readonly expectedVersion?: number;
-  /** The same as `expectedVersion`, under its old name (plan.md only then). */
-  readonly expectedPlanVersion?: number;
-}
-
-/** What an artifact write carries beyond the glob and the writer. */
-interface NewArtifact {
-  readonly kind: ArtifactKind;
-  readonly label: string;
-  readonly content: string;
-  readonly link: string | null;
-  readonly commitSha: string | null;
-  readonly runId: string | null;
-  readonly agentSetVersion: number | null;
-  readonly reviewStats: ReviewStats | null;
-  /** Who produced it, when the kind and run don't say (decision globs' plan.md from a channel). */
-  readonly by?: Provenance['by'];
-  /** File attachments: the stored file's facts. */
-  readonly file?: AttachmentFile;
-}
-
-/**
- * Appends an artifact version with its provenance and `ArtifactAdded` event, in the caller's transaction (which has
- * checked the writer's access). The one write path for artifacts: `put` and the inbox's attach both use it. The
- * caller publishes `glob.artifacts` after the commit.
- */
-export const addArtifact = async (tx: Tx, clock: Clock, glob: Glob, email: string, input: NewArtifact): Promise<Artifact> => {
-  const { kind, label, content, link } = input;
-  const globId = glob.id;
-  // An investigation whose block doesn't validate is kept as text, with the reason beside it.
-  const parsed = kind === 'investigation' ? parseInvestigation(content) : null;
-  // A test plan with problems is kept as text with the notes beside it; its parsed spec list is stored so readers don't parse again.
-  const plan = kind === 'test_plan' ? parseTestPlan(content) : null;
-  const planNote = plan === null ? null : testPlanNote(plan.notes);
-  // Likewise a record whose workstreams block doesn't validate. A record without the section (a small glob) has nothing to say.
-  const workstreams = kind === 'implementation_plan' ? parseWorkstreams(content) : null;
-  const provenance: Provenance = {
-    by:
-      input.by ??
-      (input.runId !== null
-        ? 'routine'
-        : kind === 'implementation_plan' || kind === 'local_review' || kind === 'investigation' || kind === 'assessment'
-          ? 'sessionator'
-          : 'human'),
-    actor: email,
-    runId: input.runId,
-    agentSetVersion: input.agentSetVersion,
-    ...(kind === 'local_review' && input.reviewStats !== null && { reviewStats: input.reviewStats }),
-    ...(parsed !== null && !parsed.ok && { validation: validationNote(parsed.errors) }),
-    ...(planNote !== null && { validation: planNote }),
-    ...(plan !== null && plan.atf !== null && { atfSpecs: plan.atf }),
-    ...(workstreams?.kind === 'invalid' && { validation: workstreamsValidationNote(workstreams.errors) }),
-  };
-  const now = clock.now();
-  // Read the previous record under the artifact lock, so two pushes can't both see the same "previous" block.
-  let previous: ReturnType<typeof parseWorkstreams> | null = null;
-  if (workstreams?.kind === 'ok') {
-    await tx.lockGlobArtifacts(globId);
-    // The last version whose block parsed, so a malformed push in between doesn't make the same block look new again.
-    for (const v of (await tx.artifactVersions(globId, 'implementation_plan', '')).reverse()) {
-      const p = parseWorkstreams(v.content);
-      if (p.kind === 'ok') {
-        previous = p;
-        break;
-      }
-    }
-  }
-  const artifact = await tx.insertArtifact({
-    globId,
-    kind,
-    label,
-    content,
-    link,
-    commitSha: input.commitSha,
-    provenance,
-    createdAt: now,
-    ...(input.file === undefined ? {} : { file: input.file }),
-  });
-  // Queued for the findings pipeline in the same transaction; nothing is parsed or asked here.
-  if (kind === 'local_review') {
-    await tx.insertReviewSource({
-      boardId: glob.boardId,
-      globId,
-      kind: 'local_review',
-      artifactId: artifact.id,
-      externalId: null,
-      commitSha: input.commitSha,
-      agentSetVersion: input.agentSetVersion,
-      content: null,
-      path: null,
-      line: null,
-      createdAt: now,
-    });
-  }
-  await tx.appendEvents([
-    {
-      type: 'ArtifactAdded',
-      globId,
-      actor: email,
-      at: now,
-      data: { kind, label, version: artifact.version, commitSha: input.commitSha, runId: input.runId, agentSetVersion: input.agentSetVersion },
-    },
-    // Only a changed block is an event, so re-pushing the same record doesn't pile them up; consumers read the latest per glob.
-    ...(workstreams?.kind === 'ok' && !(previous?.kind === 'ok' && sameWorkstreams(previous.block, workstreams.block))
-      ? [
-          {
-            type: 'WorkstreamsRecorded' as const,
-            globId,
-            actor: email,
-            at: now,
-            data: workstreamsEventData(workstreams.block, { version: artifact.version, commitSha: input.commitSha, runId: input.runId }),
-          },
-        ]
-      : []),
-  ]);
-  return artifact;
-};
-
-/** A link attachment on a glob in the caller's transaction (the inbox's attach); the caller publishes `glob.artifacts` after commit. */
-export const addAttachment = (
-  tx: Tx,
-  clock: Clock,
-  glob: Glob,
-  email: string,
-  input: { readonly label: string; readonly content: string; readonly link: string | null },
-): Promise<Artifact> =>
-  addArtifact(tx, clock, glob, email, { kind: 'attachment', ...input, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
 
 /**
  * Glob artifacts: plan.md, the implementation record (stored as kind `implementation_plan`), local reviews and attachments,
@@ -641,28 +227,12 @@ export class ArtifactService {
       // Legacy postplan rows were migrated into the record; they stay as history, not listed.
       const others = artifacts.filter((a) => ARTIFACT_ROLE[a.kind] !== 'payload' && ARTIFACT_ROLE[a.kind] !== 'record' && !full(a));
       const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);
-      const allDecisions = await tx.listDecisions(glob.boardId);
-      const decisions = decisionViews(
-        allDecisions.filter((d) => d.globId === globId),
-        allDecisions,
-      )
-        // Current first (stable: each group stays newest first).
-        .sort((a, b) => Number(a.status === 'superseded') - Number(b.status === 'superseded'))
-        .slice(0, CONTEXT_DECISIONS);
+      const decisions = await decisionsOfGlob(tx, glob);
       const sizeCheck = await tx.getSizeCheck(globId);
       const running = investigationRunning(glob);
       const scopedDecisions = await governingDecisions(tx, glob);
-      const inbox = (await tx.listInboxForGlob(globId)).map((i) => ({
-        id: i.id,
-        title: inboxTitle(i),
-        sourceLabel: i.sourceLabel,
-        occurredAt: i.occurredAt,
-        summary: i.summary,
-        url: inboxLink(i.boardId, i.id),
-        text: i.text.slice(0, INBOX_CONTEXT_CHARS),
-        truncated: i.text.length > INBOX_CONTEXT_CHARS,
-      }));
-      const group = await this.groupSection(tx, glob);
+      const inbox = await inboxSection(tx, globId);
+      const group = await groupSection(tx, this.deps.clock, glob);
       const hotspotView = this.deps.hotspots === undefined ? null : await this.deps.hotspots(glob.boardId, this.deps.clock.now());
       return ok({
         glob: {
@@ -745,20 +315,6 @@ export class ArtifactService {
           "Not in full: call get_artifact(id, kind, label?) for one, or get_context(id, include: ['local_review', 'attachment:<label>', 'all']). Inbox items are attached notes: their text is cut at 12000 characters (truncated: true); search_text finds the rest.",
       });
     });
-  }
-
-  /** The group section of a glob's context: its neighbours and open decisions; null when it has none. */
-  private async groupSection(tx: Tx, glob: Glob): Promise<GroupContext | null> {
-    if (glob.group === null) return null;
-    const all = await tx.listGlobs(glob.boardId, { include: 'all' });
-    const members = all.filter((g) => inGroup(g, glob.group ?? '') && !isArchivedDecision(g));
-    const relations = await tx.listRelationsFrom(members.filter((g) => !isHumanCategory(g.category)).map((g) => g.id));
-    const memberIds = new Set(members.map((g) => g.id));
-    const others = await tx.getGlobs([...new Set(relations.map((r) => r.to))].filter((id) => !memberIds.has(id)));
-    // Plans only for the neighbours the context shows, in one read.
-    const shown = contextNeighbours(glob, members, this.deps.clock.now()).slice(0, GROUP_CONTEXT_MAX_GLOBS);
-    const plans = new Map((await tx.latestArtifacts(shown.map((g) => g.id), ['plan'])).map((a) => [a.globId, a.content]));
-    return groupContext(glob, members, relations, plans, others.filter((g) => isHumanCategory(g.category) && !isArchivedDecision(g)), this.deps.clock.now());
   }
 
   /** The latest version of one artifact (kind and, for attachments, label) in full. */
