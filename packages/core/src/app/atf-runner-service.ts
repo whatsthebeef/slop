@@ -130,6 +130,9 @@ export class AtfRunnerService {
     const url = input.config?.webhook?.url;
     let hook: { readonly webhook: { readonly url: string; readonly secret: string }; readonly secret: string } | undefined;
     if (url !== undefined) {
+      // Only an admin makes the server look a host up.
+      const allowed = await this.adminOnly(email, boardId);
+      if (!allowed.ok) return allowed;
       const hooks = await this.webhookTarget(url);
       if (!hooks.ok) return hooks;
       const secret = hooks.value.newSecret();
@@ -161,6 +164,13 @@ export class AtfRunnerService {
     const webhookSecret = hook === undefined ? {} : { webhookSecret: hook.secret };
     if (issuer === undefined) return ok({ ...publicRunner(saved.value), ...webhookSecret });
     return this.issueFor(boardId, saved.value, issuer, webhookSecret);
+  }
+
+  private async adminOnly(email: string, boardId: number): Promise<Result<boolean>> {
+    return this.deps.store.transaction(async (tx) => {
+      const actor = await adminOf(tx, email, boardId);
+      return actor.ok ? ok(true) : actor;
+    });
   }
 
   /** The server's webhook support when `url` may be delivered to: the rules, a server that can sign, and the host's addresses. */
@@ -226,8 +236,13 @@ export class AtfRunnerService {
     let hooks: RunnerWebhooks | undefined;
     if (url !== undefined) {
       // The addresses are looked up outside the transaction; an unchanged URL is checked at every delivery anyway.
-      const before = await this.deps.store.transaction((tx) => tx.getAtfRunner(boardId, id));
-      if (before?.config.webhook?.url !== url) {
+      // Admin first: only an admin makes the server look a host up.
+      const before = await this.deps.store.transaction(async (tx) => {
+        const actor = await adminOf(tx, email, boardId);
+        return actor.ok ? ok(await tx.getAtfRunner(boardId, id)) : actor;
+      });
+      if (!before.ok) return before;
+      if (before.value?.config.webhook?.url !== url) {
         const target = await this.webhookTarget(url);
         if (!target.ok) return target;
         hooks = target.value;

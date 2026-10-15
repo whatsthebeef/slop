@@ -239,7 +239,7 @@ describe('the HTTPS transport', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.body).toBe('{"a":1}');
     expect(seen[0]?.url).toBe('/hook?x=1');
-    expect(seen[0]?.headers['host']).toBe('localhost');
+    expect(seen[0]?.headers['host']).toBe(`localhost:${String(port)}`);
     expect(seen[0]?.headers['slop-event']).toBe('deploy.live');
   });
 
@@ -509,6 +509,24 @@ describe('deploy-live delivery through the outbox', () => {
           .where(eq(schema.outbox.kind, 'deliver_atf_webhook'))
       ).filter((j) => j.globId === `board-${String(boardId)}`),
     ).toHaveLength(3);
+  });
+
+  it('does not queue a delivery again after it was dropped, whatever state the earlier one ended in', async () => {
+    await queue(effect());
+    await database.db
+      .update(schema.outbox)
+      .set({ state: 'dropped', lastError: 'The receiver refused' })
+      .where(eq(schema.outbox.kind, 'deliver_atf_webhook'));
+    await queue(effect());
+    expect((await jobs()).map((j) => j.state)).toEqual(['dropped']);
+    for (const state of ['done', 'failed'] as const) {
+      await database.db
+        .update(schema.outbox)
+        .set({ state })
+        .where(eq(schema.outbox.kind, 'deliver_atf_webhook'));
+      await queue(effect());
+      expect((await jobs()).map((j) => j.state)).toEqual([state]);
+    }
   });
 
   it('is queued by the containment check for subscribed runners only, once per deploy', async () => {

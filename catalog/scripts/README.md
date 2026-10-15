@@ -4,7 +4,7 @@ An ATF runner is any system that runs a board's acceptance tests and tells slop 
 
 ## The contract
 
-1. **Trigger.** The runner's own pipeline runs after a deploy (or a branch deploy).
+1. **Trigger.** The runner's own pipeline runs after a deploy (or a branch deploy). A runner that can't watch for deploys itself can register a webhook (see "Deploy-live webhook" below): slop calls it once the deploy is live and checked, and the runner then does steps 3 and 4.
 2. **Identity.** One of the methods below, sent as `Authorization: Bearer <credential>`. slop resolves it to one registered runner on one board; anything else is a plain `401`.
 3. **Specs.** `GET /integrations/boards/:b/atf-specs?environment=<env>&sha=<sha>`. `202` means slop is still checking the deploy (wait `retryAfterSeconds`), `409` means a newer deploy replaced the commit, `200` has the planned `specs` and `greps`. Run the default suite on anything else.
 4. **Results.** `POST /integrations/boards/:b/atf-results` with `{environment | branch, sha, passed, failed, skipped, url?, specs?: [{file, status, tests, failed}]}` and an `Idempotency-Key` header naming this pipeline run (a build id; one per run, not per commit, or an identical re-run is dropped as a redelivery). `201` recorded, `200` ignored (a redelivery, or nothing on the board to attach it to), `403` the runner doesn't serve that environment, `401` identity not accepted.
@@ -18,11 +18,13 @@ An ATF runner is any system that runs a board's acceptance tests and tells slop 
 | `SLOP_OIDC_TOKEN` | a CI-issued JWT (identity 1) |
 | `SLOP_OIDC_AUDIENCE` | the token's audience when it isn't `SLOP_URL` (must equal the server's `ATF_OIDC_AUDIENCE`) |
 | `SLOP_TOKEN` | the board's integration token (deprecated) |
-| `SLOP_ATF_AUTH` | `oidc`, `aws` or `token` to force an identity |
+| `SLOP_CLIENT_ID`, `SLOP_CLIENT_SECRET`, `SLOP_TOKEN_URL` | a client-credentials runner's client and its token URL (identity 2) |
+| `SLOP_ATF_SCOPE` | the scope to ask the token URL for, when it isn't the one the script needs (`slop/atf.read-specs` for `atf-specs.sh`, `slop/atf.write-results` for `atf-report.sh`) |
+| `SLOP_ATF_AUTH` | `oidc`, `client`, `aws` or `token` to force an identity |
 | `SLOP_ATF_TRANSPORT` | `http` or `eventbridge` for the results |
 | `SLOP_ATF_IDEMPOTENCY_KEY` | the pipeline run id, when the CI isn't CodeBuild or GitHub Actions |
 
-Without `SLOP_ATF_AUTH`: `SLOP_OIDC_TOKEN` first; then AWS credentials when `SLOP_TOKEN` isn't set; then `SLOP_TOKEN`.
+Without `SLOP_ATF_AUTH`: `SLOP_OIDC_TOKEN` first; then `SLOP_CLIENT_ID` with `SLOP_CLIENT_SECRET`; then AWS credentials when `SLOP_TOKEN` isn't set; then `SLOP_TOKEN`.
 
 ## OIDC runner (GitHub Actions and other CI systems)
 
@@ -42,6 +44,41 @@ No stored secret. The runner's IAM role asks AWS for a JWT through outbound iden
 2. **Server admin:** add the issuer URL to `ATF_AWS_ALLOWED_ISSUERS` and the 12-digit account to `ATF_AWS_ALLOWED_ACCOUNTS`, then redeploy. These are separate from the OIDC list and from `ATF_PUSH_ALLOWED_ROLE_ACCOUNTS`: a role in an account that isn't listed is refused even when a board registers it.
 3. **Board admin:** register a runner with method `aws_iam` and `roleArns` (`arn:aws:iam::123456789012:role/atf-codebuild`, or `prefix*`). A session of the role (`assumed-role/atf-codebuild/...`) matches the role.
 4. **Runner:** use `buildspec-atf.yml` with `SLOP_URL` and `SLOP_BOARD` and no `SLOP_TOKEN`. The scripts need an AWS CLI (or boto3) that has `sts get-web-identity-token`; see the buildspec comments.
+
+## Client credentials runner (OAuth, for systems with no CI identity)
+
+For a runner that can keep a secret but has no OIDC or IAM identity. slop creates an OAuth client for it in its Cognito user pool, limited to the two ATF scopes; the runner exchanges the client for a short-lived access token (one hour).
+
+1. **Board admin:** register a runner with method `client_credentials` (Board Settings, or `POST /api/boards/:b/atf-runners`) and the environments it serves. Do not send a `clientId`: slop makes the client. The server can do this only when Settings, System shows `ATF client credentials` as ready (it has the Cognito permission and the auth stack's `slop/atf.*` scopes); otherwise registering fails and nothing is saved. Cognito charges for machine-to-machine tokens, so ask who pays before turning this on for many runners.
+2. **Read the answer once.** The answer to the create call (the notice in Settings, or `credentials` in the API response) has four values: `clientId`, `clientSecret`, `tokenUrl` and `scope` (`slop/atf.read-specs slop/atf.write-results`). slop never stores the secret and cannot show it again; if it is lost, revoke the runner and register another.
+3. **Runner:** keep the secret in the CI system's secret store and set `SLOP_CLIENT_ID` (`clientId`), `SLOP_CLIENT_SECRET` (`clientSecret`) and `SLOP_TOKEN_URL` (`tokenUrl`) next to `SLOP_URL` and `SLOP_BOARD`. Each script asks `SLOP_TOKEN_URL` for a token with only the scope it needs (`atf-specs.sh`: `slop/atf.read-specs`; `atf-report.sh`: `slop/atf.write-results`; `SLOP_ATF_SCOPE` overrides), once per run. The secret is passed to curl in a mode-600 file, never on the command line, and is never printed. A failed token request is a warning and the pipeline carries on.
+
+Without the scripts: `POST <tokenUrl>` with HTTP Basic auth `clientId:clientSecret` and a form body `grant_type=client_credentials&scope=<scope>`, then send `Authorization: Bearer <access_token>`. A user's token, or one without the scope the door needs, is refused. Revoking the runner deletes its client; the other runners are unaffected.
+
+## Deploy-live webhook (push, for runners that can't pull)
+
+Pull is the default: the runner's pipeline asks `atf-specs`. A runner whose system can only be called can have slop call it once a deploy is live and checked. The webhook is an extra setting of any runner, whatever its identity method. It has no screen yet: set it through the API.
+
+1. **Board admin:** `POST /api/boards/:b/atf-runners`, or `PATCH /api/boards/:b/atf-runners/:id`, with `config: {..., "webhook": {"url": "https://ci.example.com/hooks/slop"}}`. `PATCH`'s `config.webhook` is the whole setting: leave it out to turn delivery off.
+2. **URL rules:** `https`, no user name or password, a public host name (not `localhost`, a single label or an internal-looking suffix), and every address it resolves to must be public (private, loopback, link-local and other reserved ranges are refused). slop resolves the host when you set the webhook and again at every delivery, and connects to the address it resolved (the host name is the TLS name and the `Host` header). Redirects are not followed. The server must have `SIGNING_SECRET` set, or webhooks can't be turned on.
+3. **Read the signing secret once.** The answer that turns the webhook on has `webhookSecret` (`whsec_...`), with `Cache-Control: no-store`. slop keeps it sealed and shows it nowhere else. Moving the URL keeps it; turning the webhook off and on again makes a new one. Don't send a secret of your own: it is refused.
+
+**What slop sends.** One `POST` per runner and deploy, once the deploy is live and slop has checked what it contains, for each enabled runner that serves the environment. The body is JSON:
+
+```json
+{"event": "deploy.live", "id": "atf-<runner>-<deploy>", "board": {"id": 4, "name": "..."}, "environment": "staging", "sha": "<commit>", "deployId": 123, "deployedAt": "<ISO time>"}
+```
+
+| Header | Meaning |
+| --- | --- |
+| `Slop-Event` | `deploy.live` |
+| `Slop-Delivery` | `atf-<runner>-<deploy>`: the same on every retry of one delivery |
+| `Slop-Timestamp` | when slop signed it, Unix seconds |
+| `Slop-Signature` | `sha256=<hex>`: HMAC-SHA256, keyed with the `whsec_` secret, of the text `<timestamp>.<raw body>` |
+
+**Verify before acting.** Compute the HMAC over the `Slop-Timestamp` value, a dot and the raw request body (the bytes, before any JSON parsing), keyed with the secret; compare with `Slop-Signature` in constant time (`hmac.compare_digest`, `crypto.timingSafeEqual`); reject a timestamp more than five minutes from your clock (a replay window; retries are re-signed, so a late retry has a fresh timestamp); and ignore a `Slop-Delivery` you already handled. Then run the pipeline for `environment` at `sha` (steps 3 and 4 of the contract), and answer quickly: slop waits 10 seconds and doesn't keep your answer's body.
+
+**Retries and drops.** Any `2xx` ends the delivery. A network failure, a timeout, `408`, `429` or `5xx` is retried with growing delays (5 seconds doubling, eight attempts in all) under the same `Slop-Delivery`. Any other answer (a redirect or another `4xx`) is taken as the receiver's refusal and the delivery is dropped and not repeated; so is one whose runner was disabled, revoked or no longer serves the environment, whose webhook was removed, whose deploy was replaced by a newer one, or whose host now resolves to a private address. A dropped or failed delivery is never queued again for the same deploy. Webhook failures never block a deploy or a merge.
 
 ## Board token (deprecated for ATF)
 

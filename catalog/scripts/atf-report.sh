@@ -16,12 +16,15 @@
 #                deploy-target stack forwards those to slop. AWS only; the project's role needs events:PutEvents there.
 #                Used when selected, and when there is no URL, board or identity for http.
 #
-# Which identity http uses (SLOP_ATF_AUTH=oidc|aws|token forces one; otherwise the first that applies):
+# Which identity http uses (SLOP_ATF_AUTH=oidc|client|aws|token forces one; otherwise the first that applies):
 #   1. SLOP_OIDC_TOKEN   a JWT from the CI system (GitHub Actions: see github-actions-atf.yml), sent as the bearer.
-#   2. AWS credentials   when there is no SLOP_TOKEN and the environment has AWS credentials: a JWT from AWS outbound identity
+#   2. SLOP_CLIENT_ID, SLOP_CLIENT_SECRET, SLOP_TOKEN_URL   a client-credentials runner's client (shown once when an admin
+#                        registers it), exchanged for an access token (scope slop/atf.write-results, or SLOP_ATF_SCOPE) with the
+#                        secret in a mode-600 file, never on the command line. The secret and token are never printed.
+#   3. AWS credentials   when there is no SLOP_TOKEN and the environment has AWS credentials: a JWT from AWS outbound identity
 #                        federation (STS GetWebIdentityToken, audience SLOP_OIDC_AUDIENCE, else SLOP_URL). Needs the aws CLI
 #                        with `sts get-web-identity-token`, or python3 with a boto3 that has it.
-#   3. SLOP_TOKEN        the board's integration token (deprecated for ATF: slop answers with a Deprecation header).
+#   4. SLOP_TOKEN        the board's integration token (deprecated for ATF: slop answers with a Deprecation header).
 # The identity must be registered on the board as an ATF runner (see README.md). A token is never printed.
 #
 # Each report carries an Idempotency-Key naming this pipeline run (SLOP_ATF_IDEMPOTENCY_KEY, else the CodeBuild build id or
@@ -68,17 +71,48 @@ print(boto3.client("sts").get_web_identity_token(Audience=[os.environ["SLOP_AUD"
   printf '%s' "$token"
 }
 
+# An access token for a client-credentials runner on stdout (SLOP_CLIENT_ID, SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, asking
+# for scope $1, or SLOP_ATF_SCOPE when set); fails quietly. The secret reaches curl through a mode-600 config file, never the
+# command line, and is never printed. The token is requested once per script run (the credential is chosen once).
+slop_atf_client_token() {
+  local scope="${SLOP_ATF_SCOPE:-$1}" cfg="" out="" code="" token=""
+  [ -n "${SLOP_CLIENT_ID:-}" ] && [ -n "${SLOP_CLIENT_SECRET:-}" ] && [ -n "${SLOP_TOKEN_URL:-}" ] || return 1
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 1
+  # Characters that would break out of a curl config string are not in any client id, secret or scope.
+  case "${SLOP_CLIENT_ID}${SLOP_CLIENT_SECRET}${scope}" in
+    *'"'* | *\\* | *$'\n'* | *$'\r'*) return 1 ;;
+  esac
+  cfg="$(mktemp 2>/dev/null)" || return 1
+  out="$(mktemp 2>/dev/null)" || { rm -f "$cfg"; return 1; }
+  chmod 600 "$cfg" "$out" 2>/dev/null
+  printf 'user = "%s:%s"\ndata-urlencode = "grant_type=client_credentials"\ndata-urlencode = "scope=%s"\n' \
+    "$SLOP_CLIENT_ID" "$SLOP_CLIENT_SECRET" "$scope" >"$cfg"
+  code="$(curl -sS --max-time 20 -K "$cfg" -o "$out" -w '%{http_code}' "$SLOP_TOKEN_URL" 2>/dev/null)" || code="000"
+  if [ "$code" = "200" ]; then
+    token="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("access_token", ""))
+except Exception:
+    pass' "$out" 2>/dev/null)" || token=""
+  fi
+  rm -f "$cfg" "$out"
+  [ -n "$token" ] || return 1
+  printf '%s' "$token"
+}
+
 # Prints the method on the first line and the bearer on the second, or fails when no identity is available.
 slop_atf_credential() {
   local want="${SLOP_ATF_AUTH:-}" token=""
   if [[ -z "$want" ]]; then
     if [[ -n "${SLOP_OIDC_TOKEN:-}" ]]; then want=oidc
+    elif [[ -n "${SLOP_CLIENT_ID:-}" && -n "${SLOP_CLIENT_SECRET:-}" ]]; then want=client
     elif [[ -z "${SLOP_TOKEN:-}" ]] && slop_atf_have_aws; then want=aws
     elif [[ -n "${SLOP_TOKEN:-}" ]]; then want=token
     fi
   fi
   case "$want" in
     oidc) token="${SLOP_OIDC_TOKEN:-}" ;;
+    client) token="$(slop_atf_client_token slop/atf.write-results)" || token="" ;;
     aws) token="$(slop_atf_aws_token)" || token="" ;;
     token) token="${SLOP_TOKEN:-}" ;;
   esac
@@ -121,7 +155,7 @@ if [[ "$transport" != "eventbridge" && -n "$results_endpoint" ]]; then
     bearer="$(printf '%s\n' "$cred" | sed -n '2p')"
     transport="http"
   elif [[ "$transport" == "http" ]]; then
-    echo "atf-report: no identity for http (set SLOP_OIDC_TOKEN, SLOP_TOKEN, or run with AWS credentials). Not reported." >&2
+    echo "atf-report: no identity for http (set SLOP_OIDC_TOKEN, SLOP_CLIENT_ID with SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, SLOP_TOKEN, or run with AWS credentials). Not reported." >&2
     exit 0
   fi
 fi

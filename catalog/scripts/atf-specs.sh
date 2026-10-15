@@ -17,9 +17,12 @@
 # Where it asks, and with what (set by the project's environment variables; nothing here names a board):
 #   SLOP_URL       slop's address, e.g. https://slop.example.com
 #   SLOP_BOARD     the board's number
-#   Identity (SLOP_ATF_AUTH=oidc|aws|token forces one; otherwise the first that applies). Register it on the board as an ATF
+#   Identity (SLOP_ATF_AUTH=oidc|client|aws|token forces one; otherwise the first that applies, in this order). Register it on the board as an ATF
 #   runner (README.md); a token is never printed:
 #   SLOP_OIDC_TOKEN  a JWT from the CI system (GitHub Actions: github-actions-atf.yml), sent as the bearer
+#   SLOP_CLIENT_ID, SLOP_CLIENT_SECRET, SLOP_TOKEN_URL   a client-credentials runner's client (shown once when an admin
+#                    registers it): the script exchanges them for an access token (scope slop/atf.read-specs, or SLOP_ATF_SCOPE)
+#                    with the secret in a mode-600 file, never on the command line. The secret and token are never printed.
 #   AWS credentials  when SLOP_TOKEN is not set and the environment has AWS credentials: a JWT from AWS outbound identity
 #                    federation (STS GetWebIdentityToken; audience SLOP_OIDC_AUDIENCE, else SLOP_URL). Needs the aws CLI
 #                    with `sts get-web-identity-token`, or python3 with a boto3 that has it.
@@ -56,17 +59,48 @@ print(boto3.client("sts").get_web_identity_token(Audience=[os.environ["SLOP_AUD"
   printf '%s' "$token"
 }
 
+# An access token for a client-credentials runner on stdout (SLOP_CLIENT_ID, SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, asking
+# for scope $1, or SLOP_ATF_SCOPE when set); fails quietly. The secret reaches curl through a mode-600 config file, never the
+# command line, and is never printed. The token is requested once per script run (the credential is chosen once).
+slop_atf_client_token() {
+  local scope="${SLOP_ATF_SCOPE:-$1}" cfg="" out="" code="" token=""
+  [ -n "${SLOP_CLIENT_ID:-}" ] && [ -n "${SLOP_CLIENT_SECRET:-}" ] && [ -n "${SLOP_TOKEN_URL:-}" ] || return 1
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 1
+  # Characters that would break out of a curl config string are not in any client id, secret or scope.
+  case "${SLOP_CLIENT_ID}${SLOP_CLIENT_SECRET}${scope}" in
+    *'"'* | *\\* | *$'\n'* | *$'\r'*) return 1 ;;
+  esac
+  cfg="$(mktemp 2>/dev/null)" || return 1
+  out="$(mktemp 2>/dev/null)" || { rm -f "$cfg"; return 1; }
+  chmod 600 "$cfg" "$out" 2>/dev/null
+  printf 'user = "%s:%s"\ndata-urlencode = "grant_type=client_credentials"\ndata-urlencode = "scope=%s"\n' \
+    "$SLOP_CLIENT_ID" "$SLOP_CLIENT_SECRET" "$scope" >"$cfg"
+  code="$(curl -sS --max-time 20 -K "$cfg" -o "$out" -w '%{http_code}' "$SLOP_TOKEN_URL" 2>/dev/null)" || code="000"
+  if [ "$code" = "200" ]; then
+    token="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("access_token", ""))
+except Exception:
+    pass' "$out" 2>/dev/null)" || token=""
+  fi
+  rm -f "$cfg" "$out"
+  [ -n "$token" ] || return 1
+  printf '%s' "$token"
+}
+
 # Prints the method on the first line and the bearer on the second, or fails when no identity is available.
 slop_atf_credential() {
   local want="${SLOP_ATF_AUTH:-}" token=""
   if [ -z "$want" ]; then
     if [ -n "${SLOP_OIDC_TOKEN:-}" ]; then want=oidc
+    elif [ -n "${SLOP_CLIENT_ID:-}" ] && [ -n "${SLOP_CLIENT_SECRET:-}" ]; then want=client
     elif [ -z "${SLOP_TOKEN:-}" ] && slop_atf_have_aws; then want=aws
     elif [ -n "${SLOP_TOKEN:-}" ]; then want=token
     fi
   fi
   case "$want" in
     oidc) token="${SLOP_OIDC_TOKEN:-}" ;;
+    client) token="$(slop_atf_client_token slop/atf.read-specs)" || token="" ;;
     aws) token="$(slop_atf_aws_token)" || token="" ;;
     token) token="${SLOP_TOKEN:-}" ;;
   esac
@@ -113,7 +147,7 @@ slop_atf_specs() {
   fi
   local cred method bearer
   cred="$(slop_atf_credential)" || {
-    echo "atf-specs: no identity (set SLOP_OIDC_TOKEN or SLOP_TOKEN, or run with AWS credentials); running the default suite" >&2
+    echo "atf-specs: no identity (set SLOP_OIDC_TOKEN, SLOP_CLIENT_ID with SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, or SLOP_TOKEN, or run with AWS credentials); running the default suite" >&2
     return 0
   }
   method="$(printf '%s\n' "$cred" | sed -n '1p')"
@@ -197,4 +231,4 @@ PY
 }
 
 slop_atf_specs "$@"
-unset -f slop_atf_specs slop_atf_retry_after slop_atf_have_aws slop_atf_aws_token slop_atf_credential
+unset -f slop_atf_specs slop_atf_retry_after slop_atf_have_aws slop_atf_aws_token slop_atf_client_token slop_atf_credential

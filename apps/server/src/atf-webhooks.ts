@@ -179,7 +179,9 @@ export const httpsTransport =
           agent: false,
           headers: {
             ...post.headers,
-            Host: target.hostname,
+            // A port other than the https default is part of the Host, as in any browser's request.
+            Host:
+              target.port === 443 ? target.hostname : `${target.hostname}:${String(target.port)}`,
             'Content-Length': String(Buffer.byteLength(post.body)),
           },
           signal: AbortSignal.timeout(options.timeoutMs ?? WEBHOOK_TIMEOUT_MS),

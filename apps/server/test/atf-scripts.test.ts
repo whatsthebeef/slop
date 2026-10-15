@@ -311,6 +311,10 @@ describe.skipIf(!has('python3') || !has('bash') || !has('curl'))('ATF runner ide
   let events: string;
   const seen: Seen[] = [];
   let status = 201;
+  let tokenStatus = 200;
+  let curlLog: string;
+  const CLIENT_JWT = 'client.access.token';
+  const CLIENT_SECRET = 'shh-very-secret-value';
   const SHA = 'a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0';
   const AWS_JWT = 'header.payload.signature-from-aws';
 
@@ -320,6 +324,11 @@ describe.skipIf(!has('python3') || !has('bash') || !has('curl'))('ATF runner ide
     awsLog = join(dir, 'aws.log');
     events = join(dir, 'events.json');
     mkdirSync(bin);
+    // A curl that logs its arguments (to prove no secret is among them) and then runs the real one.
+    curlLog = join(dir, 'curl.log');
+    const realCurl = spawnSync('sh', ['-c', 'command -v curl'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(bin, 'curl'), `#!/bin/sh\necho "$*" >> "$CURL_LOG"\nexec "${realCurl}" "$@"\n`);
+    chmodSync(join(bin, 'curl'), 0o755);
     // A stand-in AWS CLI: `sts get-web-identity-token` logs its arguments and prints a JWT; put-events keeps the entries.
     writeFileSync(
       join(bin, 'aws'),
@@ -341,6 +350,11 @@ echo 0
           key: req.headers['idempotency-key'] as string | undefined,
           body: Buffer.concat(chunks).toString('utf8'),
         });
+        if (req.url === '/oauth2/token') {
+          res.writeHead(tokenStatus, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(tokenStatus === 200 ? { access_token: CLIENT_JWT, expires_in: 3600 } : { error: 'invalid_client' }));
+          return;
+        }
         const ok = status === 200 || status === 201;
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(
@@ -367,6 +381,7 @@ echo 0
   const base = (): Record<string, string> => ({
     PATH: `${bin}:${process.env.PATH ?? ''}`,
     AWS_LOG: awsLog,
+    CURL_LOG: curlLog,
     EVENTS: events,
     SLOP_URL: url,
     SLOP_BOARD: '4',
@@ -385,6 +400,7 @@ echo 0
     seen.length = 0;
     rmSync(events, { force: true });
     rmSync(awsLog, { force: true });
+    rmSync(curlLog, { force: true });
     return run('bash', [join(scripts, 'atf-report.sh'), 'staging', reports(name)], {
       env: { ...base(), ...extra },
     });
@@ -392,6 +408,7 @@ echo 0
   const specs = async (extra: Record<string, string>) => {
     seen.length = 0;
     rmSync(awsLog, { force: true });
+    rmSync(curlLog, { force: true });
     const out = join(dir, `s${String(Math.random()).slice(2)}`);
     const { stdout, stderr } = await run(
       'bash',
@@ -500,6 +517,73 @@ echo 0
     expect(refused.specs).toEqual([]);
     expect(refused.stderr).toContain('oidc identity');
     expect(refused.stderr).not.toContain('ci.jwt');
+  });
+
+  const client = (): Record<string, string> => ({
+    SLOP_CLIENT_ID: 'client-id-1',
+    SLOP_CLIENT_SECRET: CLIENT_SECRET,
+    SLOP_TOKEN_URL: `${url}/oauth2/token`,
+  });
+  const basic = `Basic ${Buffer.from(`client-id-1:${CLIENT_SECRET}`).toString('base64')}`;
+
+  it('exchanges client credentials for a token (write scope) and reports with it, the secret never on a command line or in the output', async () => {
+    status = 201;
+    tokenStatus = 200;
+    const out = await report('client', { ...client(), CODEBUILD_BUILD_ID: 'p:2' });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ method: 'POST', path: '/oauth2/token', auth: basic });
+    const form = new URLSearchParams(seen[0]?.body ?? '');
+    expect(form.get('grant_type')).toBe('client_credentials');
+    expect(form.get('scope')).toBe('slop/atf.write-results');
+    expect(seen[1]).toMatchObject({ path: '/integrations/boards/4/atf-results', auth: `Bearer ${CLIENT_JWT}` });
+    expect(readFileSync(curlLog, 'utf8')).not.toContain(CLIENT_SECRET);
+    for (const text of [out.stdout, out.stderr]) {
+      expect(text).not.toContain(CLIENT_SECRET);
+      expect(text).not.toContain(CLIENT_JWT);
+    }
+  });
+
+  it('asks for the specs with the read scope and the client token, and lets SLOP_ATF_SCOPE override it', async () => {
+    status = 200;
+    tokenStatus = 200;
+    const got = await specs(client());
+    expect(got.specs).toEqual(['e2e/a.spec.ts']);
+    expect(new URLSearchParams(seen[0]?.body ?? '').get('scope')).toBe('slop/atf.read-specs');
+    expect(seen[1]?.auth).toBe(`Bearer ${CLIENT_JWT}`);
+    expect(readFileSync(curlLog, 'utf8')).not.toContain(CLIENT_SECRET);
+    await specs({ ...client(), SLOP_ATF_SCOPE: 'slop/atf.write-results' });
+    expect(new URLSearchParams(seen[0]?.body ?? '').get('scope')).toBe('slop/atf.write-results');
+  });
+
+  it('puts the client identity after a CI token and before AWS and the board token, and SLOP_ATF_AUTH forces one', async () => {
+    status = 200;
+    tokenStatus = 200;
+    await specs({ ...client(), SLOP_OIDC_TOKEN: 'ci.jwt' });
+    expect(seen.map((r) => r.path)).toEqual([expect.stringContaining('atf-specs')]);
+    expect(seen[0]?.auth).toBe('Bearer ci.jwt');
+    await specs({ ...client(), SLOP_TOKEN: 'slopit_board', AWS_ACCESS_KEY_ID: 'AKIAEXAMPLE' });
+    expect(seen[1]?.auth).toBe(`Bearer ${CLIENT_JWT}`);
+    expect(existsSync(awsLog)).toBe(false);
+    await specs({ ...client(), SLOP_TOKEN: 'slopit_board', SLOP_ATF_AUTH: 'token' });
+    expect(seen.map((r) => r.auth)).toEqual(['Bearer slopit_board']);
+  });
+
+  it('warns and exits 0 when the token request is refused or the client settings are incomplete, naming no secret', async () => {
+    status = 201;
+    tokenStatus = 401;
+    const refused = await report('client-refused', client());
+    // Without a usable identity the report takes the EventBridge route, as for any missing identity.
+    expect(existsSync(events)).toBe(true);
+    expect(refused.stdout + refused.stderr).not.toContain(CLIENT_SECRET);
+    expect(seen.map((r) => r.path)).toEqual(['/oauth2/token']);
+    status = 200;
+    const none = await specs(client());
+    expect(none.specs).toEqual([]);
+    expect(none.stderr).not.toContain(CLIENT_SECRET);
+    tokenStatus = 200;
+    const incomplete = await specs({ ...client(), SLOP_TOKEN_URL: '' });
+    expect(incomplete.specs).toEqual([]);
+    expect(seen).toHaveLength(0);
   });
 
   it.each(['atf-specs.sh', 'atf-report.sh', 'buildspec-atf.yml', 'github-actions-atf.yml', 'README.md'])(

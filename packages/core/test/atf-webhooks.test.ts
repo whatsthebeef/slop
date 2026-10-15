@@ -315,6 +315,27 @@ describe('the registry and webhooks', () => {
     expect(unwrap(await service.list(ADMIN, boardId))).toEqual([]);
   });
 
+  it('gives a non-admin the same refusal as any other call and never looks the webhook host up', async () => {
+    const outsider = 'outsider@example.com';
+    await store.transaction((tx) =>
+      tx.upsertUser({ email: outsider, name: outsider, active: true }),
+    );
+    const runner = unwrap(await service.create(ADMIN, boardId, input({})));
+    targets.length = 0;
+    const plain = await service.create(outsider, boardId, input({}));
+    expect(plain.ok).toBe(false);
+    for (const url of ['https://127.0.0.1/x', 'http://nope.invalid/x', URL_OK]) {
+      refuse = 'The host resolves to a private or reserved address';
+      const created = await service.create(outsider, boardId, input({ webhook: { url } }));
+      expect(created).toEqual(plain);
+      const updated = await service.update(outsider, boardId, runner.id, {
+        config: { roleArns: ['arn:aws:iam::123456789012:role/x'], webhook: { url } },
+      });
+      expect(updated).toEqual(plain);
+    }
+    expect(targets).toEqual([]);
+  });
+
   it('makes no secret for a runner without a webhook', async () => {
     const created = unwrap(await service.create(ADMIN, boardId, input({})));
     expect(created.webhookSecret).toBeUndefined();
