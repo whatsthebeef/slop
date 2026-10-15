@@ -32,7 +32,7 @@ import type {
   GlobAttributes,
 } from './attributes.js';
 import { isAgentSetGlob } from './agent-set.js';
-import { CLOSING_EDGE_KINDS, isHumanCategory, SLOP_TYPES } from './types.js';
+import { CLOSING_EDGE_KINDS, defaultFix, defaultWorkKind, fixOf, isHumanCategory, SLOP_TYPES, workKindOf } from './types.js';
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
@@ -59,6 +59,7 @@ import type {
   Failure,
   Glob,
   GlobLink,
+  InferenceSource,
   HeadChecks,
   ImpliedAfter,
   LabelName,
@@ -72,6 +73,7 @@ import type {
   RunPurpose,
   SlopType,
   Status,
+  WorkKind,
 } from './types.js';
 
 export interface Context {
@@ -479,6 +481,13 @@ export interface CreateInput {
   /** Null for human work (decision, action). */
   readonly type: SlopType | null;
   readonly category: Category;
+  /** Default: the category's (bug fixes, else not). Human work is never a fix. */
+  readonly fix?: boolean;
+  readonly fixSource?: InferenceSource;
+  /** Default: the category's (feature is R&D, else maintenance). */
+  readonly workKind?: WorkKind;
+  readonly workKindSource?: InferenceSource;
+  readonly inferenceReason?: string | null;
   /** Decisions and actions: the full attributes (scope, source, channel); validated by `create`. Work globs: none. */
   readonly attributes?: GlobAttributes;
   readonly group: string | null;
@@ -491,6 +500,18 @@ export interface CreateInput {
   readonly start?: boolean;
 }
 
+/** The stored fix and work kind of a new glob: what was given, else the category's defaults; human work is never a fix and counts as maintenance. */
+const inferenceFields = (
+  input: Pick<CreateInput, 'category' | 'fixSource' | 'workKind' | 'workKindSource' | 'inferenceReason'>,
+  fix: boolean,
+): Pick<Glob, 'fix' | 'fixSource' | 'workKind' | 'workKindSource' | 'inferenceReason'> => ({
+  fix,
+  fixSource: input.fixSource ?? 'inferred',
+  workKind: isHumanCategory(input.category) ? 'maintenance' : (input.workKind ?? defaultWorkKind(input.category)),
+  workKindSource: input.workKindSource ?? 'inferred',
+  inferenceReason: input.inferenceReason ?? null,
+});
+
 export const create = (
   input: CreateInput,
   board: Board,
@@ -499,8 +520,9 @@ export const create = (
   relations: RelationFacts = NO_RELATIONS,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
-  if (!isValidCombination(input.type, input.category)) {
-    return invalidCombination(`A ${input.category} cannot be a ${input.type}`);
+  const fix = isHumanCategory(input.category) ? false : (input.fix ?? defaultFix(input.category));
+  if (!isValidCombination(input.type, input.category, fix)) {
+    return invalidCombination(`A ${fix ? 'fix' : input.category} cannot be a ${input.type}`);
   }
   if ((actor.role === 'qa' || actor.role === 'po') && input.type === 'super') {
     return forbidden('QA and PO members cannot create supers');
@@ -535,6 +557,7 @@ export const create = (
     title: input.title.trim(),
     type,
     category: input.category,
+    ...inferenceFields(input, fix),
     group: input.group,
     environment,
     status,
@@ -563,6 +586,8 @@ export const create = (
   const b = new Builder(glob, ctx).event('GlobCreated', {
     type: glob.type,
     category: glob.category,
+    fix,
+    workKind: workKindOf(glob),
     group: glob.group,
     environment: glob.environment,
     status,
@@ -660,10 +685,14 @@ export const investigate = (glob: Glob, ctx: Context, automatic = false): Result
   return new Builder(glob, ctx).queueRun(triggeredBy, undefined, false, 'investigate').done();
 };
 
-/** Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. */
+/**
+ * Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. Not
+ * while it is merging: the change is about to land and the after-merge review runs anyway.
+ */
 export const canReviewNow = (glob: Glob): boolean =>
   glob.pr !== null &&
   glob.pr.state !== 'closed' &&
+  glob.status !== 'merging' &&
   (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
 
 /**
@@ -1623,6 +1652,12 @@ export interface FieldChanges {
   readonly title?: string;
   readonly type?: SlopType;
   readonly category?: Category;
+  /** The fix flag and work kind. A source of `inferred` never overwrites a value a person set; a value given without a source is a person's. */
+  readonly fix?: boolean;
+  readonly fixSource?: InferenceSource;
+  readonly workKind?: WorkKind;
+  readonly workKindSource?: InferenceSource;
+  readonly inferenceReason?: string | null;
   readonly group?: string | null;
   readonly environment?: string | null;
   /**
@@ -1635,6 +1670,39 @@ export interface FieldChanges {
   /** A decision's scope (the only attribute a client edits); checked by `changeFields`. */
   readonly attributes?: unknown;
 }
+
+/**
+ * Re-inference after the plan changed: a system step that refreshes the inferred fix flag, work kind and the reason. A value a
+ * person set (source `person`) is never touched, a fix is never a super, and nothing but those fields moves, so there is no
+ * notification beyond the recorded `FieldsChanged`. Sources stay `inferred`.
+ */
+export const workReinferred = (
+  glob: Glob,
+  found: { readonly fix: boolean; readonly workKind: WorkKind; readonly reason: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  if (isHumanCategory(glob.category)) return unchanged(glob);
+  const fixSticks = (glob.fixSource ?? 'inferred') === 'person';
+  const kindSticks = (glob.workKindSource ?? 'inferred') === 'person';
+  const fix = fixSticks ? fixOf(glob) : found.fix && isValidCombination(glob.type, glob.category, true);
+  const workKind = kindSticks ? workKindOf(glob) : found.workKind;
+  const diff: { [key: string]: JsonValue } = {};
+  const patch: { -readonly [K in keyof Glob]?: Glob[K] } = {};
+  if (fix !== fixOf(glob)) {
+    diff['fix'] = { from: fixOf(glob), to: fix };
+    patch.fix = fix;
+  }
+  if (workKind !== workKindOf(glob)) {
+    diff['workKind'] = { from: workKindOf(glob), to: workKind };
+    patch.workKind = workKind;
+  }
+  if (!(fixSticks && kindSticks) && found.reason !== (glob.inferenceReason ?? null)) {
+    diff['inferenceReason'] = { from: glob.inferenceReason ?? null, to: found.reason };
+    patch.inferenceReason = found.reason;
+  }
+  if (Object.keys(diff).length === 0) return unchanged(glob);
+  return new Builder(glob, ctx).set(patch).event('FieldsChanged', diff).done();
+};
 
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
 export const changeFields = (
@@ -1655,8 +1723,34 @@ export const changeFields = (
   }
   const type = changes.type ?? glob.type;
   const category = changes.category ?? glob.category;
-  if (!isValidCombination(type, category)) {
-    return invalidCombination(`A ${category} cannot be a ${type}`);
+  // Fix and work kind: inference never overwrites a person's value; a bare value is a person's; a category alias (one
+  // release) moves a still-inferred value to the new category's default.
+  const human = isHumanCategory(category);
+  const categoryChanged = changes.category !== undefined && changes.category !== glob.category;
+  const currentFixSource = glob.fixSource ?? 'inferred';
+  const currentKindSource = glob.workKindSource ?? 'inferred';
+  const fixBy: InferenceSource = changes.fixSource ?? (changes.fix === undefined ? currentFixSource : 'person');
+  const kindBy: InferenceSource = changes.workKindSource ?? (changes.workKind === undefined ? currentKindSource : 'person');
+  const fixSticks = changes.fix !== undefined && fixBy === 'inferred' && currentFixSource === 'person';
+  const kindSticks = changes.workKind !== undefined && kindBy === 'inferred' && currentKindSource === 'person';
+  const fix = human
+    ? false
+    : changes.fix !== undefined && !fixSticks
+      ? changes.fix
+      : categoryChanged && currentFixSource === 'inferred'
+        ? defaultFix(category)
+        : fixOf(glob);
+  const workKind = human
+    ? 'maintenance'
+    : changes.workKind !== undefined && !kindSticks
+      ? changes.workKind
+      : categoryChanged && currentKindSource === 'inferred'
+        ? defaultWorkKind(category)
+        : workKindOf(glob);
+  const fixSource = fixSticks ? currentFixSource : changes.fix !== undefined ? fixBy : currentFixSource;
+  const workKindSource = kindSticks ? currentKindSource : changes.workKind !== undefined ? kindBy : currentKindSource;
+  if (!isValidCombination(type, category, fix)) {
+    return invalidCombination(`A ${fix ? 'fix' : category} cannot be a ${type}`);
   }
   if (changes.title?.trim() === '') return invalidInput('A glob needs a title');
   if (changes.environment !== undefined) {
@@ -1696,6 +1790,21 @@ export const changeFields = (
       Object.assign(patch, { [key]: value });
       diff[key] = { from: glob[key], to: value };
     }
+  }
+  // The reason follows the values: given with a change, or alone (a silent re-inference that only refreshed it). A
+  // sticky person's value keeps its own reason.
+  const inference: Array<[string, JsonValue, JsonValue, Partial<Glob>]> = [
+    ['fix', fixOf(glob), fix, { fix }],
+    ['fixSource', currentFixSource, fixSource, { fixSource }],
+    ['workKind', workKindOf(glob), workKind, { workKind }],
+    ['workKindSource', currentKindSource, workKindSource, { workKindSource }],
+  ];
+  const reason = fixSticks && kindSticks ? undefined : changes.inferenceReason;
+  if (reason !== undefined) inference.push(['inferenceReason', glob.inferenceReason ?? null, reason, { inferenceReason: reason }]);
+  for (const [key, from, to, set] of inference) {
+    if (from === to) continue;
+    Object.assign(patch, set);
+    diff[key] = { from, to };
   }
   if (changes.after !== undefined && afterChanged) {
     diff['after'] = { from: [...changes.after.from], to: [...changes.after.to] };
@@ -1807,7 +1916,7 @@ export interface TypeChangeOption {
 export const allowedTypeChanges = (glob: Glob, role: Role): TypeChangeOption[] =>
   SLOP_TYPES.flatMap((to): TypeChangeOption[] => {
     if (to === glob.type || !checkTypeChange(glob, to, { email: '', role }).ok) return [];
-    return isValidCombination(to, glob.category) ? [{ to }] : [];
+    return isValidCombination(to, glob.category, fixOf(glob)) ? [{ to }] : [];
   });
 
 // ---------------------------------------------------------------------------
@@ -2690,7 +2799,7 @@ const needsPairing = (glob: Glob): boolean =>
   glob.status === 'failed' &&
   glob.failure?.kind === 'needs_pairing' &&
   glob.type !== 'super' &&
-  glob.category !== 'bug';
+  !fixOf(glob);
 
 /**
  * Make it a super: a person takes over a glob whose routine asked for pairing. The type becomes super with the person
@@ -3236,6 +3345,7 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     title: input.title.trim(),
     type: null,
     category: 'decision',
+    ...inferenceFields({ category: 'decision' }, false),
     attributes: attributes.value,
     group: input.group,
     environment: null,
@@ -3264,6 +3374,8 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
     .event('GlobCreated', {
       type: glob.type,
       category: glob.category,
+      fix: false,
+      workKind: 'maintenance',
       group: glob.group,
       environment: null,
       status: glob.status,
@@ -3298,6 +3410,7 @@ const createAction = (input: CreateInput, ctx: Context, actor: Actor): Result<Tr
     title: input.title.trim(),
     type: null,
     category: 'action',
+    ...inferenceFields({ category: 'action' }, false),
     attributes: attributes.value,
     group: input.group,
     environment: null,
@@ -3326,6 +3439,8 @@ const createAction = (input: CreateInput, ctx: Context, actor: Actor): Result<Tr
     .event('GlobCreated', {
       type: null,
       category: glob.category,
+      fix: false,
+      workKind: 'maintenance',
       group: glob.group,
       environment: null,
       status: glob.status,

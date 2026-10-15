@@ -46,13 +46,13 @@ describe('Signed Off view filters', () => {
     renderPage('/boards/1/signed-off');
     expect(await screen.findByTestId('signed-off-s1f1')).toBeTruthy();
     expect(screen.getByTestId('filter-pane')).toBeTruthy();
-    expect(screen.getByTestId('filter-category-bug')).toBeTruthy();
+    expect(screen.getByTestId('filter-fix')).toBeTruthy();
     expect(screen.getByTestId('filter-id')).toBeTruthy();
     expect(screen.getByTestId('filter-human').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('filters by category and by ID or name', async () => {
-    renderPage('/boards/1/signed-off?category=bug');
+  it('filters by fix and by ID or name', async () => {
+    renderPage('/boards/1/signed-off?fix=1');
     expect(await screen.findByTestId('signed-off-s1b2')).toBeTruthy();
     expect(screen.queryByTestId('signed-off-s1f1')).toBeNull();
     await userEvent.setup().click(screen.getByTestId('filter-clear'));
@@ -67,7 +67,7 @@ describe('Signed Off view filters', () => {
     expect(await screen.findByTestId('signed-off-s1b2')).toBeTruthy();
     expect(screen.queryByTestId('signed-off-s1f1')).toBeNull();
     expect(screen.getByTestId('filter-human').getAttribute('aria-pressed')).toBe('true');
-    await userEvent.setup().click(screen.getByTestId('filter-category-bug'));
+    await userEvent.setup().click(screen.getByTestId('filter-mode-same'));
     expect(await screen.findByTestId('no-match')).toBeTruthy();
   });
 });
@@ -105,7 +105,7 @@ describe('Signed Off view cards', () => {
     api.signedOff
       .mockResolvedValueOnce({ next: 'c2', globs: [view({ id: 's1f1', title: 'One', category: 'feature', status: 'signed_off' })] })
       .mockResolvedValueOnce({ next: null, globs: [view({ id: 's1b2', title: 'Two', category: 'bug', status: 'signed_off' })] });
-    renderPage('/boards/1/signed-off?category=bug');
+    renderPage('/boards/1/signed-off?fix=1');
     expect(await screen.findByTestId('no-match')).toBeTruthy();
     await userEvent.setup().click(screen.getByText('Load more'));
     expect(await screen.findByTestId('card-s1b2')).toBeTruthy();

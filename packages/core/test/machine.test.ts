@@ -1401,6 +1401,16 @@ describe('checks and merging (slice 2)', () => {
       expect(offered(merged, [review('post_merge')])).toBe(false);
     });
 
+    it('is not offered while merging, and is refused if called, but is offered again once back in pr_open or merged', () => {
+      const merging = glob({ status: 'merging', pr: pr('ready') });
+      expect(offered(merging, [])).toBe(false);
+      expect(m.reviewOffer(merging, [])).toBeNull();
+      expect(errorCode(m.reviewNow(merging, ctx()))).toBe('invalid_transition');
+      expect(m.reviewOffer(ready, [])).toBe('retry');
+      expect(offered(ready, [])).toBe(true);
+      expect(offered(merged, [])).toBe(true);
+    });
+
     it('does not guess the retry case without the reviews loaded', () => {
       expect(offered(ready)).toBe(false);
       expect(offered(merged)).toBe(false);
@@ -2345,6 +2355,13 @@ describe('needs_pairing and Make it a super', () => {
     expect(m.allowedActions(pairing({ type: 'same' }), dev)).toContain('pick_up');
   });
 
+  it('keys on the fix flag, not the category: a fix is never made a super, and a bug a person cleared can be', () => {
+    expect(m.allowedActions(pairing({ category: 'task', fix: true }), admin)).not.toContain('make_super');
+    expect(m.allowedActions(pairing({ category: 'bug', fix: false }), admin)).toContain('make_super');
+    // A legacy bug row without the flag still reads as a fix.
+    expect(m.allowedActions(pairing({ category: 'bug' }), admin)).not.toContain('make_super');
+  });
+
   it('makes it a super in progress with the person implementing; branch, PR and provisioning stay', () => {
     const failed = pairing({ type: 'same', pr: { number: 7, state: 'draft', headSha: 'aaa' }, provisioning: 'ok' });
     const t = value(m.makeSuper(failed, ctx(other)));
@@ -2366,5 +2383,26 @@ describe('needs_pairing and Make it a super', () => {
     expect(errorCode(m.makeSuper(pairing(), ctx(po)))).toBe('forbidden');
     expect(errorCode(m.makeSuper({ ...pairing(), type: 'super' }, ctx()))).toBe('invalid_transition');
     expect(errorCode(m.makeSuper({ ...pairing(), runs: [run({ state: 'active' })] }, ctx()))).toBe('run_active');
+  });
+});
+
+describe('workReinferred', () => {
+  it('refreshes an inferred fix, work kind and reason, recording only a FieldsChanged', () => {
+    const t = value(m.workReinferred(glob({ category: 'feature', type: 'same' }), { fix: true, workKind: 'maintenance', reason: 'It crashes' }, ctx(null)));
+    expect(t.glob).toMatchObject({ fix: true, workKind: 'maintenance', inferenceReason: 'It crashes' });
+    expect(t.events.map((e) => e.type)).toEqual(['FieldsChanged']);
+    expect(t.events[0]?.data).toMatchObject({ fix: { from: false, to: true }, workKind: { from: 'rnd', to: 'maintenance' } });
+  });
+
+  it("never overwrites a person's value, and is unchanged when nothing differs", () => {
+    const g = glob({ category: 'feature', type: 'same', fix: false, fixSource: 'person', workKind: 'rnd', workKindSource: 'person' });
+    expect(value(m.workReinferred(g, { fix: true, workKind: 'maintenance', reason: 'x' }, ctx(null))).glob).toBe(g);
+    const same = glob({ category: 'feature', type: 'same' });
+    expect(value(m.workReinferred(same, { fix: false, workKind: 'rnd', reason: null }, ctx(null))).glob).toBe(same);
+  });
+
+  it('never makes a super a fix', () => {
+    const t = value(m.workReinferred(glob({ category: 'feature', type: 'super' }), { fix: true, workKind: 'rnd', reason: null }, ctx(null)));
+    expect(t.glob.fix).toBeUndefined();
   });
 });

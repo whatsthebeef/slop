@@ -1,7 +1,7 @@
 import { SearchCheck } from 'lucide-react';
 import { describe, expect, it } from 'vitest';
 import { ARTIFACT_META } from '../src/components/artifacts';
-import { CATEGORY_ICON } from '../src/components/glob-card';
+import { FIX_ICON, HUMAN_MODE_ICON } from '../src/components/glob-card';
 
 describe('artifact icons', () => {
   it('gives every artifact kind its own icon, apart from the postplan alias and the review pair', () => {
@@ -17,8 +17,8 @@ describe('artifact icons', () => {
     expect(ARTIFACT_META.independent_review.icon).toBe(SearchCheck);
   });
 
-  it('never uses a category icon for an artifact kind', () => {
-    const categoryIcons = new Set(Object.values(CATEGORY_ICON).map((c) => c.icon));
+  it('never uses a fix or human mode icon for an artifact kind', () => {
+    const categoryIcons = new Set([FIX_ICON.icon, ...Object.values(HUMAN_MODE_ICON).map((c) => c.icon)]);
     for (const [kind, meta] of Object.entries(ARTIFACT_META)) {
       expect(categoryIcons.has(meta.icon), kind).toBe(false);
     }

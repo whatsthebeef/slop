@@ -1,5 +1,5 @@
-import { canChooseType, isValidCombination, machine, SLOP_TYPES, WORK_CATEGORIES } from '@slop/core';
-import type { Category, EditFailure, Role, SlopType } from '@slop/core';
+import { canChooseType, fixOf, isValidCombination, machine, SLOP_TYPES, WORK_KINDS, workKindOf } from '@slop/core';
+import type { EditFailure, Role, SlopType, WorkKind } from '@slop/core';
 import type { GlobChanges, GlobView } from './api';
 
 /** Shown beside the type choices a non-admin can't make. */
@@ -47,7 +47,7 @@ const consequenceFor = (to: SlopType, via: TypeVia, glob: Pick<GlobView, 'after'
 
 /** Why a type can't be chosen now, in the words the server's refusal would use. */
 const blockerFor = (glob: GlobView, role: Role, to: SlopType): string => {
-  if (!isValidCombination(to, glob.category)) return `A ${glob.category} cannot be a ${to}`;
+  if (!isValidCombination(to, glob.category, fixOf(glob))) return `A fix cannot be a ${to}`;
   if (!canChooseType(role, to)) return CHOOSE_TYPE_TOOLTIP;
   if (to === 'super' && (role === 'qa' || role === 'po')) return 'QA and PO members cannot create supers';
   const from = glob.type;
@@ -91,19 +91,35 @@ export const typeOptions = (glob: GlobView, role: Role): TypeOption[] => {
   });
 };
 
-/** The categories the glob's type allows. */
-export const categoryOptions = (type: SlopType | null): Category[] => (type === null ? [] : WORK_CATEGORIES.filter((c) => isValidCombination(type, c)));
+/** True when the glob's fix flag may be turned on: a fix is never a super, and human work is never a fix. */
+export const canBeFix = (glob: Pick<GlobView, 'category' | 'type'>): boolean => glob.type !== null && isValidCombination(glob.type, glob.category, true);
 
-export type CategorySave =
-  | { readonly saved: true; readonly undo: Category }
+/** The work kinds a glob can be given: none for human work. */
+export const workKindOptions = (glob: Pick<GlobView, 'type'>): readonly WorkKind[] => (glob.type === null ? [] : WORK_KINDS);
+
+export type KindSave<T> =
+  | { readonly saved: true; readonly undo: T }
   | { readonly saved: false; readonly failure: EditFailure };
 
-/** Saves a category change at once. The caller keeps showing the old value when it is refused. */
-export const saveCategory = async (
+/** Saves a fix flag change at once (a person's choice, which inference never overwrites). The caller keeps showing the old value when it is refused. */
+export const saveFix = async (
   update: (changes: GlobChanges) => Promise<EditFailure | null>,
-  from: Category,
-  to: Category,
-): Promise<CategorySave> => {
-  const failure = await update({ category: to });
+  from: boolean,
+  to: boolean,
+): Promise<KindSave<boolean>> => {
+  const failure = await update({ fix: to });
   return failure === null ? { saved: true, undo: from } : { saved: false, failure };
 };
+
+/** Saves a work kind change at once (board admins only; the server refuses anyone else). */
+export const saveWorkKind = async (
+  update: (changes: GlobChanges) => Promise<EditFailure | null>,
+  from: WorkKind,
+  to: WorkKind,
+): Promise<KindSave<WorkKind>> => {
+  const failure = await update({ workKind: to });
+  return failure === null ? { saved: true, undo: from } : { saved: false, failure };
+};
+
+/** The work kind a glob reads as (stored, else from its old category). */
+export const currentWorkKind = (glob: Pick<GlobView, 'category' | 'workKind'>): WorkKind => workKindOf(glob);

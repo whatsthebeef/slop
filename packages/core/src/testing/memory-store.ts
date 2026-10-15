@@ -42,7 +42,7 @@ import type { TypeCorrection } from '../domain/type-learning.js';
 import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, Relation, User } from '../domain/types.js';
-import { includes } from '../domain/types.js';
+import { includes, workKindOf } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 import type { SearchQuery } from '../domain/search.js';
 
@@ -319,7 +319,7 @@ export class MemoryStore implements Store {
         Promise.resolve(
           [...new Set(ids)].flatMap((id) => {
             const glob = s.globs.get(id)?.glob;
-            return glob === undefined ? [] : [{ id, boardId: glob.boardId, planner: glob.planner, category: glob.category, type: glob.type }];
+            return glob === undefined ? [] : [{ id, boardId: glob.boardId, planner: glob.planner, category: glob.category, type: glob.type, workKind: workKindOf(glob) }];
           }),
         ),
       insertGlob: (glob, creationKey) => {

@@ -657,7 +657,8 @@ describe('a due rollout step is the main action, never a scroll-only button', ()
     const cb = renderMerged(dueStep({ kind: 'rollout', detail: 'Set it in prod' }));
     const main = screen.getByTestId('main-action');
     expect(main.textContent).toContain('Mark done');
-    expect(screen.getByTestId('main-action-note').textContent).toContain('Set it in prod');
+    expect(screen.getByTestId('main-action-note').textContent).toBe('Add SLOP_X to the server env');
+    expect(screen.getByTestId('main-action-note').textContent).not.toContain('Set it in prod');
     await user.click(main);
     expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');
   });
@@ -847,12 +848,13 @@ describe('glob view: split moves in the action ▾', () => {
         ...patch,
       });
 
-    it('shows no type control and no category or environment fields, only the category word in the bar', () => {
+    it('shows no type control and no fix, work kind or environment fields, only the mode word in the bar', () => {
       renderGlob(action());
       const type = screen.getByTestId('glob-type');
       expect(type.textContent).toBe('action');
       expect(screen.queryByTestId('type-popover')).toBeNull();
-      expect(screen.queryByTestId('category')).toBeNull();
+      expect(screen.queryByTestId('fix')).toBeNull();
+      expect(screen.queryByTestId('work-kind')).toBeNull();
     });
 
     it('leads with Done and the human icon, and keeps Dismiss… in the menu', async () => {

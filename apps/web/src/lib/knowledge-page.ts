@@ -20,8 +20,8 @@ export const relativeTime = (iso: string, now: number): string => {
 /** The link target for a glob on its board (the same `?glob=` mechanism the cards use). */
 export const globHref = boardGlobHref;
 
-/** The board with the Decision category selected (the same `?category=` filter the board's filter bar writes). */
-export const decisionsHref = (boardId: number): string => `/boards/${boardId}?category=decision`;
+/** The board with the decision mode selected (the same `?mode=` filter the board's filter bar writes). */
+export const decisionsHref = (boardId: number): string => `/boards/${boardId}?mode=decision`;
 
 /** The page shows at most this many key decisions; the rest sit behind "N more decisions". */
 export const KEY_DECISIONS_MAX = 20;

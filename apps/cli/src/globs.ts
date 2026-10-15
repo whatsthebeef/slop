@@ -26,7 +26,7 @@ export const GLOB_USAGE = 'glob <id> [--json]';
 export const HANDOVER_USAGE = 'handover <id> [--json]';
 export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]';
 export const NEW_USAGE =
-  'new [--same|--sub|--super] [--feature|--task|--bug] [--routine] [--env <name>] [--after <id>[,<id>...]] [--json] <prompt...>';
+  'new [--mode sub|same|super | --same|--sub|--super] [--fix] [--routine] [--env <name>] [--after <id>[,<id>...]] [--json] <prompt...>';
 export const READY_USAGE = 'ready [<id>] [--json]';
 export const MERGE_USAGE = 'merge [<id>] [--continue] [--json]';
 
@@ -59,6 +59,11 @@ const globSchema = z.object({
   title: z.string(),
   type: z.string(),
   category: z.string(),
+  /** Who works on it and how; absent on an older slop (read as the type and category). */
+  actor: z.string().optional(),
+  mode: z.string().optional(),
+  fix: z.boolean().optional(),
+  workKind: z.string().optional(),
   status: z.string(),
   version: z.number().int(),
   branch: z.string(),
@@ -76,6 +81,10 @@ const createdSchema = z.object({
   branch: z.string(),
   type: z.string(),
   category: z.string(),
+  actor: z.string().optional(),
+  mode: z.string().optional(),
+  fix: z.boolean().optional(),
+  workKind: z.string().optional(),
   status: z.string(),
   provisioning: z.string(),
   after: z.array(z.string()).optional(),
@@ -188,12 +197,30 @@ function liveRun(glob: GlobView): GlobView['currentRun'] {
   return run !== null && LIVE_RUN_STATES.has(run.state) ? run : null;
 }
 
+/** Who works on a glob and how, with the fix flag and work kind; an older slop sends only the type and category. */
+function kindFields(glob: Pick<GlobView, 'type' | 'category' | 'actor' | 'mode' | 'fix' | 'workKind'>): Record<string, unknown> {
+  const human = glob.category === 'decision' || glob.category === 'action';
+  return {
+    actor: glob.actor ?? (human ? 'human' : 'machine'),
+    mode: glob.mode ?? (human ? glob.category : glob.type),
+    fix: glob.fix ?? glob.category === 'bug',
+    ...(glob.workKind === undefined ? {} : { workKind: glob.workKind }),
+  };
+}
+
+/** "machine same fix": the short form of who, how and whether it fixes something. */
+function describeKind(glob: Pick<GlobView, 'type' | 'category' | 'actor' | 'mode' | 'fix' | 'workKind'>): string {
+  const kind = kindFields(glob);
+  return `${String(kind.actor)} ${String(kind.mode)}${kind.fix === true ? ' fix' : ''}`;
+}
+
 function globJson(glob: GlobView): Record<string, unknown> {
   return {
     id: glob.id,
     title: glob.title,
     type: glob.type,
     category: glob.category,
+    ...kindFields(glob),
     status: glob.status,
     version: glob.version,
     branch: glob.branch,
@@ -210,7 +237,7 @@ function describeGlob(glob: GlobView): string {
     glob.currentRun === null ? 'none' : `${glob.currentRun.state} (${glob.currentRun.id})`;
   const pr = glob.pr === null ? 'none' : `#${glob.pr.number} ${glob.pr.state}`;
   return (
-    `${glob.id} [${glob.type} ${glob.category}] ${glob.status}: ${glob.title}` +
+    `${glob.id} [${describeKind(glob)}] ${glob.status}: ${glob.title}` +
     ` (branch ${glob.branch}; ${glob.environment === null ? '' : `environment ${glob.environment}; `}` +
     `implementer ${glob.implementer ?? 'none'}; run ${run}; PR ${pr})`
   );
@@ -348,7 +375,14 @@ async function waitForBranch(deps: GlobDeps, first: GlobView): Promise<GlobView>
 }
 
 const TYPE_FLAGS = { '--same': 'same', '--sub': 'sub', '--super': 'super' } as const;
+/** The old category flags, now aliases: what each says about the fix flag and the work kind. */
 const CATEGORY_FLAGS = { '--feature': 'feature', '--task': 'task', '--bug': 'bug' } as const;
+const CATEGORY_KIND = {
+  feature: { fix: false, workKind: 'rnd' },
+  task: { fix: false, workKind: 'maintenance' },
+  bug: { fix: true },
+} as const;
+const MODES: ReadonlySet<string> = new Set(['sub', 'same', 'super']);
 
 /** The value of the one flag from `table` that was given, or undefined; two is a usage error. */
 function oneOf<T extends string>(
@@ -373,9 +407,9 @@ function boardSetting(settings: Settings): number {
 export async function newCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
   const { flags, values, positionals } = parseArgs(
     args,
-    [...Object.keys(TYPE_FLAGS), ...Object.keys(CATEGORY_FLAGS), '--routine', '--json'],
+    [...Object.keys(TYPE_FLAGS), ...Object.keys(CATEGORY_FLAGS), '--fix', '--routine', '--json'],
     NEW_USAGE,
-    ['--env', '--after'],
+    ['--env', '--after', '--mode'],
   );
   const environment = values.get('--env');
   const after = (values.get('--after') ?? '')
@@ -383,8 +417,18 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
     .map((id) => id.trim())
     .filter((id) => id !== '');
   for (const id of after) requireGlobId(id, NEW_USAGE);
-  const type = oneOf(flags, TYPE_FLAGS);
+  const flagType = oneOf(flags, TYPE_FLAGS);
+  const modeValue = values.get('--mode');
+  if (modeValue !== undefined && !MODES.has(modeValue)) throw new UsageError(`--mode is sub, same or super\nusage: slop ${NEW_USAGE}`);
+  if (modeValue !== undefined && flagType !== undefined && modeValue !== flagType) {
+    throw new UsageError(`--mode ${modeValue} contradicts --${flagType}`);
+  }
+  const type = (modeValue ?? flagType) as 'sub' | 'same' | 'super' | undefined;
   const category = oneOf(flags, CATEGORY_FLAGS);
+  if (flags.has('--fix') && category !== undefined && category !== 'bug') {
+    throw new UsageError(`--fix contradicts --${category}`);
+  }
+  const kind = category === undefined ? (flags.has('--fix') ? { fix: true } : undefined) : CATEGORY_KIND[category];
   const routine = flags.has('--routine');
   if (routine && type !== undefined && type !== 'same') {
     throw new UsageError('--routine starts a routine on a same; a sub always gets one');
@@ -398,7 +442,7 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
       idempotencyKey: deps.newIdempotencyKey(),
       input: prompt,
       ...(type === undefined ? {} : { type }),
-      ...(category === undefined ? {} : { category }),
+      ...(kind === undefined ? {} : kind),
       ...(routine ? { autoTrigger: true } : {}),
       ...(environment === undefined ? {} : { environment }),
       ...(after.length === 0 ? {} : { after }),
@@ -414,6 +458,7 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
       branch: glob.branch,
       type: glob.type,
       category: glob.category,
+      ...kindFields(glob),
       status: glob.status,
       routine: routineWillImplement,
       waiting: glob.waiting === true,
@@ -427,7 +472,7 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
       ? 'a routine will implement it'
       : 'pick it up to implement it';
   deps.stdout(
-    `${glob.id} [${glob.type} ${glob.category}] ${glob.status}: branch ${glob.branch}; ${who}\n`,
+    `${glob.id} [${describeKind(glob)}] ${glob.status}: branch ${glob.branch}; ${who}\n`,
   );
 }
 

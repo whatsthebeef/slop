@@ -374,11 +374,7 @@ const StepMainButton = ({
         {menu}
       </div>
       <span className="text-xs text-muted-foreground" data-testid="main-action-note">
-        {main.kind === 'wait'
-          ? `${step.title}: ${main.reason}`
-          : main.kind === 'done' && main.text !== null
-            ? `${step.title}: ${main.text}`
-            : step.title}
+        {main.kind === 'wait' ? `${step.title}: ${main.reason}` : step.title}
       </span>
     </>
   );

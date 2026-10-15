@@ -1,4 +1,4 @@
-import { ArtifactService, BoardService, GlobService, machine } from '@slop/core';
+import { ArtifactService, BoardService, GlobService, machine, IntakeService, LlmUnavailable } from '@slop/core';
 import type { Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -122,7 +122,7 @@ describe('relations over REST and MCP (Postgres)', () => {
       outbox,
       onBoardCreated: () => Promise.resolve(),
     });
-    const server = buildServer({ artifacts, globs, outbox, boards, deploys: { history: () => Promise.resolve({ ok: true as const, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
+    const server = buildServer({ artifacts, globs, intake: new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('off', 'none')) } }), outbox, boards, deploys: { history: () => Promise.resolve({ ok: true as const, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: 'test', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);

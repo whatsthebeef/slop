@@ -100,7 +100,7 @@ describe('time reports', () => {
     expect(events.every((e) => TIME_EVENT_TYPES.some((t) => t === e.type) && e.at < '2026-09-07T13:00:00.000Z')).toBe(true);
     expect(events.map((e) => e.type)).toEqual(['GlobCreated', 'GlobCreated', 'StatusChanged', 'StatusChanged']);
     expect(events.map((e) => e.at)).toEqual([...events.map((e) => e.at)].sort());
-    expect(events[0]?.data).toEqual({ status: 'planning', category: 'feature', type: 'same' });
+    expect(events[0]?.data).toEqual({ status: 'planning', category: 'feature', type: 'same', fix: false, workKind: 'rnd' });
     expect(events[2]?.data).toEqual({ to: expect.any(String) as unknown });
     const keysOnly = await store.transaction((tx) => tx.listEventsUntil('2026-09-07T13:00:00.000Z', ['GlobCreated'], []));
     expect(keysOnly.map((e) => e.data)).toEqual([{}, {}]);

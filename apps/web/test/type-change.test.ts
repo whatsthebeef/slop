@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Role } from '@slop/core';
 import type { GlobView } from '../src/lib/api';
-import { categoryOptions, saveCategory, typeOptions } from '../src/lib/type-change';
+import { canBeFix, saveFix, saveWorkKind, typeOptions, workKindOptions } from '../src/lib/type-change';
 import { glob } from '../../../packages/core/test/fixtures';
 
 const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), ...patch }) as GlobView;
@@ -70,7 +70,9 @@ describe('type options', () => {
     expect(option(view({ type: 'same', status: 'planning' }), 'sub', 'dev')).toMatchObject({ via: null, reason: 'Only board admins can choose sub or super' });
     expect(option(view({ type: 'same', status: 'planning' }), 'same', 'dev').current).toBe(true);
     expect(option(view({ type: 'sub', status: 'implementing' }), 'same', 'dev')).toMatchObject({ via: 'update', reason: null });
-    expect(option(view({ type: 'sub', category: 'bug' }), 'super').reason).toBe('A bug cannot be a super');
+    expect(option(view({ type: 'sub', category: 'bug' }), 'super').reason).toBe('A fix cannot be a super');
+    expect(option(view({ type: 'sub', category: 'task', fix: true }), 'super').reason).toBe('A fix cannot be a super');
+    expect(option(view({ type: 'sub', category: 'bug', fix: false }), 'super').reason).not.toBe('A fix cannot be a super');
   });
 
   it('never offers the current type as a change', () => {
@@ -78,33 +80,42 @@ describe('type options', () => {
   });
 });
 
-describe('category', () => {
-  it('offers only the categories the type allows', () => {
-    expect(categoryOptions('sub')).toEqual(['feature', 'task', 'bug']);
-    expect(categoryOptions('super')).toEqual(['feature', 'task']);
+describe('fix flag and work kind', () => {
+  it('allows a fix on a sub or a same, never on a super or on human work', () => {
+    expect(canBeFix(view({ type: 'sub' }))).toBe(true);
+    expect(canBeFix(view({ type: 'same' }))).toBe(true);
+    expect(canBeFix(view({ type: 'super' }))).toBe(false);
+    expect(canBeFix(view({ category: 'action', type: null }))).toBe(false);
   });
 
-  it('saves on change with the new category, and Undo restores the old one', async () => {
+  it('saves the fix flag on change with the new value, and Undo restores the old one', async () => {
     const update = vi.fn().mockResolvedValue(null);
-    const saved = await saveCategory(update, 'task', 'bug');
-    expect(update).toHaveBeenCalledWith({ category: 'bug' });
-    expect(saved).toEqual({ saved: true, undo: 'task' });
-    await saveCategory(update, 'bug', 'task');
-    expect(update).toHaveBeenLastCalledWith({ category: 'task' });
+    const saved = await saveFix(update, false, true);
+    expect(update).toHaveBeenCalledWith({ fix: true });
+    expect(saved).toEqual({ saved: true, undo: false });
+    await saveFix(update, true, false);
+    expect(update).toHaveBeenLastCalledWith({ fix: false });
+  });
+
+  it('saves the work kind the same way', async () => {
+    const update = vi.fn().mockResolvedValue(null);
+    expect(await saveWorkKind(update, 'maintenance', 'rnd')).toEqual({ saved: true, undo: 'maintenance' });
+    expect(update).toHaveBeenCalledWith({ workKind: 'rnd' });
   });
 
   it('returns the reason when the change is refused', async () => {
-    const failure = { message: 'A bug cannot be a super', conflict: false };
-    expect(await saveCategory(() => Promise.resolve(failure), 'task', 'bug')).toEqual({ saved: false, failure });
+    const failure = { message: 'A fix cannot be a super', conflict: false };
+    expect(await saveFix(() => Promise.resolve(failure), false, true)).toEqual({ saved: false, failure });
+    expect(await saveWorkKind(() => Promise.resolve(failure), 'rnd', 'maintenance')).toEqual({ saved: false, failure });
   });
 });
 
 describe('human work has no type to change', () => {
-  it('offers no type and no category for a decision or an action', () => {
+  it('offers no type, fix or work kind for a decision or an action', () => {
     for (const category of ['decision', 'action'] as const) {
       const g = view({ category, type: null });
       expect(typeOptions(g, 'admin')).toEqual([]);
-      expect(categoryOptions(g.type)).toEqual([]);
+      expect(workKindOptions(g)).toEqual([]);
     }
   });
 });

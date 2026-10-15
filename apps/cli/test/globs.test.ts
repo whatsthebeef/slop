@@ -125,11 +125,11 @@ describe('slop glob', () => {
     const human = setup({ get_glob: () => ({ ...view, labels: {} }) });
     await globCommand(['s1t4'], human.deps);
     expect(human.out.join('')).toBe(
-      's1t4 [same task] in_progress: Fix login timeout (branch s1t4; implementer ann@x.test; run none; PR #9 draft)\n',
+      's1t4 [machine same] in_progress: Fix login timeout (branch s1t4; implementer ann@x.test; run none; PR #9 draft)\n',
     );
     const json = setup({ get_glob: () => view });
     await globCommand(['s1t4', '--json'], json.deps);
-    expect(JSON.parse(json.out.join(''))).toEqual({ ...view, environment: null });
+    expect(JSON.parse(json.out.join(''))).toEqual({ ...view, environment: null, actor: 'machine', mode: 'same', fix: false });
   });
 
   it("includes the glob's environment when it has one", async () => {
@@ -153,7 +153,7 @@ describe('slop glob', () => {
   it('accepts a decision glob ID (k)', async () => {
     const { deps, out } = setup({ get_glob: () => ({ ...glob({ status: 'planning' }), id: 's1k3', category: 'decision', type: 'same', branch: 's1k3' }) });
     await globCommand(['s1k3'], deps);
-    expect(out.join('')).toContain('s1k3 [same decision] planning');
+    expect(out.join('')).toContain('s1k3 [human decision] planning');
   });
 });
 
@@ -401,7 +401,7 @@ describe('slop new', () => {
       },
     ]);
     expect(run.out).toEqual([
-      's1t9 [same task] planning: branch s1t9; pick it up to implement it\n',
+      's1t9 [machine same] planning: branch s1t9; pick it up to implement it\n',
     ]);
   });
 
@@ -416,7 +416,7 @@ describe('slop new', () => {
     await expect(newCommand(['--after', 'oops', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
   });
 
-  it('maps type, category and --routine to create_glob arguments', async () => {
+  it('maps type, the old category flags (now fix and work kind) and --routine to create_glob arguments', async () => {
     const run = setup({ create_glob: () => created({ status: 'implementing' }) }, { board: '2' });
     await newCommand(['--same', '--bug', '--routine', '--json', 'crash on save'], run.deps);
     expect(run.slop.calls[0]?.args).toEqual({
@@ -424,7 +424,7 @@ describe('slop new', () => {
       idempotencyKey: 'key-1',
       input: 'crash on save',
       type: 'same',
-      category: 'bug',
+      fix: true,
       autoTrigger: true,
     });
     expect(JSON.parse(run.out.join(''))).toMatchObject({ id: 's1t9', routine: true });
@@ -434,13 +434,31 @@ describe('slop new', () => {
       { board: '2' },
     );
     await newCommand(['--sub', '--feature', 'add a tooltip'], sub.deps);
-    expect(sub.slop.calls[0]?.args).toMatchObject({ type: 'sub', category: 'feature' });
+    expect(sub.slop.calls[0]?.args).toMatchObject({ type: 'sub', fix: false, workKind: 'rnd' });
+    expect(sub.slop.calls[0]?.args).not.toHaveProperty('category');
     expect(sub.slop.calls[0]?.args).not.toHaveProperty('autoTrigger');
     expect(sub.out.join('')).toContain('a routine will implement it');
 
     const sup = setup({ create_glob: () => created({ type: 'super' }) }, { board: '2' });
     await newCommand(['--super', 'pairing'], sup.deps);
     expect(sup.slop.calls[0]?.args).toMatchObject({ type: 'super' });
+  });
+
+  it('takes --mode and --fix, and shows actor, mode and fix', async () => {
+    const run = setup({ create_glob: () => created({ type: 'sub', actor: 'machine', mode: 'sub', fix: true, workKind: 'maintenance' }) }, { board: '2' });
+    await newCommand(['--mode', 'sub', '--fix', 'crash on save'], run.deps);
+    expect(run.slop.calls[0]?.args).toEqual({ board: 2, idempotencyKey: 'key-1', input: 'crash on save', type: 'sub', fix: true });
+    expect(run.out.join('')).toContain('[machine sub fix]');
+    const json = setup({ create_glob: () => created({ type: 'same', actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' }) }, { board: '2' });
+    await newCommand(['--mode=same', '--json', 'add it'], json.deps);
+    expect(JSON.parse(json.out.join(''))).toMatchObject({ actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' });
+    // An older slop sends no actor or mode: they are read from the type and category.
+    const old = setup({ create_glob: () => created({ type: 'same', category: 'bug' }) }, { board: '2' });
+    await newCommand(['x'], old.deps);
+    expect(old.out.join('')).toContain('[machine same fix]');
+    await expect(newCommand(['--mode', 'huge', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(newCommand(['--mode', 'sub', '--same', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(newCommand(['--fix', '--feature', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
   });
 
   it('passes --env to create_glob', async () => {
