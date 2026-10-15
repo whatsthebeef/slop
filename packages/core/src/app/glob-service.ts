@@ -30,13 +30,15 @@ import type { DependencyInferenceService, InferredEdge } from './dependency-infe
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import type { PendingEffect } from '../domain/machine-steps.js';
-import { defaultAreas, matchRiskAreas, splitEvidence } from '../domain/risk-area.js';
+import { areasMatching, defaultAreas, matchRiskAreas, splitEvidence, subSafe } from '../domain/risk-area.js';
 import { scriptPathOf } from '../domain/action-script.js';
 import type { ActionScript, ScriptCheck } from '../domain/action-script.js';
 import type { CodeView } from './code-view.js';
 import { CodeViewUnavailable } from '../domain/code-view.js';
 import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, pickUpWarning, startIds, toState } from '../domain/relations.js';
 import type { AwaitedDependency, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, TitleInfo, ToState } from '../domain/relations.js';
+import { appendClarification, planChangedQuestion, questionAwaits } from '../domain/questions.js';
+import type { NewQuestion, OpenQuestion } from '../domain/questions.js';
 import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
@@ -81,6 +83,20 @@ export interface GlobServiceDeps {
   readonly codeView?: Pick<CodeView, 'read'>;
   /** Where a best-effort side task reports its failure (the server's error log). */
   readonly log?: (task: string, message: string) => void;
+}
+
+/** The attachment that carries answers to questions (agents read it in `get_context`). */
+export const CLARIFICATIONS_LABEL = 'Clarifications';
+
+/** A question to raise: `blocking` and `source` are chosen by the caller; `runId` is the routine run raising it. */
+export type RaiseQuestionInput = NewQuestion & { readonly runId?: string | null };
+
+/** What raising a question did: the question (null when it was ignored or is not stored), and whether a start hold was downgraded to a notice. */
+export interface RaisedQuestion {
+  readonly glob: Glob;
+  readonly question: OpenQuestion | null;
+  readonly ignored: string | null;
+  readonly downgraded: boolean;
 }
 
 /** plan.md v1 of a new glob: the caller's plan, else what intake was given, else the title. */
@@ -169,6 +185,8 @@ export interface CreateGlobInput {
   readonly source?: SnapshotSource;
   /** An inbox item of the board to attach to the new glob in the same transaction; refused when it is another board's or discarded. */
   readonly inboxItem?: number;
+  /** Doubts raised with the glob (intake's): a start-blocking one creates it held, with no run, whatever its type. */
+  readonly questions?: readonly NewQuestion[];
 }
 
 /** One part of a split. Part 0 is the original glob (it keeps its ID); the others become new globs in its group. */
@@ -1342,6 +1360,29 @@ export class GlobService {
     return ok(result.value.glob);
   }
 
+  /**
+   * The deterministic risk signal for a glob whose type nobody chose: its plan text or files match one of the board's risk areas
+   * (those not learned clean). Null when none matches or a type question is already raised. Never auto-applies an option: the
+   * answer only records and releases, a person changes the type.
+   */
+  private async riskTypeQuestion(tx: Tx, boardId: number, input: CodeCreateInput, planText: string, now: string): Promise<NewQuestion | null> {
+    if ((input.questions ?? []).some((q) => q.key === 'type' || q.key?.startsWith('intake:type') === true)) return null;
+    const stored = await tx.listRiskAreas(boardId);
+    const areas = (stored.length > 0 ? stored : defaultAreas(boardId, now)).filter((a) => !subSafe(a));
+    const matched = new Map(matchRiskAreas(areas, planText).areas.map((a) => [a.name, a]));
+    for (const a of areasMatching(areas, input.files ?? [])) matched.set(a.name, a);
+    if (matched.size === 0) return null;
+    const names = [...matched.keys()].join(', ');
+    return {
+      key: 'type',
+      text: `This work matches the risk ${matched.size === 1 ? 'area' : 'areas'} ${names}, and no type was chosen. Create it as a sub (a routine implements and merges it) or as a same (a person reviews it)?`,
+      options: ['same', 'sub'],
+      blocking: 'start',
+      source: 'create',
+      raisedBy: { kind: 'system', actor: null },
+    };
+  }
+
   private async createWithItem(email: string, wanted: CodeCreateInput): Promise<Result<Glob>> {
     const resolved = await this.resolveType(email, wanted);
     if (!resolved.ok) return resolved;
@@ -1444,7 +1485,10 @@ export class GlobService {
       const relations: RelationFacts = { relations: created.relations, states: await this.statesOf(tx, created.relations.map((r) => r.to)) };
       // Predicted overlaps stay on the glob as internal data (the merge policy's holds); they are not shown and not an input.
       const implied = mergeImplied(holds, []);
-      const createInput: CreateInput = { ...input, id, impliedAfter: implied };
+      // No type was chosen and it resolved to a sub (auto-merges) although the work touches a risk area: ask instead of guessing.
+      const typeAsk = input.typeChosen === false && input.type === 'sub' ? await this.riskTypeQuestion(tx, board.id, input, planText, this.deps.clock.now()) : null;
+      const questions = typeAsk === null ? input.questions : [...(input.questions ?? []), typeAsk];
+      const createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(questions === undefined ? {} : { questions }) };
       const ctx = await this.context(actor.value, board);
       const created0 = machine.create(createInput, board, ctx, relations);
       if (!created0.ok) return created0;
@@ -2667,9 +2711,121 @@ export class GlobService {
     return findHolds(this.deps.store, branchFiles, read.board, { id, plan: read.plan }, skip, await this.deps.dependencyLearning?.prediction(read.board.id));
   }
 
-  /** What a glob still waits for before it starts (its unmet start relations), for the routine executor's last check before a session is spent. */
+  /** What a glob still waits for before it starts (its unmet start relations and open start questions), for the routine executor's last check before a session is spent. */
   async startHolds(id: string): Promise<AwaitedDependency[]> {
-    return this.deps.store.transaction(async (tx) => awaitedOf(await this.relationFacts(tx, await tx.listRelationsFrom([id]))));
+    return this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return [...awaitedOf(await this.relationFacts(tx, await tx.listRelationsFrom([id]))), ...(glob === null ? [] : questionAwaits(glob))];
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Open questions
+
+  /**
+   * Raises a question on a glob (see `domain/questions.ts`). `email` is null for slop itself. A `runId` that is not the glob's
+   * current run is ignored (`ignored` says so), like a stale run's artifact. A repeated `key` changes nothing and returns the
+   * question the key names. Retries on version races: a raise carries no client version.
+   */
+  async raiseQuestion(email: string | null, id: string, input: RaiseQuestionInput): Promise<Result<RaisedQuestion>> {
+    const { runId, ...asked } = input;
+    const seen: { ignored: string | null; before: number } = { ignored: null, before: 0 };
+    const result = await this.command(
+      email,
+      id,
+      null,
+      (glob, ctx) => {
+        seen.ignored = null;
+        seen.before = (glob.questions ?? []).length;
+        if (runId !== undefined && runId !== null) {
+          const run = machine.currentRun(glob);
+          if (run === null || run.id !== runId || run.state === 'ended') {
+            seen.ignored = `Run ${runId} is not the glob's current run`;
+            return ok({ glob, changed: false, events: [], effects: [] });
+          }
+        }
+        return machine.raiseQuestion(glob, asked, ctx);
+      },
+      { applies: 'work' },
+    );
+    if (!result.ok) return result;
+    const after = result.value.questions ?? [];
+    const question =
+      seen.ignored !== null ? null : after.length > seen.before ? (after.at(-1) ?? null) : asked.key === undefined ? null : (after.find((q) => q.key === asked.key) ?? null);
+    return ok({ glob: result.value, question, ignored: seen.ignored, downgraded: question !== null && question.blocking !== asked.blocking });
+  }
+
+  /**
+   * A person answers a question. The question and answer are appended to the glob's Clarifications attachment in the same
+   * transaction (a new version, so agents and `get_context` read it), then what the question held is released: a held glob
+   * starts (a sub gets its run), a held merge resumes. Answering twice with the same text changes nothing.
+   */
+  async answerQuestion(
+    email: string,
+    id: string,
+    questionId: string,
+    input: { readonly answer: string; readonly option?: string | null; readonly runId?: string | null },
+  ): Promise<Result<Glob>> {
+    return this.closeQuestion(email, id, questionId, (glob, ctx) => machine.answerQuestion(glob, { questionId, ...input }, ctx));
+  }
+
+  /** A person dismisses a question: go ahead as is. The one-line decision is recorded in Clarifications too. */
+  async dismissQuestion(email: string, id: string, questionId: string, input: { readonly note?: string | null; readonly runId?: string | null }): Promise<Result<Glob>> {
+    return this.closeQuestion(email, id, questionId, (glob, ctx) => machine.dismissQuestion(glob, { questionId, ...input }, ctx));
+  }
+
+  private async closeQuestion(email: string, id: string, questionId: string, step: (glob: Glob, ctx: Context) => Result<Transition>): Promise<Result<Glob>> {
+    const wrote = { value: false };
+    const closed: { value: OpenQuestion | null } = { value: null };
+    const result = await this.command(email, id, null, step, {
+      applies: 'work',
+      record: async (tx, _before, next, actor) => {
+        wrote.value = false;
+        closed.value = null;
+        const q = (next.questions ?? []).find((e) => e.id === questionId);
+        if (q === undefined || actor === null) return;
+        await this.writeClarification(tx, next, actor.email, q);
+        closed.value = q;
+        wrote.value = true;
+      },
+    });
+    if (!result.ok) return result;
+    if (wrote.value) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId: id });
+    const held = closed.value;
+    // Release what the question held; each is idempotent and a no-op while something else still holds.
+    if (held !== null && held.blocking === 'start') await this.release(id);
+    if (held !== null && held.blocking === 'merge') await this.gateReleased(id);
+    return ok((await this.peek(id)) ?? result.value);
+  }
+
+  /** Appends the question's entry to the glob's Clarifications attachment (an existing label of any case is kept), under the artifact lock. */
+  private async writeClarification(tx: Tx, glob: Glob, email: string, q: OpenQuestion): Promise<void> {
+    await tx.lockGlobArtifacts(glob.id);
+    const existing = (await tx.listArtifacts(glob.id, 'attachment')).find((a) => a.label.trim().toLowerCase() === 'clarifications');
+    await addArtifact(tx, this.deps.clock, glob, email, {
+      kind: 'attachment',
+      label: existing?.label ?? CLARIFICATIONS_LABEL,
+      content: appendClarification(existing?.content ?? '', q),
+      link: null,
+      commitSha: null,
+      runId: null,
+      agentSetVersion: null,
+      reviewStats: null,
+      by: 'human',
+    });
+  }
+
+  /**
+   * A plan.md version was saved during (or after, before the merge) a run: raises the `merge` question, when it still applies.
+   * Idempotent by the question's key; null when nothing is to be raised (the glob merged, or the plan is not newer than the run).
+   */
+  async raisePlanChanged(id: string, version: number): Promise<Result<RaisedQuestion> | null> {
+    const asked = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null) return null;
+      return planChangedQuestion(glob, await tx.artifactVersions(id, 'plan', ''), version);
+    });
+    return asked === null ? null : this.raiseQuestion(null, id, asked);
   }
 
   /** The globs in `ids` that still exist, and the state of each (a glob that no longer exists is `missing`). */

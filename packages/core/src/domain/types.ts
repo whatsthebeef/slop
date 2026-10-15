@@ -1,5 +1,6 @@
 import type { GlobAttributes } from './attributes.js';
 import type { JsonValue } from './events.js';
+import type { OpenQuestion } from './questions.js';
 import type { ReviewBoardSettings } from './review-settings.js';
 
 /** What an admin's agent may approve through `decide_kb_item`: documentation items only, or agent-set files and contradicting items too. */
@@ -465,7 +466,15 @@ export interface Glob {
    * Set while a merge that would have started is held back by an unmet `merge` relation (an armed merge-when-green whose checks
    * passed, or a sub whose gate passed): `sha` is the head it would merge. `gateReleased` resumes it; cleared on merge, disarm or a new head.
    */
-  readonly mergeHold?: { readonly since: string; readonly sha: string; readonly for: readonly string[] } | null;
+  readonly mergeHold?: {
+    readonly since: string;
+    readonly sha: string;
+    readonly for: readonly string[];
+    /** The open `merge` questions that hold it too (IDs). */
+    readonly questions?: readonly string[];
+  } | null;
+  /** Open questions raised on this glob (and the answered or dismissed ones): see `domain/questions.ts`. Absent on older globs. */
+  readonly questions?: readonly OpenQuestion[];
   /** Set while another open glob changes the same exclusive paths; cleared when it no longer does. */
   readonly clash?: PathClash | null;
   readonly provisioning: ProvisioningState;

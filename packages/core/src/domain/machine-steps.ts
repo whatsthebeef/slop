@@ -202,7 +202,7 @@ export const machineSteps = (glob: Glob, facts: MachineFacts = {}): MachineStep[
 
   // A merge held for a `merge` relation (armed, or a sub whose gate passed) is waiting, not stuck: the release resumes it.
   if (mergeHeld && glob.mergeHold != null) {
-    steps.push(step('merge_held', 'running', { startedAt: glob.mergeHold.since, detail: glob.mergeHold.for.join(', ') }));
+    steps.push(step('merge_held', 'running', { startedAt: glob.mergeHold.since, detail: [...glob.mergeHold.for, ...(glob.mergeHold.questions ?? [])].join(', ') }));
   }
 
   for (const d of facts.deploys ?? []) {

@@ -112,6 +112,8 @@ export const GlobPage = () => {
       onReviewLabel={(label: LabelName, command: LabelCommand) => change(() => api.reviewLabel(open.id, label, command, open.version))}
       onDismissEdge={(relationId: string) => change(() => api.dismissRelation(open.id, relationId, open.version))}
       onAddRelation={(input) => change(() => api.addRelation(open.id, input))}
+      onAnswerQuestion={(questionId, input) => change(() => api.answerQuestion(open.id, questionId, input))}
+      onDismissQuestion={(questionId, note) => change(() => api.dismissQuestion(open.id, questionId, note))}
       onDismiss={(key, dismiss) => change(() => api.setDismissed(open.id, key, dismiss))}
       onDecide={(input) => change(() => api.decide(open.id, open.version, input))}
       onUpdate={async (changes: GlobChanges) => {

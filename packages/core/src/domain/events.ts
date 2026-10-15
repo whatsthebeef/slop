@@ -114,6 +114,12 @@ export const DOMAIN_EVENT_TYPES = [
   'SignOffHeld',
   /** The last `sign_off` relation was met, so a glob with approved labels moved to Signed off. */
   'SignOffReleased',
+  /** An open question was raised on a glob (data: its ID, key, blocking, source, who raised it). */
+  'QuestionRaised',
+  /** A person answered a question; the answer is in the Clarifications attachment (data: the ID, option). */
+  'QuestionAnswered',
+  /** A person dismissed a question: go ahead as is (data: the ID, note). */
+  'QuestionDismissed',
 ] as const;
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
 
@@ -303,7 +309,12 @@ export type Effect =
    * Remove a file attachment's object from storage (a detached file, a deleted glob's files, a refused or orphaned upload).
    * `globId` is the glob the key was under, which may be gone; not generation-checked. Deleting a missing key succeeds.
    */
-  | { readonly kind: 'delete_object'; readonly globId: string; readonly key: string };
+  | { readonly kind: 'delete_object'; readonly globId: string; readonly key: string }
+  /**
+   * A plan.md version was saved while a run was working on the glob (or after it, before the merge): raise the `merge` question
+   * "plan.md changed to vN during the run". Idempotent by the question's key (`plan:vN`); not generation-checked.
+   */
+  | { readonly kind: 'plan_changed_question'; readonly globId: string; readonly version: number };
 
 export type ReviewStage = 'pre_merge' | 'post_merge';
 
@@ -380,6 +391,9 @@ export interface OutboxJob {
 
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });
+
+/** Raise the plan-changed question for plan.md version `version` of a glob (idempotent by the question's key). */
+export const planChangedQuestionEffect = (globId: string, version: number): Effect => ({ kind: 'plan_changed_question', globId, version });
 
 /** Remove an attachment's object from storage; queued in the transaction that stops referring to it. */
 export const deleteObjectEffect = (globId: string, key: string): Effect => ({ kind: 'delete_object', globId, key });

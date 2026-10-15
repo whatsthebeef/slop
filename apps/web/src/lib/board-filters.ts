@@ -2,6 +2,7 @@ import { fixOf, isHumanCategory, modeOf } from '@slop/core';
 import type { HumanStepViewer, Mode } from '@slop/core';
 import type { GlobView } from './api';
 import { needsPerson } from './card-rows';
+import { hasOpenQuestions } from './questions';
 import { armLabel } from './rollout-stages';
 
 /** What a filter may need beyond the glob itself: the time and the viewer decide whose turn it is. */
@@ -123,6 +124,14 @@ export const BOARD_FILTERS: BoardFilter[] = [
     normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
     // Globs with a step a person must do at release (the card's "Arm system" label); human work has none.
     matches: (glob) => !isHumanCategory(glob.category) && armLabel(glob) !== null,
+  },
+  {
+    key: 'questions',
+    label: 'Has open questions',
+    control: 'toggle',
+    normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
+    // Globs with an unanswered question (the card's Question chip); an older API sends none.
+    matches: (glob) => hasOpenQuestions(glob),
   },
 ];
 

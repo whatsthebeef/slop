@@ -48,6 +48,24 @@ import {
   waitSummary,
 } from './relations.js';
 import type { RelationEdit, RelationFacts, Unmet } from './relations.js';
+import {
+  MAX_QUESTIONS,
+  MAX_QUESTION_ANSWER,
+  MAX_QUESTION_NOTE,
+  canAnswer,
+  checkNewQuestion,
+  holdsStart,
+  isOpenQuestion,
+  matchOption,
+  mergeQuestions,
+  nextQuestionId,
+  questionAwaits,
+  questionGateText,
+  questionsOf,
+  startHoldsOf,
+  startQuestions,
+} from './questions.js';
+import type { NewQuestion, OpenQuestion, QuestionRaiser } from './questions.js';
 import { rolloutPending } from './human-steps.js';
 import type { BlockProgress } from './human-steps.js';
 import type {
@@ -353,7 +371,7 @@ class Builder {
     if (queued === undefined || queued.runId !== ended.id || this.glob.status !== 'planning') return this;
     // A start relation added since Start was pressed still holds: the glob goes back to waiting (the merge of what it waits for
     // releases it), never straight into a run.
-    const awaited = awaitedOf(relations);
+    const awaited = startHoldsOf(this.glob, relations);
     if (awaited.length > 0)
       return this.set({ waiting: { since: this.glob.waiting?.since ?? this.ctx.now } }).event('Waiting', {
         for: awaited.map((a) => a.id),
@@ -478,6 +496,45 @@ const requireActor = (ctx: Context): Actor => {
 };
 
 // ---------------------------------------------------------------------------
+// Open questions: helpers
+
+/** What the log says of a raised question. */
+const questionEventData = (q: OpenQuestion): { readonly [key: string]: JsonValue } => ({
+  id: q.id,
+  ...(q.key === undefined ? {} : { key: q.key }),
+  blocking: q.blocking,
+  source: q.source,
+  raisedBy: q.raisedBy.kind,
+});
+
+/** The questions a glob is created with: checked, deduplicated by key, given IDs. A parked super holds nothing, so its start questions are notices. */
+const materialize = (asked: readonly NewQuestion[], parked: boolean, now: string): Result<OpenQuestion[]> => {
+  const made: OpenQuestion[] = [];
+  for (const raw of asked) {
+    const checked = checkNewQuestion(raw);
+    if (!checked.ok) return checked;
+    const q = checked.value;
+    if (q.key !== undefined && made.some((m) => m.key === q.key)) continue;
+    if (made.length >= MAX_QUESTIONS) return invalidInput(`A glob can have at most ${String(MAX_QUESTIONS)} questions`);
+    made.push({
+      id: nextQuestionId(made),
+      ...(q.key === undefined ? {} : { key: q.key }),
+      text: q.text,
+      ...(q.options === undefined ? {} : { options: q.options }),
+      raisedBy: q.raisedBy,
+      source: q.source,
+      blocking: parked && q.blocking === 'start' ? 'none' : q.blocking,
+      raisedAt: now,
+    });
+  }
+  return ok(made);
+};
+
+/** The glob's questions with every open start hold marked as gone past by `by` (Start now, picking it up by hand). */
+const overrideStart = (glob: Glob, by: string, now: string): readonly OpenQuestion[] =>
+  questionsOf(glob).map((q) => (holdsStart(q) ? { ...q, startOverridden: { by, at: now } } : q));
+
+// ---------------------------------------------------------------------------
 // Creation (rows 1–4)
 
 export interface CreateInput {
@@ -504,6 +561,8 @@ export interface CreateInput {
   readonly impliedAfter?: readonly ImpliedAfter[];
   /** Accepted for compatibility and ignored: a super always waits in Planning until a person picks it up to pair. */
   readonly start?: boolean;
+  /** Questions raised with the glob (intake's doubts): a start-blocking one creates it held, whatever its type. */
+  readonly questions?: readonly NewQuestion[];
 }
 
 /** The stored fix and work kind of a new glob: what was given, else the category's defaults; human work is never a fix and counts as maintenance. */
@@ -554,9 +613,12 @@ export const create = (
   if (!envCheck.ok) return envCheck;
 
   const impliedAfter = input.impliedAfter ?? [];
-  const awaited = awaitedOf(relations);
+  const raised = materialize(input.questions ?? [], type === 'super', ctx.now);
+  if (!raised.ok) return raised;
+  const questions = raised.value;
+  const awaited = [...awaitedOf(relations), ...questionAwaits({ questions })];
   const wantsStart = type === 'sub' || (type === 'same' && input.autoTrigger);
-  // A sub (or auto-started same) with something unmerged to wait for sits in Planning, with no branch, until released.
+  // A sub (or auto-started same) with something unmerged to wait for, or a question to be answered, sits in Planning, with no branch, until released.
   const held = wantsStart && awaited.length > 0;
   const autoStart = type === 'same' && input.autoTrigger && !held;
   // A super always waits in Planning for a person to pick it up, whatever `start` says; nobody's active glob until then.
@@ -594,6 +656,7 @@ export const create = (
     listSince: ctx.now,
     ...(impliedAfter.length > 0 && { impliedAfter }),
     ...(held && { waiting: { since: ctx.now } }),
+    ...(questions.length > 0 && { questions }),
   };
   const b = new Builder(glob, ctx).event('GlobCreated', {
     type: glob.type,
@@ -604,6 +667,7 @@ export const create = (
     environment: glob.environment,
     status,
   });
+  for (const q of questions) b.event('QuestionRaised', questionEventData(q));
   // Subs and auto-started sames start in Doing, so they provision now; a super waits in Planning.
   if (listOf(status) === 'doing') b.ensureProvisioned();
   if (held)
@@ -646,7 +710,7 @@ export const start = (
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
   // A second Start while the first waits for the investigation changes nothing.
   if (startQueued(glob)) return unchanged(glob);
-  const awaited = awaitedOf(relations);
+  const awaited = startHoldsOf(glob, relations);
   if (awaited.length > 0) return invalidTransition(glob, actor, refusalText(awaited));
   // Overlaps the policy predicted never hold the start; they stay on the glob as internal data for conflicts and learning.
   const overlaps =
@@ -810,20 +874,26 @@ export const startAnyway = (
     );
   }
   if (startQueued(glob)) return unchanged(glob);
-  const awaited = awaitedOf(relations);
+  const awaited = startHoldsOf(glob, relations);
   if (awaited.length === 0 && glob.waiting == null) {
     return invalidTransition(glob, actor, 'Nothing holds this glob; use Start');
   }
   // The inferred and learned start relations are marked overridden (a person's and a split's keep holding on paper, but the
-  // glob starts); the predicted overlaps on the glob are kept as they are, so a recheck doesn't replace them.
+  // glob starts); the predicted overlaps on the glob are kept as they are, so a recheck doesn't replace them. An open start
+  // question stops holding too, and the question stays open (a person still owes the answer).
+  const overriding = startQuestions(glob);
   const overridden = {
     ...(glob.impliedAfter === undefined
       ? {}
       : { impliedAfter: glob.impliedAfter.map((i) => ({ ...i, overridden: true as const })) }),
+    ...(overriding.length === 0 ? {} : { questions: overrideStart(glob, actor.email, ctx.now) }),
   };
   const b = new Builder(glob, ctx)
     .relationEdits(overrideEdits(relations.relations, ctx.now))
-    .event('HoldOverridden', { for: awaited.map((a) => a.id) });
+    .event('HoldOverridden', {
+      for: awaited.map((a) => a.id),
+      ...(overriding.length === 0 ? {} : { questions: overriding.map((q) => q.id) }),
+    });
   // An investigation is still running: the start waits for it, with the hold already overridden.
   const investigating = liveInvestigation(glob);
   if (investigating !== null) return queueStart(b, ctx, investigating, actor, overridden).done();
@@ -846,7 +916,7 @@ export const released = (
     return unchanged(glob);
   // A Start waiting for an investigation is released when that run ends, not by what the glob starts after.
   if (startQueued(glob)) return unchanged(glob);
-  if (awaitedOf(relations).length > 0) return unchanged(glob);
+  if (startHoldsOf(glob, relations).length > 0) return unchanged(glob);
   return new Builder(glob, ctx)
     .set({
       waiting: null,
@@ -943,6 +1013,8 @@ export const pickUp = (
         implementer: actor.email,
         failure: null,
         ...(glob.waiting == null ? {} : { waiting: null }),
+        // A person going ahead by hand is past any start question.
+        ...(startQuestions(glob).length === 0 ? {} : { questions: overrideStart(glob, actor.email, ctx.now) }),
       }).status('in_progress');
       break;
     case 'pr_open':
@@ -1286,7 +1358,7 @@ export const startAgain = (
     .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
     .effect({ kind: 'delete_branch', globId: glob.id, generation });
   // A sub that waits for an unmerged glob goes back to Planning, held, instead of starting again.
-  const awaited = glob.type === 'sub' ? awaitedOf(relations) : [];
+  const awaited = glob.type === 'sub' ? startHoldsOf(glob, relations) : [];
   if (awaited.length > 0) {
     b.set({ waiting: { since: ctx.now } })
       .status('planning')
@@ -1337,6 +1409,8 @@ const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
   if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
   const held = mergeGate(relations);
   if (held.length > 0) return gateText(held);
+  const asks = questionGateText(mergeQuestions(glob));
+  if (asks !== null) return asks;
   // Passing checks say nothing about mergeability once the base has moved: GitHub would refuse and fail the glob.
   if (glob.conflict != null)
     return `Conflicts with the base branch since ${glob.conflict.since ?? 'the last push'}: merge the base into the branch and push before merging`;
@@ -1436,6 +1510,8 @@ export const retryMerge = (glob: Glob, ctx: Context, relations?: RelationFacts):
     );
   const held = mergeGate(relations);
   if (held.length > 0) return invalidTransition(glob, actor, gateText(held));
+  const asks = questionGateText(mergeQuestions(glob));
+  if (asks !== null) return invalidTransition(glob, actor, asks);
   return new Builder(glob, ctx)
     .set({ failure: null, mergeMode: null, mergeUpdates: 0, ...leavesQueue(glob) })
     .status('merging', { retry: true })
@@ -1885,7 +1961,7 @@ export const changeFields = (
     const impliedAfter = becomesSub
       ? mergeImplied(glob.impliedAfter, changes.impliedAfter ?? [])
       : glob.impliedAfter;
-    const awaited = awaitedOf(relations);
+    const awaited = startHoldsOf(glob, relations);
     if (awaited.length > 0) {
       if (!wasHeld) {
         b.set({
@@ -2479,11 +2555,25 @@ const withConflict = (b: Builder, conflict: MergeConflict | undefined, ctx: Cont
  * A merge that would have started waits for a `merge` relation: the hold is recorded on the glob (once per head and set of
  * globs, so a repeated webhook adds no event) and the merge stays as it is (armed, or a sub's passed gate).
  */
-const holdMerge = (b: Builder, glob: Glob, sha: string, held: readonly Unmet[], ctx: Context): Builder => {
+const holdMerge = (
+  b: Builder,
+  glob: Glob,
+  sha: string,
+  held: readonly Unmet[],
+  asks: readonly OpenQuestion[],
+  ctx: Context,
+): Builder => {
   const waitingFor = held.map((u) => u.relation.to);
-  const same = glob.mergeHold != null && glob.mergeHold.sha === sha && glob.mergeHold.for.join(',') === waitingFor.join(',');
+  const questions = asks.map((q) => q.id);
+  const same =
+    glob.mergeHold != null &&
+    glob.mergeHold.sha === sha &&
+    glob.mergeHold.for.join(',') === waitingFor.join(',') &&
+    (glob.mergeHold.questions ?? []).join(',') === questions.join(',');
   if (same) return b;
-  return b.set({ mergeHold: { since: ctx.now, sha, for: waitingFor } }).event('MergeHeld', { for: waitingFor, sha });
+  return b
+    .set({ mergeHold: { since: ctx.now, sha, for: waitingFor, ...(questions.length === 0 ? {} : { questions }) } })
+    .event('MergeHeld', { for: waitingFor, sha, ...(questions.length === 0 ? {} : { questions }) });
 };
 
 /** Required checks finished on a commit; only the PR's current head counts. */
@@ -2552,8 +2642,9 @@ export const checksCompleted = (
         .done();
     }
     const held = mergeGate(relations);
-    // Merge when checks pass stays armed while a merge relation is unmet; the release resumes it (`gateReleased`).
-    if (held.length > 0) return holdMerge(b, glob, checks.sha, held, ctx).done();
+    const asks = mergeQuestions(glob);
+    // Merge when checks pass stays armed while a merge relation is unmet or a merge question is open; the release resumes it (`gateReleased`).
+    if (held.length > 0 || asks.length > 0) return holdMerge(b, glob, checks.sha, held, asks, ctx).done();
     return b
       .set({ mergeMode: null, mergeUpdates: 0, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
       .status('merging')
@@ -2752,8 +2843,10 @@ export const escalateToSame = (
     at: ctx.now,
     ...(runId === null ? {} : { runId }),
   };
+  // The cause is always attached as a question (a notice: a same in Planning or Doing already waits for a person), once per criterion.
+  const asked = escalationQuestion(glob, { reason, criterion, runId, by: input.by, actor: ctx.actor?.email ?? null }, ctx.now);
   const b = new Builder(glob, ctx)
-    .set({ type: 'same', escalation })
+    .set({ type: 'same', escalation, ...(asked === null ? {} : { questions: [...questionsOf(glob), asked] }) })
     .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
     .event('Escalated', {
       reason,
@@ -2761,9 +2854,37 @@ export const escalateToSame = (
       ...(evidence === '' ? {} : { evidence }),
       ...(runId === null ? {} : { runId }),
     });
+  if (asked !== null) b.event('QuestionRaised', questionEventData(asked));
   if (glob.pr !== null)
     b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   return b.done();
+};
+
+/** The question an escalation attaches (null when the glob has one for the criterion already, or no room). */
+const escalationQuestion = (
+  glob: Glob,
+  from: { reason: string; criterion: string; runId: string | null; by: string | undefined; actor: string | null },
+  now: string,
+): OpenQuestion | null => {
+  const key = `escalation:${from.criterion}`;
+  const existing = questionsOf(glob);
+  if (existing.some((q) => q.key === key) || existing.length >= MAX_QUESTIONS) return null;
+  const raisedBy: QuestionRaiser =
+    from.runId !== null
+      ? { kind: 'routine', actor: from.by ?? from.actor, runId: from.runId }
+      : from.by !== undefined
+        ? { kind: 'system', actor: null }
+        : { kind: 'person', actor: from.actor };
+  return {
+    id: nextQuestionId(existing),
+    key,
+    text: from.reason.slice(0, 1000),
+    options: ['Keep as same', 'Make it a sub again'],
+    raisedBy,
+    source: from.runId !== null ? 'run' : 'other',
+    blocking: 'none',
+    raisedAt: now,
+  };
 };
 
 /**
@@ -2794,7 +2915,7 @@ export const liftRiskAreaEscalation = (
   const b = new Builder(glob, ctx)
     .set({ type: 'sub', escalation: null })
     .event('FieldsChanged', { type: { from: 'same', to: 'sub' }, note });
-  const awaited = awaitedOf(relations ?? NO_RELATIONS);
+  const awaited = startHoldsOf(glob, relations ?? NO_RELATIONS);
   if (awaited.length > 0) {
     b.set({ waiting: { since: ctx.now } }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
   } else {
@@ -2915,8 +3036,9 @@ export const subGateCompleted = (
   });
   if (gate.passed) {
     const held = mergeGate(relations);
-    // The sub stays in pr_open with its passed gate: `gateReleased` merges it once the relations are met.
-    if (held.length > 0) return holdMerge(b, glob, gate.sha, held, ctx).done();
+    const asks = mergeQuestions(glob);
+    // The sub stays in pr_open with its passed gate: `gateReleased` merges it once the relations are met and the questions answered.
+    if (held.length > 0 || asks.length > 0) return holdMerge(b, glob, gate.sha, held, asks, ctx).done();
     return b
       .set({ mergeUpdates: 0, ...(glob.mergeHold == null ? {} : { mergeHold: null }) })
       .status('merging')
@@ -3317,7 +3439,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     glob.status === 'planning' &&
     glob.type !== 'super' &&
     !startQueued(glob) &&
-    (facts.relations === undefined ? glob.waiting != null : awaitedOf(facts.relations).length > 0);
+    (facts.relations === undefined ? glob.waiting != null || startQuestions(glob).length > 0 : startHoldsOf(glob, facts.relations).length > 0);
   if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held && !startQueued(glob)) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (reviewOffer(glob, facts.reviews) !== null) actions.push('review_now');
@@ -3877,7 +3999,7 @@ export const gateReleased = (
     const armed = isMergeArmed(glob);
     const subPassed = glob.type === 'sub' && glob.mergeHold != null && glob.mergeHold.sha === head;
     if ((!armed && !subPassed) || glob.conflict != null || !headChecksPassed(glob)) return unchanged(glob);
-    if (mergeGate(relations).length > 0) return unchanged(glob);
+    if (mergeGate(relations).length > 0 || mergeQuestions(glob).length > 0) return unchanged(glob);
     return new Builder(glob, ctx)
       .set({ mergeMode: null, mergeHold: null, mergeUpdates: 0 })
       .event('MergeResumed', { sha: head })
@@ -4105,3 +4227,115 @@ const decisionActions = (glob: Glob, actor: Actor): Action[] => {
   }
   return actions;
 };
+
+// ---------------------------------------------------------------------------
+// Open questions (rows Q1-Q4)
+
+/**
+ * Row Q1: a question is raised on a glob. A repeated key changes nothing. A `start` question holds only a glob that has not
+ * started: elsewhere (and on a super, which waits for a person anyway) it is stored as a notice. A sub in Planning shows the
+ * hold as waiting. A `merge` question is refused once the glob has merged, and is a notice while the merge is under way.
+ */
+export const raiseQuestion = (glob: Glob, input: NewQuestion, ctx: Context): Result<Transition> => {
+  if (isHumanCategory(glob.category)) {
+    return invalidTransition(glob, ctx.actor, 'A decision or action glob cannot hold a question');
+  }
+  const checked = checkNewQuestion(input);
+  if (!checked.ok) return checked;
+  const q = checked.value;
+  const existing = questionsOf(glob);
+  if (q.key !== undefined && existing.some((e) => e.key === q.key)) return unchanged(glob);
+  if (existing.length >= MAX_QUESTIONS) return invalidInput(`A glob can have at most ${String(MAX_QUESTIONS)} questions`);
+  if (q.blocking === 'merge' && (glob.status === 'reviewing' || glob.status === 'signed_off')) {
+    return invalidTransition(glob, ctx.actor, 'A merged glob cannot have its merge held');
+  }
+  const blocking =
+    q.blocking === 'start' && (glob.status !== 'planning' || glob.type === 'super')
+      ? 'none'
+      : q.blocking === 'merge' && glob.status === 'merging'
+        ? 'none'
+        : q.blocking;
+  const made: OpenQuestion = {
+    id: nextQuestionId(existing),
+    ...(q.key === undefined ? {} : { key: q.key }),
+    text: q.text,
+    ...(q.options === undefined ? {} : { options: q.options }),
+    raisedBy: q.raisedBy,
+    source: q.source,
+    blocking,
+    raisedAt: ctx.now,
+  };
+  const b = new Builder(glob, ctx).set({ questions: [...existing, made] });
+  // A sub waits in Planning with the same mark a start relation uses, so the held state shows and `released` can start it.
+  if (blocking === 'start' && glob.type === 'sub' && glob.waiting == null) {
+    b.set({ waiting: { since: ctx.now } });
+  }
+  return b.event('QuestionRaised', questionEventData(made)).done();
+};
+
+/** Finds an open question to answer or dismiss, or says why it can't be. */
+const questionToClose = (glob: Glob, questionId: string, runId: string | null | undefined, ctx: Context): Result<OpenQuestion> => {
+  if (isHumanCategory(glob.category)) return invalidTransition(glob, ctx.actor, 'A decision or action glob cannot hold a question');
+  if (!canAnswer(glob, runId)) return forbidden('A routine run cannot answer or dismiss a question: it is a person\'s call');
+  const q = questionsOf(glob).find((e) => e.id === questionId);
+  if (q === undefined) return invalidInput(`${glob.id} has no question ${questionId}`);
+  return ok(q);
+};
+
+const replaceQuestion = (glob: Glob, next: OpenQuestion): readonly OpenQuestion[] =>
+  questionsOf(glob).map((q) => (q.id === next.id ? next : q));
+
+/**
+ * Row Q2: a person answers a question (an option, free text, or both). The answer is the person's: the service writes it
+ * into the Clarifications attachment in the same transaction and then releases whatever the question held. Answering an
+ * answered question with the same text changes nothing; with another text, or a dismissed one, it is refused.
+ */
+export const answerQuestion = (
+  glob: Glob,
+  input: { readonly questionId: string; readonly answer: string; readonly option?: string | null; readonly runId?: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const found = questionToClose(glob, input.questionId, input.runId, ctx);
+  if (!found.ok) return found;
+  const q = found.value;
+  const chosen = (input.option ?? '').trim();
+  const option = chosen === '' ? null : matchOption(q, chosen);
+  if (chosen !== '' && option === null) return invalidInput(`${chosen} is not one of the options of ${q.id}`);
+  const text = input.answer.trim() === '' ? (option ?? '') : input.answer.trim();
+  if (text === '') return invalidInput('An answer needs text or an option');
+  if (text.length > MAX_QUESTION_ANSWER) return invalidInput(`An answer is limited to ${String(MAX_QUESTION_ANSWER)} characters`);
+  if (q.answer !== undefined) {
+    return q.answer.text === text ? unchanged(glob) : invalidTransition(glob, actor, `${q.id} is already answered`);
+  }
+  if (q.dismissed !== undefined) return invalidTransition(glob, actor, `${q.id} was dismissed`);
+  const answered: OpenQuestion = { ...q, answer: { text, ...(option === null ? {} : { option }), by: actor.email, at: ctx.now } };
+  return new Builder(glob, ctx)
+    .set({ questions: replaceQuestion(glob, answered) })
+    .event('QuestionAnswered', { id: q.id, blocking: q.blocking, ...(option === null ? {} : { option }) })
+    .done();
+};
+
+/** Row Q3: a person dismisses a question: go ahead as it is (the hold clears; the note is recorded). */
+export const dismissQuestion = (
+  glob: Glob,
+  input: { readonly questionId: string; readonly note?: string | null; readonly runId?: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const found = questionToClose(glob, input.questionId, input.runId, ctx);
+  if (!found.ok) return found;
+  const q = found.value;
+  const note = (input.note ?? '').trim();
+  if (note.length > MAX_QUESTION_NOTE) return invalidInput(`A note is limited to ${String(MAX_QUESTION_NOTE)} characters`);
+  if (q.dismissed !== undefined) return unchanged(glob);
+  if (q.answer !== undefined) return invalidTransition(glob, actor, `${q.id} is already answered`);
+  const dismissed: OpenQuestion = { ...q, dismissed: { by: actor.email, at: ctx.now, note: note === '' ? null : note } };
+  return new Builder(glob, ctx)
+    .set({ questions: replaceQuestion(glob, dismissed) })
+    .event('QuestionDismissed', { id: q.id, blocking: q.blocking, ...(note === '' ? {} : { note }) })
+    .done();
+};
+
+/** The questions of a glob that are still open (the context bundle and the views read this). */
+export const openQuestionsOf = (glob: Glob): OpenQuestion[] => questionsOf(glob).filter(isOpenQuestion);

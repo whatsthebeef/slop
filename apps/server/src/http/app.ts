@@ -1,5 +1,5 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -179,6 +179,18 @@ export const createGlobSchema = z.object({
   relations: relationListSchema.optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
+  /** Questions the intake proposal raised, passed back by the form: they hold the new glob's start until a person answers. */
+  questions: z
+    .array(
+      z.object({
+        key: z.string().trim().min(1).max(MAX_QUESTION_KEY).optional(),
+        text: z.string().trim().min(1).max(MAX_QUESTION_TEXT),
+        options: z.array(z.string().trim().min(1).max(MAX_QUESTION_OPTION)).max(MAX_QUESTION_OPTIONS).optional(),
+        blocking: z.enum(['start', 'none']).default('start'),
+      }),
+    )
+    .max(MAX_INTAKE_QUESTIONS)
+    .optional(),
   /** What the intake proposal behind the form said, passed back so the glob's snapshot records it (the request is the text intake read). */
   intake: z
     .object({
@@ -610,7 +622,7 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, group, relations, type, actor, mode, fix, workKind, fixSource, workKindSource, inferenceReason, category, ...fields } = body;
+    const { intake, needs, group, relations, type, actor, mode, fix, workKind, fixSource, workKindSource, inferenceReason, category, questions, ...fields } = body;
     const boardId = Number(c.req.param('b'));
     const kind = resolveKind({ actor, mode, type, category, fix, workKind }, true);
     if (!kind.ok) return send(c, invalidInput(kind.message));
@@ -644,6 +656,9 @@ export const createApp = (deps: AppDeps) => {
       ...(relations === undefined ? {} : { relations: relationInputs(relations) }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
+      ...(questions === undefined || questions.length === 0
+        ? {}
+        : { questions: questions.map((q): NewQuestion => ({ ...q, source: 'create', raisedBy: { kind: 'intake', actor: null } })) }),
       boardId,
     });
     if (!created.ok) return send(c, created);
@@ -807,6 +822,55 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, versionSchema);
     if (body instanceof Response) return body;
     const result = await globs.dismissRelation(c.get('email'), c.req.param('id'), body.version, c.req.param('relationId'));
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
+  });
+
+  // Open questions (the glob view's Questions section). A person raises, answers or dismisses one; the web never passes a run ID, so
+  // these are always a person's call. Answering writes the Clarifications attachment and releases what the question held.
+  const raiseQuestionSchema = z.object({
+    text: z.string().min(1).max(MAX_QUESTION_TEXT),
+    options: z.array(z.string().min(1).max(MAX_QUESTION_OPTION)).max(MAX_QUESTION_OPTIONS).optional(),
+    blocking: z.enum(QUESTION_BLOCKING).optional(),
+    key: z.string().min(1).max(120).optional(),
+  });
+  const answerQuestionSchema = z.object({
+    answer: z.string().max(MAX_QUESTION_ANSWER).optional(),
+    option: z.string().min(1).optional(),
+    // Accepted for the web's request shape; a question's answer does not depend on the glob's version.
+    version: z.number().int().optional(),
+  });
+  const dismissQuestionSchema = z.object({ note: z.string().max(MAX_QUESTION_NOTE).optional(), version: z.number().int().optional() });
+
+  app.post('/api/globs/:id/questions', async (c) => {
+    const body = await parse(c, raiseQuestionSchema);
+    if (body instanceof Response) return body;
+    const email = c.get('email');
+    const id = c.req.param('id');
+    const raised = await globs.raiseQuestion(email, id, {
+      text: body.text,
+      ...(body.options === undefined ? {} : { options: body.options }),
+      ...(body.key === undefined ? {} : { key: body.key }),
+      blocking: body.blocking ?? 'none',
+      source: 'other',
+      raisedBy: { kind: 'person', actor: email },
+    });
+    if (raised.ok) void deps.outbox.drain(id).catch(() => undefined);
+    return raised.ok ? send(c, await globs.get(email, id), globViewOf) : send(c, raised);
+  });
+
+  app.post('/api/globs/:id/questions/:qid/answer', async (c) => {
+    const body = await parse(c, answerQuestionSchema);
+    if (body instanceof Response) return body;
+    const result = await globs.answerQuestion(c.get('email'), c.req.param('id'), c.req.param('qid'), { answer: body.answer ?? '', option: body.option ?? null });
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
+  });
+
+  app.post('/api/globs/:id/questions/:qid/dismiss', async (c) => {
+    const body = await parse(c, dismissQuestionSchema);
+    if (body instanceof Response) return body;
+    const result = await globs.dismissQuestion(c.get('email'), c.req.param('id'), c.req.param('qid'), { note: body.note ?? null });
     if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
     return withView(c, result);
   });

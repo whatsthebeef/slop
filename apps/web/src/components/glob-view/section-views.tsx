@@ -1,6 +1,6 @@
 import type { LabelName } from '@slop/core';
 import type { ReactNode } from 'react';
-import type { AddRelationInput } from '@/lib/api';
+import type { AddRelationInput, AnswerQuestionInput } from '@/lib/api';
 import type { GlobSection } from '@/lib/glob-section';
 import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
@@ -22,6 +22,7 @@ import { EnvironmentsPanel } from './environments';
 import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
+import { QuestionsSection } from './questions';
 import { ProblemSection } from './problem';
 import { RelatedSection } from './related';
 import { SizeSection } from './size';
@@ -50,6 +51,8 @@ export interface SectionProps {
   onReviewLabel: ReviewLabel;
   onDismissEdge: (relationId: string) => Promise<boolean>;
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
+  onAnswerQuestion: (questionId: string, input: AnswerQuestionInput) => Promise<boolean>;
+  onDismissQuestion: (questionId: string, note?: string) => Promise<boolean>;
   onAddStep: (step: {
     title: string;
     detail?: string;
@@ -66,6 +69,9 @@ type SectionView = (props: SectionProps) => ReactNode;
 
 /** How each section renders, keyed by its `data-section` id. The order lives in `sections.ts`. */
 export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
+  questions: ({ ctx, onAnswerQuestion, onDismissQuestion }) => (
+    <QuestionsSection ctx={ctx} onAnswer={onAnswerQuestion} onDismiss={onDismissQuestion} />
+  ),
   conflict: ({ ctx }) => <ConflictSection ctx={ctx} />,
   problem: ({ ctx, nowState, actions }) => <ProblemSection ctx={ctx} state={nowState} actions={actions} />,
   escalation: ({ ctx, section }) => (

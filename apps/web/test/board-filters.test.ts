@@ -211,8 +211,8 @@ describe('board filters', () => {
     expect(toggleOption(kind, 'bug', 'bug')).toBe('');
   });
 
-  it('has the kind filter, the ID filter, the temporary group filter, the Only human toggle and the Arm system toggle', () => {
-    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['kind', 'id', 'group', 'human', 'arm']);
+  it('has the kind filter, the ID filter, the temporary group filter, the Only human toggle and the Arm system and Has open questions toggles', () => {
+    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['kind', 'id', 'group', 'human', 'arm', 'questions']);
   });
 
   it('ignores the removed yourTurn and move parameters and an old human value in links', () => {
@@ -301,5 +301,15 @@ describe('board filters', () => {
       expect(params.toString()).toBe('glob=s1t1&arm=1');
       expect(parseFilters(params)).toEqual({ kind: 'task,bug,action', arm: '1' });
     });
+  });
+
+  it('filters to globs with an open question', () => {
+    const q = { id: 'q1', text: 'Prod?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'start', raisedAt: NOW } as const;
+    const values = parse('kind=all&questions=1');
+    expect(values).toEqual({ questions: '1' });
+    expect(matchesFilters(view({ questions: [q] }), values)).toBe(true);
+    expect(matchesFilters(view({ questions: [{ ...q, answer: { text: 'Yes', by: 'a', at: NOW } }] }), values)).toBe(false);
+    expect(matchesFilters(view({}), values)).toBe(false);
+    expect(matchesFilters(view({}), parse('kind=all'))).toBe(true);
   });
 });
