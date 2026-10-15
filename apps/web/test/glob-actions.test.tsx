@@ -624,7 +624,7 @@ describe('a due rollout step is the main action, never a scroll-only button', ()
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
     expect(screen.getByTestId('main-action').textContent).toContain('Copy rollout command');
     await user.click(screen.getByTestId('main-action'));
-    expect(write).toHaveBeenCalledWith('infra/deploy/host-deploy.sh');
+    expect(write).toHaveBeenCalledWith('bash infra/deploy/host-deploy.sh');
     await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Mark done'));
     await user.click(screen.getByTestId('main-action'));
     expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');

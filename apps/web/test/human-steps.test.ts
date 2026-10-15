@@ -159,7 +159,7 @@ describe('approving while the rollout is pending', () => {
 
 describe('copy', () => {
   it('copies a repo path as it is, and an artifact script by its text', async () => {
-    expect(await scriptCopyText(15, 's15f1', { path: 'infra/deploy.sh' }, () => Promise.resolve(null), 'https://slop')).toBe('infra/deploy.sh');
+    expect(await scriptCopyText(15, 's15f1', { path: 'infra/deploy.sh' }, () => Promise.resolve(null), 'https://slop')).toBe('bash infra/deploy.sh');
     expect(await scriptCopyText(15, 's15f1', { artifact: 'host' }, () => Promise.resolve('echo hi'), 'https://slop')).toBe('echo hi');
   });
   it('falls back to the artifact link when the text cannot be read', async () => {

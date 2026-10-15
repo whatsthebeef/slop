@@ -26,6 +26,30 @@ describe('catalog agents: human steps and rollout', () => {
     expect(text).toContain('What is not a rollout step');
   });
 
+  it('has the implementer put each command-sequence step in a script with its permissions, from the template, and never run it', async () => {
+    const text = await agent('implementer');
+    expect(text).toContain('**Permissions:**');
+    expect(text).toContain('Scripts for steps');
+    expect(text).toContain('script: <path>');
+    expect(text).toContain('scripts/rollout/<glob-id>-<slug>.sh');
+    expect(text).toContain('catalog/scripts/step-template.sh');
+    expect(text).toContain('You never run it for real');
+  });
+
+  it('has the orchestrator require the script and the permissions before the record is written', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('A step that is a command sequence comes with a script.');
+    expect(text).toContain('**Permissions:**');
+  });
+
+  it('has the change reviewer check the script is in the diff, follows the template shape and passes bash -n and shellcheck', async () => {
+    const text = await agent('change_reviewer');
+    expect(text).toContain('`script: <path>` line is missing');
+    expect(text).toContain('catalog/scripts/step-template.sh');
+    expect(text).toContain('`bash -n` and `shellcheck`');
+    expect(text).toContain('`**Permissions:**` line');
+  });
+
   it('has the change reviewer flag notes, pre-merge reviews and optional setup filed as steps', async () => {
     const text = await agent('change_reviewer');
     expect(text).toContain('a note with no action posing as a step');

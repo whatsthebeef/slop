@@ -293,3 +293,32 @@ describe.skipIf(!has('python3') || !has('bash') || !has('curl'))('atf-specs.sh',
     expect(seen).toEqual([]);
   });
 });
+
+describe('catalog/scripts/step-template.sh', () => {
+  const template = join(scripts, 'step-template.sh');
+
+  it('parses with bash -n and prints its header for --help', () => {
+    expect(spawnSync('bash', ['-n', template]).status).toBe(0);
+    const help = spawnSync('bash', [template, '--help'], { encoding: 'utf8' });
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('Permissions and login it needs');
+    expect(help.stdout).toContain('--dry-run');
+  });
+
+  it('rejects an unknown argument without changing anything', () => {
+    const result = spawnSync('bash', [template, '--nope'], { encoding: 'utf8' });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('unknown argument');
+  });
+
+  it.skipIf(!has('shellcheck'))('passes shellcheck', () => {
+    const result = spawnSync('shellcheck', [template], { encoding: 'utf8' });
+    expect(result.stdout + result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  });
+
+  it('has the shape a step script needs: preflight, summary, confirmation, final check', () => {
+    const text = readFileSync(template, 'utf8');
+    for (const part of ['preflight()', 'summary()', 'apply()', 'verify()', '--yes', '--dry-run', 'Go ahead? [y/N]']) expect(text).toContain(part);
+  });
+});
