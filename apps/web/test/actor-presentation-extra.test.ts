@@ -134,7 +134,7 @@ describe('status-line activity icons (s15f88)', () => {
     });
     expect(positionOf(picked, later)).toMatchObject({
       holder: 'human',
-      text: 'picked up, no machine run',
+      text: 'with Dev',
     });
   });
 
