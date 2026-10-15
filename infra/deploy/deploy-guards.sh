@@ -71,3 +71,10 @@ merge_projects() {
   done
   echo "${out[*]:-}"
 }
+
+# needs_volume_handover <stack's VolumeAttachment ids> <the data volume's attachment state to the instance>: true when the
+# volume is attached to the instance (a state such as "attached") but the stack owns no VolumeAttachment, so deploying
+# the stack would fail with "already attached" and roll back. Either empty means there is nothing to hand over.
+needs_volume_handover() {
+  [ -z "${1:-}" ] && [ -n "${2:-}" ]
+}
