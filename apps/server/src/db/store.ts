@@ -280,12 +280,14 @@ const toHumanStep = (row: typeof schema.humanSteps.$inferSelect): StoredHumanSte
   doneBy: row.doneBy,
   doneAt: row.doneAt?.toISOString() ?? null,
   dismissedReason: row.dismissedReason,
+  dueSince: row.dueSince?.toISOString() ?? null,
 });
 
 const humanStepRow = (h: StoredHumanStep): typeof schema.humanSteps.$inferInsert => ({
   ...h,
   createdAt: new Date(h.createdAt),
   doneAt: h.doneAt === null ? null : new Date(h.doneAt),
+  dueSince: h.dueSince === null ? null : new Date(h.dueSince),
 });
 
 const toRelation = (row: typeof schema.relations.$inferSelect): Relation => ({

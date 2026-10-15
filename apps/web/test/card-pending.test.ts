@@ -82,6 +82,9 @@ describe('mergeOutcomeText', () => {
     expect(mergeOutcomeText('merge', { status: 'pr_open', mergeMode: 'when_green' })).toBe('Will merge when checks pass');
     expect(mergeOutcomeText('merge', { status: 'merging' })).toBe('Merging…');
     expect(mergeOutcomeText('merge', { status: 'failed', failure: { reason: 'conflict in a.ts' } })).toBe("Can't merge: conflict in a.ts");
+    const humanSteps = [{ id: 'hs_1', kind: 'rollout', title: 'Run it', state: 'pending', who: 'admin', due: 'after_merge', blocks: [], source: 'work' }] as never;
+    expect(mergeOutcomeText('merge', { status: 'pr_open', mergeMode: 'when_green', humanSteps })).toBe('Will merge when checks pass; the rollout step comes after');
+    expect(mergeOutcomeText('merge', { status: 'merging', humanSteps })).toBe('Merging…; the rollout step comes after');
     expect(mergeOutcomeText('cancel_merge', { status: 'pr_open' })).toBe('Merge cancelled');
     expect(mergeOutcomeText('start', { status: 'in_progress' })).toBeNull();
   });

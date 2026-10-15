@@ -144,6 +144,7 @@ describe('RolloutService', () => {
           doneBy: null,
           doneAt: null,
           dismissedReason: null,
+          dueSince: null,
         },
       ]);
     });

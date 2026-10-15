@@ -17,7 +17,6 @@ import {
   isWorkStep,
   isQuietStep,
   PREDICTED_ROLLOUT_TEXT,
-  quietText,
   readStepsOpen,
   scriptArtifactPath,
   scriptCopyText,
@@ -29,6 +28,8 @@ import {
   writeStepsOpen,
 } from '@/lib/human-steps';
 import type { StepDraft } from '@/lib/human-steps';
+import { deployEnv, groupText, stageGroups } from '@/lib/rollout-stages';
+import type { StageGroup } from '@/lib/rollout-stages';
 import { copyOrSelect } from '@/lib/plan-text';
 import { cn } from '@/lib/utils';
 import { HumanIcon } from './actor-icons';
@@ -345,16 +346,36 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
   );
 };
 
-/** Steps not yet due behind one quiet line ("2 steps after merge"), collapsed until asked for. */
-const QuietSteps = ({ steps, render }: { steps: readonly ListedHumanStep[]; render: (step: ListedHumanStep) => ReactNode }) => {
+/**
+ * One stage's steps that are not due yet, behind one quiet line ("After the deploy to production: 2 steps, not due yet"),
+ * collapsed until asked for. An after-deploy group has "Mark deployed to <env>" beside it when the page can send it.
+ */
+const QuietGroup = ({
+  group,
+  busy,
+  onMarkDeployed,
+  render,
+}: {
+  group: StageGroup;
+  busy: boolean;
+  onMarkDeployed?: (env: string) => Promise<boolean>;
+  render: (step: ListedHumanStep) => ReactNode;
+}) => {
   const [shown, setShown] = useState(false);
-  if (steps.length === 0) return null;
+  const env = deployEnv(group);
   return (
-    <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground' data-testid='quiet-steps'>
-      <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='quiet-toggle' onClick={() => setShown(!shown)}>
-        {quietText(steps)} {shown ? '▾' : '▸'}
-      </button>
-      {shown && <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>{steps.map(render)}</ul>}
+    <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground' data-testid='quiet-steps' data-stage={group.stage}>
+      <div className='flex flex-wrap items-center gap-2'>
+        <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='quiet-toggle' onClick={() => setShown(!shown)}>
+          {groupText(group)} {shown ? '▾' : '▸'}
+        </button>
+        {env !== null && onMarkDeployed !== undefined && (
+          <button type='button' className='underline disabled:no-underline disabled:opacity-60' disabled={busy} data-testid='mark-deployed' onClick={() => void onMarkDeployed(env)}>
+            Mark deployed to {env}
+          </button>
+        )}
+      </div>
+      {shown && <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>{group.steps.map(render)}</ul>}
     </div>
   );
 };
@@ -458,6 +479,8 @@ export const HumanSteps = ({
   openSignal = 0,
   collapsed = false,
   part = 'all',
+  environments = [],
+  onMarkDeployed,
   ...actions
 }: {
   glob: GlobView;
@@ -474,6 +497,10 @@ export const HumanSteps = ({
   collapsed?: boolean;
   /** `due` is the block of due steps above the action row; `rest` is the collapsible section with the other steps and Add step; `all` is both, one after the other. */
   part?: 'due' | 'rest' | 'all';
+  /** The board's environment names in promotion order: the order of the stage groups after the merge. */
+  environments?: readonly string[];
+  /** Tells slop the change is deployed to an environment (its after-deploy steps fall due); without it the group has no button. */
+  onMarkDeployed?: (env: string) => Promise<boolean>;
 } & StepActions) => {
   const all = glob.humanSteps ?? [];
   const live = all.filter((s) => !isDismissedStep(s));
@@ -507,6 +534,7 @@ export const HumanSteps = ({
       }
     };
   const wrapped: StepActions = { onAdd: guarded(actions.onAdd), onComplete: guarded(actions.onComplete), onDismiss: guarded(actions.onDismiss) };
+  const wrappedMark = onMarkDeployed === undefined ? undefined : guarded(onMarkDeployed);
   const left = steps.filter((s) => (s.state === 'due' || s.state === 'pending') && s.predicted !== true).length;
   const stepProps = (s: ListedHumanStep) => ({ glob, source: { repo, baseBranch }, step: s, mine: viewer !== undefined && isForViewer(s, glob, viewer), busy, actions: wrapped });
   return (
@@ -561,7 +589,15 @@ export const HumanSteps = ({
                   ))}
                 </ul>
               )}
-              <QuietSteps steps={quiet} render={(s) => <Step key={s.id} {...stepProps(s)} />} />
+              {stageGroups(quiet, environments).map((group) => (
+                <QuietGroup
+                  key={group.stage}
+                  group={group}
+                  busy={busy}
+                  {...(wrappedMark === undefined ? {} : { onMarkDeployed: wrappedMark })}
+                  render={(s) => <Step key={s.id} {...stepProps(s)} />}
+                />
+              ))}
               <DismissedSteps steps={dismissed} />
               {canAdd && adding && <AddStep busy={busy} onAdd={wrapped.onAdd} onClose={() => setAdding(false)} />}
             </>

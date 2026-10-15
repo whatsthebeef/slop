@@ -60,6 +60,7 @@ const step = (id: string, globId: string, boardId: number, patch: Partial<Stored
   doneBy: null,
   doneAt: null,
   dismissedReason: null,
+  dueSince: null,
   ...patch,
 });
 
@@ -100,6 +101,18 @@ describe('human steps in Postgres', () => {
     expect(await store.transaction((tx) => tx.listHumanSteps(boardId, ['s9f1']))).toEqual([done, open]);
     expect(await store.transaction((tx) => tx.listHumanSteps(boardId, []))).toEqual([]);
     expect(await store.transaction((tx) => tx.listHumanSteps(boardId, ['s9f2']))).toEqual([]);
+  });
+
+  it('round-trips dueSince, and a save that sets it replaces the null (sticky after-deploy due)', async () => {
+    const waiting = step('hs-deploy', 's9f1', boardId, { due: 'after_deploy:production', blocks: [] });
+    await store.transaction((tx) => tx.saveHumanSteps([waiting]));
+    const read = () => store.transaction(async (tx) => (await tx.listHumanSteps(boardId, ['s9f1'])).find((s) => s.id === 'hs-deploy'));
+    expect(await read()).toEqual(waiting);
+    const due = { ...waiting, dueSince: '2026-10-07T09:30:00.000Z' };
+    await store.transaction((tx) => tx.saveHumanSteps([due]));
+    expect(await read()).toEqual(due);
+    expect((await store.transaction((tx) => tx.listOpenHumanSteps(boardId))).find((s) => s.id === 'hs-deploy')?.dueSince).toBe('2026-10-07T09:30:00.000Z');
+    await store.transaction((tx) => tx.saveHumanSteps([{ ...due, state: 'dismissed', dismissedReason: 'test cleanup' }]));
   });
 
   it('saving again replaces the step; the board list reads open steps only', async () => {
