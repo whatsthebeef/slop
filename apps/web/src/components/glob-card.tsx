@@ -506,35 +506,17 @@ export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
 
 /**
  * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge). Rocket and text in the
- * primary action's colour (not red, which means broken). On the board `onFilter` makes it filter to globs that need this; with `to`
- * (the glob view) it links to the board filtered so; with neither it is plain.
+ * primary action's colour (not red, which means broken), normal weight. `onOpen` opens the glob at its Human steps; without it the
+ * label is plain.
  */
-export const ArmSystemLabel = ({ step, onFilter, to }: { step: Pick<ListedHumanStep, 'title'>; onFilter?: () => void; to?: string }) => {
-  const tip = `A person has a step at release: ${step.title}`;
-  const className = 'inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] font-semibold text-primary';
-  const content = (
-    <>
+export const ArmSystemLabel = ({ step, onOpen }: { step: Pick<ListedHumanStep, 'title'>; onOpen?: () => void }) => (
+  <Tip text={`A person has a step at release: ${step.title}`}>
+    <ChipButton onOpen={onOpen} className='inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[11px] text-primary' testId='arm-system-label'>
       <Rocket className='h-3 w-3 shrink-0' aria-hidden />
       Arm system
-    </>
-  );
-  if (to !== undefined) {
-    return (
-      <Tip text={tip}>
-        <Link to={to} className={cn(className, 'rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring')} data-testid='arm-system-label'>
-          {content}
-        </Link>
-      </Tip>
-    );
-  }
-  return (
-    <Tip text={tip}>
-      <ChipButton onOpen={onFilter} className={className} testId='arm-system-label'>
-        {content}
-      </ChipButton>
-    </Tip>
-  );
-};
+    </ChipButton>
+  </Tip>
+);
 
 /**
  * A decision glob's chips: what it applies to, what was decided (the outcome so far) and, when it contradicts a decision of
@@ -604,7 +586,6 @@ export const GlobCard = ({
   viewer,
   waitingOnThis = 0,
   onFilterGroup,
-  onFilterArmSystem,
   groupHref,
   groupProgress,
 }: {
@@ -612,8 +593,6 @@ export const GlobCard = ({
   onOpen: () => void;
   /** Filters the board to a group (the card's group tag); without it the tag is plain. */
   onFilterGroup?: (name: string) => void;
-  /** Filters the board to globs that need a person at release (the "Arm system" label); without it the label is plain. */
-  onFilterArmSystem?: () => void;
   /** The group's page; with it the tag links there instead of filtering. */
   groupHref?: string;
   /** The group's progress ("3/5") while it has more than one open glob. */
@@ -791,7 +770,12 @@ export const GlobCard = ({
           )}
         </div>
         <div className='flex shrink-0 items-center gap-1.5'>
-          {armStep !== null && <ArmSystemLabel step={armStep} onFilter={onFilterArmSystem} />}
+          {armStep !== null && (
+            <>
+              <DotSeparator testId='card-arm-separator' />
+              <ArmSystemLabel step={armStep} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
+            </>
+          )}
           <Avatar email={person} planner={glob.implementer === null} />
         </div>
       </div>
