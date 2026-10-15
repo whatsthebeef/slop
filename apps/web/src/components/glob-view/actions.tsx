@@ -144,7 +144,7 @@ export const useGlobActions = ({
   const leading =
     stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
   // With no natural main (and no due step) a menu item is promoted, so the ▾ never stands alone.
-  const natural = mainAction(shownActions, glob, decision, stepTurn !== null, email, leading);
+  const natural = mainAction(shownActions, glob, human, stepTurn !== null, email, leading);
   const main = natural ?? (stepTurn === null ? promotedAction(allActions, glob) : null);
   // A stalled glob's step (nobody moving it) makes Pick up the black main; while a sub's machine progresses it stays quiet.
   const variant = mainVariant(main, glob, stall !== undefined);
