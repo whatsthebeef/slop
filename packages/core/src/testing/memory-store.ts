@@ -7,7 +7,9 @@ import type { StoredHumanStep } from '../domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
 import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import { sameCommit } from '../domain/signals.js';
+import type { AtfRunner } from '../domain/atf-runners.js';
 import type { AtfBatch, StoredRunSpec, TestRun } from '../domain/test-runs.js';
+import { sameRunnerName } from '../domain/atf-runners.js';
 import type { BoardNotification } from '../domain/notifications.js';
 import type { ChatMessage, ChatThread } from '../domain/chat.js';
 import type { ChatFeedback } from '../domain/chat-feedback.js';
@@ -110,6 +112,7 @@ interface State {
   testRuns: TestRun[];
   testRunSpecs: StoredRunSpec[];
   atfBatches: AtfBatch[];
+  atfRunners: AtfRunner[];
   notifications: Map<string, BoardNotification>;
   /** Search store: items keyed by board and external ref, and their chunks. */
   searchItems: Map<string, KnowledgeItem>;
@@ -212,6 +215,7 @@ const clone = (state: State): State => ({
   testRuns: [...state.testRuns],
   testRunSpecs: [...state.testRunSpecs],
   atfBatches: [...state.atfBatches],
+  atfRunners: [...state.atfRunners],
   notifications: new Map(state.notifications),
   searchItems: new Map(state.searchItems),
   searchChunks: [...state.searchChunks],
@@ -289,6 +293,7 @@ export class MemoryStore implements Store {
     testRuns: [],
     testRunSpecs: [],
     atfBatches: [],
+    atfRunners: [],
     notifications: new Map(),
     searchItems: new Map(),
     searchChunks: [],
@@ -811,9 +816,9 @@ export class MemoryStore implements Store {
       lockEnvironment: () => Promise.resolve(),
       insertTestRun: (run) => {
         if (s.testRuns.some((r) => r.boardId === run.boardId && r.eventId === run.eventId)) return Promise.resolve(false);
-        const { specs = [], ...fields } = run;
+        const { specs = [], runnerId = null, ...fields } = run;
         const id = this.nextRowId++;
-        s.testRuns.push({ ...fields, id });
+        s.testRuns.push({ ...fields, runnerId, id });
         for (const spec of specs) s.testRunSpecs.push({ ...spec, testRunId: id });
         return Promise.resolve(true);
       },
@@ -843,6 +848,27 @@ export class MemoryStore implements Store {
                   (filter.commits?.some((c) => c.environment === r.environment && sameCommit(c.sha, r.sha)) ?? false))),
           ),
         ),
+      listAtfRunners: (boardId, options) =>
+        Promise.resolve(s.atfRunners.filter((r) => r.boardId === boardId && (options?.includeRevoked === true || r.revokedAt === null)).sort((a, b) => a.id - b.id)),
+      getAtfRunner: (boardId, id) => Promise.resolve(s.atfRunners.find((r) => r.boardId === boardId && r.id === id) ?? null),
+      insertAtfRunner: (runner) => {
+        if (s.atfRunners.some((r) => r.boardId === runner.boardId && r.revokedAt === null && sameRunnerName(r.name, runner.name))) return Promise.resolve(null);
+        const added: AtfRunner = { ...runner, id: this.nextRowId++, revokedAt: null, lastSeenAt: null, lastResultAt: null };
+        s.atfRunners.push(added);
+        return Promise.resolve(added);
+      },
+      updateAtfRunner: (boardId, id, patch) => {
+        const current = s.atfRunners.find((r) => r.boardId === boardId && r.id === id);
+        if (current === undefined) return Promise.resolve(null);
+        const revoked = patch.revokedAt ?? current.revokedAt;
+        const name = patch.name ?? current.name;
+        if (revoked === null && s.atfRunners.some((r) => r.id !== id && r.boardId === boardId && r.revokedAt === null && sameRunnerName(r.name, name))) {
+          return Promise.resolve(null);
+        }
+        const updated: AtfRunner = { ...current, ...patch, name, revokedAt: revoked };
+        s.atfRunners = s.atfRunners.map((r) => (r.id === id ? updated : r));
+        return Promise.resolve(updated);
+      },
       insertReviewSource: (input) => {
         const taken = s.reviewSources.some(
           (r) =>
@@ -1430,6 +1456,8 @@ export class MemoryStore implements Store {
           // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
           // backing off) gets a sibling, so a change it may not have seen still gets its step.
           if ((effect.kind === 'kb_route' || effect.kind === 'kb_draft' || effect.kind === 'suggest_decision' || effect.kind === 'write_rollout_steps') && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
+          // One delivery per runner and deploy, whatever became of the earlier one.
+          if (effect.kind === 'deliver_atf_webhook' && s.outbox.some((e) => e.kind === effect.kind && e.runnerId === effect.runnerId && e.deployId === effect.deployId)) continue;
           // An on-demand review (it has a requestId) is always queued, and neither dedupes nor cancels the automatic ones.
           if (effect.kind === 'review_change' && effect.requestId === undefined) {
             const same = (e: Effect) => e.kind === 'review_change' && e.requestId === undefined && e.globId === effect.globId && e.stage === effect.stage;

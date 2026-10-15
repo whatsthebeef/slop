@@ -1,4 +1,5 @@
-import type { AtfBatch, AtfIntegration, Effect, Result } from '@slop/core';
+import { AtfRefusedError } from '@slop/core';
+import type { AtfBatch, AtfIntegration, AtfStart, Effect, Result, RunnerStarter } from '@slop/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({ clients: [] as { config: unknown }[], inputs: [] as unknown[] }));
@@ -19,9 +20,8 @@ vi.mock('@aws-sdk/client-codebuild', () => ({
 }));
 
 const { startAtf } = await import('../src/atf-executors.js');
-const { AtfRefusedError, CodeBuildAtfStarter, atfIdempotencyToken, atfVariables, combineGreps } =
+const { CodeBuildAtfStarter, atfIdempotencyToken, atfVariables, combineGreps } =
   await import('../src/atf-starter.js');
-import type { AtfStart, AtfStarter } from '../src/atf-starter.js';
 
 const integration: AtfIntegration = {
   provider: 'codebuild',
@@ -40,6 +40,13 @@ const job: AtfStart = {
 };
 
 describe('the CodeBuild ATF starter', () => {
+  it('is a RunnerStarter: core knows the port, the server the AWS adapter behind it', async () => {
+    const starter: RunnerStarter = new CodeBuildAtfStarter(policy);
+    expect((await starter.start(job)).buildId).toBe('atf-project:1234');
+    // The refusal the executor drops on is core's own class, so any adapter can raise it.
+    await expect(new CodeBuildAtfStarter().start(job)).rejects.toBeInstanceOf(AtfRefusedError);
+  });
+
   beforeEach(() => {
     calls.clients.length = 0;
     calls.inputs.length = 0;
@@ -161,7 +168,7 @@ describe('the start_atf executor', () => {
     createdAt: '2026-10-05T13:00:00.000Z',
   };
   const starts: AtfStart[] = [];
-  const starter: AtfStarter = {
+  const starter: RunnerStarter = {
     start: (j) => {
       starts.push(j);
       return Promise.resolve({ buildId: 'b1', url: null });
@@ -198,7 +205,7 @@ describe('the start_atf executor', () => {
   });
 
   it('drops, and logs, a start the allow-list refuses instead of retrying it', async () => {
-    const refusing: AtfStarter = { start: () => Promise.reject(new AtfRefusedError('not on the allow-list')) };
+    const refusing: RunnerStarter = { start: () => Promise.reject(new AtfRefusedError('not on the allow-list')) };
     const logged: string[] = [];
     const outcome = await startAtf(effect, {
       testRuns: { atfBatch: () => Promise.resolve({ ok: true, value: { status: 'ready', batch } }) },

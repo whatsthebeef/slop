@@ -451,7 +451,9 @@ export const atfLine = (run: AtfRun): string => {
   const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
   const counts = `${run.passed} passed, ${run.failed} failed${run.skipped > 0 ? `, ${run.skipped} skipped` : ''}`;
   const own = run.plannedSpecs === undefined ? '' : ` · this glob's planned specs: ${plannedSpecsText(run.plannedSpecs)}`;
-  return `${where} at ${run.sha.slice(0, 7)}: ${counts}${run.stale === true ? ' (an older commit than the PR head)' : ''}${own}`;
+  // Only set when the board has several runners, so a one-runner board reads as before.
+  const runner = run.runnerName === undefined ? '' : ` · runner: ${run.runnerName}`;
+  return `${where} at ${run.sha.slice(0, 7)}: ${counts}${runner}${run.stale === true ? ' (an older commit than the PR head)' : ''}${own}`;
 };
 
 /** The glob's own planned specs in one run, in words: "2 passed, 1 failed, 1 missing, 1 not reported". */

@@ -25,6 +25,7 @@ import type {
   Board,
   BoardJobResult,
   AtfBatchGrep,
+  AtfRunnerConfig,
   AtfBatchSpec,
   AtfIntegration,
   DeployIntegration,
@@ -1034,6 +1035,33 @@ export const globEnvironments = pgTable(
   ],
 );
 
+/**
+ * A board's registered ATF runners (spec, ATF runners). `config` holds the method's settings (issuer and claim rules, role
+ * ARNs, Cognito client ID...) so a new identity method needs no migration; secrets are never stored here. A revoked
+ * runner keeps its row (its runs point at it) and frees its name.
+ */
+export const atfRunners = pgTable(
+  'atf_runners',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** oidc, aws_iam or client_credentials (`ATF_RUNNER_METHODS`). */
+    method: text('method').notNull(),
+    config: jsonb('config').$type<AtfRunnerConfig>().notNull().default({}),
+    environments: jsonb('environments').$type<string[]>().notNull().default([]),
+    enabled: boolean('enabled').notNull().default(true),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    lastResultAt: timestamp('last_result_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('atf_runners_name_idx').on(t.boardId, sql`lower(${t.name})`).where(sql`${t.revokedAt} is null`)],
+);
+
 /** ATF runs reported by pipelines: on a glob's branch, or against the commit an environment ran. */
 export const testRuns = pgTable(
   'test_runs',
@@ -1053,9 +1081,12 @@ export const testRuns = pgTable(
     url: text('url'),
     eventId: text('event_id').notNull(),
     finishedAt: timestamp('finished_at', { withTimezone: true }).notNull(),
+    /** The registered runner that posted it; null for the legacy board token and EventBridge (and once the runner row is gone). */
+    runnerId: bigint('runner_id', { mode: 'number' }).references(() => atfRunners.id, { onDelete: 'set null' }),
   },
   (t) => [
     uniqueIndex('test_runs_event_idx').on(t.boardId, t.eventId),
+    index('test_runs_runner_idx').on(t.runnerId),
     index('test_runs_board_env_sha_idx').on(t.boardId, t.environment, t.sha),
     index('test_runs_glob_idx').on(t.globId),
   ],

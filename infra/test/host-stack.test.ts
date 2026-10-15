@@ -7,7 +7,7 @@ import { Stack } from 'aws-cdk-lib';
 
 const env = { account: '123456789012', region: 'us-east-1' };
 
-const synth = (stage: string, extra: { amiId?: string; dataVolumeId?: string } = {}): Template => {
+const synth = (stage: string, extra: { amiId?: string; dataVolumeId?: string; cognitoUserPoolId?: string } = {}): Template => {
   const app = new App();
   const secrets = new SlopSecrets(new Stack(app, 'Secrets', { env }), 'Secrets', { stage });
   const stack = new HostStack(app, 'Host', {
@@ -54,5 +54,32 @@ describe('HostStack', () => {
       Properties: Match.objectLike({ Size: 30, Encrypted: true, Tags: Match.arrayWith([{ Key: 'slop:snapshot', Value: 'weekly' }]) }),
     });
     t.resourceCountIs('AWS::EC2::VolumeAttachment', 1);
+  });
+
+  const cognitoStatements = (t: Template): { Action: string[]; Resource: unknown }[] =>
+    Object.values(t.findResources('AWS::IAM::Policy')).flatMap((policy) => {
+      const document = (policy.Properties as { PolicyDocument: { Statement: { Action: string | string[]; Resource: unknown }[] } }).PolicyDocument;
+      return document.Statement.flatMap((s) => {
+        const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+        return actions.some((a) => a.startsWith('cognito-idp:')) ? [{ Action: actions, Resource: s.Resource }] : [];
+      });
+    });
+
+  it('lets the instance manage ATF runners\' app clients on the given pool only', () => {
+    const t = synth('dev', { cognitoUserPoolId: 'us-east-1_AbCdEf123' });
+    const statements = cognitoStatements(t);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action.sort()).toEqual([
+      'cognito-idp:CreateUserPoolClient',
+      'cognito-idp:DeleteUserPoolClient',
+      'cognito-idp:DescribeResourceServer',
+      'cognito-idp:DescribeUserPoolClient',
+    ]);
+    expect(JSON.stringify(statements[0]?.Resource)).toContain('userpool/us-east-1_AbCdEf123');
+    expect(JSON.stringify(statements[0]?.Resource)).not.toContain('*');
+  });
+
+  it('grants nothing on Cognito without a pool', () => {
+    expect(cognitoStatements(synth('dev'))).toEqual([]);
   });
 });

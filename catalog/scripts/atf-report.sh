@@ -8,8 +8,28 @@
 # glob that environment's deployed commit contains. Send the commit the environment ran when the tests
 # started (SLOP_SHA); without one, slop takes the environment's latest deploy when the event arrives.
 #
-# It puts a `slop.ci` "Slop ATF Completed" event on the account's default EventBridge bus; the board's
-# deploy-target stack forwards those to slop. The project's role needs events:PutEvents on the default bus.
+# How it reaches slop (SLOP_ATF_TRANSPORT, or by what is set):
+#   http         POST to $SLOP_URL/integrations/boards/$SLOP_BOARD/atf-results with the runner's own identity (the default
+#                whenever SLOP_URL, SLOP_BOARD and an identity are set). Any CI can use it. slop records the run against
+#                the runner and only for the board and environments that runner serves, so no repo is needed.
+#   eventbridge  a `slop.ci` "Slop ATF Completed" event on the account's default EventBridge bus; the board's
+#                deploy-target stack forwards those to slop. AWS only; the project's role needs events:PutEvents there.
+#                Used when selected, and when there is no URL, board or identity for http.
+#
+# Which identity http uses (SLOP_ATF_AUTH=oidc|client|aws|token forces one; otherwise the first that applies):
+#   1. SLOP_OIDC_TOKEN   a JWT from the CI system (GitHub Actions: see github-actions-atf.yml), sent as the bearer.
+#   2. SLOP_CLIENT_ID, SLOP_CLIENT_SECRET, SLOP_TOKEN_URL   a client-credentials runner's client (shown once when an admin
+#                        registers it), exchanged for an access token (scope slop/atf.write-results, or SLOP_ATF_SCOPE) with the
+#                        secret in a mode-600 file, never on the command line. The secret and token are never printed.
+#   3. AWS credentials   when there is no SLOP_TOKEN and the environment has AWS credentials: a JWT from AWS outbound identity
+#                        federation (STS GetWebIdentityToken, audience SLOP_OIDC_AUDIENCE, else SLOP_URL). Needs the aws CLI
+#                        with `sts get-web-identity-token`, or python3 with a boto3 that has it.
+#   4. SLOP_TOKEN        the board's integration token (deprecated for ATF: slop answers with a Deprecation header).
+# The identity must be registered on the board as an ATF runner (see README.md). A token is never printed.
+#
+# Each report carries an Idempotency-Key naming this pipeline run (SLOP_ATF_IDEMPOTENCY_KEY, else the CodeBuild build id or
+# the GitHub run id and attempt): slop records a redelivery of the same key once, and a re-run of the same commit with
+# identical counts under a new key as a new run.
 #
 # What it sends, and where it comes from (set the SLOP_* variables to override):
 #   environment  the first argument, else SLOP_ENVIRONMENT (optional for a branch run)
@@ -26,6 +46,79 @@
 #
 # A failed report never fails the pipeline: every problem is a warning and the script exits 0.
 set -euo pipefail
+
+# --- identity (the same choice atf-specs.sh makes) ----------------------------------------------------------------
+
+slop_atf_have_aws() {
+  command -v aws >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || return 1
+  [[ -n "${AWS_ACCESS_KEY_ID:-}${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}${AWS_WEB_IDENTITY_TOKEN_FILE:-}${AWS_PROFILE:-}" ]]
+}
+
+# A JWT from AWS outbound identity federation for slop's audience, on stdout; fails quietly when AWS can't issue one.
+slop_atf_aws_token() {
+  local audience="${SLOP_OIDC_AUDIENCE:-${SLOP_URL:-}}" token=""
+  audience="${audience%/}"
+  [[ -n "$audience" ]] || return 1
+  if command -v aws >/dev/null 2>&1; then
+    token="$(aws sts get-web-identity-token --audience "$audience" --signing-algorithm RS256 --duration-seconds 300 \
+      --query WebIdentityToken --output text 2>/dev/null)" || token=""
+  fi
+  if [[ -z "$token" || "$token" == "None" ]] && command -v python3 >/dev/null 2>&1; then
+    token="$(SLOP_AUD="$audience" python3 -c 'import os, boto3
+print(boto3.client("sts").get_web_identity_token(Audience=[os.environ["SLOP_AUD"]], SigningAlgorithm="RS256", DurationSeconds=300)["WebIdentityToken"])' 2>/dev/null)" || token=""
+  fi
+  [[ -n "$token" && "$token" != "None" ]] || return 1
+  printf '%s' "$token"
+}
+
+# An access token for a client-credentials runner on stdout (SLOP_CLIENT_ID, SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, asking
+# for scope $1, or SLOP_ATF_SCOPE when set); fails quietly. The secret reaches curl through a mode-600 config file, never the
+# command line, and is never printed. The token is requested once per script run (the credential is chosen once).
+slop_atf_client_token() {
+  local scope="${SLOP_ATF_SCOPE:-$1}" cfg="" out="" code="" token=""
+  [ -n "${SLOP_CLIENT_ID:-}" ] && [ -n "${SLOP_CLIENT_SECRET:-}" ] && [ -n "${SLOP_TOKEN_URL:-}" ] || return 1
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 1
+  # Characters that would break out of a curl config string are not in any client id, secret or scope.
+  case "${SLOP_CLIENT_ID}${SLOP_CLIENT_SECRET}${scope}" in
+    *'"'* | *\\* | *$'\n'* | *$'\r'*) return 1 ;;
+  esac
+  cfg="$(mktemp 2>/dev/null)" || return 1
+  out="$(mktemp 2>/dev/null)" || { rm -f "$cfg"; return 1; }
+  chmod 600 "$cfg" "$out" 2>/dev/null
+  printf 'user = "%s:%s"\ndata-urlencode = "grant_type=client_credentials"\ndata-urlencode = "scope=%s"\n' \
+    "$SLOP_CLIENT_ID" "$SLOP_CLIENT_SECRET" "$scope" >"$cfg"
+  code="$(curl -sS --max-time 20 -K "$cfg" -o "$out" -w '%{http_code}' "$SLOP_TOKEN_URL" 2>/dev/null)" || code="000"
+  if [ "$code" = "200" ]; then
+    token="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("access_token", ""))
+except Exception:
+    pass' "$out" 2>/dev/null)" || token=""
+  fi
+  rm -f "$cfg" "$out"
+  [ -n "$token" ] || return 1
+  printf '%s' "$token"
+}
+
+# Prints the method on the first line and the bearer on the second, or fails when no identity is available.
+slop_atf_credential() {
+  local want="${SLOP_ATF_AUTH:-}" token=""
+  if [[ -z "$want" ]]; then
+    if [[ -n "${SLOP_OIDC_TOKEN:-}" ]]; then want=oidc
+    elif [[ -n "${SLOP_CLIENT_ID:-}" && -n "${SLOP_CLIENT_SECRET:-}" ]]; then want=client
+    elif [[ -z "${SLOP_TOKEN:-}" ]] && slop_atf_have_aws; then want=aws
+    elif [[ -n "${SLOP_TOKEN:-}" ]]; then want=token
+    fi
+  fi
+  case "$want" in
+    oidc) token="${SLOP_OIDC_TOKEN:-}" ;;
+    client) token="$(slop_atf_client_token slop/atf.write-results)" || token="" ;;
+    aws) token="$(slop_atf_aws_token)" || token="" ;;
+    token) token="${SLOP_TOKEN:-}" ;;
+  esac
+  [[ -n "$token" ]] || return 1
+  printf '%s\n%s\n' "$want" "$token"
+}
 
 env="${1:-${SLOP_ENVIRONMENT:-}}"
 reports="${2:-reports/atf}"
@@ -48,7 +141,27 @@ if [[ -n "$sha" && ! "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
   sha=""
 fi
 
-if [[ -z "$repo" ]]; then
+# http needs a URL, a board and an identity; without them (or when asked) the report goes over EventBridge.
+transport="${SLOP_ATF_TRANSPORT:-}"
+results_endpoint="${SLOP_ATF_RESULTS_ENDPOINT:-}"
+if [[ -z "$results_endpoint" && -n "${SLOP_URL:-}" && -n "${SLOP_BOARD:-}" ]]; then
+  results_endpoint="${SLOP_URL%/}/integrations/boards/${SLOP_BOARD}/atf-results"
+fi
+auth_method=""
+bearer=""
+if [[ "$transport" != "eventbridge" && -n "$results_endpoint" ]]; then
+  if cred="$(slop_atf_credential)"; then
+    auth_method="$(printf '%s\n' "$cred" | sed -n '1p')"
+    bearer="$(printf '%s\n' "$cred" | sed -n '2p')"
+    transport="http"
+  elif [[ "$transport" == "http" ]]; then
+    echo "atf-report: no identity for http (set SLOP_OIDC_TOKEN, SLOP_CLIENT_ID with SLOP_CLIENT_SECRET and SLOP_TOKEN_URL, SLOP_TOKEN, or run with AWS credentials). Not reported." >&2
+    exit 0
+  fi
+fi
+[[ "$transport" == "http" ]] || transport="eventbridge"
+
+if [[ "$transport" == "eventbridge" && -z "$repo" ]]; then
   echo "atf-report: couldn't tell the repo; set SLOP_REPO. Not reported." >&2
   exit 0
 fi
@@ -58,12 +171,17 @@ if [[ -n "$branch" && -z "$sha" ]]; then
 fi
 
 command -v python3 >/dev/null 2>&1 || { echo "atf-report: python3 isn't installed. Not reported." >&2; exit 0; }
-command -v aws >/dev/null 2>&1 || { echo "atf-report: the AWS CLI isn't installed. Not reported." >&2; exit 0; }
+if [[ "$transport" == "eventbridge" ]]; then
+  command -v aws >/dev/null 2>&1 || { echo "atf-report: the AWS CLI isn't installed. Not reported." >&2; exit 0; }
+else
+  command -v curl >/dev/null 2>&1 || { echo "atf-report: curl isn't installed. Not reported." >&2; exit 0; }
+fi
 
 entries="$(mktemp 2>/dev/null)" || { echo "atf-report: couldn't create a temporary file. Not reported." >&2; exit 0; }
-trap 'rm -f "$entries"' EXIT
+headers=""
+trap 'rm -f "$entries" "$headers"' EXIT
 # python3 counts the JUnit results and builds the JSON, so no value needs shell quoting.
-if ! REPORT_DIR="$reports" REPORT_ENV="$env" REPORT_BRANCH="$branch" REPORT_REPO="$repo" REPORT_SHA="$sha" \
+if ! REPORT_DIR="$reports" REPORT_ENV="$env" REPORT_BRANCH="$branch" REPORT_REPO="$repo" REPORT_SHA="$sha" REPORT_TRANSPORT="$transport" \
   python3 - >"$entries" <<'PY'
 import glob, json, os, re, sys
 import xml.etree.ElementTree as ET
@@ -174,7 +292,9 @@ for spec in planned:
 severity = {"failed": 0, "missing": 1, "skipped": 2, "passed": 3}
 specs.sort(key=lambda s: (severity[s["status"]], s["file"]))
 
-detail = {"repo": os.environ["REPORT_REPO"], "passed": passed, "failed": failed, "skipped": skipped}
+detail = {"passed": passed, "failed": failed, "skipped": skipped}
+if os.environ.get("REPORT_REPO"):
+    detail["repo"] = os.environ["REPORT_REPO"]
 for key, var in (("environment", "REPORT_ENV"), ("branch", "REPORT_BRANCH"), ("sha", "REPORT_SHA")):
     if os.environ.get(var):
         detail[key] = os.environ[var]
@@ -191,14 +311,33 @@ while specs and len(json.dumps(detail)) > MAX_DETAIL_BYTES:
 if not specs:
     del detail["specs"]
 print(f"ATF: {passed} passed, {failed} failed, {skipped} skipped across {len(rows)} spec files", file=sys.stderr)
-print(json.dumps([{"Source": "slop.ci", "DetailType": "Slop ATF Completed", "Detail": json.dumps(detail)}]))
+if os.environ.get("REPORT_TRANSPORT") == "http":
+    print(json.dumps(detail))
+else:
+    print(json.dumps([{"Source": "slop.ci", "DetailType": "Slop ATF Completed", "Detail": json.dumps(detail)}]))
 PY
 then
   echo "atf-report: nothing to report; slop won't show this run" >&2
   exit 0
 fi
 
-if aws events put-events --entries "file://$entries" --query 'FailedEntryCount' --output text | grep -qx 0; then
+if [[ "$transport" == "http" ]]; then
+  key="${SLOP_ATF_IDEMPOTENCY_KEY:-${CODEBUILD_BUILD_ID:-}}"
+  [[ -n "$key" || -z "${GITHUB_RUN_ID:-}" ]] || key="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+  # No pipeline run id: a key unique to this call, so a re-run is never taken for a redelivery.
+  [[ -n "$key" ]] || key="${env:-$branch}-${sha:-nosha}-$(date -u +%s)-$$"
+  key="$(printf '%s' "$key" | tr -c 'A-Za-z0-9._:@/-' '_' | cut -c1-200)"
+  headers="$(mktemp 2>/dev/null)" || { echo "atf-report: couldn't create a temporary file. Not reported." >&2; exit 0; }
+  chmod 600 "$headers" 2>/dev/null || true
+  # The bearer goes through a header file, not the command line, so it isn't visible in the process list.
+  printf 'Authorization: Bearer %s\nContent-Type: application/json\nIdempotency-Key: %s\n' "$bearer" "$key" >"$headers"
+  code="$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -X POST -H "@$headers" --data-binary "@$entries" "$results_endpoint" 2>/dev/null)" || code="000"
+  case "$code" in
+    200|201) echo "Reported to slop over HTTP (${auth_method}): ATF${env:+ in $env}${branch:+ on $branch}${sha:+ at $sha}" ;;
+    401) echo "atf-report: slop didn't accept the ${auth_method} identity (is the runner registered, enabled and serving $env?); slop won't show this run" >&2 ;;
+    *) echo "atf-report: slop answered ${code}; slop won't show this run" >&2 ;;
+  esac
+elif aws events put-events --entries "file://$entries" --query 'FailedEntryCount' --output text | grep -qx 0; then
   echo "Reported to slop: ATF for $repo${env:+ in $env}${branch:+ on $branch}${sha:+ at $sha}"
 else
   echo "atf-report: EventBridge didn't take the event; slop won't show this run" >&2
