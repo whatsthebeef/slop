@@ -42,3 +42,14 @@ volume is still attached to the old one, so the new attachment cannot be created
 5. Let the CodeBuild deploy run, or re-run it: `remote-deploy.sh` refuses to start on an empty data disk.
 
 Never deploy with a different `hostDataVolumeId` than the one holding production's data.
+
+## Disk space and image pruning
+
+Every deploy pulls a new image, so `remote-deploy.sh` removes old ones: after a successful deploy it keeps the release
+now running and the one before it (for rollback) and removes the other images of the repository, dangling images and
+build cache. Images used by a running container are never removed. Before pulling, it needs `MIN_FREE_MB` (default 4096)
+free on `/var/lib/docker`; if short, it prunes first, and if still short it fails with
+"instance disk full: N GB free, need M GB" without touching the running release.
+
+Manual recovery after that failure: over SSM on the instance run `docker image prune -af` (the running containers'
+images stay), or grow the root volume, then re-run the deploy project.

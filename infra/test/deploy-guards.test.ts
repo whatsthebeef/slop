@@ -59,3 +59,46 @@ describe('data_disk_guard', () => {
     expect(sh(`data_disk_guard ${dir}`, skip).code).toBe(0);
   });
 });
+
+describe('images_to_remove', () => {
+  const list = 'r/slop:new\\nr/slop:prev\\nr/slop:old1\\nr/slop:old2';
+  const run = (keep: string) => {
+    const r = spawnSync(
+      'bash',
+      ['-c', `. ${lib}; printf '${list}\\n' | images_to_remove ${keep}`],
+      {
+        env: { PATH: process.env.PATH ?? '' },
+        encoding: 'utf8',
+      },
+    );
+    return r.stdout.split('\n').filter(Boolean);
+  };
+  it('keeps the running and previous release and removes the rest', () =>
+    expect(run('r/slop:new r/slop:prev')).toEqual(['r/slop:old1', 'r/slop:old2']));
+  it('keeps an image a running container uses', () =>
+    expect(run('r/slop:new r/slop:prev r/slop:old2')).toEqual(['r/slop:old1']));
+  it('ignores an empty previous release', () =>
+    expect(run('r/slop:new ""')).toEqual(['r/slop:prev', 'r/slop:old1', 'r/slop:old2']));
+});
+
+describe('has_enough_disk', () => {
+  it('needs the image plus the margin', () => {
+    expect(sh('has_enough_disk 2800 800 2048').code).toBe(1);
+    expect(sh('has_enough_disk 2848 800 2048').code).toBe(0);
+  });
+  it('counts an unknown image size as 0', () =>
+    expect(sh('has_enough_disk 2048 "" 2048').code).toBe(0));
+  it('fails when free space is unknown', () =>
+    expect(sh('has_enough_disk "" 0 2048').code).toBe(1));
+});
+
+describe('disk_full_message', () => {
+  it('says how much is free and needed', () => {
+    const r = spawnSync('bash', ['-c', `. ${lib}; disk_full_message 1024 3000`], {
+      encoding: 'utf8',
+    });
+    expect(r.stdout).toBe(
+      'instance disk full: 1 GB free, need 3 GB; prune images or grow the root volume\n',
+    );
+  });
+});
