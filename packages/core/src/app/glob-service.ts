@@ -694,7 +694,9 @@ export class GlobService {
       let scripts = false;
       for (const step of parsed) {
         let script: HumanStepScript | null = null;
-        if (step.script !== null && step.script.trim() !== '') {
+        if (step.scriptPath !== null) {
+          script = { path: step.scriptPath };
+        } else if (step.script !== null && step.script.trim() !== '') {
           const label = rolloutScriptLabel(step.title);
           script = { artifact: label };
           const latest = (await tx.artifactVersions(id, ROLLOUT_SCRIPT_KIND, label)).at(-1);
@@ -825,7 +827,9 @@ export class GlobService {
       } else {
         for (const written of answer.steps) {
           let script: HumanStepScript | null = null;
-          if (written.script !== null && written.script.trim() !== '') {
+          if (written.scriptPath !== null) {
+            script = { path: written.scriptPath };
+          } else if (written.script !== null && written.script.trim() !== '') {
             const label = rolloutScriptLabel(written.title);
             script = { artifact: label };
             await addArtifact(tx, this.deps.clock, glob, 'slop', { kind: ROLLOUT_SCRIPT_KIND, label, content: written.script, link: null, commitSha: null, runId: null, agentSetVersion: null, reviewStats: null });
