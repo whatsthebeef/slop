@@ -344,12 +344,15 @@ export const KeepAsLearning = ({
   learning,
   busy,
   onClose,
+  onSent,
 }: {
   glob: GlobView;
   attributes: DecisionAttributes;
   learning: DecisionLearning | null;
   busy: boolean;
   onClose: () => void;
+  /** The learning was kept: the controls stay pending until the glob moves. */
+  onSent?: () => void;
 }) => {
   const client = useQueryClient();
   const toast = useToast();
@@ -360,6 +363,7 @@ export const KeepAsLearning = ({
     mutationFn: () => api.keepAsLearning(glob.id, glob.version, statement, watch === '' ? undefined : watch),
     onSuccess: () => {
       toast(`${glob.id} kept as a learning`);
+      onSent?.();
       onClose();
       refreshGlob(client, glob);
     },
