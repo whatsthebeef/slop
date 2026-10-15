@@ -66,8 +66,12 @@ export interface HumanStep {
   readonly script: HumanStepScript | null;
   /** `machine`: derived from the glob's state; `work`: stored (added by an agent or a person). */
   readonly source: 'machine' | 'work';
+  /** Who ticked it; for a dismissed step, who dismissed it (`slop` for a re-sync). */
   readonly doneBy: string | null;
+  /** When it was ticked; for a dismissed step, when it was dismissed. */
   readonly doneAt: string | null;
+  /** Why a dismissed step was dismissed; null for any other step. */
+  readonly dismissedReason?: string | null;
   /** The investigator's open rollout placeholder: a prediction the run replaces with real steps, not a task anyone can do yet. */
   readonly predicted?: true;
   /** The one action the step's chip runs; its label is the title. Absent when the step needs input in the glob view. */
@@ -212,6 +216,7 @@ const fromStored = (glob: Glob, s: StoredHumanStep): HumanStep => ({
   source: 'work',
   doneBy: s.doneBy,
   doneAt: s.doneAt,
+  ...(s.state === 'dismissed' ? { dismissedReason: s.dismissedReason } : {}),
   ...(s.origin === 'investigation' && s.title === PREDICTED_ROLLOUT_TITLE && s.state === 'open' ? { predicted: true as const } : {}),
 });
 
@@ -291,9 +296,10 @@ export const upcomingSteps = (steps: readonly Pick<HumanStep, 'kind' | 'state'>[
 };
 
 /** The compact form on board and glob views: enough for the card, the filters and the status line, without detail text. */
-export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'predicted' | 'action' | 'alternative'>;
+export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'predicted' | 'action' | 'alternative'> &
+  Partial<Pick<HumanStep, 'doneBy' | 'doneAt' | 'dismissedReason'>>;
 
-export const compactStep = ({ id, kind, title, state, who, due, blocks, predicted, action, alternative }: HumanStep): CompactHumanStep => ({
+export const compactStep = ({ id, kind, title, state, who, due, blocks, predicted, action, alternative, doneBy, doneAt, dismissedReason }: HumanStep): CompactHumanStep => ({
   id,
   kind,
   title,
@@ -304,6 +310,8 @@ export const compactStep = ({ id, kind, title, state, who, due, blocks, predicte
   ...(predicted === undefined ? {} : { predicted }),
   ...(action === undefined ? {} : { action }),
   ...(alternative === undefined ? {} : { alternative }),
+  // Only a dismissed step carries its closing facts here; a done step's are read from the full step.
+  ...(state === 'dismissed' ? { doneBy, doneAt, dismissedReason: dismissedReason ?? null } : {}),
 });
 
 /** When a pending step falls due, in words (for tooltips). */

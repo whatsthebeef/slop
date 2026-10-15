@@ -88,6 +88,36 @@ ${FENCE}
     expect(step?.detail).toContain('select 1;');
   });
 
+  it("keeps a step's Why / Do this / Check it worked bullets as its detail, in order, with their code block", () => {
+    const [step] = parseRollout(
+      record(`## Rollout
+- manual: Approve s14k3 on the pocketlab-notebook board
+  - **Why:** the board needs the sub-gate rule.
+  - **Do this:** open the board's Knowledge page, then run:
+    ${FENCE}bash
+    echo ok
+    ${FENCE}
+  - **Check it worked:** the item shows Approved.
+`),
+    );
+    expect(step?.title).toBe('Approve s14k3 on the pocketlab-notebook board');
+    expect(step?.detail).toBe(
+      ['- **Why:** the board needs the sub-gate rule.', "- **Do this:** open the board's Knowledge page, then run:", `${FENCE}bash`, 'echo ok', FENCE, '- **Check it worked:** the item shows Approved.'].join('\n'),
+    );
+  });
+
+  it('cuts a title over 120 characters at its first sentence and moves the rest into the detail', () => {
+    const long = 'Add the setting to the boards still on sub-gate.yml before updating. Blocks that board, not this sign-off. Ask an admin to approve the KB item first so the workflow is found.';
+    const [step] = parseRollout(`## Rollout\n- setting: ${long}\n  - **Why:** because.\n`);
+    expect(step?.title).toBe('Add the setting to the boards still on sub-gate.yml before updating');
+    expect(step?.detail).toBe('Blocks that board, not this sign-off. Ask an admin to approve the KB item first so the workflow is found.\n- **Why:** because.');
+    const words = 'word '.repeat(40).trim();
+    const [word] = parseRollout(`## Rollout\n- manual: ${words}\n`);
+    expect(word?.title.length).toBeLessThanOrEqual(120);
+    expect(word?.title.endsWith('…')).toBe(true);
+    expect(word?.detail).toBe(words);
+  });
+
   it('treats an item with no kind as manual, and stops at the next heading of the same level', () => {
     const steps = parseRollout('## Rollout\n- Ask the PO to enable it\n\n### Details\n- not a step either way\n\n## Next\n- nope\n');
     expect(steps.map((s) => [s.kind, s.title])).toEqual([
