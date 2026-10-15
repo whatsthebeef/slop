@@ -48,16 +48,21 @@ describe('position indicator', () => {
 
   it('puts merging when checks pass ahead of the plain checks wait', () => {
     const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] });
-    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: `merging when checks pass · ${head.slice(0, 7)}`, spinning: true });
+    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: 'merging when checks pass', spinning: true });
     expect(waitingFor(armed, armed.allowedActions ?? [], 'dev')).toEqual([]);
     const settled = { ...armed, headChecks: { sha: head, state: 'passed' as const } };
     expect(positionOf(settled, NOW)).toMatchObject({ holder: 'machine', text: 'merging' });
   });
 
+  it('says merging from the base while an armed merge waits for the checks on a head it just moved', () => {
+    const armed = prOpen({ headChecks: { sha: 'aaaaaaa1111', state: 'passed' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] });
+    expect(positionOf({ ...armed, headChecks: { sha: 'aaaaaaa1111', state: 'pending' } }, NOW)?.text).toBe('merging from main');
+  });
+
   it('says a ready PR is waiting for checks before they have started', () => {
     expect(positionOf(prOpen({ headChecks: null }), NOW)).toMatchObject({
       holder: 'waiting',
-      text: 'checks running on d16d563',
+      text: 'checks running',
       spinning: false,
     });
   });

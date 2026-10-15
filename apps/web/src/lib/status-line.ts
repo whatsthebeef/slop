@@ -13,6 +13,7 @@ import { stripMarkdown } from './markdown-text';
 import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
 import { rolloutLine } from './human-steps';
 import type { GlobView } from './api';
+import { mergingChecksText } from './check-wording';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
@@ -163,21 +164,15 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (merging) {
     const sha = glob.pr?.headSha ?? null;
     const recorded = glob.headChecks;
-    const base = glob.conflict?.base ?? glob.behind?.base ?? 'main';
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
-    // The head moved past the checks slop recorded: it just pushed a base merge and waits for the new head's checks.
-    const full =
-      sha !== null && recorded != null && recorded.sha !== sha
-        ? `merging · updating with ${base}`
-        : recorded == null || recorded.state === 'pending'
-          ? 'merging · checks running'
-          : 'merging';
+    // Checks in flight read the shared merging wording ("merging when checks pass", or "merging from <base>" while catching up).
+    const full = (sha !== null && recorded != null && recorded.sha !== sha) || recorded == null || recorded.state === 'pending' ? mergingChecksText(glob) : 'merging';
     candidates.push(
       make({
         kind: 'merging',
         full,
         tone: 'text-muted-foreground',
-        tip: `Merging ${short}: it merges by itself when the checks pass`,
+        tip: `Merging ${short}: it merges by itself when the checks pass, and stops and says why if they fail`,
       }),
     );
   }

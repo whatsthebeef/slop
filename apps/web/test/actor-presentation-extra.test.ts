@@ -261,6 +261,6 @@ describe('a conflict-fix run that went to standby (s15b86)', () => {
   it('checks pending after the fix: "checks running", not fixing', () => {
     const g = view({ ...fixed('watching'), headChecks: { sha: 'abc1234', state: 'pending' } });
     expect(positionOf(g, NOW)).toMatchObject({ holder: 'waiting' });
-    expect(positionOf(g, NOW)?.text).toContain('checks running on abc1234');
+    expect(positionOf(g, NOW)?.text).toBe('checks running');
   });
 });

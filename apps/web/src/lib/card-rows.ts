@@ -83,7 +83,7 @@ const learnedReasons = (glob: GlobView): string[] =>
 
 /**
  * The status without details: no elapsed times ("run failed · 18 min", "queued 3 min", "queued · 3 min") and no commit SHAs
- * ("checks running on abc1234", "merging when checks pass · abc1234"). Those live in the tooltip and the glob view.
+ * ("checks running on abc1234" in older text). Those live in the tooltip and the glob view.
  */
 export const plainText = (text: string): string =>
   text

@@ -1,6 +1,7 @@
-import { DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '@slop/core';
+import { CHECKS_RUNNING_TEXT, DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '@slop/core';
 import type { HumanStepViewer, MachineStep, MachineStepKind, Move } from '@slop/core';
 import type { GlobView } from './api';
+import { mergingChecksText } from './check-wording';
 
 /**
  * Where a glob is, in one indicator: who has the ball and what they are doing. The card's chip and the glob view's "Now" row
@@ -9,7 +10,7 @@ import type { GlobView } from './api';
  */
 export interface Position {
   readonly holder: 'human' | 'machine' | 'waiting' | 'stalled';
-  /** One short line: "implementing", "starting", "queued 3 min", "checks running on abc1234", "stalled: ...". */
+  /** One short line: "implementing", "starting", "queued 3 min", "checks running", "stalled: ...". */
   readonly text: string;
   /** The card's single line: a few words (the move's short label where it has one), never a file path or a sentence. */
   readonly label: string;
@@ -44,7 +45,7 @@ const DOING: Readonly<Record<MachineStepKind, string>> = {
   deploy: 'deploying',
   agent_set_commit: 'committing the agent set',
   rollout_check: 'checking rollout',
-  checks: 'checks running',
+  checks: CHECKS_RUNNING_TEXT,
   upload_wait: 'waiting for an upload',
   merge_held: 'merge waits for another glob',
 };
@@ -173,13 +174,15 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
     case 'waiting': {
       const armed = steps.some((s) => s.kind === 'merge' && s.id === 'machine:merge:armed');
       const checks = steps.some((s) => s.kind === 'checks' && isInFlight(s));
+      const sha = glob.pr?.headSha ?? null;
+      const text = armed && checks ? mergingChecksText(glob) : move.reason;
       return {
         holder: 'waiting',
-        text: armed && checks ? `merging when checks pass${glob.pr?.headSha == null ? '' : ` · ${glob.pr.headSha.slice(0, 7)}`}` : move.reason,
-        label: armed && checks ? `merging when checks pass${glob.pr?.headSha == null ? '' : ` · ${glob.pr.headSha.slice(0, 7)}`}` : move.reason,
+        text,
+        label: text,
         tip: armed && checks
-          ? 'Slop merges the PR as soon as the checks on its head pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.'
-          : `Waiting: ${move.reason}`,
+          ? `Slop merges the PR as soon as the checks on its head${sha === null ? '' : ` (${sha.slice(0, 7)})`} pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.`
+          : `Waiting: ${move.reason}${checks && sha !== null ? `\nChecks are running on ${sha.slice(0, 7)}` : ''}`,
         spinning: steps.some((s) => s.kind === 'checks' && s.state === 'running'),
         queued: false,
         tone: 'text-muted-foreground',
