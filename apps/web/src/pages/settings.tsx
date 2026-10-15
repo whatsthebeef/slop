@@ -5,6 +5,7 @@ import { Navigate, useLocation, useNavigate, useOutletContext, useParams, useSea
 import { FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/components/board-filter-pane';
 import type { BoardShellContext } from '@/components/board-shell';
 import { GlobCard } from '@/components/glob-card';
+import { AtfRunnersGroup } from '@/components/settings/atf-runners-group';
 import { AutomationGroup } from '@/components/settings/automation-group';
 import { BoardGroup } from '@/components/settings/board-group';
 import { EnvironmentsGroup } from '@/components/settings/environments-group';
@@ -19,7 +20,7 @@ import { learnedPanelOf, learnedPath } from '@/lib/learned';
 import { usePageContext } from '@/lib/page-context';
 
 /**
- * What a person chooses for the board, in six collapsible groups (the last, System, collapsed by default). What slop has
+ * What a person chooses for the board, in collapsible groups (the last, System, collapsed by default). What slop has
  * learned (size, subs, risk areas, escalations, dependency rules, intake, context tuning, learning jobs) is on the Knowledge page;
  * an old link into one of those (`?section=<name>`) is sent there.
  */
@@ -40,6 +41,7 @@ export const SettingsPage = () => {
       <BoardGroup board={board} admin={admin} form={form} readinessLinked={hash === '#readiness'} />
       <MembersGroup boardId={boardId} admin={admin} />
       <EnvironmentsGroup admin={admin} form={form} />
+      {admin && <AtfRunnersGroup boardId={boardId} environments={board.environments} />}
       <AutomationGroup admin={admin} form={form} />
       <ReportsGroup boardId={boardId} />
       <SystemGroup boardId={boardId} admin={admin} />

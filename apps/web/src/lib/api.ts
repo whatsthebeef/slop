@@ -38,7 +38,11 @@ import type {
   Deploy,
   DeployIndicator,
   AtfIndicator,
+  AtfRunnerConfig,
+  AtfRunnerMethod,
   AtfSpecList,
+  RunnerChange,
+  RunnerInput,
   SpecStatus,
   EnvironmentIndicator,
   GlobEnvironment,
@@ -262,7 +266,43 @@ export type TypeLearningResponse = Partial<TypeLearningView>;
 export type MonthSpendView = Omit<MonthSpend, 'unpricedBySource'> & {
   readonly unpricedBySource?: MonthSpend['unpricedBySource'];
 };
-export type AtfRun = Omit<AtfIndicator, 'id'> & { readonly id?: number; readonly specs?: readonly RunSpecView[] };
+export type AtfRun = Omit<AtfIndicator, 'id'> & {
+  readonly id?: number;
+  readonly specs?: readonly RunSpecView[];
+  /** Which runner produced the run; the server sends it only when the board has more than one (an older one never does). */
+  readonly runnerName?: string;
+};
+
+/** A registered ATF runner as the API sends it; only the identity is required, so an older server's answer still renders. */
+export interface AtfRunnerView {
+  readonly id: number;
+  readonly name: string;
+  readonly method?: AtfRunnerMethod;
+  readonly config?: AtfRunnerConfig;
+  readonly environments?: readonly string[];
+  readonly enabled?: boolean;
+  readonly lastSeenAt?: string | null;
+  readonly lastResultAt?: string | null;
+}
+
+/** What a created client-credentials runner is told once; the secret is never sent again. All fields optional, read with `?.`. */
+export interface AtfRunnerCredentials {
+  readonly clientId?: string;
+  readonly clientSecret?: string;
+  readonly tokenUrl?: string;
+  readonly scope?: string;
+}
+
+export interface AtfRunnerCreated {
+  readonly value: AtfRunnerView;
+  readonly credentials?: AtfRunnerCredentials;
+}
+
+export interface AtfRunnerRevoked {
+  readonly value?: AtfRunnerView;
+  /** Set when the runner is revoked but its client credentials could not be removed; revoking again retries. */
+  readonly warning?: string;
+}
 
 /** One spec's result inside a run; absent from runs that reported counts only (and from an older server). */
 export interface RunSpecView {
@@ -691,7 +731,16 @@ export interface KnowledgePageView {
   readonly feedback?: readonly KnowledgePageFeedback[];
 }
 
+export const atfRunnersKey = (boardId: number) => ['atf-runners', boardId] as const;
+
 export const api = {
+  /** The board's ATF runners (admins only). */
+  atfRunners: (boardId: number) => request<{ value?: AtfRunnerView[] }>('GET', `/api/boards/${boardId}/atf-runners`).then((r) => r.value ?? []),
+  /** Registers a runner; a client-credentials one answers its credentials once (the answer isn't cacheable). */
+  createAtfRunner: (boardId: number, input: RunnerInput) => request<AtfRunnerCreated>('POST', `/api/boards/${boardId}/atf-runners`, input),
+  updateAtfRunner: (boardId: number, id: number, change: RunnerChange) =>
+    request<{ value: AtfRunnerView }>('PATCH', `/api/boards/${boardId}/atf-runners/${id}`, change).then((r) => r.value),
+  revokeAtfRunner: (boardId: number, id: number) => request<AtfRunnerRevoked>('DELETE', `/api/boards/${boardId}/atf-runners/${id}`),
   health: () => request<IntegrationHealthView>('GET', '/api/health'),
   notifications: (boardId: number) =>
     request<{ value: BoardNotification[] }>('GET', `/api/boards/${boardId}/notifications`).then((r) => r.value),
