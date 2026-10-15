@@ -71,4 +71,16 @@ describe('Start and Pick up during an investigation', () => {
     unwrap(await globs.applyEvent(glob.id, (g, c) => machine.investigationPushed(g, running?.runId ?? '', c)));
     expect('investigationRunning' in unwrap(await artifacts.context(DEV, glob.id))).toBe(false);
   });
+  it('a start relation added while Start waits for the investigation still holds when the run ends', async () => {
+    const glob = await investigated();
+    const queued = unwrap(await globs.start(DEV, glob.id, glob.version));
+    const other = unwrap(await globs.create(DEV, { boardId, title: 'Other', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+    unwrap(await globs.addRelation(DEV, glob.id, null, { to: other.id, gate: 'start', until: 'merged' }, 'held_by', 'agent'));
+    const investigation = machine.investigationRunning(queued);
+    unwrap(await globs.applyEvent(glob.id, (g, c, f) => machine.investigationPushed(g, investigation?.runId ?? '', c, f.relations), { relations: true }));
+    const held = await get(glob.id);
+    expect(held.status).toBe('planning');
+    expect(held.waiting?.investigation).toBeUndefined();
+    expect(held.runs.map((r) => r.state)).toEqual(['ended']);
+  });
 });
