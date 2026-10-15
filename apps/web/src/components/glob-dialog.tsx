@@ -42,6 +42,7 @@ export const GlobDetail = ({
   email,
   onAddStep,
   onCompleteStep,
+  onMarkDeployed,
   onDismissStep,
   onAction,
   onReviewLabel,
@@ -76,6 +77,7 @@ export const GlobDetail = ({
     due?: string;
   }) => Promise<boolean>;
   onCompleteStep: (stepId: string) => Promise<boolean>;
+  onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
@@ -174,6 +176,7 @@ export const GlobDetail = ({
     onAddRelation,
     onAddStep,
     onCompleteStep,
+    ...(onMarkDeployed === undefined ? {} : { onMarkDeployed }),
     onDismissStep,
   };
 

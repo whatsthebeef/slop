@@ -45,7 +45,7 @@ describe('ChipButton inside a Tip', () => {
 
 describe('ArmSystemLabel inside a Tip', () => {
   const armed = (props: { onFilter?: () => void; to?: string }) =>
-    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ArmSystemLabel, { step: { title: 'Run the migration' }, ...props })));
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ArmSystemLabel, { label: { text: 'Arm system · main', tip: 'Run the migration' }, ...props })));
 
   it.each([
     ['a filter button', { onFilter: () => undefined }],
@@ -53,7 +53,7 @@ describe('ArmSystemLabel inside a Tip', () => {
     ['a link in the glob view', { to: '/boards/1?arm=1' }],
   ])('links the tooltip text as the description of %s', (_name, props) => {
     const html = armed(props);
-    expect(html).toContain('A person has a step at release: Run the migration');
+    expect(html).toContain('Run the migration');
     const { describedBy, descriptionId } = link(html);
     expect(descriptionId).toBeDefined();
     expect(describedBy).toBe(descriptionId);
