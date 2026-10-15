@@ -2,6 +2,8 @@ import { ClipboardCheck, FileText } from 'lucide-react';
 import { useState } from 'react';
 import { DocEditor, PlanEditor } from '../plan-editor';
 import { TEST_PLAN_TEMPLATE, TestPlanEmpty, TestPlanPreview } from '../test-plan-view';
+import { decisionOf } from '@slop/core';
+import { isLearning } from '../decision-outcomes';
 import type { GlobViewContext } from './context';
 
 type Tab = 'plan' | 'test-plan';
@@ -16,6 +18,9 @@ export const PlanSection = ({ ctx }: { ctx: GlobViewContext }) => {
   const [tab, setTab] = useState<Tab>(params.get('tab') === TEST_PLAN_TAB ? TEST_PLAN_TAB : 'plan');
   // A panel stays mounted once opened, so an unsaved draft survives a switch to the other tab.
   const [opened, setOpened] = useState<readonly Tab[]>([tab]);
+  const decision = decisionOf(ctx.glob);
+  // A learning's proposal text is the Why of its decision block; it is not shown as a plan.
+  if (decision !== null && isLearning(decision)) return null;
   if (ctx.glob.category === 'decision')
     return <PlanEditor globId={ctx.glob.id} startExpanded={startExpanded} />;
   const canInvestigate = ctx.glob.allowedActions?.includes('investigate') === true;

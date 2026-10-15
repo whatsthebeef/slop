@@ -27,11 +27,27 @@ export const adminOnlyReason = (kind: KnowledgeKind | undefined): string | null 
   return null;
 };
 
-export const PERSON_ONLY_NOTICE = 'Only a person can approve this kind of change';
+/** The change's heading in words: what it edits and where, from its target and whether the draft only adds text (never claiming a new section: the diff can't show that). */
+export const changeHeading = (target: KbTarget | null, additive: boolean): string | null => {
+  if (target === null) return null;
+  if (target.kind === 'merge_policy') return 'Merge policy setting';
+  if (target.kind === 'local_run') return 'Local-run spec';
+  if (target.newDocument !== null) return `New document ${target.name}`;
+  const where = target.section === null ? target.name : `${target.name} › ${target.section}`;
+  // The diff can't say whether the section already existed, so an addition is not called a new section.
+  return additive ? `Addition to ${where}` : `Edit to ${where}`;
+};
 
-/** The notice for a kind of change agents are never allowed to approve (specs, agent-set files, whole documents), or null. */
-export const personOnlyNotice = (document: boolean, kind: KnowledgeKind | undefined): string | null =>
-  document || kind === 'merge_policy' || kind === 'local_run' || (kind !== undefined && isAgentSetKind(kind)) ? PERSON_ONLY_NOTICE : null;
+/** Whether a scope is worth showing: not for a change routed to a document or a setting, which applies wherever it is written. */
+export const scopeMatters = (document: boolean, hotspot: boolean, target: KbTarget | null): boolean => !document && !hotspot && target === null;
+
+/** What each scope kind means, for the explained options. */
+export const SCOPE_EXPLAINED = {
+  glob: 'One glob: only this glob',
+  future_work: "Future work: every new glob, optionally only one group's",
+  area_group: "A group: only that group's globs",
+  project: 'Whole project',
+} as const;
 
 /** The header's text when the viewer can't approve this change themselves. */
 export const approveBlockedText = (adminOnly: string | null, canDecide: boolean): string | null => {
@@ -55,8 +71,8 @@ const SUGGEST_TIP =
   'Ask the model what to do with this: approve, approve with an edit, merge into another learning, or reject. It reads the draft, the target section, the sibling learnings and the changes merged since';
 
 /**
- * The ▾ next to Approve change, in the order a person is likely to want them: Reject…, keeping the statement without
- * changing a document, Suggest again, then the outcomes that stay available (accept with edits, retarget, needs work).
+ * The ▾ next to the primary button, in the order a person is likely to want them: Reject…, approve with edits, keeping the
+ * statement without changing a document, a new recommendation, then the outcomes that stay available (retarget, needs work).
  */
 export const headerMenu = ({
   canDecide,
@@ -75,15 +91,14 @@ export const headerMenu = ({
   const noDecide = canDecide ? null : "You can't decide this";
   const noItem = !hasItem ? 'This decision has no knowledge item to edit or retarget' : null;
   const adminEdits = adminOnly === null ? null : `An admin decides it: it ${adminOnly}`;
-  const entries: MenuEntry[] = [{ key: 'reject', label: 'Reject…', tip: 'Turn the proposal down, with a reason', disabled: noDecide }];
-  if (canKeep) entries.push({ key: 'keep', label: 'Approve without changing a document', tip: KEEP_TIP, disabled: noDecide });
-  if (canSuggest) entries.push({ key: 'suggest', label: 'Suggest again', tip: SUGGEST_TIP, disabled: null });
-  entries.push(
-    { key: 'accept_with_edits', label: 'Accept with edits', tip: 'Apply the change with your own wording', disabled: noDecide ?? noItem ?? adminEdits },
+  return [
+    { key: 'reject', label: 'Reject…', tip: 'Turn the proposal down, with a reason', disabled: noDecide },
+    { key: 'accept_with_edits', label: 'Approve with edits…', tip: 'Edit the draft, then approve it with your wording', disabled: noDecide ?? noItem ?? adminEdits },
+    ...(canKeep ? [{ key: 'keep', label: 'Approve without changing a document', tip: KEEP_TIP, disabled: noDecide } satisfies MenuEntry] : []),
+    ...(canSuggest ? [{ key: 'suggest', label: 'Get a new recommendation', tip: SUGGEST_TIP, disabled: null } satisfies MenuEntry] : []),
     { key: 'retarget', label: 'Retarget', tip: 'Point the proposal at another document or file; it is drafted again', disabled: noDecide ?? noItem },
     { key: 'needs_work', label: 'Needs work', tip: 'Some work has to land first; the decision waits for it to merge', disabled: noDecide },
-  );
-  return entries;
+  ];
 };
 
 /** What the block's submit button says for the form that is open. */
@@ -92,7 +107,7 @@ export const submitLabel = (mode: Choice, approve: string): string => {
     case 'accept':
       return approve;
     case 'accept_with_edits':
-      return 'Accept with edits';
+      return 'Save';
     case 'retarget':
       return 'Retarget';
     case 'needs_work':

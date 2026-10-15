@@ -1,6 +1,6 @@
 import type { SuggestionView } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { APPLY_HINT_TEXT, applyPrefill, suggestionState } from '../src/lib/suggestion';
+import { applyPrefill, recommendedLabel, suggestionState } from '../src/lib/suggestion';
 
 const view = (patch: Partial<SuggestionView> = {}): SuggestionView => ({
   suggestion: {
@@ -31,8 +31,13 @@ describe('the Suggest card', () => {
   });
 });
 
-describe('APPLY_HINT_TEXT', () => {
-  it('does not point at another section: the suggestion and its form are in the Decide block', () => {
-    expect(APPLY_HINT_TEXT).not.toMatch(/above|below/i);
+describe('recommendedLabel', () => {
+  const base = { reason: 'r', editedDraft: null, mergeInto: null, mergedText: null };
+  it('is the primary button: Approve unless slop recommends something else', () => {
+    expect(recommendedLabel(undefined, 'Approve change')).toBe('Approve change');
+    expect(recommendedLabel({ ...base, action: 'approve' }, 'Approve change')).toBe('Approve change');
+    expect(recommendedLabel({ ...base, action: 'approve_with_edit' }, 'Approve change')).toBe('Approve with edits…');
+    expect(recommendedLabel({ ...base, action: 'reject' }, 'Approve change')).toBe('Reject…');
+    expect(recommendedLabel({ ...base, action: 'merge_into', mergeInto: 's1k3' }, 'Approve change')).toBe('Reject, merged into s1k3');
   });
 });
