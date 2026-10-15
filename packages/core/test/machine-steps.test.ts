@@ -86,6 +86,12 @@ describe('machineSteps: other sources', () => {
     expect(machineSteps(glob(), { pendingUploads: [{ key: 'k', fileName: 'a.png', since: NOW }] })[0]).toMatchObject({ kind: 'upload_wait', holdsBall: false, detail: 'a.png' });
   });
 
+  it('a pending recommendation is its own step, holding the ball, and gone once the job finishes', () => {
+    const queued = [{ kind: 'suggest_decision', state: 'queued' as const, since: NOW }];
+    expect(machineSteps(glob(), { effects: queued })[0]).toMatchObject({ kind: 'recommendation', state: 'queued', holdsBall: true });
+    expect(machineSteps(glob(), { effects: [] }).some((s) => s.kind === 'recommendation')).toBe(false);
+  });
+
   it('effects: the ones that are a step of their own show; housekeeping does not', () => {
     const effects = [
       { kind: 'review_change', state: 'running' as const, since: NOW },

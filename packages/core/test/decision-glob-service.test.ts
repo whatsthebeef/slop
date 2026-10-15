@@ -228,8 +228,24 @@ describe('decision globs', () => {
       expect(store.state.outbox.filter((e) => e.globId === 's1k1').map((e) => e.kind)).toEqual(['kb_route']);
       expect(glob_()).toEqual([]);
       await pickUp('s1k1');
-      expect(glob_()).toEqual([]);
+      // Picking up asks for the model's recommendation, and nothing else.
+      expect(glob_().map((e) => e.kind)).toEqual(['suggest_decision']);
       expect(await glob('s1k1')).toMatchObject({ status: 'in_progress', provisioning: 'none', runs: [], implementer: ADMIN });
+    });
+
+    it('reports the pending recommendation job of a picked-up decision as an effect, and nothing else', async () => {
+      await submit();
+      const before = await glob('s1k1');
+      expect((await globs.recommendationEffectsOf([before])).size).toBe(0);
+      await pickUp('s1k1');
+      const picked = await glob('s1k1');
+      const effects = await globs.recommendationEffectsOf([picked]);
+      expect(effects.get('s1k1')).toMatchObject([{ kind: 'suggest_decision', state: 'running' }]);
+      // Not a decision: ignored whatever its status.
+      expect((await globs.recommendationEffectsOf([{ ...picked, category: 'task' }])).size).toBe(0);
+      // A finished job is no longer "getting a recommendation".
+      store.state.outboxJobs = store.state.outboxJobs.map((j) => (j.kind === 'suggest_decision' ? { ...j, state: 'done' as const } : j));
+      expect((await globs.recommendationEffectsOf([picked])).size).toBe(0);
     });
 
     it('is idempotent on its creation key', async () => {
