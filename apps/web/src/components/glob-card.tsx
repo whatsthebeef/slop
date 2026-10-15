@@ -754,7 +754,7 @@ export const GlobCard = ({
                   move={move}
                   hot={move.action === previewing}
                   disabled={pending !== undefined}
-                  primary={mainAction(all.map((m) => m.action), glob, decision) === move.action}
+                  primary={mainAction(all.map((m) => m.action), glob, human) === move.action}
                   onPreview={onPreview}
                   onMove={onMove}
                 />
