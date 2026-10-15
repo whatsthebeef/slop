@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { SizeForecast } from '@slop/core';
 import { api } from '@/lib/api';
 import type { GlobView } from '@/lib/api';
+import { Block } from './glob-view/block';
 
 const pct = (n: number): string => `${Math.round(n * 100)}%`;
 
@@ -94,47 +95,55 @@ export type OversizedState = ReturnType<typeof useOversized>;
 export const OversizedGlob = ({ glob, size }: { glob: GlobView; size: OversizedState }) => {
   const { check, proposal, planChanged } = size;
   return (
-    <div className='grid gap-2 rounded border border-amber/60 bg-amber/10 p-3 text-xs' data-testid='oversized-proposal'>
-      <p className='font-semibold'>Oversized: this looks like more than one PR's worth of work</p>
-      {check !== undefined && (
-        <p className='text-muted-foreground'>
-          {check.reasons.join('; ')}. This is advice: {glob.id} can start as it is{proposal !== null && ', and the run works the workstreams in parallel'}.
-        </p>
-      )}
-      {check?.estimate.forecast !== undefined && <SizeForecastView forecast={check.estimate.forecast} />}
-      {check !== undefined && check.evidence.length > 0 && (
-        <ul className='list-disc pl-4 text-muted-foreground'>
-          {check.evidence.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      )}
-      {proposal?.criticalPath !== undefined && (
-        <p className='text-muted-foreground' data-testid='oversized-shape'>
-          Critical path: {proposal.criticalPath} of {proposal.workstreams.length} workstreams in a row; up to {proposal.maxParallel ?? 1} at the same time.
-        </p>
-      )}
-      {proposal !== null && (
-        <ol className='grid gap-1 pl-4' data-testid='oversized-parts'>
-          {proposal.workstreams.map((w, index) => (
-            <li key={index} className='list-decimal'>
-              <span className='font-semibold'>{w.name}</span>
-              {w.needs.length > 0 && <span className='text-muted-foreground'>, needs {w.needs.map((n) => `workstream ${n + 1}`).join(', ')}</span>}
-              {w.files.length > 0 && (
-                <span className='block break-all text-muted-foreground' data-testid='oversized-part-files'>
-                  {w.files.join(', ')}
-                </span>
-              )}
-            </li>
-          ))}
-        </ol>
-      )}
-      {check === undefined && <p className='text-muted-foreground'>{size.loadFailed ? 'Could not load the proposed workstreams.' : 'Loading the proposed workstreams…'}</p>}
-      {planChanged && (
-        <p className='text-muted-foreground' data-testid='plan-changed'>
-          The plan changed since this proposal
-        </p>
-      )}
-    </div>
+    <Block
+      tone='info'
+      actor='human'
+      testId='oversized-proposal'
+      title="Oversized: this looks like more than one PR's worth of work"
+      why={
+        check === undefined ? undefined : (
+          <>
+            {check.reasons.join('; ')}. This is advice: {glob.id} can start as it is{proposal !== null && ', and the run works the workstreams in parallel'}.
+          </>
+        )
+      }
+    >
+      <div className='grid gap-2 text-xs'>
+        {check?.estimate.forecast !== undefined && <SizeForecastView forecast={check.estimate.forecast} />}
+        {check !== undefined && check.evidence.length > 0 && (
+          <ul className='list-disc pl-4 text-muted-foreground'>
+            {check.evidence.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+        {proposal?.criticalPath !== undefined && (
+          <p className='text-muted-foreground' data-testid='oversized-shape'>
+            Critical path: {proposal.criticalPath} of {proposal.workstreams.length} workstreams in a row; up to {proposal.maxParallel ?? 1} at the same time.
+          </p>
+        )}
+        {proposal !== null && (
+          <ol className='grid gap-1 pl-4' data-testid='oversized-parts'>
+            {proposal.workstreams.map((w, index) => (
+              <li key={index} className='list-decimal'>
+                <span className='font-semibold'>{w.name}</span>
+                {w.needs.length > 0 && <span className='text-muted-foreground'>, needs {w.needs.map((n) => `workstream ${n + 1}`).join(', ')}</span>}
+                {w.files.length > 0 && (
+                  <span className='block break-all text-muted-foreground' data-testid='oversized-part-files'>
+                    {w.files.join(', ')}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+        {check === undefined && <p className='text-muted-foreground'>{size.loadFailed ? 'Could not load the proposed workstreams.' : 'Loading the proposed workstreams…'}</p>}
+        {planChanged && (
+          <p className='text-muted-foreground' data-testid='plan-changed'>
+            The plan changed since this proposal
+          </p>
+        )}
+      </div>
+    </Block>
   );
 };

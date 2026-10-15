@@ -1,6 +1,6 @@
 import { decisionOf, isHumanCategory, machine } from '@slop/core';
 import { DecisionMainAction, isLearning } from '../decision-outcomes';
-import type { Action, EditFailure, Handover } from '@slop/core';
+import type { Action, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
@@ -25,7 +25,7 @@ import { workingLabel } from '@/lib/card-pending';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { startAgainConfirmation } from '@/lib/start-again';
-import { handoverConfirmation, handoverOneLine, handoverToShow } from '@/lib/handover';
+import { handoverConfirmation, handoverToShow } from '@/lib/handover';
 import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
@@ -310,99 +310,6 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
       compact
     />
   );
-
-const CLAMP_AT = 200;
-
-/** A long line (a run's whole failure reason) cut to its first lines, with a toggle for the rest. */
-const Clamped = ({ text }: { text: string }) => {
-  const [more, setMore] = useState(false);
-  if (text.length <= CLAMP_AT) return <>{text}</>;
-  return (
-    <>
-      {more ? text : `${text.slice(0, CLAMP_AT).trimEnd()}…`}{' '}
-      <button
-        type="button"
-        className="cursor-pointer text-xs underline"
-        data-testid="clamp-toggle"
-        onClick={() => setMore(!more)}
-      >
-        {more ? 'show less' : 'show more'}
-      </button>
-    </>
-  );
-};
-
-/** Why the viewer is needed, inside the Now panel's details: the full brief until acknowledged, then one line. */
-export const HandoverBrief = ({
-  state,
-  brief,
-  omit = [],
-}: {
-  state: GlobActionsState;
-  brief: Handover;
-  /** Lines the panel already shows elsewhere (the failure, the decision), left out so each fact appears once. */
-  omit?: readonly string[];
-}) => {
-  const { briefRead, briefOpen } = state;
-  const why = brief.why.filter((line) => !omit.includes(line));
-  const detail = brief.detail.filter((line) => !omit.includes(line));
-  return (
-    <div
-      className="grid gap-1 rounded border border-amber/60 bg-amber/10 p-2 text-sm"
-      data-testid="handover-box"
-    >
-      {briefRead && !briefOpen ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="flex-1">
-            <strong>Why you're needed:</strong> {handoverOneLine(brief)}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            data-testid="handover-expand"
-            onClick={() => state.setBriefOpen(true)}
-          >
-            Show
-          </Button>
-        </div>
-      ) : (
-        <>
-          <strong>Why you're needed</strong>
-          <ul className="list-disc pl-5">
-            {why.map((cause) => (
-              <li key={cause}>
-                <Clamped text={cause} />
-              </li>
-            ))}
-          </ul>
-          <p>
-            <strong>First:</strong> {brief.next}
-          </p>
-          {detail.length > 0 && (
-            <ul className="list-disc pl-5 text-xs text-muted-foreground">
-              {detail.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          )}
-          <div>
-            <Button
-              size="sm"
-              variant="ghost"
-              data-testid="handover-acknowledge"
-              onClick={() => {
-                void state.dismiss(handoverKey(brief), true);
-                state.setBriefOpen(false);
-              }}
-            >
-              Got it
-            </Button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-};
 
 /**
  * A due blocking step as the glob's main button: Copy rollout command for a script (then Mark done), Mark done for a

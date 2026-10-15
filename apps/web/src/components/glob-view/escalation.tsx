@@ -1,5 +1,6 @@
 import { HumanIcon } from '@/components/actor-icons';
 import { Tip } from '../ui/tip';
+import { Block } from './block';
 import type { GlobViewContext } from './context';
 
 /**
@@ -25,7 +26,7 @@ export const EscalationChip = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {
   );
 };
 
-/** "Why a person?": the escalation's reason and evidence, collapsed. The reason is shown here once and not in Now. */
+/** "Why a person?": an information block with the escalation's reason, and its evidence and author folded under Details. The reason is shown here once and not in Now. */
 export const EscalationSection = ({
   ctx: { glob },
   startOpen = false,
@@ -35,15 +36,16 @@ export const EscalationSection = ({
 }) => {
   if (glob.escalation == null) return null;
   return (
-    <details className="text-sm" data-testid="escalation-note" open={startOpen || undefined}>
-      <summary className="cursor-pointer text-xs text-muted-foreground">Why a person?</summary>
-      <div className="mt-1 grid gap-1 rounded border border-edge p-2">
-        <span>{glob.escalation.reason}</span>
-        {glob.escalation.evidence !== undefined && (
-          <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>
-        )}
-        <span className="text-xs text-muted-foreground">Escalated by {glob.escalation.by}</span>
-      </div>
-    </details>
+    <Block
+      tone="info"
+      actor="human"
+      testId="escalation-note"
+      title="Why a person?"
+      why={glob.escalation.reason}
+      fold={{ label: 'Details', open: startOpen }}
+    >
+      {glob.escalation.evidence !== undefined && <span className="text-xs text-muted-foreground">{glob.escalation.evidence}</span>}
+      <span className="text-xs text-muted-foreground">Escalated by {glob.escalation.by}</span>
+    </Block>
   );
 };

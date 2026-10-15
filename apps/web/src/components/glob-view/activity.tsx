@@ -5,11 +5,9 @@ import { HumanIcon, MachineIcon } from '@/components/actor-icons';
 import { ACTIVITY_SHOWN, activityOf } from '@/lib/activity';
 import type { ActivityEntry } from '@/lib/activity';
 import { turnKey } from '@/lib/dismissals';
-import { cn } from '@/lib/utils';
-import { HandoverBrief } from './actions';
 import type { GlobActionsState } from './actions';
 import type { GlobViewContext } from './context';
-import { ACTIVITY_ID, GotIt, Link, LinkButton, capitalised, headlineReason, shownElsewhere } from './status';
+import { ACTIVITY_ID, GotIt, LinkButton, headlineReason } from './status';
 import type { NowState } from './status';
 
 const relative = (iso: string | null, now: number): string => {
@@ -57,8 +55,7 @@ const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
 };
 
 /**
- * The glob's Activity log, right under the action button: the pinned entries that need the viewer (the status's full text,
- * the handover brief) and a flat feed of what happened (machine steps, runs, PR, checks, conflicts, human actions), one line each: the last
+ * The glob's Activity log, right under the action button: the viewer's turn line and a flat feed of what happened (machine steps, runs, PR, checks, conflicts, human actions), one line each: the last
  * few with "Show all", the only control in it.
  */
 export const ActivityLog = ({
@@ -70,7 +67,7 @@ export const ActivityLog = ({
   state: NowState;
   actions: GlobActionsState;
 }) => {
-  const { move, turn, steps, brief, problem, seen, turnDismissed } = state;
+  const { move, turn, steps, seen, turnDismissed } = state;
   const [all, setAll] = useState(false);
   useEffect(() => {
     setAll(false);
@@ -97,37 +94,6 @@ export const ActivityLog = ({
             )}
           </p>
         )}
-        {problem !== null && seen !== null && seen.dismissed && (
-          <p className="text-muted-foreground" data-testid="status-line" data-kind={problem.kind} data-dismissed="true">
-            {capitalised(seen.label)}
-            {' · '}
-            <LinkButton testId="show-again" disabled={actions.busy} onClick={() => void actions.dismiss(seen.key, false)}>
-              Show again
-            </LinkButton>
-          </p>
-        )}
-        {problem !== null && seen !== null && !seen.dismissed && (
-          <p className={cn(problem.tone)} data-testid="status-line" data-kind={problem.kind}>
-            {problem.full}
-            {problem.doing !== null && (
-              <span className="font-normal">
-                {' — '}
-                {problem.sessionUrl === null ? problem.doing : <Link href={problem.sessionUrl}>{problem.doing}</Link>}
-              </span>
-            )}
-            {problem.url !== null && (
-              <>
-                {' ('}
-                <Link href={problem.url}>check run</Link>
-                {glob.pr?.headSha != null && !problem.full.includes(glob.pr.headSha.slice(0, 7)) && `, ${glob.pr.headSha.slice(0, 7)}`})
-              </>
-            )}
-            {problem.kind !== 'rollout' && (
-              <GotIt disabled={actions.busy} onClick={() => void actions.dismiss(seen.key, true)} />
-            )}
-          </p>
-        )}
-        {brief !== null && <HandoverBrief state={actions} brief={brief} omit={shownElsewhere(glob, problem)} />}
       </div>
       <ul className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 text-xs" data-testid="activity-feed">
         {shown.map((entry) => (

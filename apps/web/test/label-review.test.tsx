@@ -70,6 +70,16 @@ const confirmButton = () => {
 const CR = () => screen.getByTestId('review-CR');
 const field = () => screen.getByLabelText(/^CR item \d+$/);
 
+describe('the sign-off block', () => {
+  it('is a needs-a-person block of the shared family with one card per label as its body', () => {
+    render(<Host api={server(start())} />);
+    const block = screen.getByTestId('label-reviews');
+    expect(block.getAttribute('data-block')).toBe('person');
+    expect(block.querySelector('[data-testid="block-head"]')?.textContent).toBe('Sign-off');
+    expect(block.querySelectorAll('[data-testid="block-body"] > [data-testid^="review-"]')).toHaveLength(3);
+  });
+});
+
 describe('typing review items', () => {
   it('Enter saves a draft, shows it read-only and opens a fresh focused field', async () => {
     const api = server(start());

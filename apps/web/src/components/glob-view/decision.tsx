@@ -3,19 +3,22 @@ import { useState } from 'react';
 import type { AddRelationInput } from '@/lib/api';
 import { isLearning } from '../decision-outcomes';
 import { DecisionAssessment, DecisionSection as DecisionBody } from '../decision-section';
+import { Block } from './block';
 import type { GlobViewContext } from './context';
 import { AddRelationForm, RelationsHeader, relatedGroups, Row } from './related';
 
 /** The decision section: only a decision glob has one. */
 export const DecisionPanel = ({ ctx }: { ctx: GlobViewContext }) =>
   decisionOf(ctx.glob) === null ? null : (
-    <DecisionBody
-      board={ctx.board}
-      glob={ctx.glob}
-      busy={ctx.busy}
-      decide={ctx.decide ?? null}
-      onUpdate={ctx.onUpdate}
-    />
+    <Block tone="person" actor="human" testId="decision-block" title={ctx.glob.status === 'signed_off' ? 'Decision' : 'Decision needed'}>
+      <DecisionBody
+        board={ctx.board}
+        glob={ctx.glob}
+        busy={ctx.busy}
+        decide={ctx.decide ?? null}
+        onUpdate={ctx.onUpdate}
+      />
+    </Block>
   );
 
 /** The older assessments of a decision glob that is neither a replacement nor a learning (a learning's sit at the foot of its block). */
