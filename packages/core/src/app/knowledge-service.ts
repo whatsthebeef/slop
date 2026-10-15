@@ -1182,9 +1182,14 @@ export class KnowledgeService {
     return this.deps.store.transaction(async (tx) => {
       const actor = await adminOf(tx, email, boardId);
       if (!actor.ok) return actor;
-      const signals = this.deps.signals === undefined ? [] : await this.deps.signals.measure(tx, boardId, this.deps.clock.now());
-      return ok(signals.filter((s) => isEffectMeasured(s.key)).sort((a, b) => a.key.localeCompare(b.key)));
+      return ok(await this.signalsToWatch(tx, boardId));
     });
+  }
+
+  /** The signals an approval may watch, without an access check (the caller has one): what the recommendation chooses from. */
+  async signalsToWatch(tx: Tx, boardId: number): Promise<KbSignal[]> {
+    const signals = this.deps.signals === undefined ? [] : await this.deps.signals.measure(tx, boardId, this.deps.clock.now());
+    return signals.filter((s) => isEffectMeasured(s.key)).sort((a, b) => a.key.localeCompare(b.key));
   }
 
   /** The measured signal an admin chose to watch for a submitted item, or null when none was chosen. */

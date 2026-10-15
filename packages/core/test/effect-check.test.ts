@@ -450,7 +450,7 @@ describe('Effect checks', () => {
       },
     });
     expect(raised.statement).toBe(
-      `Revise or revert ${watched.id} (Run the full checks, not only the fast ones, before pushing a commit that a rou…): after 3 globs with work started after 2026-10-07 the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before.`,
+      `Revise or revert ${watched.id} (Run the full checks, not only the fast ones, before pushing a commit that a rou…): after 3 globs with work started after 2026-10-07 the rate of CI failing after local checks passed is 1 of 3 globs (33%), against 1 of 3 globs (33%) before.`,
     );
     expect(raised.evidence.split('\n')).toEqual([
       `Effect check by slop of ${watched.id} (approved 2026-10-07): CI failing after local checks passed (ci_after_local), 3 globs a side, with work started after 2026-10-07.`,
@@ -512,10 +512,10 @@ describe('Effect checks', () => {
     const raised = await item(result.raised[0] ?? '');
     // Leads with the gain to keep, then the side effect over that signal's own globs.
     expect(raised.statement).toBe(
-      `Revise ${watched.id} (Run the full checks, not only the fast ones, before pushing a commit that a rou…): after 3 globs with work started after 2026-10-07 the rate of CI failing after local checks passed fell from 100% (3/3) to 0% (0/3), but the rate of routine runs ending in a take-over or start again rose from 0% (0/3) to 67% (2/3).`,
+      `Revise ${watched.id} (Run the full checks, not only the fast ones, before pushing a commit that a rou…): after 3 globs with work started after 2026-10-07 the rate of CI failing after local checks passed fell from 3 of 3 globs (100%) to 0 of 3 globs (0%), but the rate of routine runs ending in a take-over or start again rose from 0 of 3 globs (0%) to 2 of 3 globs (67%).`,
     );
     expect(raised.evidence).toContain(
-      'Worse elsewhere: routine runs ending in a take-over or start again (run_superseded) 0% (0/3) before, 67% (2/3) after.',
+      'Worse elsewhere: routine runs ending in a take-over or start again (run_superseded) 0 of 3 globs (0%) before, 2 of 3 globs (67%) after.',
     );
   });
 
@@ -636,7 +636,7 @@ describe('Effect checks', () => {
     expect(final.worse.map((w) => w.key)).toEqual(['run_superseded']);
     const raised = await item(result.raised[0] ?? '');
     expect(raised.statement).toContain(
-      'the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before. The rate of routine runs ending in a take-over or start again also rose from 0% (0/3) to 67% (2/3).',
+      'the rate of CI failing after local checks passed is 1 of 3 globs (33%), against 1 of 3 globs (33%) before. The rate of routine runs ending in a take-over or start again also rose from 0 of 3 globs (0%) to 2 of 3 globs (67%).',
     );
   });
 

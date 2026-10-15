@@ -803,7 +803,7 @@ describe('KB pipeline: routing and dedupe', () => {
     const raisedFor = async (sourceGlobId: string) => {
       const id = await submit({ sourceGlobId });
       const current = await item(id);
-      const statement = `Revise or revert ${originalId} (${original.statement}): after 3 globs the rate of CI failing after local checks passed is 33% (1/3), against 33% (1/3) before.`;
+      const statement = `Revise or revert ${originalId} (${original.statement}): after 3 globs the rate of CI failing after local checks passed is 1 of 3 globs (33%), against 1 of 3 globs (33%) before.`;
       await store.transaction((tx) => learningSeed(tx, TEST_KB_WRITES).updateSeeded({ ...current, statement, signal, version: current.version + 1 }, current.version));
       return id;
     };
