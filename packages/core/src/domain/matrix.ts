@@ -1,16 +1,16 @@
-import type { Category, List, SlopType, Status } from './types.js';
+import type { Category, List, SlopType, Status, WorkCategory } from './types.js';
 
-const ALLOWED: Record<Category, readonly SlopType[]> = {
+const ALLOWED: Record<WorkCategory, readonly SlopType[]> = {
   feature: ['sub', 'same', 'super'],
   task: ['sub', 'same', 'super'],
   bug: ['sub', 'same'],
-  /** Decisions never run, branch or merge: always a same, and the type can't change. */
-  decision: ['same'],
 };
 
-/** The type/category matrix: bugs are never supers. */
-export const isValidCombination = (type: SlopType, category: Category): boolean =>
-  ALLOWED[category].includes(type);
+/** Code work takes one of its allowed types; human work (decision, action) takes none. Bugs are never supers. */
+export const isValidCombination = (type: SlopType | null, category: Category): boolean => {
+  if (category === 'decision' || category === 'action') return type === null;
+  return type !== null && ALLOWED[category].includes(type);
+};
 
 export const LIST_OF_STATUS: Record<Status, List> = {
   planning: 'planning',

@@ -56,7 +56,7 @@ export const DecisionHoldsBack = ({
       {open && (
         <>
           {rows.length === 0 ? (
-            <span className="text-xs text-muted-foreground">Nothing waits for this decision.</span>
+            <span className="text-xs text-muted-foreground">Nothing waits for this {ctx.glob.category === 'action' ? 'action' : 'decision'}.</span>
           ) : (
             <ul className="ml-4 list-disc">
               {rows.map((r) => (

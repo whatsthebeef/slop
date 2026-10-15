@@ -88,6 +88,10 @@ export const DOMAIN_EVENT_TYPES = [
   'GlobDeleted',
   /** A person chose an outcome for a decision glob (accept, retarget, needs work, reject), or the pipeline closed it. */
   'DecisionDecided',
+  /** A person did an action glob's work and marked it done (data: by, note). */
+  'ActionDone',
+  /** A person dismissed an action glob as not needed (data: by, reason). */
+  'ActionDismissed',
   /** The work glob a decision waited on merged. */
   'DecisionWorkLanded',
   /** An admin reopened a learning the KB pipeline closed (data: how it was closed). */

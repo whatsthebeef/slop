@@ -42,6 +42,7 @@ import type { TypeCorrection } from '../domain/type-learning.js';
 import type { DependencyRule, DependencyRuleChange } from '../domain/dependency-rules.js';
 import type { GlobOutcome, IntakeSnapshot } from '../domain/intake-learning.js';
 import type { Board, Glob, Member, Relation, User } from '../domain/types.js';
+import { includes } from '../domain/types.js';
 import type { GlobFilter, Hint, Notifier, Store, Tx } from '../ports.js';
 import type { SearchQuery } from '../domain/search.js';
 
@@ -390,7 +391,7 @@ export class MemoryStore implements Store {
             .filter(
               (g) =>
                 g.boardId === boardId &&
-                (filter.include === 'all' || (filter.include === 'decisions') === (g.category === 'decision')) &&
+                includes(filter.include, g.category) &&
                 (filter.status === undefined || filter.status.includes(g.status)) &&
                 (filter.type === undefined || g.type === filter.type) &&
                 (filter.group === undefined || g.group === filter.group) &&

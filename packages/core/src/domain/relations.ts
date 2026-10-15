@@ -1,23 +1,24 @@
 /**
  * Relations: one glob held back by another. `from` can't pass `gate` (start, merge, sign off) until `to` reaches `until`
- * (merged, decided, signed off). What is held is derived from the other glob's live state, so a deleted `to` or one sent back
+ * (merged, decided, done, signed off). What is held is derived from the other glob's live state, so a deleted `to` or one sent back
  * to Planning needs no bookkeeping beyond the rule below: a deleted `to` releases the gate, a `to` back in Planning holds it.
  *
  * Pure: the service reads the rows and the live state of every `to` and passes them in as `RelationFacts`.
  */
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
-import { isDecisionAttributes } from './attributes.js';
+import { isActionAttributes, isDecisionAttributes } from './attributes.js';
 import { RELATION_GATES } from './types.js';
 import type { Glob, Relation, RelationGate, RelationPatch, RelationSource, RelationUntil } from './types.js';
 
 /**
  * Where the glob a relation points at stands. `merged`: Reviewing (a super that merged and continues is still `open`).
- * `signed_off`: signed off. `decided`: a decision glob whose outcome was accept, reject or closed (not needs work).
+ * `signed_off`: signed off. `decided`: a decision glob whose outcome was accept, reject or closed (not needs work). `done`: an action glob a
+ * person finished (done or dismissed).
  * `planning`: not started, or sent back to Planning. `missing`: deleted (or never on this board). `rollout`: merged, but
  * work steps that hold back its dependants are still open.
  */
-export type ToState = 'open' | 'merged' | 'planning' | 'missing' | 'rollout' | 'decided' | 'signed_off';
+export type ToState = 'open' | 'merged' | 'planning' | 'missing' | 'rollout' | 'decided' | 'done' | 'signed_off';
 
 /** At most this many relations per glob and gate. */
 export const MAX_RELATIONS = 20;
@@ -32,6 +33,11 @@ const DECIDED_OUTCOMES: ReadonlySet<string> = new Set(['accept', 'accept_with_ed
 /** The state of a `to` glob; `held` holds the globs whose open work steps hold back their dependants. */
 export const toState = (glob: Glob | null | undefined, held: ReadonlySet<string> = NOT_HELD): ToState => {
   if (glob === null || glob === undefined) return 'missing';
+  if (glob.category === 'action') {
+    const outcome = isActionAttributes(glob.attributes) ? glob.attributes.outcome : null;
+    if (outcome !== null || glob.status === 'signed_off') return 'done';
+    return 'planning';
+  }
   if (glob.category === 'decision') {
     const outcome = isDecisionAttributes(glob.attributes) ? glob.attributes.outcome : null;
     if (glob.status === 'signed_off') return 'signed_off';
@@ -63,10 +69,16 @@ export const isMet = (r: Relation, state: ToState): boolean => {
       return state === 'merged' || state === 'signed_off' || state === 'decided';
     case 'decided':
       return state === 'decided' || state === 'signed_off';
+    case 'done':
+      return state === 'done';
     case 'signed_off':
-      return state === 'signed_off';
+      return state === 'signed_off' || state === 'done';
   }
 };
+
+/** What a relation to this glob waits for by default: a decision's outcome, an action's completion, or a merge. */
+export const defaultUntil = (target: Pick<Glob, 'category'>): RelationUntil =>
+  target.category === 'decision' ? 'decided' : target.category === 'action' ? 'done' : 'merged';
 
 /** What a glob's relations and the state of each `to` say; passed to the machine in place of the old `dependencies` map. */
 export interface RelationFacts {
@@ -102,7 +114,7 @@ export const startIds = (relations: readonly Relation[]): string[] => [
 // Words
 
 export const GATE_WORDS: Readonly<Record<RelationGate, string>> = { start: 'start', merge: 'merge', sign_off: 'sign off' };
-export const UNTIL_WORDS: Readonly<Record<RelationUntil, string>> = { merged: 'merged', decided: 'decided', signed_off: 'signed off' };
+export const UNTIL_WORDS: Readonly<Record<RelationUntil, string>> = { merged: 'merged', decided: 'decided', done: 'done', signed_off: 'signed off' };
 
 /** "can't start until s15f82 is merged": what one relation says, for a refusal or a row. */
 export const holdWords = (r: Pick<Relation, 'gate' | 'to' | 'until'>): string =>
@@ -246,7 +258,7 @@ export const overrideEdits = (relations: readonly Relation[], now: string): Rela
 
 /** The milestones of a glob's life, in order: a relation's gate is the milestone held back, `until` the one waited for. */
 const MILESTONE: Readonly<Record<RelationGate, number>> = { start: 0, merge: 1, sign_off: 2 };
-const REACHED: Readonly<Record<RelationUntil, number>> = { merged: 1, decided: 1, signed_off: 2 };
+const REACHED: Readonly<Record<RelationUntil, number>> = { merged: 1, decided: 1, done: 1, signed_off: 2 };
 
 /** The relation as the question "can `from` pass `gate`?" depending on "has `to` reached `until`?". */
 export interface RelationDraft {
@@ -324,6 +336,14 @@ export const startReaches = (relations: readonly Relation[], from: string, targe
 // ---------------------------------------------------------------------------
 // What holds a glob back, as the views and whose-move read it
 
+/** What a holding or a relation row says about the glob it points at. */
+export interface TitleInfo {
+  readonly title: string;
+  readonly decision: boolean;
+  /** An action glob (absent: not one). */
+  readonly action?: boolean;
+}
+
 /** One unmet relation of a glob, with where `to` stands: the board list and the glob read carry these as `holding`. */
 export interface Holding {
   readonly relationId: string;
@@ -332,6 +352,8 @@ export interface Holding {
   readonly toTitle: string | null;
   /** Whether `to` is a decision glob: whose-move says "waiting on decision s15k190". */
   readonly toIsDecision: boolean;
+  /** Whether `to` is an action glob: whose-move says "waiting on action s15a3". Absent from older servers. */
+  readonly toIsAction?: boolean;
   readonly gate: RelationGate;
   readonly until: RelationUntil;
   readonly state: ToState;
@@ -345,7 +367,7 @@ export interface Holding {
  */
 export const holdingOf = (
   facts: RelationFacts,
-  titles: ReadonlyMap<string, { readonly title: string; readonly decision: boolean }>,
+  titles: ReadonlyMap<string, TitleInfo>,
 ): Holding[] => {
   // Start gates first, then merge, then sign-off: the order a glob meets them.
   return RELATION_GATES.flatMap((gate) => unmet(facts, gate)).map(({ relation: r, state }): Holding => {
@@ -355,6 +377,7 @@ export const holdingOf = (
       to: r.to,
       toTitle: to?.title ?? null,
       toIsDecision: to?.decision ?? false,
+      toIsAction: to?.action ?? false,
       gate: r.gate,
       until: r.until,
       state,
@@ -372,16 +395,21 @@ export const isMergeHeld = (glob: Pick<Glob, 'status' | 'mergeHold' | 'mergeMode
   (glob.mergeMode === 'when_green' || glob.type === 'sub');
 
 /**
- * Whether a relation of this shape makes sense: `decided` only waits for a decision glob (a work glob has no outcome), and a
- * decision glob is never the one held back (it has no start, merge or sign-off gate a relation could guard).
+ * Whether a relation of this shape makes sense: `decided` only waits for a decision glob and `done` only for an action glob
+ * (a work glob has neither outcome), and a human glob is never the one held back (it has no start, merge or sign-off gate a
+ * relation could guard).
  */
 export const checkRelationShape = (
   from: Pick<Glob, 'id' | 'category'>,
   draft: Pick<RelationDraft, 'to' | 'until'>,
   to: Pick<Glob, 'category'>,
 ): Result<null> => {
-  if (from.category === 'decision') return invalidInput(`${from.id} is a decision: a decision can hold other globs back, but it is not held back`);
+  if (from.category === 'decision' || from.category === 'action') {
+    return invalidInput(`${from.id} is ${from.category === 'action' ? 'an action' : 'a decision'}: human work can hold other globs back, but it is not held back`);
+  }
   if (draft.until === 'decided' && to.category !== 'decision') return invalidInput(`${draft.to} is not a decision, so nothing can wait for it to be decided`);
+  if (draft.until === 'done' && to.category !== 'action') return invalidInput(`${draft.to} is not an action, so nothing can wait for it to be done`);
+  if (to.category === 'action' && draft.until !== 'done') return invalidInput(`${draft.to} is an action: wait for it to be done`);
   return ok(null);
 };
 
@@ -424,7 +452,7 @@ export interface RelationsView {
 /** The relations of the glob that no longer hold, with how each stopped (dismissals and overrides first, then met and deleted). */
 export const doneOf = (
   facts: RelationFacts,
-  titles: ReadonlyMap<string, { readonly title: string; readonly decision: boolean }>,
+  titles: ReadonlyMap<string, TitleInfo>,
 ): DoneRelation[] =>
   facts.relations.flatMap((r): DoneRelation[] => {
     const state = facts.states.get(r.to) ?? 'missing';

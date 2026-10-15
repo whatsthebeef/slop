@@ -24,27 +24,32 @@ describe('decision IDs and the category matrix', () => {
     expect(parseId('s1k3')).toEqual({ boardId: 1, letter: 'k', n: 3 });
     expect(parseId('s1d3')).toBeNull();
     expect(parseId('s12k4')).toEqual({ boardId: 12, letter: 'k', n: 4 });
-    expect([letterOf('feature'), letterOf('task'), letterOf('bug')]).toEqual(['f', 't', 'b']);
+    expect([letterOf('feature'), letterOf('task'), letterOf('bug'), letterOf('action')]).toEqual(['f', 't', 'b', 'a']);
+    expect(parseId('s2a5')).toEqual({ boardId: 2, letter: 'a', n: 5 });
     expect(parseId('s1x3')).toBeNull();
   });
 
   it('has one glob-ID pattern that accepts every letter, k included, and not d', () => {
-    expect(['s1f2', 's1t2', 's1b2', 's1h2', 's15k3'].every((id) => GLOB_ID_PATTERN.test(id))).toBe(true);
+    expect(['s1f2', 's1t2', 's1b2', 's1h2', 's15k3', 's15a3'].every((id) => GLOB_ID_PATTERN.test(id))).toBe(true);
     expect(['s1d3', 's0k1', 's1k0', 's1k3x', 'xs1k3'].some((id) => GLOB_ID_PATTERN.test(id))).toBe(false);
     expect('See s15k3 and s15t7, not s15d2 or as15k4.'.match(globIdInText())).toEqual(['s15k3', 's15t7']);
   });
 
-  it('allows only a same for a decision, and keeps the work matrix', () => {
-    expect(isValidCombination('same', 'decision')).toBe(true);
+  it('allows no type for human work, requires one for code work, and keeps the work matrix', () => {
+    expect(isValidCombination(null, 'decision')).toBe(true);
+    expect(isValidCombination(null, 'action')).toBe(true);
+    expect(isValidCombination('same', 'decision')).toBe(false);
     expect(isValidCombination('sub', 'decision')).toBe(false);
-    expect(isValidCombination('super', 'decision')).toBe(false);
+    expect(isValidCombination('same', 'action')).toBe(false);
+    expect(isValidCombination(null, 'feature')).toBe(false);
+    expect(isValidCombination(null, 'bug')).toBe(false);
     expect(isValidCombination('super', 'bug')).toBe(false);
     expect(isValidCombination('super', 'feature')).toBe(true);
   });
 
   it('keeps decisions out of the categories a person may create', () => {
     expect(WORK_CATEGORIES).toEqual(['feature', 'task', 'bug']);
-    expect(CATEGORIES).toEqual(['feature', 'task', 'bug', 'decision']);
+    expect(CATEGORIES).toEqual(['feature', 'task', 'bug', 'decision', 'action']);
   });
 
   it('puts a decision in the lists its status gives', () => {

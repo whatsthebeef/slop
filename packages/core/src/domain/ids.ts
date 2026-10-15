@@ -2,15 +2,15 @@ import type { Category } from './types.js';
 
 /**
  * ID letters. `h` (hotfix) is reserved; `k` numbers the decision globs, one sequence per board (a KB item is its
- * decision glob, under that ID).
+ * decision glob, under that ID); `a` numbers the action globs.
  */
-export type IdLetter = 'f' | 't' | 'b' | 'h' | 'k';
+export type IdLetter = 'f' | 't' | 'b' | 'h' | 'k' | 'a';
 
 /** Every ID letter, for patterns. */
-export const ID_LETTERS = 'ftbhk';
+export const ID_LETTERS = 'ftbhka';
 
 export const letterOf = (category: Category): IdLetter =>
-  category === 'feature' ? 'f' : category === 'task' ? 't' : category === 'decision' ? 'k' : 'b';
+  category === 'feature' ? 'f' : category === 'task' ? 't' : category === 'decision' ? 'k' : category === 'action' ? 'a' : 'b';
 
 export const formatId = (boardId: number, letter: IdLetter, n: number): string =>
   `s${boardId}${letter}${n}`;

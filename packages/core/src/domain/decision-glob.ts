@@ -2,6 +2,7 @@ import { evidenceCount } from './kb.js';
 import type { DraftPreview, KbContradiction, KbCoverage, KbDraft, LearningWire, LearningStatus, KbPossibleCoverage, KbProcessing, KbTarget, ProposedDocument } from './kb.js';
 import { isDecisionAttributes } from './attributes.js';
 import type { DecisionAttributes, DecisionChannel, DecisionScope, ScopeKind } from './attributes.js';
+import { isHumanCategory } from './types.js';
 import type { Glob } from './types.js';
 
 /**
@@ -155,7 +156,7 @@ export const isAccepted = (glob: Glob): boolean => {
 export const appliesTo = (decision: Glob, work: Glob): boolean => {
   const attributes = decisionOf(decision);
   // A hotspot decision is about one file, not a rule for later work.
-  if (attributes === null || attributes.origin.kind === 'hotspot' || !isAccepted(decision) || work.category === 'decision') return false;
+  if (attributes === null || attributes.origin.kind === 'hotspot' || !isAccepted(decision) || isHumanCategory(work.category)) return false;
   const { scope } = attributes;
   switch (scope.kind) {
     case 'glob':

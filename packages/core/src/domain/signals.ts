@@ -85,7 +85,7 @@ export const MAX_SIGNAL_EXAMPLES = 5;
 /** A board glob as the signals see it. */
 export interface ActivityGlob {
   readonly id: string;
-  readonly type: SlopType;
+  readonly type: SlopType | null;
   readonly status: Status;
   readonly createdAt: string;
 }

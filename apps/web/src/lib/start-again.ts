@@ -2,7 +2,7 @@ import type { SlopType } from '@slop/core';
 import type { GlobView } from './api';
 
 /** What Discard does to each glob type once the PR and branch are gone. */
-const DISCARD_OUTCOME = (type: SlopType, base: string): string =>
+const DISCARD_OUTCOME = (type: SlopType | null, base: string): string =>
   type === 'sub'
     ? `a new machine run starts from ${base}`
     : type === 'same'
