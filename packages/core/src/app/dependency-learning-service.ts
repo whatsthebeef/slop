@@ -31,7 +31,7 @@ export interface DependencyPrediction {
   readonly defaults: DependencyDefaults;
 }
 
-/** The board's rules and history, for board settings. */
+/** The board's rules and history, for the Knowledge page's "What slop has learned". */
 export interface DependencyRulesView {
   readonly rules: readonly DependencyRuleView[];
   readonly history: readonly DependencyRuleChange[];

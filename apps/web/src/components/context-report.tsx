@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import { JobStatus } from '@/components/job-status';
+import { DefaultLine, History, Value } from '@/components/learned/panel';
 import { Button } from '@/components/ui/button';
+import { newestFirst } from '@/lib/learned';
 import { api } from '@/lib/api';
 import { changeText, CHOICE_SOURCE_TEXT, percentText, settingValueText, sourceTypeText, TIER_TEXT } from '@/lib/context-report';
 
@@ -38,7 +40,7 @@ const Table = ({ head, rows, empty, testId }: { head: string[]; rows: (string | 
   );
 
 /**
- * The context report (System page): what agents were handed, what became of the choices, how the inbox's suggestions
+ * The context report (the Context tuning panel of "What slop has learned"): what agents were handed, what became of the choices, how the inbox's suggestions
  * fared, and the context settings with their defaults, effect and history. Settings are never edited by hand; an
  * admin can only put one back on its default. Everything is rendered as text.
  */
@@ -72,9 +74,16 @@ export const ContextSection = ({ boardId, admin }: { boardId: number; admin: boo
   const r: ContextReport = report.data;
   const units = new Map(r.settings.map((s) => [s.key, s.unit]));
   const labels = new Map(r.settings.map((s) => [s.key, s.label]));
+  const learnable = r.settings.filter((s) => s.learned).length;
+  const tuned = r.settings.filter((s) => s.learned && s.value !== s.default).length;
   return (
     <div className='grid gap-2' data-testid='context-report'>
-      <h3 className='text-xs font-semibold text-muted-foreground'>Context</h3>
+      <Value testId='context-value'>
+        {tuned === 0
+          ? `Slop tunes ${learnable} of ${r.settings.length} context settings, and all of them are still at their default.`
+          : `Slop tunes ${learnable} of ${r.settings.length} context settings; ${tuned} ${tuned === 1 ? 'is' : 'are'} away from its default.`}
+      </Value>
+      <DefaultLine testId='context-default'>Default: each setting starts at the value shown under Default below; the weekly run moves them a step at a time.</DefaultLine>
       <p className='text-xs text-muted-foreground'>
         What agents are handed from the board's records, over the last {r.windowDays} days. Retrievals are counted from when slop started counting them by
         source; the most retrieved choices are counted from the start of the window.
@@ -214,10 +223,7 @@ export const ContextSection = ({ boardId, admin }: { boardId: number; admin: boo
       </table>
       {reset.isError && <p className='text-xs text-red'>Could not reset the setting.</p>}
 
-      <Heading>Setting history</Heading>
-      {r.history.length === 0 ? (
-        <p className='text-xs text-muted-foreground'>No setting has moved yet.</p>
-      ) : (
+      <History testId='context-history-block' count={r.history.length} empty='No setting has moved yet.'>
         <table className='text-xs' data-testid='context-history'>
           <thead className='text-left text-muted-foreground'>
             <tr>
@@ -228,7 +234,7 @@ export const ContextSection = ({ boardId, admin }: { boardId: number; admin: boo
             </tr>
           </thead>
           <tbody>
-            {r.history.map((c) => (
+            {newestFirst(r.history).map((c) => (
               <tr key={c.id} className='align-top'>
                 <td className='pr-3 whitespace-nowrap'>{new Date(c.at).toLocaleDateString()}</td>
                 <td className='pr-3'>{labels.get(c.key) ?? c.key}</td>
@@ -238,7 +244,7 @@ export const ContextSection = ({ boardId, admin }: { boardId: number; admin: boo
             ))}
           </tbody>
         </table>
-      )}
+      </History>
       <JobStatus boardId={boardId} admin={admin} job='context_tuning' />
     </div>
   );
