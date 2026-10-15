@@ -1884,9 +1884,9 @@ export class GlobService {
     agentSetVersion: number | null = null,
     pairing?: { readonly kind: 'needs_pairing'; readonly decision?: string | null },
   ) {
-    return this.command(email, id, null, (glob, ctx) =>
-      machine.reportFailure(glob, { reason, runId, agentSetVersion, ...(pairing === undefined ? {} : pairing) }, ctx),
-    ).then(async (result) => {
+    return this.command(email, id, null, (glob, ctx, _board, facts) =>
+      machine.reportFailure(glob, { reason, runId, agentSetVersion, ...(pairing === undefined ? {} : pairing) }, ctx, facts.relations),
+    { relations: true }).then(async (result) => {
       // A run that failed for unmerged prerequisites teaches the board a need; the report itself never fails on it.
       if (result.ok) await this.deps.dependencyLearning?.onFailed(id, reason).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
       return result;
