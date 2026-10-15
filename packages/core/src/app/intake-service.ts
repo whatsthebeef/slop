@@ -1,9 +1,11 @@
 import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import { globIdInText } from '../domain/ids.js';
+import { globIdsIn, sentencesOf } from '../domain/relation-scan.js';
 import type { Result } from '../domain/errors.js';
 import { isValidCombination } from '../domain/matrix.js';
 import { SLOP_TYPES, WORK_CATEGORIES, WORK_KINDS } from '../domain/types.js';
-import type { Environment, InferenceSource, SlopType, WorkCategory, WorkKind } from '../domain/types.js';
+import { RELATION_GATES } from '../domain/types.js';
+import type { Environment, InferenceSource, RelationGate, SlopType, WorkCategory, WorkKind } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { CONFIDENCES, INTAKE_PROMPT_VERSION, examplesBlock, needsConfirmation } from '../domain/intake-learning.js';
 import type { Confidence, IntakeExample } from '../domain/intake-learning.js';
@@ -18,7 +20,7 @@ import { typeLearningBlock } from '../domain/type-learning.js';
 import { memberOf } from './access.js';
 import { recentTypeCorrections } from './type-learning-service.js';
 import { embedRequest, nearestExamples } from './intake-learning-service.js';
-import { field, parseJson, text } from './llm-json.js';
+import { field, list, parseJson, text } from './llm-json.js';
 import type { LlmSpendTag } from '../domain/spend.js';
 import { INTAKE_GROUP_SCHEMA, INTAKE_SCHEMA } from './llm-schemas.js';
 
@@ -133,6 +135,12 @@ export interface IntakeProposal {
   readonly files: readonly string[];
   /** Unmerged globs on the board the request says to wait for ("once s15t7 is merged"); a suggestion, never applied by itself. */
   readonly suggestedAfter: readonly string[];
+  /**
+   * Open globs the request says this work must wait for ("only after s14t17 is in place"), with the gate and the request's own
+   * sentence: the automatic relation pass's answer for this text, so creating makes no second call (`RelationScanService.classifyAtCreate`
+   * takes it as `answered`). Present only when there is at least one; absent for a request that names no glob.
+   */
+  readonly prerequisites?: readonly IntakePrerequisite[];
   /** How sure intake is of the category (an explicit category is `high`); null when the model gave none. */
   readonly categoryConfidence: Confidence | null;
   /** The model's one-line reason for the category; null when none or the category was explicit. */
@@ -146,6 +154,13 @@ export interface IntakeProposal {
   readonly promptVersion: number;
   /** Why the plan looks oversized by its text (more tasks than the board's threshold); empty when it doesn't. Creating the glob judges it again with the model. */
   readonly oversized: readonly string[];
+}
+
+/** A glob the request says to wait for: its ID, the gate it holds, and the sentence of the request that says so. */
+export interface IntakePrerequisite {
+  readonly id: string;
+  readonly gate: RelationGate;
+  readonly sentence: string;
 }
 
 /** What inference decided about a glob's fix flag and work kind, with a reason each. */
@@ -212,7 +227,7 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
+{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[], "prerequisites": [{"id": string, "gate": "start" | "merge" | "sign_off", "sentence": string}]}
 
 - title: a short imperative title, at most 70 characters.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
@@ -229,6 +244,7 @@ Respond with one JSON object and nothing else:
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
 - files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths. List every one you expect: the board's risk-area path patterns are matched against them.
+- prerequisites: glob IDs (like s15t7) the request says this work cannot start, merge or be signed off until they are done ("only after s14t17 is in place", "requires s1t2"), each with its "gate" ("start": the work cannot begin; "merge"; "sign_off": it can be built but not handed over or rolled out) and "sentence", the request's own sentence word for word. The globs the request names are listed after it with their titles and states. A glob named only as background, history ("after s14t13 merged we removed the token") or a reference is not a prerequisite. An empty list when the request names none, and when in doubt.
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.`;
 
 const normalise = normaliseGroup;
@@ -285,6 +301,28 @@ const pathList = (value: unknown): string[] =>
         .slice(0, 20)
     : [];
 
+const squash = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * The model's prerequisites, checked: the glob is open on this board, it is named in the request, the gate is one of the three, and
+ * the quoted sentence is (part of) a sentence of the request that names it. The sentence kept is the request's own. `{}` when none
+ * survive, so a proposal without prerequisites keeps its shape.
+ */
+const prerequisitesOf = (answer: unknown, request: string, open: ReadonlySet<string>): { prerequisites?: IntakePrerequisite[] } => {
+  const listed = list(field(answer, 'prerequisites'));
+  const sentences = sentencesOf(request);
+  const found: IntakePrerequisite[] = [];
+  for (const item of listed) {
+    const id = text(field(item, 'id'))?.trim().toLowerCase();
+    const gate = RELATION_GATES.find((g) => g === field(item, 'gate'));
+    const quote = squash(text(field(item, 'sentence')) ?? '');
+    if (id === undefined || gate === undefined || quote === '' || !open.has(id) || found.some((p) => p.id === id)) continue;
+    const sentence = sentences.find((s) => globIdsIn(s).includes(id) && (squash(s).includes(quote) || quote.includes(squash(s))));
+    if (sentence !== undefined) found.push({ id, gate, sentence });
+  }
+  return found.length === 0 ? {} : { prerequisites: found };
+};
+
 const oneOf = <T extends string>(values: readonly T[], value: unknown): T | null =>
   values.find((v) => v === value) ?? null;
 
@@ -325,10 +363,12 @@ export class IntakeService {
         areas: await riskAreasOf(),
         corrections: await recentTypeCorrections(tx, boardId),
         open: new Set(globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off').map((g) => g.id)),
+        // The open globs the request names, for the prerequisites it asks about (titles are the board's own; nothing from other boards).
+        named: globs.filter((g) => g.status !== 'reviewing' && g.status !== 'signed_off' && globIdsIn(input.text).includes(g.id)).map((g) => `${g.id} "${g.title}" [${g.status}]`),
       });
     });
     if (!known.ok) return known;
-    const { groups, environments, open, threshold, areas, subMaxChangedLines, corrections } = known.value;
+    const { groups, environments, open, threshold, areas, subMaxChangedLines, corrections, named } = known.value;
 
     const examples = await this.examplesFor(boardId, input.text);
     const block = examplesBlock(examples);
@@ -341,6 +381,7 @@ export class IntakeService {
       boardContextBlock(areas, subMaxChangedLines),
       '',
       typeLearningBlock(corrections),
+      ...(named.length === 0 ? [] : ['', 'Open globs the request names:', ...named.map((n) => `- ${n}`)]),
       ...(block === '' ? [] : ['', block]),
     ].join('\n');
     let completion: string;
@@ -524,6 +565,7 @@ export class IntakeService {
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
       files: pathList(field(answer, 'files')),
       suggestedAfter: waitedForIn(request, open),
+      ...prerequisitesOf(answer, request, open),
       categoryConfidence: confidence,
       categoryReason: explicitCategory ? null : (fixReason ?? workKindReason),
       examples,
