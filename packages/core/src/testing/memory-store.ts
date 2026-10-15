@@ -357,7 +357,7 @@ export class MemoryStore implements Store {
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, step] of s.humanSteps) if (step.globId === id) s.humanSteps.delete(key);
-        for (const [key, r] of s.relations) if (r.from === id) s.relations.delete(key);
+        for (const [key, r] of s.relations) if (r.from === id || (r.to === id && r.kind === 'superseded_by')) s.relations.delete(key);
         for (const [key, r] of s.relationScans) if (r.globId === id) s.relationScans.delete(key);
         for (const [key, d] of s.statusDismissals) if (d.globId === id) s.statusDismissals.delete(key);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);

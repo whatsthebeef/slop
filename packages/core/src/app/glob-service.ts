@@ -35,7 +35,7 @@ import { scriptPathOf } from '../domain/action-script.js';
 import type { ActionScript, ScriptCheck } from '../domain/action-script.js';
 import type { CodeView } from './code-view.js';
 import { CodeViewUnavailable } from '../domain/code-view.js';
-import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, UNTIL_WORDS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, normaliseUntil, pickUpWarning, startIds, toState, wouldCycle } from '../domain/relations.js';
+import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, UNTIL_WORDS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, normaliseUntil, pickUpWarning, relationUniverse, startIds, OTHER_BOARD_GLOB, toState, wouldCycle } from '../domain/relations.js';
 import type { AwaitedDependency, DoneRelation, ExternalGlob, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, Supersession, TitleInfo, ToState } from '../domain/relations.js';
 import { globIdsIn, idSentences, quoteReason, reverseCuesIn, sentenceHash, supersedeCuesIn } from '../domain/relation-scan.js';
 import type { AutomaticAdd, AutomaticRelations, AutomaticResult, RelationListExtras, RelationScanRow, RelationSuggestion } from '../domain/relation-scan.js';
@@ -149,7 +149,6 @@ const scriptFacts = (check: ScriptCheck | null): { readonly script?: ActionScrip
 export const MAX_RELATION_REASON = 300;
 
 /** How many relations beyond a board's own the cycle check reads across boards before it refuses. */
-const RELATION_UNIVERSE_CAP = 1000;
 
 /** Who stated the relations of a request: the source they are recorded with. */
 export type RelationsBy = 'person' | 'agent' | 'auto';
@@ -357,13 +356,17 @@ export const splitEscalations = (
   });
 };
 
+const NO_IDS: ReadonlySet<string> = new Set();
+/** Events are stored once and read by every member of the holder's board: a glob on another board is named by a stub there. */
+const eventName = (id: string, external: ReadonlySet<string>): string => (external.has(id) ? OTHER_BOARD_GLOB : id);
+
 /** The event on `from` for a relation that was added. */
-const relationAdded = (r: Relation, actor: string | null, at: string): DomainEvent => ({
+const relationAdded = (r: Relation, actor: string | null, at: string, external: ReadonlySet<string> = NO_IDS): DomainEvent => ({
   type: 'RelationAdded',
   globId: r.from,
   actor,
   at,
-  data: { to: r.to, gate: r.gate, until: r.until, source: r.source, reason: r.reason },
+  data: { to: eventName(r.to, external), gate: r.gate, until: r.until, source: r.source, reason: r.reason },
 });
 
 /**
@@ -377,18 +380,19 @@ const relationEvents = (
   before: readonly Relation[],
   write: RelationWrite,
   inserted: readonly Relation[],
+  external: ReadonlySet<string> = NO_IDS,
 ): DomainEvent[] => {
   const known = (id: string): Relation | undefined => before.find((r) => r.id === id);
   const events: DomainEvent[] = [];
   for (const r of write.remove) {
     const gone = known(r);
-    if (gone !== undefined) events.push({ type: 'RelationReleased', globId: from, actor, at, data: { to: gone.to, gate: gone.gate, reason: 'removed' } });
+    if (gone !== undefined) events.push({ type: 'RelationReleased', globId: from, actor, at, data: { to: eventName(gone.to, external), gate: gone.gate, reason: 'removed' } });
   }
-  for (const r of inserted) events.push(relationAdded(r, actor, at));
+  for (const r of inserted) events.push(relationAdded(r, actor, at, external));
   for (const u of write.update) {
     const was = known(u.id);
     if (was !== undefined && u.patch.dismissedAt != null) {
-      events.push({ type: 'RelationDismissed', globId: from, actor, at, data: { to: was.to, edgeId: was.to, gate: was.gate, source: was.source, planHash: u.patch.dismissedPlanHash ?? null } });
+      events.push({ type: 'RelationDismissed', globId: from, actor, at, data: { to: eventName(was.to, external), edgeId: eventName(was.to, external), gate: was.gate, source: was.source, planHash: u.patch.dismissedPlanHash ?? null } });
     }
   }
   if (write.notes !== undefined && write.notes.lines.length > 0) {
@@ -634,7 +638,7 @@ export class GlobService implements AutomaticRelations {
         allowedActions: machine.allowedActions(glob, actor.value, facts),
         artifacts,
         relations: factsView(relations, seen.external).relations,
-        waitingFor: awaitedOf(relations).map((a) => awaitedView(a, seen.external.get(a.id))),
+        waitingFor: awaitedOf({ relations: relations.relations, states: relations.states }).map((a) => awaitedView(a, seen.external.get(a.id))),
         waitedOnBy: waited.ids,
         holding: holdingOf({ relations: relations.relations, states: seen.reach.states }, titlesOf(seen.reach.globs)).map((h) => holdingView(h, seen.external.get(h.to))),
         relationGroups: waited.other > 0 ? { ...groups, waitedOnByOtherBoards: waited.other } : groups,
@@ -1968,7 +1972,8 @@ export class GlobService implements AutomaticRelations {
         return invalidInput(`A glob can have at most ${MAX_RELATIONS} relations for one gate`);
       }
       const created = applyWrite([], { add: needs, update: [], remove: [] }, { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() });
-      const relations: RelationFacts = { relations: created.relations, states };
+      const external = await this.externalIds(tx, board.id, created.relations.map((r) => r.to));
+      const relations: RelationFacts = { relations: created.relations, states, ...(external.size === 0 ? {} : { external }) };
       // Predicted overlaps stay on the glob as internal data (the merge policy's holds); they are not shown and not an input.
       const implied = mergeImplied(holds, []);
       const createInput: CreateInput = { ...input, id, impliedAfter: implied };
@@ -2289,7 +2294,7 @@ export class GlobService implements AutomaticRelations {
           },
           board,
           ctx,
-          { relations: startRelations.relations, states: await this.statesOf(tx, awaitedIds) },
+          { relations: startRelations.relations, states: await this.statesOf(tx, awaitedIds), external: await this.externalIds(tx, board.id, awaitedIds) },
         );
         if (!created.ok) return created;
         const partEscalation = escalations[index];
@@ -2458,24 +2463,7 @@ export class GlobService implements AutomaticRelations {
    * the edge itself is local. Over `RELATION_UNIVERSE_CAP` rows beyond the base it refuses rather than guesses.
    */
   private async relationUniverse(tx: Tx, base: readonly Relation[], targets: readonly string[]): Promise<Result<Relation[]>> {
-    const rows = new Map(base.map((r) => [r.id, r]));
-    const seen = new Set<string>();
-    let frontier = [...new Set(targets)];
-    let added = 0;
-    while (frontier.length > 0) {
-      const batch = frontier.filter((id) => !seen.has(id));
-      for (const id of batch) seen.add(id);
-      frontier = [];
-      if (batch.length === 0) break;
-      for (const r of await tx.listRelationsFrom(batch)) {
-        frontier.push(r.to);
-        if (rows.has(r.id)) continue;
-        rows.set(r.id, r);
-        added++;
-        if (added > RELATION_UNIVERSE_CAP) return invalidInput('the relation graph is too large to check');
-      }
-    }
-    return ok([...rows.values()]);
+    return relationUniverse((ids) => tx.listRelationsFrom(ids), base, targets);
   }
 
   /**
@@ -2822,12 +2810,16 @@ export class GlobService implements AutomaticRelations {
   private async dismissForSupersession(tx: Tx, glob: Glob, actor: string | null): Promise<StoredHumanStep[]> {
     const label = (await tx.listSupersessions([glob.id])).find(isActive);
     if (label === undefined) return [];
+    // A label whose superseder is gone is inert (the superseder's deletion also removes it); one on another board is named by a stub.
+    const superseder = await tx.getGlob(label.to);
+    if (superseder === null) return [];
+    const by = superseder.boardId === glob.boardId ? label.to : OTHER_BOARD_GLOB;
     const open = (await tx.listHumanSteps(glob.boardId, [glob.id])).filter((s) => s.state === 'open');
     if (open.length === 0) return [];
     const now = this.deps.clock.now();
-    const closed = open.map((step): StoredHumanStep => ({ ...step, state: 'dismissed', dismissedReason: `superseded by ${label.to}`, doneBy: 'slop', doneAt: now }));
+    const closed = open.map((step): StoredHumanStep => ({ ...step, state: 'dismissed', dismissedReason: `superseded by ${by}`, doneBy: 'slop', doneAt: now }));
     await tx.saveHumanSteps(closed);
-    await tx.appendEvents(closed.map((step): DomainEvent => ({ type: 'HumanStepChanged', globId: glob.id, actor, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: 'dismissed', link: label.to } })));
+    await tx.appendEvents(closed.map((step): DomainEvent => ({ type: 'HumanStepChanged', globId: glob.id, actor, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: 'dismissed', link: by } })));
     return closed;
   }
 
@@ -3111,7 +3103,7 @@ export class GlobService implements AutomaticRelations {
       const next = { ...touched.value.glob, version: glob.version + 1 };
       if (!(await tx.updateGlob(next, glob.version))) throw new DependantMoved(`${glob.id} changed while ${gone.id} was deleted`);
       await tx.appendEvents(
-        rows.filter((r) => r.from === from).map((r): DomainEvent => ({ type: 'RelationReleased', globId: from, actor: null, at, data: { to: r.to, gate: r.gate, reason: `${gone.id} was deleted` } })),
+        rows.filter((r) => r.from === from).map((r): DomainEvent => ({ type: 'RelationReleased', globId: from, actor: null, at, data: { to: eventName(r.to, gone.boardId === glob.boardId ? NO_IDS : new Set([r.to])), gate: r.gate, reason: `${eventName(gone.id, gone.boardId === glob.boardId ? NO_IDS : new Set([gone.id]))} was deleted` } })),
       );
       out.push(next);
     }
@@ -3352,7 +3344,10 @@ export class GlobService implements AutomaticRelations {
           const known = new Map((await tx.getGlobs(fresh.map((e) => e.id))).map((g) => [g.id, g]));
           const states = await this.statesOf(tx, fresh.map((e) => e.id));
           const remove = mine.filter(replaceable).map((r) => r.id);
-          const growing: Relation[] = board.filter((r) => !remove.includes(r.id));
+          // The cycle check reads across boards too: a local edge can close a cycle through a cross-board one.
+          const universe = await this.relationUniverse(tx, board, fresh.map((e) => e.id));
+          if (!universe.ok) return ok({ add: [], update: [], remove: [], notes: { lines: [`Dropped every inferred relation: ${universe.error.message}`], planHash } });
+          const growing: Relation[] = universe.value.filter((r) => !remove.includes(r.id));
           const add: NewRelation[] = [];
           const lines: string[] = [];
           for (const edge of fresh) {
@@ -3571,7 +3566,20 @@ export class GlobService implements AutomaticRelations {
 
   /** A glob's relations with the state of each glob they point at. */
   private async relationFacts(tx: Tx, relations: readonly Relation[]): Promise<RelationFacts> {
-    return { relations, states: await this.statesOf(tx, [...new Set(relations.map((r) => r.to))]) };
+    const ids = [...new Set(relations.map((r) => r.to))];
+    const reach = await this.reachOf(tx, ids);
+    const external = new Set(relations.filter((r) => {
+      const board = reach.globs.get(r.to)?.boardId;
+      return board !== undefined && board !== r.boardId;
+    }).map((r) => r.to));
+    return { relations, states: reach.states, ...(external.size === 0 ? {} : { external }) };
+  }
+
+  /** The ids among `ids` of globs on a board other than `boardId`: what stored or machine text names by a stub. */
+  private async externalIds(tx: Tx, boardId: number, ids: readonly string[]): Promise<Set<string>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Set();
+    return new Set((await tx.getGlobs(unique)).filter((g) => g.boardId !== boardId).map((g) => g.id));
   }
 
   /** The globs in Planning that wait for `id` before they start; those on a board the viewer can't see are only counted. */
@@ -3708,7 +3716,8 @@ export class GlobService implements AutomaticRelations {
         }
         for (const e of edits) await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
         await this.closeCovering(tx, inserted, ctx.now);
-        const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted);
+        const external = await this.externalIds(tx, glob.boardId, [...before, ...inserted].map((r) => r.to));
+        const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted, external);
         // A change to the relations alone still moves the glob's version, so live updates and stale forms see it.
         const touched = machine.relationsChanged(stepped.value.glob, ctx);
         transition = stepped.value.changed || !touched.ok ? stepped : ok({ ...stepped.value, glob: touched.value.glob, changed: true });
@@ -3756,7 +3765,10 @@ export class GlobService implements AutomaticRelations {
     for (const r of inserted) {
       if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
     }
-    if (inserted.length > 0) await tx.appendEvents(inserted.map((r) => relationAdded(r, actor, at)));
+    if (inserted.length > 0) {
+      const external = await this.externalIds(tx, glob.boardId, inserted.map((r) => r.to));
+      await tx.appendEvents(inserted.map((r) => relationAdded(r, actor, at, external)));
+    }
     await this.closeCovering(tx, inserted, at);
   }
 

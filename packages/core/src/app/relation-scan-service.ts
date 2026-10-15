@@ -222,13 +222,21 @@ export class RelationScanService {
       const { take } = batchOf(candidates);
       let answered: Answered[];
       if (input.answered !== undefined) {
-        // Intake saw the same text: its prerequisites stand (checked against the sentences), the rest are not.
+        // Intake saw the same text: its prerequisites stand (checked against the sentences), the rest of what it was shown are not.
+        // Intake is shown only this board's globs that have not merged: a mention of any other glob (another board, or one merged
+        // with its rollout still open) was not judged, so it goes to the model like a plain create (at most one call).
         const said = new Set(input.answered.map((a) => `${a.id}:${normal(a.sentence)}`));
         const gates = new Map(input.answered.map((a) => [`${a.id}:${normal(a.sentence)}`, a.gate]));
-        answered = take.map((mention) => {
+        const judged = (m: Mention): boolean => {
+          const glob = targets.get(m.id)?.glob;
+          return glob !== undefined && glob.boardId === input.boardId && glob.status !== 'reviewing' && glob.status !== 'signed_off';
+        };
+        answered = take.filter(judged).map((mention) => {
           const key = `${mention.id}:${normal(mention.sentence)}`;
           return { mention, verdict: said.has(key) ? 'prerequisite' : 'context', gate: gates.get(key) ?? 'sign_off' };
         });
+        const unjudged = take.filter((m) => !judged(m));
+        if (unjudged.length > 0 && this.deps.llm !== undefined) answered.push(...(await this.classify(input.boardId, null, input.title ?? null, unjudged, targets)));
       } else {
         if (this.deps.llm === undefined) return none;
         answered = await this.classify(input.boardId, null, input.title ?? null, take, targets);
@@ -315,7 +323,7 @@ export class RelationScanService {
     return { glob, planHash: hash(plan), mentions, targets };
   }
 
-  /** One model call for all `mentions`. Throws when there is no usable answer; an answer that skips a mention says "not a prerequisite" for it. */
+  /** One model call for all `mentions`. Throws when there is no usable answer; a mention the answer skips is left out of the result (not decided). */
   private async classify(boardId: number, globId: string | null, title: string | null, mentions: readonly Mention[], targets: ReadonlyMap<string, Target>): Promise<Answered[]> {
     const llm = this.deps.llm;
     if (llm === undefined) throw new Error('No model is configured for the relation scan');
@@ -355,7 +363,13 @@ export class RelationScanService {
       const gate = gateOf(field(item, 'gate'));
       out.set(mention, verdict === undefined || (verdict === 'prerequisite' && gate === null) ? { mention, verdict: 'unsure', gate } : { mention, verdict, gate });
     }
-    return mentions.map((m) => out.get(m) ?? { mention: m, verdict: 'context', gate: null });
+    // A reply that covers none of the mentions says nothing (retry). A mention it skipped is not decided: nothing is recorded for it, so
+    // the next pass asks again; only what the model actually answered is returned.
+    if (out.size === 0 && mentions.length > 0) throw new Error('The model answered none of the mentions in the relation scan');
+    return mentions.flatMap((m) => {
+      const a = out.get(m);
+      return a === undefined ? [] : [a];
+    });
   }
 }
 

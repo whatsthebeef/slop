@@ -732,6 +732,8 @@ export class PgStore implements Store {
         await t.delete(schema.humanSteps).where(eq(schema.humanSteps.globId, id));
         // Its own relations go; the ones pointing at it stay, so a glob that waited on it can say it was deleted.
         await t.delete(schema.relations).where(eq(schema.relations.fromGlob, id));
+        // A "superseded by" label pointing at it goes too: with its superseder gone the glob is no longer superseded.
+        await t.delete(schema.relations).where(and(eq(schema.relations.toGlob, id), eq(schema.relations.kind, 'superseded_by')));
         await t.delete(schema.relationScans).where(eq(schema.relationScans.globId, id));
         await t.delete(schema.statusDismissals).where(eq(schema.statusDismissals.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
@@ -2756,6 +2758,8 @@ export class PgStore implements Store {
           if (effect.kind === 'scan_relations') {
             // One unclaimed scan per glob, and every trigger pushes it out again: a burst of saves makes one pass.
             const jobs = schema.outbox;
+            // Two concurrent saves would both find no pending job and queue two: the per-glob lock makes the second one see the first.
+            await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`scan_relations:${effect.globId}`}))`);
             const runAfter = new Date(Date.now() + RELATION_SCAN_DEBOUNCE_MS);
             const updated = await t
               .update(jobs)

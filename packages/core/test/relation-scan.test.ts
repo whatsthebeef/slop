@@ -205,18 +205,25 @@ describe('relation scan', () => {
       expect(await rows(me.id)).toEqual([expect.objectContaining({ decision: 'unsure', state: 'open', gate: 'start' })]);
     });
 
-    it('a decision about an ID that is not in the sentence it names is ignored, and a skipped mention reads as context', async () => {
+    it('a decision about an ID that is not in the sentence it names is ignored, and a skipped mention is left undecided (R1-6)', async () => {
       const me = await create('Mine');
       const a = await create('A');
       const b = await create('B');
       await plan(me.id, `Needs ${a.id} first.\nSee also ${b.id}.`);
-      // Names the wrong sentence for `a`, and says nothing about `b`.
-      reply = () => JSON.stringify({ decisions: [{ id: a.id, sentence: 1, verdict: 'prerequisite', gate: 'start' }] });
+      // Names the wrong sentence for `a`, answers `b` and says nothing else.
+      reply = () =>
+        JSON.stringify({
+          decisions: [
+            { id: a.id, sentence: 1, verdict: 'prerequisite', gate: 'start' },
+            { id: b.id, sentence: 1, verdict: 'context', gate: 'sign_off' },
+          ],
+        });
 
       await scan.run(me.id);
 
       expect(applied).toEqual([]);
-      expect((await rows(me.id)).map((r) => [r.mentionedId, r.decision]).sort()).toEqual([[a.id, 'context'], [b.id, 'context']].sort());
+      // Only what the model answered is stored: `a` stays uncached, so the next pass asks again.
+      expect((await rows(me.id)).map((r) => [r.mentionedId, r.decision])).toEqual([[b.id, 'context']]);
     });
 
     it('exactly one call for several mentions in one pass, and an add per prerequisite', async () => {
@@ -286,11 +293,16 @@ describe('relation scan', () => {
       expect(await rows(me.id)).toEqual([]);
     });
 
-    it('a well-formed empty answer is an answer: the mention is remembered as not a prerequisite', async () => {
+    it('a well-formed empty answer decides nothing: the pass throws, nothing is cached, and a later pass with an answer decides (R1-6)', async () => {
       const me = await setUp();
       reply = () => JSON.stringify({ decisions: [] });
+      await expect(scan.run(me.id)).rejects.toThrow(/none of the mentions/);
+      expect(await rows(me.id)).toEqual([]);
+      expect(applied).toEqual([]);
+
+      reply = answering(() => ({ verdict: 'prerequisite', gate: 'sign_off' }));
       await scan.run(me.id);
-      expect(await rows(me.id)).toEqual([expect.objectContaining({ decision: 'context', state: 'done' })]);
+      expect(applied).toHaveLength(1);
     });
 
     it('the pass stays quiet for deterministic items too: nothing is written when the model call fails', async () => {
@@ -598,6 +610,25 @@ describe('relation scan', () => {
       const made = await create('New');
       await scan.remember(made.id, boardId, result.decided);
       expect(await rows(made.id)).toEqual([expect.objectContaining({ mentionedId: other.id, decision: 'context', sentenceHash: sentenceHash(`See ${other.id}.`) })]);
+    });
+
+    it('intake only judged this board\'s unmerged globs: a mention of another board or of a merged glob with its rollout open goes to the model (R1-5)', async () => {
+      const merged = await create('Merged, rolling out');
+      setStatus(merged.id, 'reviewing');
+      const boards = new BoardService({ store, notifier: new RecordingNotifier() });
+      const otherBoard = unwrap(await boards.create(DEV, { name: 'Board two', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+      const abroad = unwrap(await globs.create(DEV, { boardId: otherBoard, title: 'Abroad', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      // Rollout steps still open keep the merged glob holding.
+      await store.transaction((tx) => tx.saveHumanSteps([{ id: 'step-1', globId: merged.id, boardId, kind: 'rollout', title: 'Roll out', why: null, detail: null, blocks: ['dependants'], state: 'open' } as never]));
+      reply = answering(() => ({ verdict: 'prerequisite', gate: 'start' }));
+      const text = `Hand over only after ${merged.id} is rolled out.\nWait for ${abroad.id} to be deployed first.`;
+
+      // Intake answered nothing (it was never shown either glob): the model decides, not an empty "context".
+      const result = await scan.classifyAtCreate(input(text, { answered: [] }));
+
+      expect(requests).toHaveLength(1);
+      expect(result.prerequisites.map((p) => p.id).sort()).toEqual([abroad.id, merged.id].sort());
+      expect(result.decided).toEqual([]);
     });
 
     it('a settled target, a fix cue, and an answer that cannot be used add nothing, and it never throws', async () => {

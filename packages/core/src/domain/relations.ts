@@ -86,6 +86,11 @@ export interface RelationFacts {
   readonly relations: readonly Relation[];
   /** The state of each `to` (a missing entry reads as deleted). */
   readonly states: ReadonlyMap<string, ToState>;
+  /**
+   * The `to` ids on another board than the holder. Text built from the facts (refusals, the `Waiting` event note, failure reasons) is
+   * viewer-independent and stored, so it names these as "a glob on another board" and never prints the id or where it stands.
+   */
+  readonly external?: ReadonlySet<string>;
 }
 
 export const NO_RELATIONS: RelationFacts = { relations: [], states: new Map() };
@@ -94,7 +99,12 @@ export const NO_RELATIONS: RelationFacts = { relations: [], states: new Map() };
 export interface Unmet {
   readonly relation: Relation;
   readonly state: ToState;
+  /** `to` is on another board: its id and state stay out of any text. */
+  readonly external?: boolean;
 }
+
+/** What text says in place of the id of a glob on another board. */
+export const OTHER_BOARD_GLOB = 'a glob on another board';
 
 /** The relations of one gate that still hold (not lifted, `to` not there yet), in the order they were made. */
 export const unmet = (facts: RelationFacts, gate: RelationGate): Unmet[] =>
@@ -102,7 +112,8 @@ export const unmet = (facts: RelationFacts, gate: RelationGate): Unmet[] =>
     .filter((r) => r.gate === gate)
     .flatMap((relation) => {
       const state = facts.states.get(relation.to) ?? 'missing';
-      return isMet(relation, state) ? [] : [{ relation, state }];
+      if (isMet(relation, state)) return [];
+      return facts.external?.has(relation.to) === true ? [{ relation, state, external: true }] : [{ relation, state }];
     });
 
 /** Every active start relation of a glob, whether or not it is met: what the glob starts after. */
@@ -125,12 +136,14 @@ export const normaliseUntil = (value: string): RelationUntil | null => {
 };
 
 /** "can't start until s15f82 is merged": what one relation says, for a refusal or a row. */
-export const holdWords = (r: Pick<Relation, 'gate' | 'to' | 'until'>): string =>
-  `can't ${GATE_WORDS[r.gate]} until ${r.to} is ${UNTIL_WORDS[r.until]}`;
+export const holdWords = (r: Pick<Relation, 'gate' | 'to' | 'until'>, external = false): string =>
+  `can't ${GATE_WORDS[r.gate]} until ${external ? OTHER_BOARD_GLOB : r.to} is ${UNTIL_WORDS[r.until]}`;
 
 /** Why one unmet relation holds, as shown on the glob: "Waits for s15t7 to merge", "Waits for s15t7: <reason>", ... */
-export const waitNote = ({ relation, state }: Unmet): string => {
-  const { to, reason, source } = relation;
+export const waitNote = ({ relation, state, external }: Unmet): string => {
+  const { reason, source } = relation;
+  const to = external === true ? OTHER_BOARD_GLOB : relation.to;
+  if (external === true && relation.gate === 'start' && relation.until === 'merged') return `Waits for ${to} to merge`;
   if (relation.gate === 'start' && relation.until === 'merged') {
     if (state === 'open' && reason !== null && (source === 'learned' || source === 'inferred')) return `Waits for ${to}: ${reason}`;
     switch (state) {
@@ -155,6 +168,8 @@ export type AwaitedState = 'open' | 'planning' | 'rollout';
 export interface AwaitedDependency {
   readonly id: string;
   readonly state: AwaitedState;
+  /** `id` is on another board: texts built from it name "a glob on another board" instead. */
+  readonly external?: boolean;
   /** Why it waits, as shown on the glob: "Waits for s15t7 to merge", ... */
   readonly why: string;
 }
@@ -163,7 +178,17 @@ const awaitedState = (state: ToState): AwaitedState => (state === 'planning' || 
 
 /** What the glob still waits for before it can start: its unmet start relations, one line each. */
 export const awaitedOf = (facts: RelationFacts): AwaitedDependency[] =>
-  unmet(facts, 'start').map((u) => ({ id: u.relation.to, state: awaitedState(u.state), why: waitNote(u) }));
+  unmet(facts, 'start').map((u) => ({
+    id: u.relation.to,
+    state: awaitedState(u.state),
+    ...(u.external === true && { external: true }),
+    why: waitNote(u),
+  }));
+
+/** What stored or shown text calls a waited-for glob: its id, or a stub for one on another board. */
+export const awaitedName = (a: Pick<AwaitedDependency, 'id' | 'external'>): string => (a.external === true ? OTHER_BOARD_GLOB : a.id);
+/** The ids an event records for what a glob waits for (a stub for each glob on another board). */
+export const awaitedNames = (awaited: readonly Pick<AwaitedDependency, 'id' | 'external'>[]): string[] => awaited.map(awaitedName);
 
 /** One line for a glob that waits: "Waits for s15t7 to merge", joined for several. */
 export const waitSummary = (awaited: readonly AwaitedDependency[]): string => awaited.map((a) => a.why).join('; ');
@@ -172,7 +197,7 @@ export const waitSummary = (awaited: readonly AwaitedDependency[]): string => aw
 export const pickUpWarning = (awaited: readonly AwaitedDependency[]): string | null =>
   awaited.length === 0
     ? null
-    : `${awaited.map((a) => a.id).join(', ')} hasn't merged yet; this branch lacks ${awaited.length === 1 ? 'its' : 'their'} changes`;
+    : `${awaited.map(awaitedName).join(', ')} hasn't merged yet; this branch lacks ${awaited.length === 1 ? 'its' : 'their'} changes`;
 
 /** What a glob waits for, in a form that reads in a refusal: "Waits for s15t7 to merge (use Start now)". */
 export const refusalText = (awaited: readonly AwaitedDependency[]): string => `${waitSummary(awaited)} (use Start now)`;
@@ -301,6 +326,40 @@ export const wouldCycle = (relations: readonly Relation[], draft: RelationDraft)
     for (const r of byFrom.get(node[0]) ?? []) if (MILESTONE[r.gate] === node[1]) stack.push([r.to, REACHED[r.until]]);
   }
   return false;
+};
+
+/** Most relation rows a cycle check reads beyond the glob's own board. */
+export const RELATION_UNIVERSE_CAP = 1000;
+
+/**
+ * The relations a cycle check must see: `base` (the glob's board) plus everything reachable forward from `targets`, across boards.
+ * A cycle through a new edge needs a path from its `to` back to its `from`, and that path may run through other boards even when
+ * the edge itself is local. Over `RELATION_UNIVERSE_CAP` rows beyond the base it refuses rather than guesses. Every relation
+ * writer uses it under the instance-wide relations lock.
+ */
+export const relationUniverse = async (
+  listFrom: (ids: string[]) => Promise<readonly Relation[]>,
+  base: readonly Relation[],
+  targets: readonly string[],
+): Promise<Result<Relation[]>> => {
+  const rows = new Map(base.map((r) => [r.id, r]));
+  const seen = new Set<string>();
+  let frontier = [...new Set(targets)];
+  let added = 0;
+  while (frontier.length > 0) {
+    const batch = frontier.filter((id) => !seen.has(id));
+    for (const id of batch) seen.add(id);
+    frontier = [];
+    if (batch.length === 0) break;
+    for (const r of await listFrom(batch)) {
+      frontier.push(r.to);
+      if (rows.has(r.id)) continue;
+      rows.set(r.id, r);
+      added++;
+      if (added > RELATION_UNIVERSE_CAP) return invalidInput('the relation graph is too large to check');
+    }
+  }
+  return ok([...rows.values()]);
 };
 
 /**

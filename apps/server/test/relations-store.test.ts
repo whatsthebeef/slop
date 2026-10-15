@@ -216,6 +216,12 @@ describe('relations in Postgres', () => {
       expect(again?.id).toBe(first?.id);
       expect(Date.parse(again?.runAfter ?? '')).toBeGreaterThan(Date.parse(first?.runAfter ?? ''));
     });
+
+    it('two concurrent saves of one glob queue one scan job, not two (R1-13)', async () => {
+      const effect: Effect = { kind: 'scan_relations', globId: 's1t7' };
+      await Promise.all([store.transaction((tx) => tx.enqueueEffects([effect])), store.transaction((tx) => tx.enqueueEffects([effect]))]);
+      expect(await store.transaction((tx) => tx.latestOutboxJobs(['s1t7'], ['scan_relations']))).toHaveLength(1);
+    });
   });
 
   it('reads a long list of IDs as one parameter', async () => {
@@ -253,6 +259,15 @@ describe('relations in Postgres', () => {
     expect(started?.version ?? 0).toBeGreaterThan(third.version);
     unwrap(await globs.delete(DEV, third.id, started?.version ?? 0));
     expect(await rows()).toEqual([]);
+  });
+
+  it('deleting a superseder removes the superseded_by label pointing at it (R1-4)', async () => {
+    const old = await create();
+    const made = await create();
+    unwrap(await globs.addSupersession(DEV, made.id, old.id, { reason: 'replaced' }, 'agent'));
+    expect(await store.transaction((tx) => tx.listSupersessions([old.id]))).toHaveLength(1);
+    unwrap(await globs.delete(DEV, made.id, (await globs.peek(made.id))?.version ?? 0));
+    expect(await store.transaction((tx) => tx.listSupersessions([old.id]))).toEqual([]);
   });
 
   it('two cycle-closing writes at once: exactly one wins, under the board lock', async () => {

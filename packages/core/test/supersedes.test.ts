@@ -97,6 +97,18 @@ describe('supersedes: one glob makes another obsolete', () => {
     expect(unwrap(await globs.get(ADMIN, waiter.id)).relationGroups.supersededBy).toBeUndefined();
   });
 
+  it('deleting the superseder removes the label: later steps on the superseded glob stay open (R1-4)', async () => {
+    const old = await merged('Old', { CR: 'required' });
+    const made = await make({ title: 'New' });
+    unwrap(await globs.addSupersession(ADMIN, made.id, old.id, { reason: 'replaced' }, 'agent'));
+    expect(supersessionRows()).toHaveLength(1);
+    unwrap(await globs.delete(ADMIN, made.id, (await peek(made.id)).version));
+    expect(supersessionRows()).toEqual([]);
+    const added = unwrap(await globs.addHumanStep(ADMIN, old.id, null, { title: 'Late step' }));
+    expect(added.state).toBe('open');
+    expect(unwrap(await globs.get(ADMIN, old.id)).relationGroups.supersededBy).toBeUndefined();
+  });
+
   it('steps added later (by hand or from the record) are dismissed at once', async () => {
     const old = await merged('Old', { CR: 'required' });
     const made = await make({ title: 'New' });

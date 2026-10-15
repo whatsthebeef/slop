@@ -4,6 +4,9 @@ import { GlobService, OTHER_BOARD } from '../src/app/glob-service.js';
 import type { CreateGlobInput } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
+import { groupSection } from '../src/app/context/handover-section.js';
+import { OTHER_BOARD_GLOB, awaitedOf, holdWords, refusalText, waitNote } from '../src/domain/relations.js';
+import { relation } from './fixtures.js';
 import type { Glob, Relation } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -217,5 +220,63 @@ describe('cross-board relations', () => {
     const holder = await make(b1, { type: 'sub', after: [target.id] });
     unwrap(await globs.delete(BOTH, target.id, (await current(target.id)).version));
     expect((await current(holder.id)).status).toBe('implementing');
+  });
+
+  describe('text and events never name a hidden other-board glob (R1-1)', () => {
+    it('the refusal a non-member gets on Start, the Waiting event and the RelationAdded event carry no id or state', async () => {
+      const target = await make(b2, { title: 'Secret target' });
+      const holder = await make(b1, { type: 'same', after: [target.id] });
+      const started = await globs.start(ONE, holder.id, holder.version);
+      expect(started.ok).toBe(false);
+      expect(message(started)).toContain(OTHER_BOARD_GLOB);
+      expect(message(started)).not.toContain(target.id);
+      expect(message(started)).not.toMatch(/Planning/);
+      const sub = await make(b1, { type: 'sub', after: [target.id] });
+      const events = store.state.events.filter((e) => (e.globId === holder.id || e.globId === sub.id) && (e.type === 'Waiting' || e.type === 'RelationAdded'));
+      expect(events.map((e) => e.type)).toContain('Waiting');
+      expect(events.map((e) => e.type)).toContain('RelationAdded');
+      expect(JSON.stringify(events)).not.toContain(target.id);
+      expect(JSON.stringify(events)).toContain(OTHER_BOARD_GLOB);
+      // The routine executor's startHolds text (the run's failure reason) is neutral too.
+      expect(refusalText(await globs.startHolds(holder.id))).not.toContain(target.id);
+    });
+
+    it('a same-board target still reads with its id', async () => {
+      const target = await make(b1);
+      const holder = await make(b1, { type: 'same', after: [target.id] });
+      const started = await globs.start(ONE, holder.id, holder.version);
+      expect(message(started)).toContain(target.id);
+    });
+
+    it('merge and sign-off gate words print the stub for an external target, the id otherwise', () => {
+      const r = relation('s1t1', 's2t1', { gate: 'merge', boardId: 1 });
+      expect(holdWords(r, true)).toBe(`can't merge until ${OTHER_BOARD_GLOB} is merged and rolled out`);
+      expect(holdWords(r)).toContain('s2t1');
+      const facts = { relations: [relation('s1t1', 's2t1', { boardId: 1 })], states: new Map([['s2t1', 'planning' as const]]), external: new Set(['s2t1']) };
+      const [awaited] = awaitedOf(facts);
+      expect(awaited).toMatchObject({ id: 's2t1', external: true });
+      expect(awaited?.why).toBe(`Waits for ${OTHER_BOARD_GLOB} to merge`);
+      expect(waitNote({ relation: facts.relations[0] as never, state: 'rollout', external: true })).not.toMatch(/rollout|s2t1/);
+    });
+
+    it('get_context group section leaves out a decision glob on another board (R1-2)', async () => {
+      const member = await make(b1, { group: 'launch' });
+      const decision = await make(b2, { title: 'Secret decision' });
+      const entry = store.state.globs.get(decision.id);
+      if (entry === undefined) throw new Error('missing');
+      store.state.globs.set(decision.id, { ...entry, glob: { ...entry.glob, category: 'decision', status: 'planning' } });
+      unwrap(await globs.addRelation(BOTH, member.id, null, { to: decision.id, gate: 'sign_off', until: 'decided', reason: 'needs the call' }));
+      const section = await store.transaction((tx) => groupSection(tx, { now: () => '2026-10-15T12:00:00.000Z' }, member));
+      expect(JSON.stringify(section)).not.toContain(decision.id);
+      expect(JSON.stringify(section)).not.toContain('Secret decision');
+    });
+
+    it('a release event for a deleted cross-board target names the stub', async () => {
+      const target = await make(b2);
+      const holder = await make(b1, { type: 'sub', after: [target.id] });
+      unwrap(await globs.delete(BOTH, target.id, (await current(target.id)).version));
+      const released = store.state.events.filter((e) => e.globId === holder.id && e.type === 'RelationReleased');
+      expect(JSON.stringify(released)).not.toContain(target.id);
+    });
   });
 });
