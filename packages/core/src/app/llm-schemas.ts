@@ -141,6 +141,9 @@ export const INTAKE_SCHEMA = named(
     autoTriggerQuote: nullable(str),
     files: array(str),
     prerequisites: array(object({ id: str, gate: oneOf('start', 'merge', 'sign_off'), sentence: str })),
+    questions: array(
+      object({ kind: oneOf('type', 'environment', 'scope', 'acceptance'), text: str, options: array(str), blocking: oneOf('start', 'none') }),
+    ),
   }),
 );
 

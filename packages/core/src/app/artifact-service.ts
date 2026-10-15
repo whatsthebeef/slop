@@ -5,8 +5,9 @@ import { ARTIFACT_ROLE } from '../domain/knowledge.js';
 import type { Artifact, ArtifactKind, IndependentReviewMeta, Provenance } from '../domain/knowledge.js';
 import { payloadOf } from '../domain/payload.js';
 import { testPlanSpecs } from '../domain/test-plan.js';
-import { recheckOverlapsEffect } from '../domain/events.js';
+import { planChangedQuestionEffect, recheckOverlapsEffect } from '../domain/events.js';
 import { humanSteps } from '../domain/human-steps.js';
+import { isOpenQuestion, planChangedQuestion, questionsOf } from '../domain/questions.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
@@ -303,6 +304,7 @@ export class ArtifactService {
         inbox,
         handover: await handoverOf(tx, this.deps.clock, glob),
         authority: AUTHORITY_STATEMENT,
+        questions: { open: questionsOf(glob).filter(isOpenQuestion), answered: questionsOf(glob).filter((q) => !isOpenQuestion(q)) },
         humanSteps: humanSteps(glob, {}, await tx.listHumanSteps(glob.boardId, [globId])),
         ...(hotspotView === null
           ? {}
@@ -379,6 +381,12 @@ export class ArtifactService {
       });
       // A plan that now names (or stops naming) an exclusive path changes which globs overlap.
       if (kind === 'plan') await tx.enqueueEffects([recheckOverlapsEffect(glob.boardId)]);
+      // A plan saved by a person while a run works on the glob (or after it, before the merge) asks whether the run's work still fits.
+      // A run's own save is the version it used, so it asks nothing.
+      if (kind === 'plan' && options.runId === null) {
+        const versions = await tx.artifactVersions(globId, 'plan', '');
+        if (planChangedQuestion(glob, versions, artifact.version) !== null) await tx.enqueueEffects([planChangedQuestionEffect(globId, artifact.version)]);
+      }
       return ok({ artifact, boardId: glob.boardId });
     });
     if (!result.ok) return result;

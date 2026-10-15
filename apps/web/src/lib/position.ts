@@ -1,7 +1,7 @@
 import { CHECKS_RUNNING_TEXT, DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '@slop/core';
 import type { HumanStepViewer, MachineStep, MachineStepKind, Move } from '@slop/core';
 import type { GlobView } from './api';
-import { checksInFlightWhileMerging, checksRunningTip, mergingChecksText } from './check-wording';
+import { checksInFlightWhileMerging, checksRunningTip, mergeQueueStatus, mergingChecksText } from './check-wording';
 
 /**
  * Where a glob is, in one indicator: who has the ball and what they are doing. The card's chip and the glob view's "Now" row
@@ -80,7 +80,7 @@ const leadStep = (steps: readonly MachineStep[], now: string): MachineStep | und
 
 const machineText = (glob: GlobView, step: MachineStep, now: string, base?: string): string => {
   // An armed merge is queued until the checks pass, but what the machine is doing is merging (the shared wording while they run).
-  if (step.kind === 'merge') return checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : DOING.merge;
+  if (step.kind === 'merge') return mergeQueueStatus(glob) ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : DOING.merge);
   if (step.state === 'queued') {
     const n = minutesSince(step.startedAt, now);
     return n === null || n < 1 ? 'starting' : `queued ${String(n)} min`;

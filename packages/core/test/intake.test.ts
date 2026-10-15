@@ -55,6 +55,7 @@ describe('intake', () => {
       autoTriggerReason: null,
       files: [],
       suggestedAfter: [],
+      questions: [],
       categoryConfidence: null,
       categoryReason: null,
       examples: [],
@@ -62,6 +63,58 @@ describe('intake', () => {
       model: null,
       promptVersion: INTAKE_PROMPT_VERSION,
       oversized: [],
+    });
+  });
+
+  describe('questions', () => {
+    const base = '"title":"T","plan":"P","type":"sub","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null,"files":[]';
+    const withQuestions = (qs: unknown) => `{${base},"questions":${JSON.stringify(qs)}}`;
+
+    it('the prompt version is 9 and the prompt asks for narrow questions', () => {
+      expect(INTAKE_PROMPT_VERSION).toBe(9);
+      expect(INTAKE_SYSTEM).toMatch(/- questions: usually an empty list/);
+      expect(INTAKE_SYSTEM).toMatch(/Never ask about style/);
+    });
+
+    it('validates the model questions: known kinds, start for type/environment/scope, a notice for acceptance, capped at three', async () => {
+      answer = withQuestions([
+        { kind: 'scope', text: 'Is prod in scope?', options: ['yes', 'no', 'no', ' '], blocking: 'start' },
+        { kind: 'acceptance', text: 'What counts as done?', options: [], blocking: 'start' },
+        { kind: 'acceptance', text: 'Second notice', options: [], blocking: 'none' },
+        { kind: 'bogus', text: 'dropped', options: [], blocking: 'start' },
+        { kind: 'type', text: '   ', options: [], blocking: 'start' },
+        { kind: 'environment', text: 'Over the cap', options: [], blocking: 'none' },
+      ]);
+      const { questions } = await propose('do the thing');
+      expect(questions).toEqual([
+        { key: 'intake:scope:1', text: 'Is prod in scope?', options: ['yes', 'no'], blocking: 'start', source: 'create', raisedBy: { kind: 'intake', actor: null } },
+        { key: 'intake:acceptance:2', text: 'What counts as done?', blocking: 'start', source: 'create', raisedBy: { kind: 'intake', actor: null } },
+        { key: 'intake:acceptance:3', text: 'Second notice', blocking: 'none', source: 'create', raisedBy: { kind: 'intake', actor: null } },
+      ]);
+    });
+
+    it('gives a type and environment question the hold unless the model says none, and a missing blocking a hold', async () => {
+      answer = withQuestions([
+        { kind: 'type', text: 'Sub or same?', options: ['sub', 'same'], blocking: 'none' },
+        { kind: 'environment', text: 'Which environment?', options: [], blocking: 'start' },
+      ]);
+      expect((await propose('x')).questions.map((q) => q.blocking)).toEqual(['none', 'start']);
+    });
+
+    it('drops a question about something the request set explicitly', async () => {
+      answer = withQuestions([
+        { kind: 'type', text: 'Sub or same?', options: [], blocking: 'start' },
+        { kind: 'environment', text: 'Which environment?', options: [], blocking: 'start' },
+        { kind: 'scope', text: 'How far?', options: [], blocking: 'start' },
+      ]);
+      expect((await propose('x', { type: 'same', environment: 'int' })).questions.map((q) => q.text)).toEqual(['How far?']);
+    });
+
+    it('ignores a malformed questions value and an answer with none', async () => {
+      answer = `{${base},"questions":"nope"}`;
+      expect((await propose('x')).questions).toEqual([]);
+      answer = `{${base}}`;
+      expect((await propose('x')).questions).toEqual([]);
     });
   });
 

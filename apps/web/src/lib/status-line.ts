@@ -6,6 +6,7 @@ import {
   machine,
   readyStatus,
   MERGE_CONFLICT_STALL_LABEL,
+  MERGE_QUEUE_TIP,
   stuckHint,
   UNTIL_WORDS,
   yourTurn,
@@ -15,7 +16,7 @@ import type { Action, Holding, HumanStepKind, HumanStepViewer, RelationSource, R
 import { rolloutLine } from './human-steps';
 import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
 import type { GlobView } from './api';
-import { checksInFlightWhileMerging, mergingChecksText } from './check-wording';
+import { checksInFlightWhileMerging, mergeQueueStatus, mergingChecksText } from './check-wording';
 import { actionPresentation, type ActionIcon } from './action-presentation';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
@@ -167,13 +168,19 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     const sha = glob.pr?.headSha ?? null;
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
     // Checks in flight read the shared merging wording ("merging when checks pass", or "merging from <base>" while catching up).
-    const full = checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging';
+    // In the host's merge queue it reads the queue wording instead.
+    const queued = mergeQueueStatus(glob);
+    const full = queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
+    const rollout = hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : '';
     candidates.push(
       make({
         kind: 'merging',
         full,
         tone: 'text-muted-foreground',
-        tip: `Merging ${short}: slop merges it once the checks pass, and stops and says why if they fail${hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : ''}`,
+        tip:
+          queued === null
+            ? `Merging ${short}: slop merges it once the checks pass, and stops and says why if they fail${rollout}`
+            : `Merging ${short}: in the merge queue. ${MERGE_QUEUE_TIP}${rollout}`,
       }),
     );
   }

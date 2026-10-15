@@ -4,6 +4,7 @@ import type {
   ChatTestCase,
   Action,
   MachineStep,
+  OpenQuestion,
   Move,
   AttachmentFile,
   AgentSetEntry,
@@ -130,6 +131,8 @@ export interface GlobView extends Glob {
   readonly holdsBack?: readonly HeldBack[];
   /** Open card suggestions from the automatic relation pass; absent when none or on an older API. */
   readonly suggestions?: readonly RelationSuggestion[];
+  /** Open and answered questions (the "the AI is unsure" marker); absent on an older API or when the glob has none (read with `?.`). */
+  readonly questions?: readonly OpenQuestion[];
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
   readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
   /** A fanned-out glob's workstreams in compact form, for the card's workstream states; absent for a small glob or an older API. */
@@ -507,6 +510,8 @@ export interface NewGlob {
   idempotencyKey?: string;
   /** Files intake guessed the work changes (sent back as given). */
   files?: string[];
+  /** Questions the intake proposal raised, sent back as given: they hold the new glob's start until a person answers. */
+  questions?: { text: string; options?: string[]; blocking?: 'start' | 'none'; key?: string }[];
   /** What the intake proposal behind the form said, sent back so the glob's snapshot records it. */
   intake?: {
     request: string;
@@ -566,6 +571,12 @@ export type AddRelationInput = {
   /** This glob supersedes that one (the label lands on it). */
   | { readonly supersedes: string }
 );
+
+/** An answer to an open question: a chosen option, free text, or both. */
+export interface AnswerQuestionInput {
+  readonly answer?: string;
+  readonly option?: string;
+}
 
 export type GlobChanges = Partial<Pick<Glob, 'title' | 'type' | 'category' | 'fix' | 'workKind' | 'group' | 'environment'>> & {
   /** A decision's scope or an action's assignee, the only attributes a person edits. */
@@ -1067,6 +1078,12 @@ export const api = {
     request<GlobView>('POST', `/api/globs/${id}/suggestions/${encodeURIComponent(suggestionId)}/dismiss`, {}),
   /** Adds a relation: `to` holds this glob back (needs its version), or `holdsBack` is held back by this one (a decision's "Holds back"). */
   addRelation: (id: string, relation: AddRelationInput) => request<GlobView>('POST', `/api/globs/${id}/relations`, relation),
+  /** Answers an open question (an option, free text, or both); writes the Clarifications attachment and releases what it held. */
+  answerQuestion: (id: string, questionId: string, input: AnswerQuestionInput) =>
+    request<GlobView>('POST', `/api/globs/${id}/questions/${encodeURIComponent(questionId)}/answer`, input),
+  /** Dismisses an open question: go ahead as is, with an optional note. */
+  dismissQuestion: (id: string, questionId: string, note?: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/questions/${encodeURIComponent(questionId)}/dismiss`, note === undefined || note === '' ? {} : { note }),
 };
 
 export const ACTION_PATHS: Record<Action, ActionPath | null> = {

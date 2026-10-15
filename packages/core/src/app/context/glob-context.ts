@@ -8,6 +8,7 @@ import type { Handover } from '../../domain/handover.js';
 import type { GroupContext } from '../../domain/group-view.js';
 import type { HumanStep } from '../../domain/human-steps.js';
 import type { SearchHit } from '../../domain/search.js';
+import type { OpenQuestion } from '../../domain/questions.js';
 import type { Glob, Mode, WorkActor, WorkKind } from '../../domain/types.js';
 import type { ArtifactListing } from './artifact-listing.js';
 import type { GlobHotspot } from './hotspot-section.js';
@@ -105,6 +106,11 @@ export interface GlobContext {
    * status, one line of plan) and the decisions still open, so a run needn't read their plans. Absent otherwise.
    */
   readonly group?: GroupContext;
+  /**
+   * The glob's questions: `open` ones still wait for a person (a `start` or `merge` one holds the glob: don't call
+   * `answer_question`, that is a person's call), `answered` ones (answered or dismissed) are also in the Clarifications attachment above.
+   */
+  readonly questions: { readonly open: readonly OpenQuestion[]; readonly answered: readonly OpenQuestion[] };
   /** Present when intake judged the glob: the oversized flag (advice only), its reasons and the proposed workstreams. */
   readonly size?: SizeContext;
   readonly fetch: string;

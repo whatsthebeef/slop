@@ -1,6 +1,6 @@
-import type { Relation, SlopType, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, StoredHumanStep } from '@slop/core';
-import { cleanFileName, inferenceReasonOf, invalidInput, isHumanCategory, machine, notFound, startIds, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, OUTCOME_REASON_MAX, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
+import type { Relation, SlopType, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, NewQuestion, StoredHumanStep } from '@slop/core';
+import { cleanFileName, inferenceReasonOf, invalidInput, isHumanCategory, machine, notFound, openQuestions, relationQuestion, startIds, startQuestions, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
+import { ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, MAX_QUESTION_ANSWER, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, OUTCOME_REASON_MAX, QUESTION_BLOCKING, QUESTION_SOURCES, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -152,7 +152,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Prerequisites: pass `needs`/`after` (globs this one waits for until they have merged and rolled out; a glob that merged but still has rollout steps due keeps holding it) with a `reason` (required for agents: one line, applied to every id), or `relations` for other gates. A sub with unmerged prerequisites waits in Planning with no run, whatever way it was created (with or without `type`); the reply says what it waits for (`waitingFor`), what was ignored (`ignoredAfter`: already merged and rolled out, deleted) and, when you are not an admin and left `type` unset, that it became a same (`typeNote`). `holds` (alias `follows_up`) and `supersedes` cover globs created because of another one. Returns its ID and branch once provisioned, with `after` (the stored start relations), `waitingFor`, `ignoredAfter`, `holds`, `supersedes` and `typeNote` where they apply. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. A create that is checked (no `mode`) may come back held in Planning with `questions` when slop is unsure of something material (the type, the environment, the scope): relay them to the person, who answers on the card or glob view; do not answer them yourself. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Prerequisites: pass `needs`/`after` (globs this one waits for until they have merged and rolled out; a glob that merged but still has rollout steps due keeps holding it) with a `reason` (required for agents: one line, applied to every id), or `relations` for other gates. A sub with unmerged prerequisites waits in Planning with no run, whatever way it was created (with or without `type`); the reply says what it waits for (`waitingFor`), what was ignored (`ignoredAfter`: already merged and rolled out, deleted) and, when you are not an admin and left `type` unset, that it became a same (`typeNote`). `holds` (alias `follows_up`) and `supersedes` cover globs created because of another one. Returns its ID and branch once provisioned, with `after` (the stored start relations), `waitingFor`, `ignoredAfter`, `holds`, `supersedes` and `typeNote` where they apply. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -295,6 +295,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       // Intake's guesses: files the work changes (they can hold it for the merge policy) and globs the request waits for (only reported).
       let files: readonly string[] = [];
       let suggestedAfter: readonly string[] = [];
+      // Questions intake raised instead of guessing: they hold a new glob's start until a person answers.
+      let intakeQuestions: readonly NewQuestion[] = [];
       // The write-up intake made from the request: plan.md v1 unless the caller gave a plan.
       let proposedPlan: string | null = null;
       // What intake saw and decided, for the glob's snapshot.
@@ -335,6 +337,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         };
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
+        // A glob the request says to wait for is suggested, never applied: leave a notice to add the relation or not.
+        const applied = new Set([...(input.needs ?? []), ...(input.after ?? [])]);
+        intakeQuestions = [
+          ...proposal.value.questions,
+          ...proposal.value.suggestedAfter
+            .filter((id) => !applied.has(id))
+            .map((id) => relationQuestion(id, 'The request says to wait for it, but it was not added as a relation. Answering only records your choice: add the relation from the glob view if it is one.', { kind: 'intake', actor: null })),
+        ];
       }
       // A titled create skips intake, so choose the group alone; a model that is down leaves it empty.
       if (input.title !== undefined && input.group === undefined) {
@@ -354,6 +364,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(input.inboxItem === undefined ? {} : { inboxItem: input.inboxItem }),
         ...relationFields,
         ...(files.length === 0 ? {} : { files }),
+        ...(intakeQuestions.length === 0 ? {} : { questions: intakeQuestions }),
       });
       if (!made.ok) return reply(made);
       const created = { ok: true as const, value: made.value.glob };
@@ -383,6 +394,13 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         environment: glob.environment,
         ...relationReply(made.value.notes, relations, waitingFor),
         ...(glob.waiting == null ? {} : { waiting: true }),
+        // Open questions intake raised: relay them to the person. A start-blocking one holds the glob in Planning (no run) until answered.
+        ...(openQuestions(glob).length === 0
+          ? {}
+          : {
+              questions: openQuestions(glob).map((q) => ({ id: q.id, text: q.text, ...(q.options === undefined ? {} : { options: q.options }), blocking: q.blocking })),
+            }),
+        ...(glob.status === 'planning' && startQuestions(glob).length > 0 ? { held: true } : {}),
         // Not applied: pass `after` to wait for them.
         ...(suggestedAfter.filter((id) => !startIds(relations).includes(id)).length === 0
           ? {}
@@ -457,7 +475,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_glob',
     {
       description:
-        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why, where `merged` means merged and rolled out; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, auto (added by slop from the text; dismissible), inferred or learned; older rows may say split; a relation to a glob on another board carries `external` (the board's name, or `hidden: true` and the id `another board` when you cannot view it); `supersededBy` and `supersedes` when set; `waitedOnByOtherBoards`: how many relations from boards you cannot see wait for it), `suggestions` (short list of open card suggestions: id, kind, text), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
+        "Everything about a glob (a decision glob carries `attributes`: scope, origin, channel, outcome, and for a KB learning its kind, target, evidence count, staleness and, when the pipeline closed it, closedAs; `links` says how it relates to other learnings (duplicate_of, suppressed_by, covered_by, possibly_covered_by, contradicts, kept_apart_from), kept apart from the glob's `relations`; its proposal is plan.md): status, version, fields, labels, PR, runs, flags, its `relations` (`holding`: what holds it back now, with the gate, what it waits for and why, where `merged` means merged and rolled out; `holdsBack`: the globs waiting for it; `done`: relations that no longer hold, met, dismissed, overridden or deleted; each with its source: person, agent, auto (added by slop from the text; dismissible), inferred or learned; older rows may say split; a relation to a glob on another board carries `external` (the board's name, or `hidden: true` and the id `another board` when you cannot view it); `supersededBy` and `supersedes` when set; `waitedOnByOtherBoards`: how many relations from boards you cannot see wait for it), `suggestions` (short list of open card suggestions: id, kind, text), its artifacts (the latest version of each plan, implementation record, local review and attachment, with version count, commitSha, createdAt and provenance; no content) and its latest deploys (environment, commit, state: waiting, running, succeeded, failed or replaced; error and log link). `questions` lists the glob's questions (open ones have no `answer` or `dismissed`; a `start` or `merge` one holds the glob until a person answers it: finish and report, don't answer it yourself). Routines pass their run ID, which records the run as making progress. When intake's size check flagged the glob, `oversized` is true and `sizeCheck` carries why, its evidence, `decision` (`split` once its scope was cut into independent globs) and the proposed workstreams (each with its name, goal, files, needs, a short `planSummary` and `planChars`; `get_context` has them in full). The flag is advice: it never holds the glob, which can start at once and works the workstreams inside its one run; a flagged sub is a same. `handover` is the hand-over brief (`why`: one sentence per cause, most actionable first; `next`: what to do first; `detail`: the extra lines) when the glob needs a person (a conflict, a failure, failed checks, a stalled run or open in-scope review findings), else null.",
       inputSchema: {
         id: z.string(),
         runId: z.string().optional(),
@@ -854,6 +872,79 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       ),
   );
 
+  server.registerTool(
+    'raise_question',
+    {
+      description:
+        "Raise an open question on a glob when you are unsure of something material and a wrong guess would be costly: scope, data loss, security or permissions, prod, cost, irreversible changes. It is raised in addition to recording the assumption, never instead. `blocking`: `merge` (default: a run finishes and opens its PR, but nothing merges, and merge-when-green waits, until a person answers or dismisses it), `start` (holds a glob that has not started in Planning; on a glob already running it is stored as a notice, `downgraded: true`), `none` (a notice only). A person answers on the card or the glob view; the answer is added to the Clarifications attachment, which `get_context` returns, together with `questions.answered`. Routines pass their run ID (a superseded run's call is ignored) and never wait for the answer. A `key` makes a repeat a no-op (the same question is returned).",
+      inputSchema: {
+        id: z.string(),
+        text: z.string().min(1).max(MAX_QUESTION_TEXT).describe('The question, in one or two sentences, with what you assumed meanwhile'),
+        options: z.array(z.string().min(1).max(MAX_QUESTION_OPTION)).max(MAX_QUESTION_OPTIONS).optional().describe('Short answers the person can pick'),
+        blocking: z.enum(QUESTION_BLOCKING).optional().describe('merge (default), start or none'),
+        key: z.string().min(1).max(120).optional().describe('A dedupe key: raising the same key again changes nothing'),
+        source: z.enum(QUESTION_SOURCES).optional().describe('Where it comes from (default: run with a run ID, else other)'),
+        runId: z.string().optional(),
+      },
+    },
+    async ({ id, text, options, blocking, key, source, runId }) => {
+      const raised = await globs.raiseQuestion(email, id, {
+        text,
+        ...(options === undefined ? {} : { options }),
+        ...(key === undefined ? {} : { key }),
+        blocking: blocking ?? 'merge',
+        source: source ?? (runId === undefined ? 'other' : 'run'),
+        raisedBy: runId === undefined ? { kind: 'agent', actor: email } : { kind: 'routine', actor: email, runId },
+        ...(runId === undefined ? {} : { runId }),
+      });
+      if (raised.ok) await deps.outbox.drain(id);
+      return reply(raised, (r) =>
+        r.ignored !== null
+          ? { ignored: true, reason: r.ignored }
+          : {
+              id: r.glob.id,
+              version: r.glob.version,
+              question: r.question === null ? null : { id: r.question.id, text: r.question.text, blocking: r.question.blocking, ...(r.question.options === undefined ? {} : { options: r.question.options }) },
+              ...(r.downgraded ? { downgraded: true, note: 'The glob has started, so a start question is a notice' } : {}),
+            },
+      );
+    },
+  );
+
+  server.registerTool(
+    'answer_question',
+    {
+      description:
+        "Answer an open question on a glob with what the person said: free text, an option, or both. The question and answer are added to the glob's Clarifications attachment (a new version) and whatever the question held is released: a held glob starts (a sub gets its run), a held merge resumes. Routines must never call this: a run answering its own question would clear a hold meant for a person (a call that passes one of the glob's run IDs is refused with `forbidden`). Only relay an answer a person gave you.",
+      inputSchema: {
+        id: z.string(),
+        questionId: z.string().min(1),
+        answer: z.string().max(MAX_QUESTION_ANSWER).describe("The person's answer (may be empty when `option` is given)"),
+        option: z.string().min(1).optional().describe("One of the question's options"),
+        runId: z.string().optional(),
+      },
+    },
+    async ({ id, questionId, answer, option, runId }) => {
+      const answered = await globs.answerQuestion(email, id, questionId, { answer, option: option ?? null, runId: runId ?? null });
+      if (answered.ok) await deps.outbox.drain(id);
+      return reply(answered, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'dismiss_question',
+    {
+      description:
+        'Dismiss an open question on a glob: go ahead as it is. The hold clears and the dismissal (with the optional note) is added to the Clarifications attachment. Routines must never call this (a call that passes one of the glob\'s run IDs is refused with `forbidden`); only relay a dismissal a person gave you.',
+      inputSchema: { id: z.string(), questionId: z.string().min(1), note: z.string().max(MAX_QUESTION_NOTE).optional(), runId: z.string().optional() },
+    },
+    async ({ id, questionId, note, runId }) => {
+      const dismissed = await globs.dismissQuestion(email, id, questionId, { note: note ?? null, runId: runId ?? null });
+      if (dismissed.ok) await deps.outbox.drain(id);
+      return reply(dismissed, (g) => globView(g));
+    },
+  );
+
   // ---------------------------------------------------------------------------
   // Knowledge and context (slice 3)
 
@@ -1045,7 +1136,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_context',
     {
       description:
-        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md, the test plan (`testPlan`: version, full text, the parsed `atfSpecs` block and any `validation` note; null before one is saved) and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized` (advice, not a hold), its reasons and evidence, `decision` (`split` when its scope was cut) and the proposed workstreams (name, goal, files, plan share and `needs` as earlier workstream indexes: parallel work inside this glob's one run and PR). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. `hotspots` lists the board's conflict hotspots among the files the glob plans to change (its investigation's or plan.md's paths) or conflicted on: path, conflicts, globs, real conflicts, last conflict time and the window in days; empty when none. `group` (only when the glob's group has other open or merged-in-the-last-14-days globs, or open decisions): the group's name and progress, the other globs (ID, title, status, one line of plan; `more` counts those beyond 12) and the open decisions (those holding a glob of the group, and the group's own) with the group's globs each holds back, so you know what the neighbours do without reading their plans; `get_group` has the full view. `handover` is the hand-over brief (why a person is needed, what to do first), null when nothing is wrong. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
+        "The glob's context bundle: its fields (`attributes` on a decision glob), `payload` (the same text as plan.md), `scopedDecisions` (accepted decisions that govern this glob: its scope, statement and outcome), plan.md, the test plan (`testPlan`: version, full text, the parsed `atfSpecs` block and any `validation` note; null before one is saved) and the implementation record in full, Clarifications and Assumptions attachments in full, a listing of the other artifacts (kind, label, version, commitSha, size, description), the board's repo and base branch, `inbox` (pasted meeting notes, threads and documents a person attached to this glob, with their summary and text cut at 12000 characters; `truncated` says it was cut: search_text finds the rest), `decisions` (the choices taken on this glob, current first, each with its source link; a replaced one says what replaced it and when; the field keeps its old name), `authority` (which source wins when they disagree: merged code and the implementation record, then current choices newest first, then plan.md, then older discussion; replaced choices are history), and `related`: up to 5 cited search results for the glob's title and plan (what the board already knows, current choices first, replaced ones labelled; the glob's own items left out). `size` (when intake's size check judged the glob): `oversized` (advice, not a hold), its reasons and evidence, `decision` (`split` when its scope was cut) and the proposed workstreams (name, goal, files, plan share and `needs` as earlier workstream indexes: parallel work inside this glob's one run and PR). `size.forecast` (when made) is the predicted footprint: expected files and modules, a lines range, parts with their file sets, risk areas, confidence, the reference class of similar past globs and the calibration applied; it is a prediction to confirm or correct while investigating, not a fact. `hotspots` lists the board's conflict hotspots among the files the glob plans to change (its investigation's or plan.md's paths) or conflicted on: path, conflicts, globs, real conflicts, last conflict time and the window in days; empty when none. `group` (only when the glob's group has other open or merged-in-the-last-14-days globs, or open decisions): the group's name and progress, the other globs (ID, title, status, one line of plan; `more` counts those beyond 12) and the open decisions (those holding a glob of the group, and the group's own) with the group's globs each holds back, so you know what the neighbours do without reading their plans; `get_group` has the full view. `questions`: `{open, answered}`, the glob's questions (answered ones, and dismissed ones, are also in the Clarifications attachment). `handover` is the hand-over brief (why a person is needed, what to do first), null when nothing is wrong. Pass `include` to get more in full: 'local_review', 'attachment:<label>', or 'all'.",
       inputSchema: { id: z.string(), runId: z.string().optional(), include: z.array(z.string()).optional() },
     },
     async ({ id, runId, include }) => {

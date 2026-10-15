@@ -313,6 +313,7 @@ describe('create_glob relations over MCP (Postgres)', () => {
         files: [],
         suggestedAfter: [],
         prerequisites,
+        questions: [],
         categoryConfidence: 'high',
         categoryReason: null,
         examples: [],

@@ -22,6 +22,7 @@ export * from './domain/merge-policy.js';
 export * from './domain/exclusive-paths.js';
 export * from './domain/relations.js';
 export * from './domain/relation-scan.js';
+export * from './domain/questions.js';
 export * from './domain/agent-set.js';
 export * from './domain/kb.js';
 export * from './domain/kb-glob.js';

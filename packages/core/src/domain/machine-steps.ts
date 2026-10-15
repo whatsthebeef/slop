@@ -1,5 +1,6 @@
 import type { Deploy } from './deploys.js';
 import { isMergeHeld } from './relations.js';
+import { mergeQueueText } from './whose-move.js';
 import type { Board, Glob, Run } from './types.js';
 
 /**
@@ -195,12 +196,13 @@ export const machineSteps = (glob: Glob, facts: MachineFacts = {}): MachineStep[
     // Held for a `merge` relation, the merge waits for another glob, not for slop.
     steps.push(step('merge', 'queued', { id: 'machine:merge:armed', detail: 'merge when checks pass', holdsBall: checksPassed && !mergeHeld }));
   } else if (glob.mergeMode === 'continue' || glob.status === 'merging') {
-    steps.push(step('merge', 'running', { id: 'machine:merge:running' }));
+    // In the host's merge queue: GitHub holds it and its own events (or the reconcile sweep) report back, so no `startedAt`.
+    steps.push(step('merge', 'running', { id: 'machine:merge:running', ...(glob.mergeQueue != null && { detail: mergeQueueText(glob.mergeQueue.position, glob.mergeQueue.state) }) }));
   }
 
   // A merge held for a `merge` relation (armed, or a sub whose gate passed) is waiting, not stuck: the release resumes it.
   if (mergeHeld && glob.mergeHold != null) {
-    steps.push(step('merge_held', 'running', { startedAt: glob.mergeHold.since, detail: glob.mergeHold.for.join(', ') }));
+    steps.push(step('merge_held', 'running', { startedAt: glob.mergeHold.since, detail: [...glob.mergeHold.for, ...(glob.mergeHold.questions ?? [])].join(', ') }));
   }
 
   for (const d of facts.deploys ?? []) {

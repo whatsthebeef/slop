@@ -163,7 +163,8 @@ export const waitNote = ({ relation, state, external }: Unmet): string => {
 // What a glob still waits for before it starts: the start gate's wording, for refusals and the pick-up warning
 
 /** The states a view shows for a held start relation. */
-export type AwaitedState = 'open' | 'planning' | 'rollout';
+/** `question`: not a relation but an open start question (see `questions.ts`). */
+export type AwaitedState = 'open' | 'planning' | 'rollout' | 'question';
 
 export interface AwaitedDependency {
   readonly id: string;

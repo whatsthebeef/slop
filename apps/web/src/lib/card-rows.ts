@@ -6,6 +6,7 @@ import { cardTargets } from './card-targets';
 import { clickTip, positionClick, sentence, statusClick, tipLines, yourTurnClick } from './chip-actions';
 import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
+import { heldByQuestion, holdingQuestionsOf, questionChipTip, WAITING_FOR_ANSWER } from './questions';
 import type { Position } from './position';
 import { blockedParts, holdLine, relationTips, statusLine, workstreamLine } from './status-line';
 import type { StatusLine } from './status-line';
@@ -139,6 +140,15 @@ const decidedStatus = (glob: GlobView, decision: DecisionAttributes): CornerStat
   return { kind: 'decided', icon: 'check', text, label: text, tip, tone, click: { kind: 'section', target: cardTargets.decision() } };
 };
 
+/** "Waiting for an answer": the hold a person clears in the Questions section. */
+const questionHold = (
+  glob: GlobView,
+  make: (kind: string, icon: StatusIcon, text: string, tone: string, click: ChipClick | null, lead: string[]) => CornerStatus,
+): CornerStatus =>
+  make('hold', 'human', WAITING_FOR_ANSWER, 'text-required', { kind: 'section', target: cardTargets.questions() }, [
+    `${WAITING_FOR_ANSWER}. ${questionChipTip(glob) ?? ''}`.trim(),
+  ]);
+
 /**
  * The card's one status (and the glob view header's text), or null when there is nothing to say. Highest priority wins the
  * words, the rest go in the tooltip: a stall, an escalation in Planning, your turn, a problem, the machine running, the
@@ -226,6 +236,9 @@ export const cornerStatus = (
       PROVISIONING_TIP,
     ]);
   }
+  // A start question holds the glob in Planning: that is the reason it waits, ahead of any relation hold. Built from the glob's
+  // questions (the single glob read has no `move`, and `holding` lists relations only).
+  if (heldByQuestion(glob)) return questionHold(glob, make);
   if (status !== null && status.kind === 'ready') {
     // Merge and Done (an `act` click) are run by the corner itself unless something blocks; any other step opens the glob view.
     const turn = yourTurnClick(status, glob);
@@ -263,6 +276,8 @@ export const cornerStatus = (
     const isStandby = position.label.toLowerCase() === 'standby';
     return make(isStandby ? 'standby' : 'machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
+  // A merge question lets the run finish; the merge waits for the answer.
+  if (holdingQuestionsOf(glob).length > 0) return questionHold(glob, make);
   if (held !== null) {
     return make('hold', held.icon, held.text, 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [held.tip, ...learnedReasons(glob)]);
   }
@@ -298,7 +313,7 @@ export const hasBlocker = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (glob.status === 'planning' && position?.holder === 'waiting') return true;
   if (conflictOf(glob) != null) return true;
   if (position?.holder === 'stalled') return true;
-  if (isEscalated(glob) || status?.turn === 'decide') return true;
+  if (isEscalated(glob) || heldByQuestion(glob) || status?.turn === 'decide') return true;
   return status !== null && ['provisioning', 'base-red', 'checks', 'stuck'].includes(status.kind);
 };
 
