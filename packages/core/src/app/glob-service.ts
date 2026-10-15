@@ -45,6 +45,8 @@ import { findHolds } from './hold-service.js';
 import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
+import { inferenceReasonOf } from './intake-service.js';
+import type { WorkInference } from './intake-service.js';
 import { checkFrom } from './size-check-service.js';
 import { hash } from './text-hash.js';
 import type { SizeAssessor } from './size-check-service.js';
@@ -2304,6 +2306,37 @@ export class GlobService {
       if (result.ok && result.value.version !== glob.version) changed.push(glob.id);
     }
     return changed;
+  }
+
+  /**
+   * Infers the glob's fix flag and work kind again after its plan changed. `infer` is the model-with-rules judgement
+   * (`IntakeService.inferWork`; any function that never throws for the model being down). It is silent: no notification, only
+   * the recorded field change, and the reason is refreshed. A value a person set (source `person`) is never overwritten, and a
+   * plan saved while the model answered wins (the answer is dropped). Only code globs that can still carry the flag are
+   * touched: a fix is never a super, so a super's answer says "not a fix" and stays so.
+   */
+  async reinferWork(id: string, infer: (input: { readonly title: string; readonly plan: string }) => Promise<WorkInference>): Promise<void> {
+    const before = await this.peek(id);
+    if (before === null || !isCodeGlob(before)) return;
+    const plan = await this.deps.store.transaction(async (tx) => (await tx.artifactVersions(id, 'plan', '')).at(-1)?.content ?? '');
+    // Skip the model when a person already decided both: nothing could change.
+    if (before.fixSource === 'person' && before.workKindSource === 'person') return;
+    const found = await infer({ title: before.title, plan });
+    const planHash = hash(plan);
+    const fix = before.type === 'super' ? false : found.fix;
+    await this.command(
+      null,
+      id,
+      null,
+      (g, ctx) => machine.workReinferred(g, { fix, workKind: found.workKind, reason: inferenceReasonOf(found) }, ctx),
+      {
+        applies: 'any',
+        prepare: async (tx) => {
+          const latest = hash((await tx.artifactVersions(id, 'plan', '')).at(-1)?.content ?? '');
+          return latest === planHash ? ok(null) : invalidInput('The plan changed while it was being read');
+        },
+      },
+    );
   }
 
   /**

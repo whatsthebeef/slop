@@ -1654,6 +1654,39 @@ export interface FieldChanges {
   readonly attributes?: unknown;
 }
 
+/**
+ * Re-inference after the plan changed: a system step that refreshes the inferred fix flag, work kind and the reason. A value a
+ * person set (source `person`) is never touched, a fix is never a super, and nothing but those fields moves, so there is no
+ * notification beyond the recorded `FieldsChanged`. Sources stay `inferred`.
+ */
+export const workReinferred = (
+  glob: Glob,
+  found: { readonly fix: boolean; readonly workKind: WorkKind; readonly reason: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  if (isHumanCategory(glob.category)) return unchanged(glob);
+  const fixSticks = (glob.fixSource ?? 'inferred') === 'person';
+  const kindSticks = (glob.workKindSource ?? 'inferred') === 'person';
+  const fix = fixSticks ? fixOf(glob) : found.fix && isValidCombination(glob.type, glob.category, true);
+  const workKind = kindSticks ? workKindOf(glob) : found.workKind;
+  const diff: { [key: string]: JsonValue } = {};
+  const patch: { -readonly [K in keyof Glob]?: Glob[K] } = {};
+  if (fix !== fixOf(glob)) {
+    diff['fix'] = { from: fixOf(glob), to: fix };
+    patch.fix = fix;
+  }
+  if (workKind !== workKindOf(glob)) {
+    diff['workKind'] = { from: workKindOf(glob), to: workKind };
+    patch.workKind = workKind;
+  }
+  if (!(fixSticks && kindSticks) && found.reason !== (glob.inferenceReason ?? null)) {
+    diff['inferenceReason'] = { from: glob.inferenceReason ?? null, to: found.reason };
+    patch.inferenceReason = found.reason;
+  }
+  if (Object.keys(diff).length === 0) return unchanged(glob);
+  return new Builder(glob, ctx).set(patch).event('FieldsChanged', diff).done();
+};
+
 /** Changing fields is not a transition, except same → sub from planning (row 26). */
 export const changeFields = (
   glob: Glob,
@@ -2751,7 +2784,7 @@ const needsPairing = (glob: Glob): boolean =>
   glob.status === 'failed' &&
   glob.failure?.kind === 'needs_pairing' &&
   glob.type !== 'super' &&
-  glob.category !== 'bug';
+  !fixOf(glob);
 
 /**
  * Make it a super: a person takes over a glob whose routine asked for pairing. The type becomes super with the person

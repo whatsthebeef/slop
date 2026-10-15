@@ -4,7 +4,7 @@ import { markdownHeadings } from './sections.js';
 import { gateVerdictOf, namesGlob } from './sub-limit.js';
 import { inheritedFromBase } from './signals.js';
 import { SLOP_TYPES, WORK_CATEGORIES } from './types.js';
-import type { Category, SlopType } from './types.js';
+import type { Category, SlopType, WorkKind } from './types.js';
 
 /**
  * Learned task categorisation (spec, Intake): every glob keeps a frozen snapshot of what intake saw and decided when it was
@@ -13,7 +13,7 @@ import type { Category, SlopType } from './types.js';
  */
 
 /** Bumped whenever the intake prompt changes, so accuracy can be read per prompt. v1 is the prompt before examples, v2 the prompt with them, v3 the broader sub definition, v4 optimistic: a sub unless a risk area or the board's learned sub size says otherwise, v7 big settled work stays one glob (the agents split it into workstreams in the run). */
-export const INTAKE_PROMPT_VERSION = 7;
+export const INTAKE_PROMPT_VERSION = 8;
 
 /** Intake's own confidence in the category it chose. */
 export const CONFIDENCES = ['high', 'medium', 'low'] as const;
@@ -162,6 +162,9 @@ export const extractPlanFeatures = (plan: string): PlanFeatures => {
 export interface IntakeDecisions {
   readonly type: SlopType;
   readonly category: Category;
+  /** The fix flag and work kind at creation. Absent in snapshots from before they existed: read the category then (bug is a fix, feature is R&D). */
+  readonly fix?: boolean;
+  readonly workKind?: WorkKind;
   readonly group: string | null;
   readonly environment: string | null;
   /** Null when intake didn't run (a glob created with a title) or the model gave none. */

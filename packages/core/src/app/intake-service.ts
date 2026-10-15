@@ -2,8 +2,8 @@ import { invalidInput, llmUnavailable, ok } from '../domain/errors.js';
 import { globIdInText } from '../domain/ids.js';
 import type { Result } from '../domain/errors.js';
 import { isValidCombination } from '../domain/matrix.js';
-import { SLOP_TYPES, WORK_CATEGORIES } from '../domain/types.js';
-import type { Environment, SlopType, WorkCategory } from '../domain/types.js';
+import { SLOP_TYPES, WORK_CATEGORIES, WORK_KINDS } from '../domain/types.js';
+import type { Environment, InferenceSource, SlopType, WorkCategory, WorkKind } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import { CONFIDENCES, INTAKE_PROMPT_VERSION, examplesBlock, needsConfirmation } from '../domain/intake-learning.js';
 import type { Confidence, IntakeExample } from '../domain/intake-learning.js';
@@ -79,7 +79,10 @@ export interface IntakeInput {
   readonly explicit: Partial<{
     title: string;
     type: SlopType;
+    /** Old alias, kept for one release: bug is a fix, feature is R&D, task is maintenance. `fix` and `workKind` win over it. */
     category: WorkCategory;
+    fix: boolean;
+    workKind: WorkKind;
     group: string;
     environment: string;
   }>;
@@ -92,7 +95,18 @@ export interface IntakeProposal {
   readonly type: SlopType;
   /** The model's one-line reason for the type (when a person is needed); null when none or the type was explicit. */
   readonly typeReason: string | null;
+  /** Derived for the stored category (fix: bug; else R&D: feature, maintenance: task); nobody picks it. */
   readonly category: WorkCategory;
+  /** Whether the work repairs something broken or regressed (the bug behaviours). */
+  readonly fix: boolean;
+  /** `person` when the request set `fix` explicitly (an alias category counts), else `inferred`. */
+  readonly fixSource: InferenceSource;
+  /** The one-line reason for `fix`; null when explicit or none was given. */
+  readonly fixReason: string | null;
+  /** Whether time on it counts as R&D or maintenance in the time report. */
+  readonly workKind: WorkKind;
+  readonly workKindSource: InferenceSource;
+  readonly workKindReason: string | null;
   readonly group: string | null;
   /** An environment the request names (one that allows branch deploys); null when it names none. */
   readonly environment: string | null;
@@ -118,6 +132,57 @@ export interface IntakeProposal {
   readonly oversized: readonly string[];
 }
 
+/** What inference decided about a glob's fix flag and work kind, with a reason each. */
+export interface WorkInference {
+  readonly fix: boolean;
+  readonly fixReason: string | null;
+  readonly workKind: WorkKind;
+  readonly workKindReason: string | null;
+}
+
+/** The stored category that stands for a fix flag and work kind (for the one release that `category` is still stored). */
+export const categoryFor = (fix: boolean, workKind: WorkKind): WorkCategory => (fix ? 'bug' : workKind === 'rnd' ? 'feature' : 'task');
+
+/** The two reasons as the one line stored on the glob (`inferenceReason`); null when there is none. */
+export const inferenceReasonOf = (p: Pick<WorkInference, 'fixReason' | 'workKindReason'>): string | null => {
+  const parts = [p.fixReason, p.workKindReason].filter((r): r is string => r !== null && r.trim() !== '');
+  return parts.length === 0 ? null : [...new Set(parts)].join(' ').slice(0, 500);
+};
+
+const FIX_WORDS = /\b(fails?|failing|failed|failures?|broken|breaks?|errors?|regress(?:ion|ed|es)?|crash(?:es|ed|ing)?|bugs?|exceptions?|not working|doesn'?t work|stopped working|stops? working)\b/i;
+const NEW_WORDS = /\b(add|adds|new|introduce|build|implement|support|create|prototype|experiment|explore|feature)\b/i;
+
+/**
+ * The fallback when the model gives no usable answer: words in the request. A repair vocabulary ("fails", "broken", "error",
+ * "regression", "crash") makes it a fix and maintenance; otherwise new-capability words make it R&D and anything else is maintenance.
+ * Crude on purpose: it only ever fills a gap, and a person's override always wins.
+ */
+export const inferWorkByRules = (request: string): WorkInference => {
+  const fix = FIX_WORDS.exec(request);
+  if (fix !== null) {
+    const word = `"${fix[0].toLowerCase()}"`;
+    return { fix: true, fixReason: `The request mentions ${word}`, workKind: 'maintenance', workKindReason: 'A fix is maintenance' };
+  }
+  const added = NEW_WORDS.exec(request);
+  return added === null
+    ? { fix: false, fixReason: null, workKind: 'maintenance', workKindReason: 'No new capability named' }
+    : { fix: false, fixReason: null, workKind: 'rnd', workKindReason: `The request says "${added[0].toLowerCase()}"` };
+};
+
+/** The old category's meaning as a fix flag and work kind (a model that still answers the old shape, an alias from a caller). */
+const fromCategory = (category: WorkCategory): { fix: boolean; workKind: WorkKind } => ({
+  fix: category === 'bug',
+  workKind: category === 'feature' ? 'rnd' : 'maintenance',
+});
+
+const WORK_SYSTEM = `You judge one unit of software work on a planning board.
+
+Respond with one JSON object and nothing else: {"fix": boolean, "fixReason": string, "workKind": "rnd" | "maintenance", "workKindReason": string}
+
+- fix: true when the work repairs something broken or regressed (it fails, errors, crashes, behaves wrongly); false for new capability or any other change.
+- workKind: "rnd" for new capability or exploration; "maintenance" for repairs, upkeep and chores. A fix is maintenance.
+- fixReason and workKindReason: one short sentence each.`;
+
 /** What the board has learned, for the prompt: its risk areas (path patterns and why) and its sub size. */
 export const boardContextBlock = (areas: readonly RiskArea[], subMaxChangedLines: number): string =>
   [
@@ -131,7 +196,7 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "category": "feature" | "task" | "bug", "group": string | null, "categoryConfidence": "high" | "medium" | "low", "categoryReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
+{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[]}
 
 - title: a short imperative title, at most 70 characters.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
@@ -142,8 +207,9 @@ Respond with one JSON object and nothing else:
   - Size is separate: big settled work stays one glob, sized for one review; the agents divide it into workstreams in the run, so do not split it or choose "super" for it. A "super" is for unsettled work that needs a person to pair on it.
   - When unsure, choose "sub" rather than "same". Choose "super" only on real evidence of an open decision.
 - typeReason: one short sentence saying when a person is needed (or that none is), e.g. "Settled plan, no open questions" or "The plan leaves the storage design open".
-- category: "feature" for new capability, "bug" for something broken, "task" for other maintenance.
-- categoryConfidence: how sure you are of the category: "low" when the request could reasonably be a different category. categoryReason: one short sentence saying why.
+- fix: true when the work repairs something broken or regressed (it fails, errors, crashes, behaves wrongly); false for new capability or any other change. fixReason: one short sentence saying why.
+- workKind: "rnd" for new capability or exploration; "maintenance" for repairs, upkeep and chores. A fix is maintenance. workKindReason: one short sentence saying why.
+- confidence: how sure you are of fix and workKind: "low" when the request could reasonably be judged differently.
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
 - files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths. List every one you expect: the board's risk-area path patterns are matched against them.
@@ -312,6 +378,39 @@ export class IntakeService {
     return ok(groups.value.find((g) => normalise(g) === normalise(proposed)) ?? proposed.trim().slice(0, 60));
   }
 
+  /**
+   * The fix flag and work kind of a glob already created, for re-inference when its plan changes (`GlobService.reinferWork`).
+   * Never fails and never throws for the model being down: no usable answer (unavailable, unparseable, partial) falls back to
+   * the request's words, field by field.
+   */
+  async inferWork(boardId: number, input: { readonly title: string; readonly plan: string }): Promise<WorkInference> {
+    const request = `${input.title.trim()}\n${input.plan.trim()}`.trim();
+    const rules = inferWorkByRules(request);
+    let completion: string;
+    try {
+      completion = await this.deps.llm.complete({
+        system: WORK_SYSTEM,
+        prompt: `Title: ${input.title.trim()}\n\nPlan:\n${input.plan.trim().slice(0, 6000)}`,
+        maxTokens: 300,
+        spend: { boardId, source: 'intake' },
+      });
+    } catch (error) {
+      if (error instanceof LlmUnavailable) return rules;
+      throw error;
+    }
+    const answer = parseJson(completion);
+    const modelFix = field(answer, 'fix');
+    const modelKind = oneOf(WORK_KINDS, field(answer, 'workKind'));
+    const fix = typeof modelFix === 'boolean' ? modelFix : rules.fix;
+    const reason = (key: string): string | null => text(field(answer, key))?.trim().slice(0, 300) || null;
+    return {
+      fix,
+      fixReason: typeof modelFix === 'boolean' ? reason('fixReason') : rules.fixReason,
+      workKind: modelKind ?? (fix ? 'maintenance' : rules.workKind),
+      workKindReason: modelKind === null ? rules.workKindReason : reason('workKindReason'),
+    };
+  }
+
   /** The nearest past snapshots; none when there is no embedder, it fails, or the board has none. Never fails intake. */
   private async examplesFor(boardId: number, text: string): Promise<IntakeExample[]> {
     const embedding = await embedRequest(this.deps.embedder, text);
@@ -336,17 +435,40 @@ export class IntakeService {
     const title = (input.explicit.title ?? text(field(answer, 'title')) ?? '').trim() || request.split('\n')[0]?.slice(0, 70) || 'Untitled';
     const plan = text(field(answer, 'plan')) ?? request;
 
-    let category = input.explicit.category ?? oneOf(WORK_CATEGORIES, field(answer, 'category')) ?? 'task';
+    // The old `category` is still understood, from a caller (an alias) and from a model that answers the old shape.
+    const aliased = input.explicit.category === undefined ? null : fromCategory(input.explicit.category);
+    const modelCategory = oneOf(WORK_CATEGORIES, field(answer, 'category'));
+    const modelOld = modelCategory === null ? null : fromCategory(modelCategory);
+    const rules = inferWorkByRules(request);
+    const modelFix = field(answer, 'fix');
+    const modelKind = oneOf(WORK_KINDS, field(answer, 'workKind'));
+    const reasonOf = (key: string): string | null => text(field(answer, key))?.trim().slice(0, 300) || null;
+    const oldReason = reasonOf('categoryReason');
+
+    const explicitFix = input.explicit.fix ?? aliased?.fix;
+    const explicitKind = input.explicit.workKind ?? aliased?.workKind;
+    let fix = explicitFix ?? (typeof modelFix === 'boolean' ? modelFix : (modelOld?.fix ?? rules.fix));
+    let workKind = explicitKind ?? modelKind ?? modelOld?.workKind ?? (fix ? 'maintenance' : rules.workKind);
+    let fixSource: InferenceSource = explicitFix === undefined ? 'inferred' : 'person';
+    let fixReason = explicitFix !== undefined ? null : typeof modelFix === 'boolean' || modelOld !== null ? (reasonOf('fixReason') ?? oldReason) : rules.fixReason;
+    const workKindSource: InferenceSource = explicitKind === undefined ? 'inferred' : 'person';
+    const workKindReason =
+      explicitKind !== undefined ? null : modelKind !== null || modelOld !== null ? (reasonOf('workKindReason') ?? oldReason) : rules.workKindReason;
+
     // Optimistic: an unclear type is a sub.
     let type = input.explicit.type ?? oneOf(SLOP_TYPES, field(answer, 'type')) ?? 'sub';
-    if (!isValidCombination(type, category)) {
-      // Keep whatever the person set explicitly and repair the other field.
-      if (input.explicit.type !== undefined && input.explicit.category === undefined) {
-        category = 'feature';
+    if (!isValidCombination(type, 'task', fix)) {
+      // A fix is never a super. Keep whatever the person set explicitly and repair the other field.
+      if (input.explicit.type !== undefined && explicitFix === undefined) {
+        fix = false;
+        fixSource = 'inferred';
+        fixReason = null;
+        if (explicitKind === undefined) workKind = 'rnd';
       } else {
-        type = isValidCombination('sub', category) ? 'sub' : 'same';
+        type = 'sub';
       }
     }
+    const category = categoryFor(fix, workKind);
 
     const proposedGroup = input.explicit.group ?? text(field(answer, 'group'));
     const group =
@@ -362,10 +484,9 @@ export class IntakeService {
       normalise(request).includes(normalise(quote));
     const autoTrigger = type === 'same' && explicitInstruction;
 
-    const explicitCategory = input.explicit.category !== undefined;
-    const confidence = explicitCategory ? 'high' : (oneOf(CONFIDENCES, field(answer, 'categoryConfidence')));
+    const explicitCategory = explicitFix !== undefined && explicitKind !== undefined;
+    const confidence = explicitCategory ? 'high' : (oneOf(CONFIDENCES, field(answer, 'confidence')) ?? oneOf(CONFIDENCES, field(answer, 'categoryConfidence')));
     const typeReason = input.explicit.type !== undefined ? null : (text(field(answer, 'typeReason'))?.trim().slice(0, 300) || null);
-    const reason = explicitCategory ? null : text(field(answer, 'categoryReason'))?.trim().slice(0, 300) || null;
 
     return {
       title: title.slice(0, 120),
@@ -373,6 +494,12 @@ export class IntakeService {
       type,
       typeReason,
       category,
+      fix,
+      fixSource,
+      fixReason,
+      workKind,
+      workKindSource,
+      workKindReason,
       group,
       environment: input.explicit.environment ?? environmentNamedIn(request, environments),
       autoTrigger,
@@ -380,7 +507,7 @@ export class IntakeService {
       files: pathList(field(answer, 'files')),
       suggestedAfter: waitedForIn(request, open),
       categoryConfidence: confidence,
-      categoryReason: reason,
+      categoryReason: explicitCategory ? null : (fixReason ?? workKindReason),
       examples,
       needsConfirmation: !explicitCategory && needsConfirmation(confidence, examples),
       model: this.deps.model ?? null,

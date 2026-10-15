@@ -13,7 +13,7 @@ import {
   subLimitMove,
 } from '../domain/sub-limit.js';
 import type { SubLimitCandidate, SubLimitOutcome, SubLimitView } from '../domain/sub-limit.js';
-import type { Board } from '../domain/types.js';
+import { fixOf, type Board } from '../domain/types.js';
 import type { Notifier, Store, SubDiffSource } from '../ports.js';
 import { sizeIgnoredPathsOf } from '../domain/sub-gate.js';
 import { memberOf } from './access.js';
@@ -151,7 +151,7 @@ export class SubLimitService {
       const since = new Date(Date.parse(mergedSince) - GATE_LOOKBACK_DAYS * DAY_MS).toISOString();
       const events = await tx.listBoardEvents(boardId, since, SUB_LIMIT_EVENT_TYPES);
       const globs = await tx.listGlobs(boardId, {});
-      const bugIds = new Set(globs.filter((g) => g.category === 'bug').map((g) => g.id));
+      const bugIds = new Set(globs.filter((g) => fixOf(g)).map((g) => g.id));
       const plans = new Map<string, string>();
       for (const a of await tx.listLatestArtifacts(boardId)) if (a.kind === 'plan' && bugIds.has(a.globId)) plans.set(a.globId, a.content);
       const recorded = new Set(

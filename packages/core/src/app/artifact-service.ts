@@ -1,4 +1,4 @@
-import { isHumanCategory } from '../domain/types.js';
+import { actorOf, fixOf, isHumanCategory, modeOf, workKindOf } from '../domain/types.js';
 import { missingFileNote } from '../domain/attachment-file.js';
 import type { AttachmentFile, FileState } from '../domain/attachment-file.js';
 import { decisionViews } from '../domain/decisions.js';
@@ -27,7 +27,7 @@ import type { HumanStep } from '../domain/human-steps.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
-import type { Glob } from '../domain/types.js';
+import type { Glob, Mode, WorkActor, WorkKind } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import type { InvestigationReactor } from './investigation-service.js';
@@ -88,7 +88,12 @@ const hotspotsOfGlob = (
     }));
 
 export interface GlobContext {
-  readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'>;
+  readonly glob: Pick<Glob, 'id' | 'title' | 'type' | 'category' | 'group' | 'environment' | 'status'> & {
+    readonly actor: WorkActor;
+    readonly mode: Mode;
+    readonly fix: boolean;
+    readonly workKind: WorkKind;
+  };
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
   /** plan.md: the latest version. */
   readonly plan: { readonly version: number; readonly content: string } | null;
@@ -475,6 +480,8 @@ export class ArtifactService {
       sizeCheck?: SizeAssessor;
       /** Re-infers a glob's relations after its plan or investigation changed; never throws. */
       dependencyInference?: { refresh(globId: string): Promise<void> };
+      /** Re-infers a glob's fix flag and work kind after its plan changed (`GlobService.reinferWork`); never throws. */
+      workInference?: { refresh(globId: string): Promise<void> };
       /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
       investigation?: InvestigationReactor;
       /** `GlobService.reconcileRollout`: turns a stored implementation record's `## Rollout` section into the glob's rollout steps. */
@@ -663,6 +670,10 @@ export class ArtifactService {
           title: glob.title,
           type: glob.type,
           category: glob.category,
+          actor: actorOf(glob),
+          mode: modeOf(glob),
+          fix: fixOf(glob),
+          workKind: workKindOf(glob),
           group: glob.group,
           environment: glob.environment,
           status: glob.status,
@@ -815,6 +826,8 @@ export class ArtifactService {
       if (kind === 'plan') void this.deps.sizeCheck?.refresh(globId);
       // Likewise the dependency tree: a changed plan (or an investigation that read the code) may change what the glob needs.
       if (kind === 'plan' || kind === 'investigation') void this.deps.dependencyInference?.refresh(globId);
+      // And what the work is: a plan that now describes a repair (or new capability) moves the inferred flags, never a person's.
+      if (kind === 'plan') void this.deps.workInference?.refresh(globId);
       // A queued review shows as being read in an open glob view straight away.
       if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
       // Awaited: slop flags the glob before the run goes on to implement.
