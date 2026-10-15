@@ -22,7 +22,7 @@ import { cardProgress, groupPath } from '@/lib/group-page';
 import { hasBlocker, waitingOnCounts } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
-import { mergeOutcomeText, runCardAction } from '@/lib/card-pending';
+import { mergeOutcomeText, opensGlobView, runCardAction } from '@/lib/card-pending';
 import type { CardPending } from '@/lib/card-pending';
 import { matchesFilters } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
@@ -374,7 +374,7 @@ export const BoardPage = () => {
     // One action in flight per glob: a repeat click, drop or key while one is pending does nothing.
     if (inFlight.current.has(glob.id)) return;
     motion.markLocal(glob.id);
-    await runCardAction(
+    const done = await runCardAction(
       inFlight.current,
       glob.id,
       action,
@@ -383,6 +383,8 @@ export const BoardPage = () => {
         setPending((p) => (pendingAction === null ? Object.fromEntries(Object.entries(p).filter(([k]) => k !== id)) : { ...p, [id]: pendingAction })),
       () => toast(`${glob.id} is still working; refresh if it doesn't move.`),
     );
+    // The card has already stepped into place (the mutation stored the returned glob); a failed action opens nothing.
+    if (done === true && opensGlobView(action)) openGlob(glob.id);
     // If nothing moved (the action failed), a later move made elsewhere mustn't look like ours.
     setTimeout(() => motion.forgetLocal(glob.id), 1000);
   };
