@@ -41,11 +41,12 @@ import { useToast } from '@/toast';
 type Direction = 'left' | 'right';
 
 /**
- * The moves a glob can make from its card (`cardMoves`: the one common action, or Start and Pick up for a same), and none
- * while anything blocks it. The same rule hides the card's buttons, so ← → and Enter never preview a move without a button.
+ * The moves a glob can make from its card (`cardMoves`: the one common action, or Start and Pick up for a same; Fix conflict
+ * in place outside Planning), and while anything blocks it only the in-place Fix conflict. The same rule hides the card's
+ * buttons, so ← → and Enter never preview a move without a button.
  */
 const movesFor = (glob: GlobView, viewer?: HumanStepViewer): { move: CardMove; target: List }[] =>
-  hasBlocker(glob, new Date().toISOString(), viewer) ? [] : cardMoves(glob);
+  hasBlocker(glob, new Date().toISOString(), viewer) ? cardMoves(glob, viewer).filter((m) => m.move.direction === 'none') : cardMoves(glob, viewer);
 
 /** A previewed move: its ghost piece shows in the target list where the card would land. */
 interface Preview {
