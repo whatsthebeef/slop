@@ -353,7 +353,12 @@ export const Recommendation = ({ glob, suggest }: { glob: GlobView; suggest: Sug
         </p>
       )}
       {suggest.failed && <p className='text-xs text-red'>Could not get a recommendation.</p>}
-      {stored !== undefined && state === 'ready' && (
+      {stored !== undefined && state === 'working' && (
+        <p className='text-xs text-muted-foreground' data-testid='suggest-refreshing'>
+          Getting a fresh recommendation; this one may change.
+        </p>
+      )}
+      {stored !== undefined && (state === 'ready' || state === 'working') && (
         <div className='grid gap-1 text-sm' data-testid='suggestion'>
           <p className='whitespace-pre-wrap break-words'>
             <span className='font-medium'>
