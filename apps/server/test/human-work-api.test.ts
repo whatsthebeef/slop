@@ -1,4 +1,4 @@
-import { ArtifactService, BoardService, GlobService, IntakeService, LlmUnavailable } from '@slop/core';
+import { ArtifactService, BoardService, CodeViewUnavailable, GlobService, IntakeService, LlmUnavailable, machine } from '@slop/core';
 import type { Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -38,6 +38,7 @@ interface Body {
   allowedActions?: string[];
   holding?: { to: string; until: string; toIsAction?: boolean }[];
   humanSteps?: { kind: string; title: string; who: string }[];
+  script?: { path: string; onBase: boolean | null } | null;
   code?: string;
   message?: string;
 }
@@ -51,6 +52,15 @@ describe('action globs over REST and MCP (Postgres)', () => {
   let client: Client;
   let app: Hono<Env>;
   let boardId: number;
+  // The base branch's files as the fake code view sees them, how often it was read, and whether the code host is down.
+  const onBase = new Set<string>();
+  const baseReads: string[] = [];
+  let hostDown = false;
+  let downReads = 0;
+  // The local clone lags a push until the board's code sync runs: reads miss `onBase` files while true.
+  let stale = false;
+  // Moves the service's clock forward (ms), to pass cache lifetimes.
+  let skew = 0;
 
   const rest = async (method: string, path: string, body?: unknown, as = DEV): Promise<{ status: number; body: Body }> => {
     const res = await app.request(path, {
@@ -75,9 +85,19 @@ describe('action globs over REST and MCP (Postgres)', () => {
     ({ database, drop } = await createTestDatabase('human_work_api'));
     store = new PgStore(database.db);
     const notifier = new HintHub();
-    const clock = { now: () => new Date().toISOString() };
+    const clock = { now: () => new Date(Date.now() + skew).toISOString() };
     const deps = { store, notifier, clock };
-    globs = new GlobService({ ...deps, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) } });
+    const codeView = {
+      read: (_board: number, ref: string | null, path: string) => {
+        if (hostDown) {
+          downReads += 1;
+          return Promise.reject(new CodeViewUnavailable('host down'));
+        }
+        baseReads.push(`${String(ref)}:${path}`);
+        return Promise.resolve(onBase.has(path) && !stale ? { path, content: '#!/bin/sh\n', startLine: 1, endLine: 1, totalLines: 1, truncated: false, binary: false } : null);
+      },
+    };
+    globs = new GlobService({ ...deps, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) }, codeView });
     const artifacts = new ArtifactService(deps);
     const boards = new BoardService(deps);
     await store.transaction(async (tx) => {
@@ -199,6 +219,100 @@ describe('action globs over REST and MCP (Postgres)', () => {
     expect((await tool('dismiss_action', { id: other.body.id, version: other.body.version, reason: '' })).error).toBe(true);
     const dismissed = await tool('dismiss_action', { id: other.body.id, version: other.body.version, reason: 'no longer needed' });
     expect(dismissed.body).toMatchObject({ status: 'signed_off', attributes: { outcome: { kind: 'dismissed', reason: 'no longer needed' } } });
+  });
+
+  describe('an action waits for its script to be on the base branch', () => {
+    const plan = (path: string): string => `## Why\n\nRoll it out.\n\n## Do this\n\nscript: ${path}\n\nbash ${path}\n`;
+    const make = async (key: string, path: string, extra: Record<string, unknown> = {}) =>
+      (await tool('create_glob', { board: boardId, idempotencyKey: key, category: 'action', title: `Run ${path}`, plan: plan(path), group: null, ...extra })).body;
+    const done = (a: Body) => rest('POST', `/api/globs/${a.id}/actions/done`, { version: a.version });
+
+    it('refuses Done while the script is absent on the base branch, even with no relation, and allows it after the push', async () => {
+      const a = await make('script-1', 'scripts/rollout/s1-run.sh');
+      const view = await rest('GET', `/api/globs/${a.id}`);
+      expect(view.body.script).toEqual({ path: 'scripts/rollout/s1-run.sh', onBase: false });
+      expect(view.body.allowedActions).toEqual(['dismiss_action', 'delete']);
+      const listed = (await rest('GET', `/api/boards/${boardId}/globs`)).body as unknown as Body[];
+      expect(listed.find((g) => g.id === a.id)).toMatchObject({ script: { onBase: false }, allowedActions: ['dismiss_action', 'delete'] });
+      const refused = await done(view.body);
+      expect(refused.status).toBe(409);
+      expect(refused.body.message).toBe('script not on main yet: scripts/rollout/s1-run.sh');
+      // The answer is cached until the base branch moves.
+      const reads = baseReads.filter((r) => r.endsWith('s1-run.sh')).length;
+      await rest('GET', `/api/globs/${a.id}`);
+      expect(baseReads.filter((r) => r.endsWith('s1-run.sh')).length).toBe(reads);
+      expect(baseReads.every((r) => r.startsWith('null:'))).toBe(true);
+      onBase.add('scripts/rollout/s1-run.sh');
+      await globs.baseMoved(boardId);
+      const after = await rest('GET', `/api/globs/${a.id}`);
+      expect(after.body.script).toEqual({ path: 'scripts/rollout/s1-run.sh', onBase: true });
+      expect(after.body.allowedActions).toContain('complete_action');
+      expect((await done(after.body)).body).toMatchObject({ status: 'signed_off' });
+    });
+
+    it('does not keep a stale "missing" after a push: the clone catches up and the answer is read again', async () => {
+      const path = 'scripts/rollout/s6-run.sh';
+      const a = await make('script-6', path);
+      // The push arrives, but the clone has not fetched it yet: the re-check reads it as missing.
+      onBase.add(path);
+      stale = true;
+      await globs.baseMoved(boardId);
+      expect((await rest('GET', `/api/globs/${a.id}`)).body.script).toEqual({ path, onBase: false });
+      // The code sync runs; a missing answer is trusted for seconds only, so the next read sees the script.
+      stale = false;
+      skew += 20_000;
+      try {
+        const after = await rest('GET', `/api/globs/${a.id}`);
+        expect(after.body.script).toEqual({ path, onBase: true });
+        expect(after.body.allowedActions).toContain('complete_action');
+      } finally {
+        skew -= 20_000;
+      }
+    });
+
+    it('dismisses an action whose script is missing, and ignores a script path that leaves the repo', async () => {
+      const a = await make('script-2', 'scripts/rollout/s2-run.sh');
+      const dismissed = await tool('dismiss_action', { id: a.id, version: a.version, reason: 'not needed' });
+      expect(dismissed.body).toMatchObject({ status: 'signed_off' });
+      const escaping = await make('script-3', '../outside.sh');
+      expect((await rest('GET', `/api/globs/${escaping.id}`)).body.script).toBeNull();
+      expect(baseReads.some((r) => r.includes('outside.sh'))).toBe(false);
+    });
+
+    it('fails open when the code host is down, and says it could not check', async () => {
+      hostDown = true;
+      try {
+        const a = await make('script-4', 'scripts/rollout/s4-run.sh');
+        const view = await rest('GET', `/api/globs/${a.id}`);
+        expect(view.body.script).toEqual({ path: 'scripts/rollout/s4-run.sh', onBase: null });
+        expect(view.body.allowedActions).toContain('complete_action');
+        // The unavailable answer is cached briefly: repeated reads don't hit the down host again.
+        const reads = downReads;
+        await rest('GET', `/api/globs/${a.id}`);
+        await rest('GET', `/api/boards/${boardId}/globs`);
+        expect(downReads).toBe(reads);
+        expect((await done(view.body)).body).toMatchObject({ status: 'signed_off' });
+      } finally {
+        hostDown = false;
+      }
+    });
+
+    it('holds Done for the glob that builds the script until it merges, even when the script is on the base branch', async () => {
+      const builder = unwrap(await globs.create(ADMIN, { boardId, title: 'Builds it', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'p' }));
+      onBase.add('scripts/rollout/s5-run.sh');
+      const a = await make('script-5', 'scripts/rollout/s5-run.sh', { relations: [{ to: builder.id, gate: 'start', until: 'merged', reason: 'builds its script' }] });
+      const view = await rest('GET', `/api/globs/${a.id}`);
+      expect(view.body.allowedActions).toEqual(['dismiss_action', 'delete']);
+      expect(view.body.holding).toMatchObject([{ to: builder.id, until: 'merged' }]);
+      const refused = await done(view.body);
+      expect(refused.status).toBe(409);
+      expect(refused.body.message).toContain(`Waits for ${builder.id} to merge`);
+      unwrap(await globs.applyEvent(builder.id, (g, c) => machine.merged(g, { sha: 'abc1234' }, c)));
+      await globs.releaseDependents(builder.id, boardId);
+      const after = await rest('GET', `/api/globs/${a.id}`);
+      expect(after.body.allowedActions).toContain('complete_action');
+      expect((await done(after.body)).body).toMatchObject({ status: 'signed_off' });
+    });
   });
 
   it('list_globs: code work by default, a category filter for human work, type null for it', async () => {
