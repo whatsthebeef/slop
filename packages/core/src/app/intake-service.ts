@@ -95,7 +95,7 @@ export interface IntakeInput {
   readonly explicit: Partial<{
     title: string;
     type: SlopType;
-    /** Old alias, kept for one release: bug is a fix, feature is R&D, task is maintenance. `fix` and `workKind` win over it. */
+    /** Old alias, kept for one release: bug is a fix, feature is R&D (stored as a task), task is maintenance. `fix` and `workKind` win over it. */
     category: WorkCategory;
     fix: boolean;
     workKind: WorkKind;
@@ -111,7 +111,7 @@ export interface IntakeProposal {
   readonly type: SlopType;
   /** The model's one-line reason for the type (when a person is needed); null when none or the type was explicit. */
   readonly typeReason: string | null;
-  /** Derived for the stored category (fix: bug; else R&D: feature, maintenance: task); nobody picks it. */
+  /** Derived for the stored category (fix: bug, else task); nobody picks it. */
   readonly category: WorkCategory;
   /** Whether the work repairs something broken or regressed (the bug behaviours). */
   readonly fix: boolean;
@@ -156,8 +156,8 @@ export interface WorkInference {
   readonly workKindReason: string | null;
 }
 
-/** The stored category that stands for a fix flag and work kind (for the one release that `category` is still stored). */
-export const categoryFor = (fix: boolean, workKind: WorkKind): WorkCategory => (fix ? 'bug' : workKind === 'rnd' ? 'feature' : 'task');
+/** The stored category that stands for a fix flag: bug or task. The work kind is stored beside it; `feature` is never stored for new globs. */
+export const categoryFor = (fix: boolean): WorkCategory => (fix ? 'bug' : 'task');
 
 /** The two reasons as the one line stored on the glob (`inferenceReason`); null when there is none. */
 export const inferenceReasonOf = (p: Pick<WorkInference, 'fixReason' | 'workKindReason'>): string | null => {
@@ -486,7 +486,7 @@ export class IntakeService {
         type = 'sub';
       }
     }
-    const category = categoryFor(fix, workKind);
+    const category = categoryFor(fix);
 
     const proposedGroup = input.explicit.group ?? text(field(answer, 'group'));
     const group =

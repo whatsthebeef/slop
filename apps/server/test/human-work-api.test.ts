@@ -167,7 +167,11 @@ describe('action globs over REST and MCP (Postgres)', () => {
     const aliased = await post({ title: 'Old caller', category: 'bug', type: 'same' });
     expect(aliased.body).toMatchObject({ actor: 'machine', mode: 'same', fix: true, fixSource: 'person', workKind: 'maintenance' });
     const modern = await post({ title: 'New caller', actor: 'machine', mode: 'same', fix: false, workKind: 'rnd' });
-    expect(modern.body).toMatchObject({ mode: 'same', fix: false, workKind: 'rnd', workKindSource: 'person', category: 'feature' });
+    expect(modern.body).toMatchObject({ mode: 'same', fix: false, workKind: 'rnd', workKindSource: 'person', category: 'task' });
+    // The old category alias feature is accepted too: stored as a task, R&D.
+    const asFeature = await post({ title: 'Old feature caller', category: 'feature', type: 'same' });
+    expect(asFeature.body).toMatchObject({ category: 'task', fix: false, workKind: 'rnd', workKindSource: 'person' });
+    expect(asFeature.body.id).toMatch(/t\d+$/);
     // No category given and no intake wired: a same, not a fix, maintenance, inferred.
     const bare = await post({ title: 'Plain' });
     expect(bare.body).toMatchObject({ actor: 'machine', mode: 'same', category: 'task', fix: false, fixSource: 'inferred', workKind: 'maintenance', workKindSource: 'inferred' });
@@ -375,5 +379,20 @@ describe('action globs over REST and MCP (Postgres)', () => {
     const open = items.filter((g) => g.category === 'action' && g.status === 'planning');
     expect(open.length).toBeGreaterThan(0);
     expect(open.every((g) => g.type === null)).toBe(true);
+  });
+
+  it('lists with category feature still return legacy feature rows, while new work is stored as tasks', async () => {
+    const made = (await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Stored as a task', category: 'feature', type: 'same', group: null, plan: 'p' })).body;
+    expect(made.category).toBe('task');
+    const legacyId = `s${String(boardId)}f1`;
+    await store.transaction(async (tx) => {
+      const glob = await tx.getGlob(made.id);
+      if (glob === null) throw new Error('no glob');
+      await tx.insertGlob({ ...glob, id: legacyId, category: 'feature', title: 'Legacy feature' }, null);
+    });
+    const features = await listed({ category: 'feature', mode: 'same' });
+    expect(features.map((g) => g.id)).toEqual([legacyId]);
+    expect(features[0]?.category).toBe('feature');
+    expect((await listed({ category: 'task', mode: 'same' })).map((g) => g.id)).toContain(made.id);
   });
 });

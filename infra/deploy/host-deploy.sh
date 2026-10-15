@@ -2,21 +2,26 @@
 # Deploys the slop-<stage>-host stack (default stage: prod) with its cdk context read from the live stack, so nothing
 # account-specific lives in the repo. A person runs this: it changes paid infrastructure and IAM (see README.md).
 #
-#   infra/deploy/host-deploy.sh [--stage prod] [--yes]
+#   infra/deploy/host-deploy.sh [--stage prod] [--add-project <name>]... [--remove-project <name>]... [--yes]
 #
 # Read-only lookups (needs an AWS session for the account): the deploy connection, the CloudFront domain and certificate,
-# the alert email, the CodeBuild projects the instance role may start, and (for the stack's pinned AMI and data disk) the
+# the alert email, the CodeBuild projects the instance role may start (--add-project / --remove-project change that
+# list; names come from the command line only), and (for the stack's pinned AMI and data disk) the
 # running instance's AMI and /dev/sdf volume. It prints the context, runs `cdk diff`, and asks before `cdk deploy`.
 # Without --yes it refuses to run when stdin is not a terminal.
 set -euo pipefail
 
 STAGE=prod
 YES=0
+ADD_PROJECTS=""
+REMOVE_PROJECTS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --stage) STAGE="${2:?--stage needs a value}"; shift 2 ;;
+    --add-project) ADD_PROJECTS="${ADD_PROJECTS:+$ADD_PROJECTS,}${2:?--add-project needs a name}"; shift 2 ;;
+    --remove-project) REMOVE_PROJECTS="${REMOVE_PROJECTS:+$REMOVE_PROJECTS,}${2:?--remove-project needs a name}"; shift 2 ;;
     --yes) YES=1; shift ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -24,6 +29,8 @@ done
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 STACK="slop-${STAGE}-host"
 INFRA_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=deploy-guards.sh
+. "$(dirname "$0")/deploy-guards.sh"
 
 out() { aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text; }
 res() { aws cloudformation describe-stack-resources --stack-name "$STACK" --query "StackResources[?ResourceType=='$1'].PhysicalResourceId" --output text | tr '\t' '\n'; }
@@ -68,7 +75,9 @@ while IFS= read -r ROLE; do
     done <<<"$GRANTS"
   done
 done < <(res AWS::IAM::Role)
-if [ ${#PROJECTS[@]} -gt 0 ]; then ARGS+=(-c "deployProjects=$(IFS=,; echo "${PROJECTS[*]}")"); fi
+EXISTING="$(IFS=,; echo "${PROJECTS[*]:-}")"
+MERGED="$(merge_projects "$EXISTING" "$ADD_PROJECTS" "$REMOVE_PROJECTS")" || exit 2
+if [ -n "$MERGED" ]; then ARGS+=(-c "deployProjects=$MERGED"); fi
 
 # The stack pins the instance's AMI and data volume (infra/deploy/HOST.md): read both from the running instance.
 if [ -n "$INSTANCE" ]; then

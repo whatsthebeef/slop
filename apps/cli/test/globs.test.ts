@@ -6,6 +6,7 @@ import {
   globCommand,
   handoverCommand,
   mergeCommand,
+  NEW_USAGE,
   newCommand,
   pickUpCommand,
   readyCommand,
@@ -459,6 +460,8 @@ describe('slop new', () => {
     await expect(newCommand(['--mode', 'huge', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
     await expect(newCommand(['--mode', 'sub', '--same', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
     await expect(newCommand(['--fix', '--feature', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
+    // --feature stays a hidden alias: the visible usage no longer lists it.
+    expect(NEW_USAGE).not.toContain('feature');
   });
 
   it('passes --env to create_glob', async () => {
