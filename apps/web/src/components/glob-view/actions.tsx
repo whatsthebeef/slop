@@ -32,7 +32,7 @@ import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { GroupChip } from '../glob-card';
-import { groupPath } from '@/lib/group-page';
+import { boardGroupPath } from '@/lib/group-page';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
 import { splittable } from './size';
@@ -634,7 +634,7 @@ export const GlobActions = ({
   const group =
     glob.group === null ? null : (
       <span className="ml-auto min-w-0 max-w-full" data-testid="glob-group">
-        <GroupChip name={glob.group} to={groupPath(glob.boardId, glob.group)} />
+        <GroupChip name={glob.group} to={boardGroupPath(glob.boardId, glob.group)} />
       </span>
     );
   return (
