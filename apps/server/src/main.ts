@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -23,6 +23,7 @@ import { SqsObjectEventQueue } from './sqs-object-events.js';
 import { kbExecutors } from './kb-executors.js';
 import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { suggestExecutors } from './suggest-executors.js';
+import { relationScanExecutors } from './relation-scan-executors.js';
 import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { mergeGate, readyGate } from './ready-gate.js';
@@ -142,6 +143,15 @@ const globs = new GlobService({
   inference: { infer: (input) => dependencyInference.infer(input) },
   // Reads an action's script on the base branch; `codeView` exists by the time the first action is read.
   codeView: { read: (boardId, ref, path, range) => codeView.read(boardId, ref, path, range) },
+  // The automatic relation pass (`relationScan` is built below): a changed text that names a glob queues a pass; `classifyAtCreate` and `remember` are the create-time path.
+  // Spread, so this compiles before and after GlobService declares the dependency.
+  ...{
+    relationScan: {
+      request: (input: Parameters<RelationScanService['request']>[0]): Promise<void> => relationScan.request(input),
+      classifyAtCreate: (input: Parameters<RelationScanService['classifyAtCreate']>[0]): ReturnType<RelationScanService['classifyAtCreate']> => relationScan.classifyAtCreate(input),
+      remember: (...args: Parameters<RelationScanService['remember']>): Promise<void> => relationScan.remember(...args),
+    },
+  },
 });
 // Set once the SSO profile is read below; the registry asks when a status changes.
 let awsSignInEnabled = false;
@@ -226,6 +236,8 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   ...knowledgePageExecutors({ regenerate: (boardId, full) => knowledgePage.regenerate(boardId, full) }),
   // Suggest on a decision glob (the `llm` lane); `suggestService` is built below and only called once a job runs.
   ...suggestExecutors({ run: (globId) => suggestService.run(globId) }),
+  // The automatic relation pass (the `llm` lane); `relationScan` is built below and only called once a job runs.
+  ...relationScanExecutors({ run: (globId) => relationScan.run(globId) }),
   // The agent set's commit to its glob's branch; `agentSetCommit` is built below and only called once a job runs.
   ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id)), (id) =>
     globs.applyEvent(id, (g, ctx) => machine.readyRequested(g, null, ctx)),
@@ -365,6 +377,15 @@ const dependencyInference = new DependencyInferenceService({
   release: (globId): Promise<unknown> => globs.release(globId),
   log: logError,
 });
+// The automatic relation pass: one batched intake-model call per debounced job, written through GlobService.applyAutomatic; the call's `spend` tag is its only ledger row.
+const relationScan = new RelationScanService({
+  store,
+  clock,
+  llm: intakeLlm,
+  automatic: { applyAutomatic: (globId, planHash, adds, actorEmail) => globs.applyAutomatic(globId, planHash, adds, actorEmail) },
+  model: config.INTAKE_MODEL,
+  log: logError,
+});
 const intake = new IntakeService({
   store,
   llm: intakeLlm,
@@ -446,7 +467,7 @@ const workInference = {
     }
   },
 };
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), workInference, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), workInference, relationScan, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
   attachmentObjects === null
     ? null

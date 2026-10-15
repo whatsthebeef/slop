@@ -130,6 +130,61 @@ describe('intake', () => {
     expect((await propose(`Start once ${decision.id} is accepted, and after s${String(boardId)}t1.`)).suggestedAfter).toEqual([`s${String(boardId)}t1`]);
   });
 
+  describe('prerequisites (the relation scan\'s answer, piggybacked on the one call)', () => {
+    const asking = () => {
+      const prompts: string[] = [];
+      const counting = new IntakeService({ store, llm: { complete: (r) => (prompts.push(r.prompt), Promise.resolve(answer)) } });
+      return { prompts, propose: (text: string) => counting.propose(DEV, boardId, { text, explicit: {} }).then(unwrap) };
+    };
+    const target = () => `s${String(boardId)}t1`;
+
+    it('returns the globs the request waits for, with the gate and the request\'s own sentence, from the same single call', async () => {
+      const sentence = `Hand the prod profile to sessions only after ${target()} is in place.`;
+      answer = JSON.stringify({ title: 'T', plan: 'P', prerequisites: [{ id: target(), gate: 'sign_off', sentence: sentence.toLowerCase() }] });
+      const { prompts, propose: ask } = asking();
+      const p = await ask(`Hand over the profile.\n${sentence}`);
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain(`- ${target()} "x" [planning]`);
+      expect(p.prerequisites).toEqual([{ id: target(), gate: 'sign_off', sentence }]);
+    });
+
+    it('drops what cannot be checked: an unknown or merged glob, a bad gate, a sentence that is not in the request, a repeat', async () => {
+      const text = `Only after ${target()} is in place. Also see s${String(boardId)}t77 and s9t9.`;
+      answer = JSON.stringify({
+        title: 'T',
+        prerequisites: [
+          { id: `s${String(boardId)}t77`, gate: 'start', sentence: `Also see s${String(boardId)}t77 and s9t9.` },
+          { id: 's9t9', gate: 'start', sentence: 'Also see s9t9' },
+          { id: target(), gate: 'later', sentence: 'Only after' },
+          { id: target(), gate: 'start', sentence: 'Invented words that are not in the request' },
+          { id: target(), gate: 'start', sentence: `Only after ${target()} is in place.` },
+          { id: target(), gate: 'merge', sentence: `Only after ${target()} is in place.` },
+        ],
+      });
+      const { propose: ask } = asking();
+      expect((await ask(text)).prerequisites).toEqual([{ id: target(), gate: 'start', sentence: `Only after ${target()} is in place.` }]);
+    });
+
+    it('a proposal without any keeps its old shape, and waitedForIn is unchanged', async () => {
+      answer = JSON.stringify({ title: 'T', prerequisites: [] });
+      const { propose: ask } = asking();
+      const p = await ask(`Start once ${target()} is merged.`);
+      expect('prerequisites' in p).toBe(false);
+      expect(p.suggestedAfter).toEqual([target()]);
+      expect(waitedForIn(`Start after ${target().toUpperCase()}.`, new Set([target()]))).toEqual([target()]);
+      answer = JSON.stringify({ title: 'T' });
+      expect('prerequisites' in (await ask('no ids here'))).toBe(false);
+    });
+
+    it('the prompt names no globs when the request names none, and the schema asks for the list', async () => {
+      answer = JSON.stringify({ title: 'T' });
+      const { prompts, propose: ask } = asking();
+      await ask('Add a thing.');
+      expect(prompts[0]).not.toContain('Open globs the request names');
+      expect(INTAKE_SYSTEM).toMatch(/prerequisites:/);
+    });
+  });
+
   it('keeps the spec in plan', async () => {
     answer = '{"title":"T","plan":"The full spec.\\nDone when: it works.","type":"same","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null}';
     const p = await propose('the whole request');

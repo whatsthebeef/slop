@@ -140,6 +140,22 @@ export const INTAKE_SCHEMA = named(
     autoTrigger: bool,
     autoTriggerQuote: nullable(str),
     files: array(str),
+    prerequisites: array(object({ id: str, gate: oneOf('start', 'merge', 'sign_off'), sentence: str })),
+  }),
+);
+
+/** The relation scan's answer: one verdict per glob ID in a numbered sentence (`sentence` is the index it was shown under). */
+export const RELATION_SCAN_SCHEMA = named(
+  'relation_scan',
+  object({
+    decisions: array(
+      object({
+        id: str,
+        sentence: int,
+        verdict: oneOf('prerequisite', 'history', 'context', 'unsure'),
+        gate: oneOf('start', 'merge', 'sign_off'),
+      }),
+    ),
   }),
 );
 

@@ -40,6 +40,9 @@ export type { InboxContextItem } from './context/inbox-section.js';
 export type { InvestigationSummary } from './context/investigation-section.js';
 export type { GlobContext } from './context/glob-context.js';
 
+/** The artifacts whose text the automatic relation pass reads (attachments only by their text). */
+const SCANNED_KINDS: readonly ArtifactKind[] = ['plan', 'implementation_plan', 'attachment'];
+
 /** A versioned document (plan.md, the test plan) with its history, newest as `current`. */
 export interface VersionedDoc {
   readonly kind: ArtifactKind;
@@ -68,6 +71,8 @@ export class ArtifactService {
       dependencyInference?: { refresh(globId: string): Promise<void> };
       /** Re-infers a glob's fix flag and work kind after its plan changed (`GlobService.reinferWork`); never throws. */
       workInference?: { refresh(globId: string): Promise<void> };
+      /** Queues the automatic relation pass when a saved text names a glob it did not name before (`RelationScanService.request`); never throws. */
+      relationScan?: { request(input: { readonly globId: string; readonly newText: string; readonly prevText?: string | null }): Promise<void> };
       /** Acts on a stored investigation (escalate, oversize flag) before the save returns. */
       investigation?: InvestigationReactor;
       /** `GlobService.reconcileRollout`: turns a stored implementation record's `## Rollout` section into the glob's rollout steps. */
@@ -334,6 +339,8 @@ export class ArtifactService {
     link: string | null,
     options: PutOptions,
   ): Promise<Result<Artifact | Ignored>> {
+    // What the relation scan compares: the text this save replaces (read before it is written), set for the kinds the scan reads.
+    let previous: string | null = null;
     const result = await this.deps.store.transaction(async (tx): Promise<Result<{ artifact: Artifact | Ignored; boardId: number }>> => {
       const glob = await tx.getGlob(globId);
       if (glob === null) return notFound(`No glob ${globId}`);
@@ -359,6 +366,7 @@ export class ArtifactService {
           });
         }
       }
+      if (this.deps.relationScan !== undefined && SCANNED_KINDS.includes(kind)) previous = (await tx.artifactVersions(globId, kind, label)).at(-1)?.content ?? null;
       const artifact = await addArtifact(tx, this.deps.clock, glob, email, {
         kind,
         label,
@@ -384,6 +392,8 @@ export class ArtifactService {
       if (kind === 'plan' || kind === 'investigation') void this.deps.dependencyInference?.refresh(globId);
       // And what the work is: a plan that now describes a repair (or new capability) moves the inferred flags, never a person's.
       if (kind === 'plan') void this.deps.workInference?.refresh(globId);
+      // The texts the relation pass reads: a new sentence that names a glob queues a pass (debounced), anything else costs nothing.
+      if (SCANNED_KINDS.includes(kind)) await this.deps.relationScan?.request({ globId, newText: content, prevText: previous });
       // A queued review shows as being read in an open glob view straight away.
       if (kind === 'local_review') this.deps.notifier.publish({ kind: 'glob.findings', boardId, globId });
       // Awaited: slop flags the glob before the run goes on to implement.
