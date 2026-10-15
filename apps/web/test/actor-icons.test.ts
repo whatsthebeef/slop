@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { HumanIcon, MachineIcon } from '../src/components/actor-icons';
+import { HumanIcon, MachineIcon, PersonRunning } from '../src/components/actor-icons';
 
 const sourceFiles = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -17,6 +17,20 @@ describe('actor icons', () => {
     const html = renderToStaticMarkup(createElement(HumanIcon, { className: 'h-3 w-3' }));
     expect(html).toContain('lucide-user-round');
     expect(html).toContain('aria-label="human"');
+  });
+  it('renders PersonRunning as a stroked 24px svg that is not the human person icon', () => {
+    const html = renderToStaticMarkup(createElement(PersonRunning, { className: 'h-3.5 w-3.5', 'aria-label': 'action', role: 'img' }));
+    expect(html).toContain('data-icon="person-running"');
+    expect(html).toContain('viewBox="0 0 24 24"');
+    expect(html).toContain('stroke="currentColor"');
+    expect(html).toContain('fill="none"');
+    expect(html).toContain('class="h-3.5 w-3.5"');
+    expect(html).toContain('aria-label="action"');
+    expect(html).toContain('role="img"');
+    expect(html).not.toContain('lucide-user-round');
+  });
+  it('renders PersonRunning hidden from assistive tech when asked', () => {
+    expect(renderToStaticMarkup(createElement(PersonRunning, { 'aria-hidden': true }))).toContain('aria-hidden="true"');
   });
   it('renders MachineIcon as lucide Bot, labelled machine', () => {
     const html = renderToStaticMarkup(createElement(MachineIcon));
