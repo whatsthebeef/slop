@@ -18,13 +18,13 @@ const CodeBlock = ({ children }: { children?: ReactNode }) => {
   const [copied, setCopied] = useState(false);
   const code = textOf(children).replace(/\n$/, '');
   return (
-    <div className="relative" data-testid="step-code">
+    <div className='relative' data-testid='step-code'>
       <pre>{children}</pre>
       <Button
         size="sm"
         variant="outline"
-        className="absolute right-1 top-1"
-        data-testid="step-code-copy"
+        className='absolute right-1 top-1'
+        data-testid='step-code-copy'
         onClick={() =>
           void copyOrSelect(
             code,
@@ -43,7 +43,7 @@ const components: Components = { pre: ({ children }) => <CodeBlock>{children}</C
 
 /** A human step's detail (Markdown: Why / Do this / Check it worked), shown expanded under the step's title; code blocks have a copy button. */
 export const StepDetail = ({ detail }: { detail: string }) => (
-  <div className="min-w-0 break-words [overflow-wrap:anywhere]" data-testid="step-detail">
+  <div className='min-w-0 break-words [overflow-wrap:anywhere]' data-testid='step-detail'>
     <MarkdownView content={detail} bare components={components} />
   </div>
 );

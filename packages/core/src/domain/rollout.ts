@@ -51,14 +51,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
   const lines = sectionOf(record);
   const steps: RolloutStep[] = [];
   let topIndent: number | null = null;
-  let current: {
-    kind: RolloutStepKind;
-    title: string;
-    check: string | null;
-    detail: string[];
-    script: string[] | null;
-    fence: Fence | null;
-  } | null = null;
+  let current: { kind: RolloutStepKind; title: string; check: string | null; detail: string[]; script: string[] | null; fence: Fence | null } | null = null;
   const finish = () => {
     if (current === null) return;
     const detail = trimBlank(current.detail).join('\n');
@@ -67,8 +60,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
       title: current.title,
       detail: detail === '' ? null : detail,
       check: current.check,
-      script:
-        current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
+      script: current.kind === 'script' && current.script !== null ? current.script.join('\n') : null,
     });
     current = null;
   };
@@ -77,8 +69,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
       const { fence } = current;
       if (isFenceClose(line, fence)) {
         current.fence = null;
-        if (fence.target === 'detail')
-          current.detail.push(line.trim() === '' ? '' : dedent(line, fence.indent));
+        if (fence.target === 'detail') current.detail.push(line.trim() === '' ? '' : dedent(line, fence.indent));
         continue;
       }
       const text = dedent(line, fence.indent);
@@ -94,17 +85,9 @@ export const parseRollout = (record: string): RolloutStep[] => {
       finish();
       const parsed = titleOf(item[2] ?? '');
       if (parsed === null) continue;
-      current = {
-        kind: parsed.kind,
-        title: parsed.title,
-        check: parsed.check,
-        detail: [],
-        script: null,
-        fence: null,
-      };
+      current = { kind: parsed.kind, title: parsed.title, check: parsed.check, detail: [], script: null, fence: null };
       if (parsed.overflow !== null) current.detail.push(parsed.overflow);
-      if (parsed.unknownCheck !== null)
-        current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
+      if (parsed.unknownCheck !== null) current.detail.push(`check: ${parsed.unknownCheck} is not a capability slop knows`);
       continue;
     }
     if (current === null) continue;
@@ -112,12 +95,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
     if (open !== null && open[2] !== undefined) {
       const marker = open[2];
       const first = current.kind === 'script' && current.script === null;
-      current.fence = {
-        char: marker.charAt(0),
-        length: marker.length,
-        indent: (open[1] ?? '').length,
-        target: first ? 'script' : 'detail',
-      };
+      current.fence = { char: marker.charAt(0), length: marker.length, indent: (open[1] ?? '').length, target: first ? 'script' : 'detail' };
       if (first) current.script = [];
       else current.detail.push(line.trim());
       continue;
@@ -146,12 +124,7 @@ const CHECK_SUFFIX = /\s*\(?\bcheck\s*:\s*([A-Za-z][\w-]*)\)?\s*$/i;
 const isFenceClose = (line: string, fence: Fence): boolean => {
   const m = FENCE_OPEN.exec(line);
   const marker = m?.[2];
-  return (
-    marker !== undefined &&
-    marker.charAt(0) === fence.char &&
-    marker.length >= fence.length &&
-    line.trim() === marker
-  );
+  return marker !== undefined && marker.charAt(0) === fence.char && marker.length >= fence.length && line.trim() === marker;
 };
 
 const dedent = (line: string, indent: number): string => {
@@ -211,13 +184,7 @@ const sectionOf = (record: string): string[] => {
   for (const line of lines) {
     const open = FENCE_OPEN.exec(line);
     if (fence !== null) {
-      if (
-        open?.[2] !== undefined &&
-        open[2].charAt(0) === fence.char &&
-        open[2].length >= fence.length &&
-        line.trim() === open[2]
-      )
-        fence = null;
+      if (open?.[2] !== undefined && open[2].charAt(0) === fence.char && open[2].length >= fence.length && line.trim() === open[2]) fence = null;
     } else if (open?.[2] !== undefined) {
       fence = { char: open[2].charAt(0), length: open[2].length };
     } else {
@@ -295,8 +262,7 @@ export interface RolloutInputs {
 export const ROLLOUT_RECORD_MAX = 6_000;
 export const ROLLOUT_PATCH_MAX = 6_000;
 
-const cutText = (text: string, max: number): string =>
-  text.length > max ? `${text.slice(0, max)}\n… (cut)` : text;
+const cutText = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}\n… (cut)` : text);
 
 export const rolloutPrompt = (inputs: RolloutInputs): string =>
   [
@@ -305,15 +271,8 @@ export const rolloutPrompt = (inputs: RolloutInputs): string =>
     ...inputs.files.slice(0, 80).map((f) => `- ${f}`),
     '',
     'Diffs of the files that triggered this check:',
-    ...Object.entries(inputs.patches).flatMap(([file, patch]) => [
-      `### ${file}`,
-      '```diff',
-      cutText(patch, ROLLOUT_PATCH_MAX),
-      '```',
-    ]),
-    Object.keys(inputs.patches).length === 0
-      ? '(the code host gave no diff; judge from the file names and the record)'
-      : '',
+    ...Object.entries(inputs.patches).flatMap(([file, patch]) => [`### ${file}`, '```diff', cutText(patch, ROLLOUT_PATCH_MAX), '```']),
+    Object.keys(inputs.patches).length === 0 ? '(the code host gave no diff; judge from the file names and the record)' : '',
     '',
     'Implementation record:',
     cutText(inputs.record, ROLLOUT_RECORD_MAX),
@@ -328,35 +287,21 @@ const oneLine = (value: unknown): string | null => {
 };
 
 /** The model's answer, checked: an object with a known decision and its text; `steps` needs at least one parsed step. */
-export const checkRolloutAnswer = (
-  answer: unknown,
-):
-  | { readonly ok: true; readonly value: RolloutAnswer }
-  | { readonly ok: false; readonly error: string } => {
-  if (typeof answer !== 'object' || answer === null || Array.isArray(answer))
-    return { ok: false, error: 'not an object' };
+export const checkRolloutAnswer = (answer: unknown): { readonly ok: true; readonly value: RolloutAnswer } | { readonly ok: false; readonly error: string } => {
+  if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) return { ok: false, error: 'not an object' };
   const record = answer as Record<string, unknown>;
   if (record.decision === 'none') {
     const reason = oneLine(record.reason);
-    return reason === null
-      ? { ok: false, error: 'none without a reason' }
-      : {
-          ok: true,
-          value: { decision: 'none', reason: reason.replace(/^no rollout needed:?\s*/i, '') },
-        };
+    return reason === null ? { ok: false, error: 'none without a reason' } : { ok: true, value: { decision: 'none', reason: reason.replace(/^no rollout needed:?\s*/i, '') } };
   }
   if (record.decision === 'ask') {
     const question = oneLine(record.question);
-    return question === null
-      ? { ok: false, error: 'ask without a question' }
-      : { ok: true, value: { decision: 'ask', question } };
+    return question === null ? { ok: false, error: 'ask without a question' } : { ok: true, value: { decision: 'ask', question } };
   }
   if (record.decision === 'steps') {
     const rollout = typeof record.rollout === 'string' ? record.rollout : '';
     const steps = parseRollout(`## Rollout\n${rollout}`);
-    return steps.length === 0
-      ? { ok: false, error: 'steps without a step' }
-      : { ok: true, value: { decision: 'steps', steps } };
+    return steps.length === 0 ? { ok: false, error: 'steps without a step' } : { ok: true, value: { decision: 'steps', steps } };
   }
   return { ok: false, error: 'unknown decision' };
 };

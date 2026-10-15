@@ -1,8 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
-const agent = (name: string): Promise<string> =>
-  readFile(new URL(`../../../catalog/agents/agents/${name}.md`, import.meta.url), 'utf8');
+const agent = (name: string): Promise<string> => readFile(new URL(`../../../catalog/agents/agents/${name}.md`, import.meta.url), 'utf8');
 
 describe('catalog agents: human steps and rollout', () => {
   it('has the investigator predict human steps and a rollout', async () => {
