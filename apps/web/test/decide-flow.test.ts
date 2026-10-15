@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approveBlockedText, approveLabel, headerMenu, personOnlyNotice, submitLabel } from '../src/lib/decide-flow';
+import { approveBlockedText, approveLabel, changeHeading, headerMenu, scopeMatters, submitLabel } from '../src/lib/decide-flow';
 
 const menu = (patch: Partial<Parameters<typeof headerMenu>[0]> = {}) =>
   headerMenu({ canDecide: true, canSuggest: true, canKeep: true, hasItem: true, adminOnly: null, ...patch });
@@ -14,23 +14,34 @@ describe('what approving is called', () => {
   });
 });
 
-describe('the person-only notice', () => {
-  it('covers documents and the kinds agents may never approve', () => {
-    expect(personOnlyNotice(true, undefined)).toBe('Only a person can approve this kind of change');
-    expect(personOnlyNotice(false, 'merge_policy')).not.toBeNull();
-    expect(personOnlyNotice(false, 'local_run')).not.toBeNull();
-    expect(personOnlyNotice(false, 'doc')).toBeNull();
-    expect(personOnlyNotice(false, undefined)).toBeNull();
+describe('the change heading', () => {
+  const doc = (section: string | null) => ({ kind: 'doc', name: 'architecture', section, newDocument: null }) as const;
+  it('names the target in words', () => {
+    expect(changeHeading(null, false)).toBeNull();
+    expect(changeHeading(doc('apps/web'), false)).toBe('Edit to architecture › apps/web');
+    expect(changeHeading(doc('apps/web'), true)).toBe('Addition to architecture › apps/web');
+    expect(changeHeading(doc(null), true)).toBe('Addition to architecture');
+    expect(changeHeading({ kind: 'merge_policy', name: 'merge_policy', section: null, newDocument: null }, false)).toBe('Merge policy setting');
+    expect(changeHeading({ kind: 'agent', name: 'orchestrator', section: null, newDocument: null }, true)).toBe('Addition to orchestrator');
+  });
+});
+
+describe('when scope is shown', () => {
+  it('is hidden for a change routed to a document or setting, and for hotspots', () => {
+    expect(scopeMatters(false, false, null)).toBe(true);
+    expect(scopeMatters(true, false, null)).toBe(false);
+    expect(scopeMatters(false, true, null)).toBe(false);
+    expect(scopeMatters(false, false, { kind: 'doc', name: 'a', section: null, newDocument: null })).toBe(false);
   });
 });
 
 describe('the ▾ menu', () => {
-  it('leads with Reject…, keeping and Suggest again, and keeps the other outcomes', () => {
+  it('leads with Reject…, Approve with edits…, keeping and a new recommendation, and keeps the other outcomes', () => {
     expect(menu().map((m) => m.label)).toEqual([
       'Reject…',
+      'Approve with edits…',
       'Approve without changing a document',
-      'Suggest again',
-      'Accept with edits',
+      'Get a new recommendation',
       'Retarget',
       'Needs work',
     ]);
@@ -62,6 +73,6 @@ describe('the submit button', () => {
   it('names the open form', () => {
     expect(submitLabel('accept', 'Approve merge policy')).toBe('Approve merge policy');
     expect(submitLabel('reject', 'x')).toBe('Reject');
-    expect(submitLabel('accept_with_edits', 'x')).toBe('Accept with edits');
+    expect(submitLabel('accept_with_edits', 'x')).toBe('Save');
   });
 });

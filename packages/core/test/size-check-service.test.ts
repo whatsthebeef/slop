@@ -291,12 +291,14 @@ describe('learned size check', () => {
     expect((await create('same', BIG)).runs).toHaveLength(0);
   });
 
-  it('records why a flagged plan has no proposal when the model gives no workstreams', async () => {
-    // A model that judges the plan big but gives no usable division.
+  it('does not flag a plan when the model gives no usable workstreams, and records why', async () => {
+    // A model that judges the plan big but gives no usable division: size alone never flags.
     proposed = [];
     const glob = await create('same', BIG);
     const check = await store.transaction((tx) => tx.getSizeCheck(glob.id));
-    expect(check).toMatchObject({ flagged: true, proposal: null });
+    expect(check).toMatchObject({ flagged: false, reasons: [], proposal: null });
+    const sub = await create('sub', BIG);
+    expect(sub.type).toBe('sub');
     expect(check?.evidence).toContain('No workstreams were proposed: the model gave fewer than 2 usable workstreams');
   });
 

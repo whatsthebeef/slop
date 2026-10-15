@@ -1,5 +1,5 @@
 import { prefillOf } from '@slop/core';
-import type { SuggestAction, SuggestionPrefill, SuggestionView } from '@slop/core';
+import type { SuggestAction, Suggestion, SuggestionPrefill, SuggestionView } from '@slop/core';
 
 export const SUGGESTION_ACTION_TEXT: Readonly<Record<SuggestAction, string>> = {
   approve: 'Approve as drafted',
@@ -8,8 +8,20 @@ export const SUGGESTION_ACTION_TEXT: Readonly<Record<SuggestAction, string>> = {
   reject: 'Reject',
 };
 
-/** The Decide block holds the suggestion and its form. */
-export const APPLY_HINT_TEXT = 'Fills the decision form in with the suggested outcome and reason. You confirm it.';
+/** The primary button's text for a recommendation that is not a plain approval; `approve` is the label an approval has here. */
+export const recommendedLabel = (stored: Suggestion | undefined, approve: string): string => {
+  switch (stored?.action) {
+    case undefined:
+    case 'approve':
+      return approve;
+    case 'approve_with_edit':
+      return 'Approve with edits…';
+    case 'merge_into':
+      return `Reject, merged into ${stored.mergeInto ?? 'another learning'}`;
+    case 'reject':
+      return 'Reject…';
+  }
+};
 
 /** What the Suggest card shows: nothing yet, a job working (or waiting for the model), a usable suggestion, or one the draft or target has outgrown. */
 export type SuggestionState = 'none' | 'working' | 'ready' | 'stale';

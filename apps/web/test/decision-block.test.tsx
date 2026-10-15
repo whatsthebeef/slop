@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Action, DecisionAttributes, DecisionLearning, KbSignal, KbTarget } from '@slop/core';
 import { MemoryRouter } from 'react-router';
@@ -65,6 +65,21 @@ const signal: KbSignal = {
   measuredAt: '2026-10-08T00:00:00Z',
 };
 
+const planOf = (content: string): Awaited<ReturnType<typeof api.plan>> =>
+  ({ current: { content, version: 1 }, versions: [{ version: 1 }] }) as unknown as Awaited<ReturnType<typeof api.plan>>;
+
+const suggestionOf = (action: 'approve' | 'approve_with_edit' | 'reject', editedDraft: string | null = null): Awaited<ReturnType<typeof api.suggestion>> => ({
+  suggestion: {
+    suggestion: { action, editedDraft, mergeInto: null, mergedText: null, reason: 'Fits the conventions.' },
+    model: 'm',
+    at: '2026-10-08T00:00:00Z',
+    stamp: { draftVersion: 1, targetVersion: 1, promptVersion: 1 },
+  },
+  pending: false,
+  stale: false,
+  error: null,
+});
+
 const renderGlob = (glob: GlobView, role: BoardView['role'] = 'admin') => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onDecide = vi.fn(() => Promise.resolve(true));
@@ -123,6 +138,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('no server in component tests'))));
   vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf());
   vi.spyOn(api, 'boardSignals').mockResolvedValue([]);
+  vi.spyOn(api, 'plan').mockResolvedValue(planOf(''));
   vi.spyOn(api, 'suggestion').mockResolvedValue({ suggestion: null, pending: false, stale: false, error: null });
 });
 
@@ -138,26 +154,101 @@ const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
 };
 
 describe('the proposal block of a learning', () => {
-  it('reads statement, then what approving changes, then the controls, with no Decide heading', async () => {
-    renderGlob(decision());
-    const statement = await screen.findByTestId('proposal-statement');
-    const changes = await screen.findByText('What approving changes');
+  it('reads why, then the change named by its target, then the recommendation, the buttons and where it applies, with no Decide heading', async () => {
+    vi.spyOn(api, 'plan').mockResolvedValue(planOf('Tests next to the code keep them found and kept up to date.'));
+    vi.spyOn(api, 'globDiff').mockResolvedValue(
+      diffOf({
+        target: { kind: 'doc', name: 'architecture', section: 'apps/web', newDocument: null },
+        preview: { version: 1, stale: false, diff: [{ op: 'added', text: 'Tests live next to the code.' }], duplicateSections: [] },
+      }),
+    );
+    vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('approve'));
+    renderGlob(decision({ evidenceCount: 3, sourceGlobs: ['s1t1', 's1t2'] }));
+    const why = await screen.findByTestId('why');
+    const heading = await screen.findByTestId('change-heading');
+    const recommendation = await screen.findByTestId('recommendation');
     const outcomes = await screen.findByTestId('outcomes');
-    expect(statement.textContent).toBe('Tests live next to the code they cover');
-    expect(statement.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(changes.compareDocumentPosition(outcomes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await within(why).findByText(/keep them found/)).toBeTruthy();
+    expect(within(why).getByTestId('evidence-summary').textContent).toBe('Seen 3 times on 2 globs: s1t1, s1t2');
+    expect(heading.textContent).toBe('Addition to architecture › apps/web');
+    const follows = (a: Element, b: Element) => expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    follows(why, heading);
+    follows(heading, recommendation);
+    follows(recommendation, outcomes);
     expect(screen.queryByText('Decide')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Decide' })).toBeNull();
-    // The block's controls live inside the same block as the statement.
+    expect(screen.queryByText('What approving changes')).toBeNull();
+    // The block's controls live inside the same block as the why.
     expect(within(screen.getByTestId('proposal-block')).getByTestId('outcomes')).toBe(outcomes);
   });
 
-  it('says only a person can approve a merge policy, and names what is approved', async () => {
-    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ target: mergePolicy }));
+  it('shows the recommendation once, as one line, and has one Approve and no header action', async () => {
+    vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('approve'));
     renderGlob(decision());
-    const notice = await screen.findByTestId('person-only-notice');
-    expect(notice.textContent).toBe('Only a person can approve this kind of change');
-    expect(within(await screen.findByTestId('outcomes')).getByRole('button', { name: 'Approve merge policy' })).toBeTruthy();
+    const recommendation = await screen.findByTestId('recommendation');
+    expect((await within(recommendation).findByTestId('suggestion')).textContent).toBe('Recommends: Approve as drafted. Fits the conventions.');
+    expect(screen.getAllByTestId('recommendation')).toHaveLength(1);
+    expect(screen.queryByTestId('assessment')).toBeNull();
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Approve change' })).toHaveLength(1);
+    expect(screen.queryByTestId('apply-suggestion')).toBeNull();
+  });
+
+  it('does not repeat the title as a heading or show the boilerplate', async () => {
+    vi.spyOn(api, 'plan').mockResolvedValue(planOf('The full statement of the learning.'));
+    renderGlob(decision());
+    await screen.findByText('The full statement of the learning.');
+    await screen.findByTestId('outcomes');
+    expect(screen.queryByTestId('proposal-statement')).toBeNull();
+    expect(screen.queryByText(/never deleted/)).toBeNull();
+    expect(screen.queryByTestId('person-only-notice')).toBeNull();
+    expect(screen.queryByText('Scope')).toBeNull();
+    expect(screen.queryByText('Delete…')).toBeNull();
+  });
+
+  it('explains the scope on one line, with the options behind a change link', async () => {
+    const user = userEvent.setup();
+    renderGlob(decision({ scope: { kind: 'future_work', ref: null } }));
+    const applies = await screen.findByTestId('applies-to');
+    expect(within(applies).getByTestId('decision-scope').textContent).toMatch(/^Applies to: /);
+    expect(screen.queryByTestId('scope-editor')).toBeNull();
+    await user.click(within(applies).getByTestId('change-scope'));
+    const kinds = within(await screen.findByTestId('scope-kind')).getAllByRole('option').map((o) => o.textContent);
+    expect(kinds).toContain("Future work: every new glob, optionally only one group's");
+    expect(kinds).toContain('One glob: only this glob');
+  });
+
+  it('hides the scope line for a change routed to a document', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ target: { kind: 'doc', name: 'architecture', section: null, newDocument: null } }));
+    renderGlob(decision());
+    await screen.findByTestId('outcomes');
+    await waitFor(() => expect(screen.queryByTestId('applies-to')).toBeNull());
+    expect(await screen.findByTestId('change-heading')).toBeTruthy();
+    expect(screen.queryByTestId('applies-to')).toBeNull();
+  });
+
+  it('makes the recommended outcome the primary button, and approve-with-edits opens the editor pre-filled with a single Save / Cancel', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
+    vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('approve_with_edit', 'The recommended wording'));
+    renderGlob(decision());
+    const outcomes = await screen.findByTestId('outcomes');
+    const primary = await within(outcomes).findByRole('button', { name: 'Approve with edits…' });
+    await user.click(primary);
+    const form = await screen.findByTestId('outcome-form-accept_with_edits');
+    expect(within(form).getByRole('textbox')).toHaveProperty('value', 'The recommended wording');
+    expect(within(outcomes).getAllByRole('button', { name: 'Save' })).toHaveLength(1);
+    expect(within(outcomes).getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
+    expect(screen.queryByTestId('apply-suggestion')).toBeNull();
+  });
+
+  it('opens approve-with-edits from the menu pre-filled with the recommendation, or the draft without one', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
+    renderGlob(decision());
+    const menu = await openMenu(user);
+    await user.click(within(menu).getByTestId('outcome-accept_with_edits'));
+    const form = await screen.findByTestId('outcome-form-accept_with_edits');
+    expect(within(form).getByRole('textbox')).toHaveProperty('value', 'The draft');
   });
 
   it('has no notice for an ordinary section change', async () => {
@@ -201,9 +292,9 @@ describe('the proposal block of a learning', () => {
 });
 
 describe('the admin-only check on both accept modes', () => {
-  it('blocks a PO submitting Accept with edits on an admin-only target, as it blocks Approve', async () => {
+  it('blocks a PO approving with edits on an admin-only target, as it blocks Approve', async () => {
     const user = userEvent.setup();
-    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ target: mergePolicy, draft: { content: '{}' } as GlobDiff['draft'] }));
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ target: mergePolicy, draft: { section: null, content: '{}' } }));
     vi.spyOn(api, 'suggestion').mockResolvedValue({
       suggestion: {
         suggestion: { action: 'approve_with_edit', editedDraft: '{"edited":true}', mergeInto: null, mergedText: null, reason: 'tighter' },
@@ -218,12 +309,21 @@ describe('the admin-only check on both accept modes', () => {
     const { onDecide } = renderGlob(decision(), 'po');
     const outcomes = await screen.findByTestId('outcomes');
     expect(within(outcomes).getByRole('group', { name: 'Outcome' })).toBeTruthy();
-    await user.click(await screen.findByTestId('apply-suggestion'));
-    const submit = await screen.findByRole('button', { name: /Accept with edits|Approve with edits|with edits/i });
-    expect(await screen.findByTestId('outcome-form-accept_with_edits')).toBeTruthy();
-    expect(submit).toHaveProperty('disabled', true);
-    await user.click(submit);
+    const primary = await within(outcomes).findByRole('button', { name: 'Approve with edits…' });
+    expect(primary).toHaveProperty('disabled', true);
+    await user.click(primary);
+    expect(screen.queryByTestId('outcome-form-accept_with_edits')).toBeNull();
     expect(onDecide).not.toHaveBeenCalled();
+  });
+});
+
+describe('a recommended reject on an admin-only target', () => {
+  it('leaves a PO a usable primary Reject…', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ target: mergePolicy }));
+    vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('reject'));
+    renderGlob(decision(), 'po');
+    const outcomes = await screen.findByTestId('outcomes');
+    expect(await within(outcomes).findByRole('button', { name: 'Reject…' })).toHaveProperty('disabled', false);
   });
 });
 
