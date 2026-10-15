@@ -118,7 +118,7 @@ describe('group page merge', () => {
 });
 
 describe('card group label', () => {
-  const card = (props: { groupHref?: string; groupProgress?: string | null; onFilterGroup?: (n: string) => void }) =>
+  const card = (props: { onFilterGroup?: (n: string) => void }) =>
     render(
       <MemoryRouter>
         <GlobCard
@@ -135,20 +135,14 @@ describe('card group label', () => {
       </MemoryRouter>,
     );
 
-  it('shows progress and links to the group page, with no separate filter button', async () => {
+  it('filters the board by the group on click, with no progress and no link to the group page', async () => {
     const onFilterGroup = vi.fn();
-    card({ groupHref: '/boards/1/groups/board-chat', groupProgress: '3/5', onFilterGroup });
+    card({ onFilterGroup });
     const chip = screen.getByTestId('group-chip');
-    expect(chip.textContent).toBe('board-chat 3/5');
-    expect(chip.getAttribute('href')).toBe('/boards/1/groups/board-chat');
-    expect(screen.queryByTestId('group-filter')).toBeNull();
+    expect(chip.textContent).toBe('board-chat');
+    expect(chip.getAttribute('href')).toBeNull();
     expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
     await userEvent.setup().click(chip);
-    expect(onFilterGroup).not.toHaveBeenCalled();
-  });
-
-  it('keeps a plain name without progress', () => {
-    card({ groupHref: '/boards/1/groups/board-chat', groupProgress: null });
-    expect(screen.getByTestId('group-chip').textContent).toBe('board-chat');
+    expect(onFilterGroup).toHaveBeenCalledWith('board-chat');
   });
 });

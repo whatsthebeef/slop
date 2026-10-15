@@ -120,19 +120,17 @@ const Avatar = ({ email, planner }: { email: string; planner: boolean }) =>
 
 /**
  * A group's label: a curated sticker colour, the only shiny thing on the board. It is always just the tag, and a click does one
- * thing: with `to` (`progress`, such as "3/5", shows after the name) it links to the group's page; with only `onFilter` (the
- * board's cards) it filters the board to the group without opening the card; with neither it is plain.
+ * thing: with `to` it links there (the glob view links to the board filtered by the group); with only `onFilter` (the board's
+ * cards) it filters the board to the group without opening the card; with neither it is plain.
  */
 export const GroupChip = ({
   name,
   onFilter,
   to,
-  progress,
 }: {
   name: string;
   onFilter?: (name: string) => void;
   to?: string;
-  progress?: string | null;
 }) => {
   const { hi, base, lo } = groupSticker(name);
   const colours: CSSProperties & Record<'--st-hi' | '--st-base' | '--st-lo', string> = {
@@ -141,10 +139,9 @@ export const GroupChip = ({
     '--st-lo': lo,
   };
   const className = 'sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold';
-  const label = progress == null ? name : `${name} ${progress}`;
   if (to !== undefined) {
     return (
-      <Tip text={progress == null ? `Open group: ${name}` : `Open group: ${name}, ${progress} merged`}>
+      <Tip text={`Show only group: ${name}`}>
         <Link
           to={to}
           className={className}
@@ -153,7 +150,7 @@ export const GroupChip = ({
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
-          {label}
+          {name}
         </Link>
       </Tip>
     );
@@ -162,7 +159,7 @@ export const GroupChip = ({
     return (
       <Tip text={`Group: ${name}`}>
         <span className={className} style={colours}>
-          {label}
+          {name}
         </span>
       </Tip>
     );
@@ -181,7 +178,7 @@ export const GroupChip = ({
         }}
         onKeyDown={(e) => e.stopPropagation()}
       >
-        {label}
+        {name}
       </button>
     </Tip>
   );
@@ -599,17 +596,11 @@ export const GlobCard = ({
   viewer,
   waitingOnThis = 0,
   onFilterGroup,
-  groupHref,
-  groupProgress,
 }: {
   glob: GlobView;
   onOpen: () => void;
   /** Filters the board to a group (the card's group tag); without it the tag is plain. */
   onFilterGroup?: (name: string) => void;
-  /** The group's page; with it the tag links there instead of filtering. */
-  groupHref?: string;
-  /** The group's progress ("3/5") while it has more than one open glob. */
-  groupProgress?: string | null;
   /** Opens the glob at the section (and artifact or label) a chip or icon points to; `onOpen` opens it at the top. */
   onOpenSection: (target: GlobTarget) => void;
   /** Absent on a read-only card (the signed-off list): its label chips then offer no approve or re-open. */
@@ -726,7 +717,7 @@ export const GlobCard = ({
       <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
         <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
           <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
-            {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} to={groupHref} progress={groupProgress} />}
+            {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} />}
             {decision ? null : human ? (
               <ActionChips glob={glob} />
             ) : (
