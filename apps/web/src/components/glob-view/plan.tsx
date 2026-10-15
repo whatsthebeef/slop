@@ -20,8 +20,8 @@ export const PlanSection = ({ ctx }: { ctx: GlobViewContext }) => {
     return <PlanEditor globId={ctx.glob.id} startExpanded={startExpanded} />;
   const canInvestigate = ctx.glob.allowedActions?.includes('investigate') === true;
   const tabs = [
-    { id: 'plan', label: 'plan.md', icon: FileText },
-    { id: TEST_PLAN_TAB, label: 'Test plan', icon: ClipboardCheck },
+    { id: 'plan', label: 'Plan', icon: FileText },
+    { id: TEST_PLAN_TAB, label: 'Test Plan', icon: ClipboardCheck },
   ] as const;
   return (
     <div className="grid gap-2">

@@ -130,6 +130,14 @@ export interface ReportedCheck {
   readonly summary: string;
 }
 
+/** What the host's rules say about merging into a branch, as far as the integration can read them. */
+export interface BranchRules {
+  /** The status checks the rules require before merging. */
+  readonly requiredChecks: readonly string[];
+  /** Whether the integration is on the bypass list of the rulesets requiring checks; null when the host won't show bypass lists. */
+  readonly integrationBypasses: boolean | null;
+}
+
 export interface CodeHost {
   /** True once the host integration is configured (e.g. the GitHub App exists). */
   readonly configured: boolean;
@@ -137,6 +145,8 @@ export interface CodeHost {
   connection(repo: Repo): Promise<RepoConnection>;
   /** The integration's own settings (its event subscriptions and owner); null when it isn't set up or the host can't say. */
   appSettings(): Promise<AppSettings | null>;
+  /** The rules applying to `branch` (the integration's own token); null when they can't be read. */
+  branchRules(repo: Repo, branch: string): Promise<BranchRules | null>;
   /** Creates the glob's branch (empty `<id>: start` commit) and draft review with labels. Idempotent. */
   provision(repo: Repo, glob: Glob, plan: string): Promise<{ branch: string; pr: { number: number; headSha: string } }>;
   /**

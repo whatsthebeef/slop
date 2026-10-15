@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { classifyGitHubFailure, machine } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import { REVIEW_CHECK } from '../codehost.js';
-import type { AppSettings, BehindBase, BranchFile, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, CommitGraph, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -116,6 +116,30 @@ export class GitHub implements CodeHost, CommitGraph {
     };
     this.appSettingsCache = { at: Date.now(), value };
     return value;
+  }
+
+  /** Active rules on `branch` (`GET /rules/branches/{branch}`), and whether this App bypasses the rulesets that require checks. */
+  async branchRules(repo: Repo, branch: string): Promise<BranchRules | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}/rules/branches/{branch}', { owner: repo.owner, repo: repo.name, branch });
+      const requiring = data.filter((rule) => rule.type === 'required_status_checks');
+      const requiredChecks = requiring.flatMap((rule) => rule.parameters?.required_status_checks.map((c) => c.context) ?? []);
+      const appId = this.credentials.get()?.id;
+      let integrationBypasses: boolean | null = null;
+      if (requiring.length > 0 && appId !== undefined) {
+        const ids = [...new Set(requiring.map((rule) => rule.ruleset_id).filter((id): id is number => id !== undefined))];
+        const sets = await Promise.all(ids.map((id) => gh.request('GET /repos/{owner}/{repo}/rulesets/{ruleset_id}', { owner: repo.owner, repo: repo.name, ruleset_id: id }).then((r) => r.data, () => null)));
+        // The bypass list is only returned to people who can administer the repo; without it we can't say.
+        if (sets.every((set) => set !== null && set.bypass_actors !== undefined)) {
+          integrationBypasses = sets.every((set) => set?.bypass_actors?.some((a) => a.actor_type === 'Integration' && a.actor_id === appId) ?? false);
+        }
+      }
+      return { requiredChecks, integrationBypasses };
+    } catch (error) {
+      if (isStatus(error, 403, 404)) return null;
+      throw error;
+    }
   }
 
   private async octokit(repo: Repo): Promise<Octokit> {

@@ -74,4 +74,9 @@ describe('listedArtifacts', () => {
     expect(listedArtifacts(all, false)).toEqual([{ kind: 'implementation_plan' }]);
     expect(listedArtifacts(all, true)).toEqual(all);
   });
+  it('always leaves the test plan out, as it has its own tab', () => {
+    const withTestPlan = [...all, { kind: 'test_plan' }];
+    expect(listedArtifacts(withTestPlan, false)).toEqual([{ kind: 'implementation_plan' }]);
+    expect(listedArtifacts(withTestPlan, true)).toEqual(all);
+  });
 });

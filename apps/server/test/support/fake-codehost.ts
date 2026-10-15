@@ -11,6 +11,7 @@ export class FakeCodeHost implements CodeHost {
 
   connection: CodeHost['connection'] = () => Promise.resolve({ configured: true, connected: true, installUrl: null, appName: null });
   appSettings: CodeHost['appSettings'] = () => Promise.resolve(null);
+  branchRules: CodeHost['branchRules'] = () => Promise.resolve(null);
   provision: CodeHost['provision'] = (_repo: unknown, glob: Glob) => Promise.resolve({ branch: glob.id, pr: { number: 1, headSha: 'abcdef0123456789' } });
   openDraftPr: CodeHost['openDraftPr'] = () => Promise.resolve(null);
   syncLabels: CodeHost['syncLabels'] = () => Promise.resolve();
