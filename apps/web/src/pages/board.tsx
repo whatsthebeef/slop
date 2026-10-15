@@ -511,6 +511,7 @@ export const BoardPage = () => {
                       }}
                       onAct={(action) => void commit(glob, action)}
                       repo={board.data.repo ?? undefined}
+                      base={board.data.baseBranch}
                       onArrow={(direction) => arrow(glob, direction)}
                       lock={motion.locks[glob.id]}
                       bump={bumps[glob.id]}
