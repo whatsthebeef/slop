@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { handoverOneLine } from '@/lib/handover';
+import { stripMarkdown } from '@/lib/markdown-text';
+import { InlineMarkdown } from '../markdown-view';
 import { handoverKey, shortLabel } from '@/lib/dismissals';
 import { cn } from '@/lib/utils';
 import type { GlobActionsState } from './actions';
@@ -14,10 +16,10 @@ const CLAMP_AT = 200;
 /** A long line (a run's whole failure reason) cut to its first lines, with a toggle for the rest. */
 const Clamped = ({ text }: { text: string }) => {
   const [more, setMore] = useState(false);
-  if (text.length <= CLAMP_AT) return <>{text}</>;
+  if (text.length <= CLAMP_AT) return <InlineMarkdown text={text} />;
   return (
     <>
-      {more ? text : `${text.slice(0, CLAMP_AT).trimEnd()}…`}{' '}
+      {more ? <InlineMarkdown text={text} /> : `${stripMarkdown(text).slice(0, CLAMP_AT).trimEnd()}…`}{' '}
       <button
         type="button"
         className="cursor-pointer text-xs underline"
@@ -173,7 +175,9 @@ export const ProblemSection = ({
               {detail.length > 0 && (
                 <ul className="list-disc pl-5 text-xs text-muted-foreground">
                   {detail.map((l) => (
-                    <li key={l}>{l}</li>
+                    <li key={l}>
+                      <InlineMarkdown text={l} />
+                    </li>
                   ))}
                 </ul>
               )}

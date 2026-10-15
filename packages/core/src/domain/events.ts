@@ -28,6 +28,8 @@ export const DOMAIN_EVENT_TYPES = [
   'MergeHeld',
   /** A held merge started after its `merge` relations were met (data: the head). */
   'MergeResumed',
+  /** Slop updated a behind branch while merging (data: how many times for this merge request). */
+  'MergeBranchUpdated',
   'MergeReverted',
   'MergeRevertFailed',
   'MergeRevertDeclined',

@@ -240,8 +240,13 @@ export interface CodeHost {
   rerunFailedJobs(repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'>;
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
-  /** Squash-merges at exactly `sha` as `<id>: <title>`, or updates a branch that is behind. */
-  squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
+  /**
+   * Squash-merges at exactly `sha` as `<id>: <title>`. A branch that is behind is updated instead (the merge resumes
+   * on the new head's checks) while `updates`, the updates already made for this merge request, is 0; after one it is
+   * merged behind (no conflict) so a busy base can't starve it, falling back to one more update if GitHub requires an
+   * up-to-date branch.
+   */
+  squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string, updates?: number): Promise<MergeResult>;
   /**
    * Reverts commit `sha` on the base branch as a new commit `Revert "<subject>"`. `moved` when the base has commits
    * after `sha` (the revert is then left to a person).

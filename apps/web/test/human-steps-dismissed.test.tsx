@@ -54,6 +54,15 @@ describe('Dismissed human steps', () => {
     expect(screen.getByTestId('dismissed-who').textContent).toBe(' (by ann@x.com on 2026-10-15)');
   });
 
+  it('renders a dismissal reason as Markdown, with no raw markers', async () => {
+    renderSteps([step({ id: 'a', state: 'due' }), dismissed('c', 'wrong **host**, use `h2`')]);
+    await userEvent.click(screen.getByTestId('dismissed-toggle'));
+    const reason = screen.getByTestId('dismissed-reason');
+    expect(reason.textContent).toBe(': wrong host, use h2');
+    expect(reason.querySelector('strong')?.textContent).toBe('host');
+    expect(reason.querySelector('code')?.textContent).toBe('h2');
+  });
+
   it('shows no dismissed line when nothing is dismissed', () => {
     renderSteps([step({ id: 'a', state: 'due' })]);
     expect(screen.queryByTestId('dismissed-steps')).toBeNull();
