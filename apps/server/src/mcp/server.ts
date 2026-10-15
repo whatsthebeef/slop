@@ -302,7 +302,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           ...proposal.value.questions,
           ...proposal.value.suggestedAfter
             .filter((id) => !applied.has(id))
-            .map((id) => relationQuestion(id, 'The request says to wait for it, but it was not added as a relation.', { kind: 'intake', actor: null })),
+            .map((id) => relationQuestion(id, 'The request says to wait for it, but it was not added as a relation. Answering only records your choice: add the relation from the glob view if it is one.', { kind: 'intake', actor: null })),
         ];
       }
       // A titled create skips intake, so choose the group alone; a model that is down leaves it empty.
