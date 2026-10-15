@@ -392,6 +392,12 @@ describe('slop new', () => {
     ...patch,
   });
 
+  it('says a new super waits in Planning and prints the command that picks it up', async () => {
+    const run = setup({ create_glob: () => created({ type: 'super' }) }, { board: '1' });
+    await newCommand(['--super', 'design', 'it'], run.deps);
+    expect(run.out.join('')).toContain('it waits in Planning until you pick it up to pair: sstor --glob s1t9');
+  });
+
   it('creates through intake with the prompt and a fresh idempotency key', async () => {
     const run = setup({ create_glob: () => created() }, { board: '1' });
     await newCommand(['fix', 'the', 'login', 'timeout'], run.deps);

@@ -275,7 +275,8 @@ describe('services', () => {
     );
 
   it('merge and continue (row 31) needs the latest implementation record at the head', async () => {
-    const glob = unwrap(await globs.create(ADMIN, input({ type: 'super', category: 'feature' })));
+    const created = unwrap(await globs.create(ADMIN, input({ type: 'super', category: 'feature' })));
+    const glob = unwrap(await globs.pickUp(DEV, created.id, created.version, false));
     const head = 'abcdef0123456789';
     unwrap(await globs.applyEvent(glob.id, (g, ctx) => machine.prReadyForReview(g, { number: 7, headSha: head }, ctx)));
     const passing = unwrap(
@@ -298,7 +299,8 @@ describe('services', () => {
   });
 
   it("mark_ready from the board (supers) needs the latest implementation record at the draft PR's head", async () => {
-    const glob = unwrap(await globs.create(ADMIN, input({ type: 'super', category: 'feature' })));
+    const created = unwrap(await globs.create(ADMIN, input({ type: 'super', category: 'feature' })));
+    const glob = unwrap(await globs.pickUp(DEV, created.id, created.version, false));
     const head = 'abcdef0123456789';
     const drafted = unwrap(
       await globs.applyEvent(glob.id, (g, ctx) =>

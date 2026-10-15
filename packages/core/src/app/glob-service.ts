@@ -146,7 +146,7 @@ export interface CreateGlobInput {
   /** Actions: who is meant to do it (default: anyone). */
   readonly assignee?: string | null;
   readonly autoTrigger: boolean;
-  /** Super only: `false` parks it in Planning until a person picks it up to pair; otherwise it starts in Doing with its creator. */
+  /** Accepted for compatibility and ignored: a super always waits in Planning until a person picks it up to pair. */
   readonly start?: boolean;
   readonly idempotencyKey: string | null;
   /**

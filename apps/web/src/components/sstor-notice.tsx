@@ -4,14 +4,18 @@ import { copyOrSelect } from '@/lib/plan-text';
 import { copySstorCommand } from '@/lib/sstor-command';
 
 /** The notice after Pick up: says the command was copied, or shows it to copy by hand when the clipboard refused. */
-const Notice = ({ globId, command, copied }: { globId: string; command: string; copied: boolean }) =>
+const Notice = ({ globId, command, copied, pairs }: { globId: string; command: string; copied: boolean; pairs: boolean }) =>
   copied ? (
     <span>
       Picked up {globId} · Copied <code>{command}</code>
+      {pairs && ': it opens the pairing session on the branch once slop has created it'}
     </span>
   ) : (
     <span className='grid gap-1'>
-      <span>Picked up {globId} · Couldn't copy, so copy it by hand:</span>
+      <span>
+        Picked up {globId} · Couldn't copy, so copy it by hand
+        {pairs && ' (it opens the pairing session on the branch once slop has created it)'}:
+      </span>
       <span className='flex items-center gap-2'>
         <code className='select-all rounded bg-muted px-1 py-0.5'>{command}</code>
         <button
@@ -31,11 +35,11 @@ const Notice = ({ globId, command, copied }: { globId: string; command: string; 
  */
 export const useSstorCopy = () => {
   const toast = useToast();
-  return (action: Action, globId: string): (() => Promise<void>) => {
+  return (action: Action, globId: string, type?: string | null): (() => Promise<void>) => {
     const copy = copySstorCommand(action, globId, typeof navigator === 'undefined' ? undefined : navigator.clipboard);
     return async () => {
       const result = await copy;
-      if (result !== null) toast(<Notice globId={globId} command={result.command} copied={result.copied} />, result.copied ? 5000 : 20000);
+      if (result !== null) toast(<Notice globId={globId} command={result.command} copied={result.copied} pairs={type === 'super'} />, result.copied ? 5000 : 20000);
     };
   };
 };

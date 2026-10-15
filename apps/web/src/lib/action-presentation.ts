@@ -88,7 +88,7 @@ export const actionPresentation = (
             icon: 'human',
             tip:
               glob.type === 'super'
-                ? 'You pair on it with the product owner'
+                ? 'You pair on it with the product owner: copies the sstor command that opens the pairing session'
                 : 'You implement it in your own session',
             // A super is paired on and a decision is decided by a person, so picking it up is the next step.
             placement: glob.type === 'super' || decision ? 'main' : 'more',
