@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { BoardService } from '../src/app/board-service.js';
+import { GlobService } from '../src/app/glob-service.js';
+import type { CreateGlobInput, RelationScanTrigger } from '../src/app/glob-service.js';
+import type { Result } from '../src/domain/errors.js';
+import * as machine from '../src/domain/machine.js';
+import type { Glob, Relation } from '../src/domain/types.js';
+import { hash } from '../src/app/text-hash.js';
+import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import type { RelationScanRow } from '../src/domain/relation-scan.js';
+import { sentenceHash } from '../src/domain/relation-scan.js';
 import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, defaultStepBlocks, derivedSteps, dueText, humanSteps, isHumanStepDue, isForViewer, stepsForViewer, storedBlockProgress, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
 import { armOf, armView, armsStored, rolloutStages } from '../src/domain/rollout-stages.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
@@ -335,5 +345,318 @@ describe('after-deploy steps and the arm stage (s15f176)', () => {
   it('keeps the compact due of an after-deploy step', () => {
     const [step] = humanSteps(merged(), {}, [prod()]);
     expect(step && compactStep(step)).toMatchObject({ due: 'after_deploy:production', state: 'pending' });
+  });
+});
+
+describe('a failed step, card suggestions and the automatic apply (GlobService)', () => {
+  const ADMIN = 'admin@example.com';
+  const DEV = 'dev@example.com';
+  const OUTSIDER = 'outsider@example.com';
+  let store: MemoryStore;
+  let boards: BoardService;
+  let globs: GlobService;
+  let boardId: number;
+  let runs: number;
+  let requests: { globId: string; newText: string }[];
+
+  const unwrapped = <T>(result: Result<T>): T => {
+    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+    return result.value;
+  };
+  const input = (patch: Partial<CreateGlobInput> = {}): CreateGlobInput => ({
+    boardId,
+    title: 'Work',
+    type: 'same',
+    category: 'task',
+    group: null,
+    environment: null,
+    autoTrigger: false,
+    idempotencyKey: null,
+    ...patch,
+  });
+  const make = async (patch: Partial<CreateGlobInput> = {}): Promise<Glob> => unwrapped(await globs.create(ADMIN, input(patch)));
+  const merge = (id: string) => globs.applyEvent(id, (g, c) => machine.merged(g, { sha: 'abc123' }, c)).then(unwrapped);
+  const rows = (from?: string): Relation[] => [...store.state.relations.values()].filter((r) => from === undefined || r.from === from);
+  const scans = (): RelationScanRow[] => [...store.state.relationScans.values()];
+  const current = async (id: string): Promise<Glob> => {
+    const found = await globs.peek(id);
+    if (found === null) throw new Error(`No glob ${id}`);
+    return found;
+  };
+  const scanRow = (patch: Partial<RelationScanRow> & { globId: string; mentionedId: string; sentence: string }): RelationScanRow => ({
+    sentenceHash: sentenceHash(patch.sentence),
+    boardId,
+    kind: 'mention',
+    decision: 'suggested',
+    gate: null,
+    reason: null,
+    relationId: null,
+    state: 'open',
+    model: null,
+    createdAt: NOW,
+    decidedAt: null,
+    ...patch,
+  });
+  const seed = (...r: RelationScanRow[]) => store.transaction((tx) => tx.upsertRelationScans(r));
+  const planHashOf = async (id: string): Promise<string> => hash(await globs.peekPlan(id));
+
+  beforeEach(async () => {
+    store = new MemoryStore();
+    const notifier = new RecordingNotifier();
+    runs = 0;
+    requests = [];
+    const relationScan: RelationScanTrigger = { request: (r) => void requests.push(r) };
+    boards = new BoardService({ store, notifier });
+    globs = new GlobService({ store, notifier, clock: { now: () => '2026-10-15T12:00:00.000Z' }, ids: { runId: () => `run-${++runs}` }, routines: { hasRoutine: () => Promise.resolve(true) }, relationScan });
+    await store.transaction(async (tx) => {
+      for (const email of [ADMIN, DEV, OUTSIDER]) await tx.upsertUser({ email, name: email, active: true });
+    });
+    boardId = unwrapped(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    unwrapped(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
+  });
+
+  describe('failHumanStep', () => {
+    const failed = async () => {
+      const g = await make({ title: 'Log data protection' });
+      await merge(g.id);
+      const step = unwrapped(await globs.addHumanStep(ADMIN, g.id, null, { title: 'Provision the stack', kind: 'rollout' }));
+      unwrapped(await globs.failHumanStep(DEV, g.id, step.id, 'the stack did not provision', null));
+      return { g, step };
+    };
+
+    it('leaves the step open, logs HumanStepFailed and writes one open step_failed suggestion, with no model call', async () => {
+      const { g, step } = await failed();
+      expect([...store.state.humanSteps.values()].find((s) => s.id === step.id)?.state).toBe('open');
+      expect(store.state.events.filter((e) => e.type === 'HumanStepFailed')).toMatchObject([{ globId: g.id, actor: DEV, data: { stepId: step.id, title: 'Provision the stack', note: 'the stack did not provision' } }]);
+      expect(scans()).toMatchObject([
+        { globId: g.id, mentionedId: step.id, kind: 'step_failed', decision: 'suggested', state: 'open', gate: 'sign_off', sentence: 'This step failed: is there a fix glob? Provision the stack', model: null },
+      ]);
+      expect(unwrapped(await globs.get(ADMIN, g.id)).suggestions).toMatchObject([{ kind: 'step_failed', stepId: step.id, mentioned: null, text: 'This step failed: is there a fix glob? Provision the stack' }]);
+      // Failing it again while the suggestion is open adds nothing.
+      unwrapped(await globs.failHumanStep(DEV, g.id, step.id, 'still broken', null));
+      expect(scans()).toHaveLength(1);
+      // The board list carries it too.
+      expect(unwrapped(await globs.listWithArtifacts(ADMIN, boardId, {})).find((r) => r.glob.id === g.id)?.suggestions).toHaveLength(1);
+      // Nothing asks the relation scan about a failure.
+      expect(requests.filter((r) => r.newText.includes('did not provision'))).toEqual([]);
+    });
+
+    it('refuses a step that is not open or does not exist, and a stale version', async () => {
+      const g = await make();
+      const step = unwrapped(await globs.addHumanStep(ADMIN, g.id, null, { title: 'Do it', kind: 'rollout' }));
+      expect((await globs.failHumanStep(ADMIN, g.id, 'hs_nope', 'x', null)).ok).toBe(false);
+      const stale = await globs.failHumanStep(ADMIN, g.id, step.id, 'x', g.version + 5);
+      expect(!stale.ok && stale.error.code).toBe('version_conflict');
+      unwrapped(await globs.completeHumanStep(ADMIN, g.id, step.id, null));
+      const done = await globs.failHumanStep(ADMIN, g.id, step.id, 'x', null);
+      expect(!done.ok && done.error.message).toContain('already done');
+      expect((await globs.failHumanStep(OUTSIDER, g.id, step.id, 'x', null)).ok).toBe(false);
+    });
+
+    it('"link a glob" writes sign_off until merged on this glob, pointing at the fix, and closes the suggestion', async () => {
+      const { g, step } = await failed();
+      const fix = await make({ title: 'Fix the stack', category: 'bug' });
+      const [suggestion] = unwrapped(await globs.get(ADMIN, g.id)).suggestions ?? [];
+      const none = await globs.resolveSuggestion(ADMIN, g.id, suggestion?.id ?? '', 'accept', {});
+      expect(none.ok).toBe(false);
+      unwrapped(await globs.resolveSuggestion(ADMIN, g.id, suggestion?.id ?? '', 'accept', { glob: fix.id }));
+      expect(rows(g.id)).toMatchObject([{ to: fix.id, gate: 'sign_off', until: 'merged', source: 'person', reason: 'fixes the failed step Provision the stack' }]);
+      expect(unwrapped(await globs.get(ADMIN, g.id)).suggestions).toBeUndefined();
+      expect(scans()[0]).toMatchObject({ mentionedId: step.id, state: 'done' });
+    });
+
+    it('dismissing is remembered: the suggestion is gone and stays gone', async () => {
+      const { g } = await failed();
+      const [suggestion] = unwrapped(await globs.get(ADMIN, g.id)).suggestions ?? [];
+      unwrapped(await globs.resolveSuggestion(ADMIN, g.id, suggestion?.id ?? '', 'dismiss', {}));
+      expect(scans()[0]?.state).toBe('dismissed');
+      expect(unwrapped(await globs.get(ADMIN, g.id)).suggestions).toBeUndefined();
+      expect((await globs.resolveSuggestion(ADMIN, g.id, suggestion?.id ?? '', 'dismiss', {})).ok).toBe(false);
+    });
+  });
+
+  describe('suggestions from the automatic pass', () => {
+    it('accepting a prerequisite adds the relation as the person, with the sentence as its reason', async () => {
+      const a = await make();
+      const b = await make({ title: 'Needs a' });
+      const sentence = `Hand over the profile only after ${a.id} is in place.`;
+      await seed(scanRow({ globId: b.id, mentionedId: a.id, sentence, gate: 'sign_off' }));
+      const [s] = unwrapped(await globs.get(ADMIN, b.id)).suggestions ?? [];
+      expect(s).toMatchObject({ kind: 'prerequisite', mentioned: a.id, gate: 'sign_off' });
+      expect(s?.text).toContain(`Mentions ${a.id}`);
+      unwrapped(await globs.resolveSuggestion(ADMIN, b.id, s?.id ?? '', 'accept'));
+      expect(rows(b.id)).toMatchObject([{ to: a.id, gate: 'sign_off', source: 'person', reason: sentence }]);
+      expect(scans()[0]).toMatchObject({ state: 'done', decision: 'added' });
+    });
+
+    it('accepting a reverse suggestion writes the relation on the other glob; a supersede suggestion writes the supersession', async () => {
+      const served = await make({ title: 'Served' });
+      const fix = await make({ title: 'Fix' });
+      await seed(scanRow({ globId: fix.id, mentionedId: served.id, sentence: `This fixes ${served.id}.`, gate: 'sign_off' }));
+      const [r] = unwrapped(await globs.get(ADMIN, fix.id)).suggestions ?? [];
+      expect(r?.kind).toBe('reverse');
+      unwrapped(await globs.resolveSuggestion(ADMIN, fix.id, r?.id ?? '', 'accept'));
+      expect(rows(served.id)).toMatchObject([{ to: fix.id, gate: 'sign_off', source: 'person' }]);
+
+      const old = await make({ title: 'Old' });
+      const fresh = await make({ title: 'Fresh' });
+      await seed(scanRow({ globId: fresh.id, mentionedId: old.id, sentence: `This replaces ${old.id}.` }));
+      const [x] = unwrapped(await globs.get(ADMIN, fresh.id)).suggestions ?? [];
+      expect(x?.kind).toBe('supersedes');
+      unwrapped(await globs.resolveSuggestion(ADMIN, fresh.id, x?.id ?? '', 'accept'));
+      expect(unwrapped(await globs.get(ADMIN, old.id)).relationGroups.supersededBy).toMatchObject({ id: fresh.id });
+    });
+
+    it('adding a covering relation by hand marks the suggestion done', async () => {
+      const a = await make();
+      const b = await make();
+      await seed(scanRow({ globId: b.id, mentionedId: a.id, sentence: `Needs ${a.id} first.` }));
+      unwrapped(await globs.addRelation(ADMIN, b.id, null, { to: a.id, reason: 'x' }, 'held_by', 'agent'));
+      expect(unwrapped(await globs.get(ADMIN, b.id)).suggestions).toBeUndefined();
+      expect(scans()[0]).toMatchObject({ state: 'done', relationId: rows(b.id)[0]?.id });
+    });
+
+    it('a suggestion that names a glob on a board the viewer cannot see is not shown', async () => {
+      const other = unwrapped(await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+      const foreign = unwrapped(await globs.create(OUTSIDER, input({ boardId: other.id })));
+      const mine = await make();
+      await seed(scanRow({ globId: mine.id, mentionedId: foreign.id, sentence: `Waits for ${foreign.id}.` }));
+      expect(unwrapped(await globs.get(DEV, mine.id)).suggestions).toBeUndefined();
+    });
+  });
+
+  describe('applyAutomatic', () => {
+    const add = (to: string, patch: Partial<Parameters<GlobService['applyAutomatic']>[2][number]> = {}) => ({
+      to,
+      gate: 'start' as const,
+      until: 'merged' as const,
+      reason: `needs ${to}`,
+      sentence: `Starts after ${to}.`,
+      ...patch,
+    });
+
+    it('writes source auto rows with the reason in one go, events carry the source, and returns what it added', async () => {
+      const a = await make();
+      const b = await make();
+      const waiting = await make({ type: 'sub', after: [a.id] });
+      const plan = await planHashOf(waiting.id);
+      const result = await globs.applyAutomatic(waiting.id, plan, [add(b.id, { gate: 'sign_off', reason: 'hand over after b' })], ADMIN);
+      expect(result).toEqual({ added: [b.id], skipped: [], stale: false });
+      expect(rows(waiting.id).find((r) => r.to === b.id)).toMatchObject({ gate: 'sign_off', until: 'merged', source: 'auto', reason: 'hand over after b' });
+      expect(store.state.events.filter((e) => e.type === 'RelationAdded' && e.globId === waiting.id && e.data.source === 'auto')).toHaveLength(1);
+      expect((await current(waiting.id)).version).toBeGreaterThan(waiting.version);
+    });
+
+    it('does nothing and says stale when the plan changed', async () => {
+      const a = await make();
+      const g = await make();
+      const result = await globs.applyAutomatic(g.id, 'sha256:not-the-plan', [add(a.id)], ADMIN);
+      expect(result).toEqual({ added: [], skipped: [], stale: true });
+      expect(rows()).toEqual([]);
+    });
+
+    it('skips: a pair that has any row (dismissed too), a glob past its start gate, a target that holds nothing, a cycle, an unknown glob, an empty reason', async () => {
+      const a = await make();
+      const planning = await make({ type: 'sub', after: [a.id] });
+      const plan = await planHashOf(planning.id);
+      // Any row for the pair, whatever its gate.
+      const existing = await globs.applyAutomatic(planning.id, plan, [add(a.id, { gate: 'sign_off' })], ADMIN);
+      expect(existing.skipped).toEqual([{ to: a.id, why: 'already related' }]);
+      // A dismissed row also ends the question.
+      unwrapped(await globs.dismissRelation(ADMIN, planning.id, null, rows(planning.id)[0]?.id ?? ''));
+      expect((await globs.applyAutomatic(planning.id, plan, [add(a.id)], ADMIN)).skipped[0]?.why).toBe('already related');
+      // A start gate on a glob that already started.
+      const started = await make({ type: 'sub' });
+      const b = await make();
+      expect((await globs.applyAutomatic(started.id, await planHashOf(started.id), [add(b.id)], ADMIN)).skipped[0]?.why).toContain('already started');
+      // A target that is merged and rolled out holds nothing.
+      const done = await make();
+      await merge(done.id);
+      const c = await make();
+      expect((await globs.applyAutomatic(c.id, await planHashOf(c.id), [add(done.id, { gate: 'sign_off' })], ADMIN)).skipped[0]?.why).toContain('already');
+      // A cycle.
+      const x = await make();
+      await make({ after: [x.id] });
+      const y = rows().find((q) => q.to === x.id)?.from ?? '';
+      expect((await globs.applyAutomatic(x.id, await planHashOf(x.id), [add(y)], ADMIN)).skipped[0]?.why).toContain('cycle');
+      // Unknown glob, empty reason.
+      const r = await globs.applyAutomatic(x.id, await planHashOf(x.id), [add('s1t999'), add(b.id, { reason: ' ' })], ADMIN);
+      expect(r.skipped.map((s) => s.why)).toEqual(['No glob s1t999', 'a relation needs a reason']);
+      expect(rows().filter((q) => q.source === 'auto')).toEqual([]);
+    });
+
+    it("holds_back writes the row on the other glob (the fix or follow-up case)", async () => {
+      const served = await make({ title: 'Served' });
+      await merge(served.id);
+      const fix = await make({ title: 'Fix' });
+      const result = await globs.applyAutomatic(fix.id, await planHashOf(fix.id), [add(served.id, { gate: 'sign_off', direction: 'holds_back', reason: 'fixes it' })], ADMIN);
+      expect(result.added).toEqual([served.id]);
+      expect(rows(served.id)).toMatchObject([{ to: fix.id, gate: 'sign_off', source: 'auto', reason: 'fixes it' }]);
+    });
+
+    it("cross-board: allowed when the glob's creator is a member of the other board, a skipped result when not", async () => {
+      const other = unwrapped(await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+      const foreign = unwrapped(await globs.create(OUTSIDER, input({ boardId: other.id })));
+      const mine = await make();
+      const refused = await globs.applyAutomatic(mine.id, await planHashOf(mine.id), [add(foreign.id, { gate: 'sign_off' })], DEV);
+      expect(refused.added).toEqual([]);
+      expect(refused.skipped).toEqual([{ to: foreign.id, why: `No glob ${foreign.id}` }]);
+      unwrapped(await boards.setMember(OUTSIDER, other.id, ADMIN, 'admin'));
+      const allowed = await globs.applyAutomatic(mine.id, await planHashOf(mine.id), [add(foreign.id, { gate: 'sign_off' })], ADMIN);
+      expect(allowed.added).toEqual([foreign.id]);
+      expect(rows(mine.id)[0]).toMatchObject({ boardId, to: foreign.id, source: 'auto' });
+    });
+
+    it('dismissing an automatic relation remembers the pair in the scan cache, so it is never asked again', async () => {
+      const a = await make();
+      const g = await make();
+      await globs.applyAutomatic(g.id, await planHashOf(g.id), [add(a.id)], ADMIN);
+      const row = rows(g.id)[0];
+      unwrapped(await globs.dismissRelation(ADMIN, g.id, null, row?.id ?? ''));
+      expect(scans()).toMatchObject([{ globId: g.id, mentionedId: a.id, decision: 'not_prerequisite', state: 'dismissed', relationId: row?.id }]);
+      // A person's own relation, dismissed, leaves no scan row.
+      const b = await make();
+      const mine = await make({ after: [b.id] });
+      unwrapped(await globs.dismissRelation(ADMIN, mine.id, null, rows(mine.id)[0]?.id ?? ''));
+      expect(scans()).toHaveLength(1);
+    });
+
+    it('a rejected add does not stop the others', async () => {
+      const a = await make();
+      const b = await make();
+      const g = await make();
+      const result = await globs.applyAutomatic(g.id, await planHashOf(g.id), [add('s1t404'), add(a.id), add(b.id, { gate: 'merge' })], ADMIN);
+      expect(result.added).toEqual([a.id, b.id]);
+      expect(result.skipped).toEqual([{ to: 's1t404', why: 'No glob s1t404' }]);
+    });
+  });
+
+  describe('the automatic pass is told when text arrives', () => {
+    it('on create (the plan), on a step added (title, why, detail) and on a rollout record (changed steps only)', async () => {
+      const g = await make({ plan: 'Wire it up. It needs s1t9 first.' });
+      expect(requests).toEqual([{ globId: g.id, newText: 'Wire it up. It needs s1t9 first.' }]);
+      unwrapped(await globs.addHumanStep(ADMIN, g.id, null, { title: 'Turn on push mode', why: 'after s1t9 is deployed', detail: 'flip it' }));
+      expect(requests.at(-1)).toEqual({ globId: g.id, newText: 'Turn on push mode\nafter s1t9 is deployed\nflip it' });
+      const record = '## Rollout\n- manual: Create the groups\n  - Why: the buildspec needs them\n';
+      const source = { commitSha: null, runId: null, agentSetVersion: null };
+      await globs.reconcileRollout(ADMIN, g.id, record, source);
+      expect(requests.at(-1)?.newText).toContain('Create the groups');
+      const count = requests.length;
+      // The same record again changes nothing, so nothing is sent.
+      await globs.reconcileRollout(ADMIN, g.id, record, source);
+      expect(requests).toHaveLength(count);
+    });
+
+    it('a request that throws never fails the write', async () => {
+      const failing = new GlobService({
+        store,
+        notifier: new RecordingNotifier(),
+        clock: { now: () => NOW },
+        ids: { runId: () => `x-${++runs}` },
+        routines: { hasRoutine: () => Promise.resolve(true) },
+        relationScan: { request: () => Promise.reject(new Error('queue down')) },
+      });
+      expect((await failing.create(ADMIN, input())).ok).toBe(true);
+    });
   });
 });
