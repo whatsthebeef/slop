@@ -4,7 +4,7 @@ import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
 import type { MachineStep, StallThresholds } from './machine-steps.js';
 import { LABEL_NAMES } from './types.js';
-import type { Glob, LabelName, Labels } from './types.js';
+import type { ChecklistItem, Glob, LabelName, Labels } from './types.js';
 import type { Holding } from './relations.js';
 
 /**
@@ -60,9 +60,28 @@ export const signOffText = (labels: Labels): string => {
   return waiting.length === 0 ? 'sign off' : `sign off · ${waiting.join(', ')}`;
 };
 
-/** A state a person is the one to move in, whatever steps say: sign-off labels asked for. */
-const personReason = (glob: Glob): string | null =>
-  glob.status === 'reviewing' && labelsWaiting(glob.labels).length > 0 ? signOffText(glob.labels) : null;
+/** The unticked, sent items on labels in state `added`: the feedback the developer has to deal with, in FR, CR, QA order. */
+export const openFeedback = (glob: Pick<Glob, 'labels' | 'checklists'>): { readonly label: LabelName; readonly items: readonly ChecklistItem[] }[] =>
+  LABEL_NAMES.flatMap((label) => {
+    const items = glob.labels[label] === 'added' ? (glob.checklists[label] ?? []).filter((item) => !item.done && item.draft !== true) : [];
+    return items.length === 0 ? [] : [{ label, items }];
+  });
+
+/** The one wording for feedback waiting on the developer: "fix feedback · QA 2", the labels with open items and how many each. */
+export const feedbackText = (glob: Pick<Glob, 'labels' | 'checklists'>, verb = 'fix feedback'): string =>
+  `${verb} · ${openFeedback(glob)
+    .map((f) => `${f.label} ${String(f.items.length)}`)
+    .join(', ')}`;
+
+/**
+ * A state a person is the one to move in, whatever steps say: open feedback on a label is the developer's turn and outranks
+ * sign-off, which is the reviewer's turn.
+ */
+const personReason = (glob: Glob): string | null => {
+  if (glob.status !== 'reviewing') return null;
+  if (openFeedback(glob).length > 0) return feedbackText(glob);
+  return labelsWaiting(glob.labels).length > 0 ? signOffText(glob.labels) : null;
+};
 
 /** An escalation is a person's turn only when nothing else holds the ball: it never outranks a machine step (see `whoseMove`). */
 const escalationReason = (glob: Glob): string | null =>
