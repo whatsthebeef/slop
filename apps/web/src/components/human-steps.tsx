@@ -457,6 +457,7 @@ export const HumanSteps = ({
   startOpen = false,
   openSignal = 0,
   collapsed = false,
+  part = 'all',
   ...actions
 }: {
   glob: GlobView;
@@ -471,6 +472,8 @@ export const HumanSteps = ({
   openSignal?: number;
   /** Starts collapsed whatever is still to do (a decision glob: the steps sit below the assessments). */
   collapsed?: boolean;
+  /** `due` is the block of due steps above the action row; `rest` is the collapsible section with the other steps and Add step; `all` is both, one after the other. */
+  part?: 'due' | 'rest' | 'all';
 } & StepActions) => {
   const all = glob.humanSteps ?? [];
   const live = all.filter((s) => !isDismissedStep(s));
@@ -485,7 +488,9 @@ export const HumanSteps = ({
   useEffect(() => {
     if (openSignal > 0) setToggled(true);
   }, [openSignal]);
-  if (all.length === 0 && !canAdd) return null;
+  const showDue = part !== 'rest' && due.length > 0;
+  const showRest = part !== 'due' && (canAdd || steps.length + quiet.length + dismissed.length > 0);
+  if (!showDue && !showRest) return null;
   const open = toggled ?? stepsOpenByDefault;
   const toggle = () => {
     setToggled(!open);
@@ -506,7 +511,7 @@ export const HumanSteps = ({
   const stepProps = (s: ListedHumanStep) => ({ glob, source: { repo, baseBranch }, step: s, mine: viewer !== undefined && isForViewer(s, glob, viewer), busy, actions: wrapped });
   return (
     <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2' aria-label='Human steps' data-testid='human-steps'>
-      {due.length > 0 && (
+      {showDue && (
         <Block
           tone='person'
           actor='human'
@@ -520,43 +525,47 @@ export const HumanSteps = ({
           </ul>
         </Block>
       )}
-      <div className='flex items-center gap-2'>
-        <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>
-          {due.length > 0 ? 'More steps' : 'Human steps'} ({steps.length + quiet.length})
-          {!open && left > 0 && (
-            <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='human-steps-left'>
-              {left} to do
-            </span>
-          )}
-        </SectionToggle>
-        {canAdd && (
-          <Button
-            size='sm'
-            variant='ghost'
-            className='h-6 gap-1 px-1.5 text-xs'
-            data-testid='add-step'
-            onClick={() => {
-              setAdding(!(adding && open));
-              setToggled(true);
-            }}
-          >
-            <Plus className='h-3.5 w-3.5' />
-            Add step
-          </Button>
-        )}
-      </div>
-      {open && (
+      {showRest && (
         <>
-          {steps.length > 0 && (
-            <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
-              {steps.map((s) => (
-                <Step key={s.id} {...stepProps(s)} />
-              ))}
-            </ul>
+          <div className='flex items-center gap-2'>
+            <SectionToggle open={open} onToggle={toggle} testId='human-steps-toggle'>
+              {due.length > 0 ? 'More steps' : 'Human steps'} ({steps.length + quiet.length})
+              {!open && left > 0 && (
+                <span className='rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground' data-testid='human-steps-left'>
+                  {left} to do
+                </span>
+              )}
+            </SectionToggle>
+            {canAdd && (
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-6 gap-1 px-1.5 text-xs'
+                data-testid='add-step'
+                onClick={() => {
+                  setAdding(!(adding && open));
+                  setToggled(true);
+                }}
+              >
+                <Plus className='h-3.5 w-3.5' />
+                Add step
+              </Button>
+            )}
+          </div>
+          {open && (
+            <>
+              {steps.length > 0 && (
+                <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
+                  {steps.map((s) => (
+                    <Step key={s.id} {...stepProps(s)} />
+                  ))}
+                </ul>
+              )}
+              <QuietSteps steps={quiet} render={(s) => <Step key={s.id} {...stepProps(s)} />} />
+              <DismissedSteps steps={dismissed} />
+              {canAdd && adding && <AddStep busy={busy} onAdd={wrapped.onAdd} onClose={() => setAdding(false)} />}
+            </>
           )}
-          <QuietSteps steps={quiet} render={(s) => <Step key={s.id} {...stepProps(s)} />} />
-          <DismissedSteps steps={dismissed} />
-          {canAdd && adding && <AddStep busy={busy} onAdd={wrapped.onAdd} onClose={() => setAdding(false)} />}
         </>
       )}
     </section>
