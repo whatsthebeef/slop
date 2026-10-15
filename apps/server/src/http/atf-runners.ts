@@ -69,9 +69,11 @@ export const mountAtfRunners = (app: Hono<Env>, deps: AtfRunnerRoutesDeps): void
     const body = createBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return bad(c, body.error.issues[0]?.message ?? 'Bad runner');
     const result = await deps.runners.create(c.get('email'), boardId, body.data);
-    return result.ok
-      ? c.json({ value: result.value }, 201)
-      : c.json(errorBody(result.error), statusOf(result.error));
+    if (!result.ok) return c.json(errorBody(result.error), statusOf(result.error));
+    // The client secret (client credentials only) is in this answer and nowhere else: it is never stored or logged.
+    const { credentials, ...runner } = result.value;
+    c.header('Cache-Control', 'no-store');
+    return c.json({ value: runner, ...(credentials !== undefined && { credentials }) }, 201);
   });
 
   app.patch('/api/boards/:b/atf-runners/:id', async (c) => {
@@ -91,8 +93,14 @@ export const mountAtfRunners = (app: Hono<Env>, deps: AtfRunnerRoutesDeps): void
     const id = runnerId(c);
     if (boardId === null || id === null) return bad(c, 'Bad runner');
     const result = await deps.runners.revoke(c.get('email'), boardId, id);
-    return result.ok
-      ? c.json({ value: result.value })
-      : c.json(errorBody(result.error), statusOf(result.error));
+    if (!result.ok) return c.json(errorBody(result.error), statusOf(result.error));
+    // The runner is revoked either way; a warning says its Cognito client is still there (revoking again retries).
+    const { cleanup, ...runner } = result.value;
+    return c.json({
+      value: runner,
+      ...(cleanup === 'failed' && {
+        warning: 'The runner is revoked, but its client credentials could not be removed from Cognito. Revoke it again to retry.',
+      }),
+    });
   });
 };

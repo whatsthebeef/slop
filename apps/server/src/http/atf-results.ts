@@ -53,7 +53,7 @@ export const mountAtfResults = (app: Hono<Env>, deps: AtfResultsRoutesDeps): voi
     async (c) => {
       const boardId = Number(c.req.param('b'));
       const bearer = bearerOf(c.req.header('authorization'));
-      const runner = bearer === null ? null : await deps.authenticate(boardId, bearer);
+      const runner = bearer === null ? null : await deps.authenticate(boardId, bearer, 'atf.write-results');
       if (runner === null) return c.json(unauthenticated, 401);
       for (const [name, value] of Object.entries(deprecationHeaders(runner))) c.header(name, value);
       const body = resultsBody.safeParse(await c.req.json().catch(() => null));

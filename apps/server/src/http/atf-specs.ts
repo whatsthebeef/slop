@@ -86,7 +86,7 @@ export const mountAtfSpecs = (app: Hono<Env>, deps: AtfSpecsRoutesDeps): void =>
   app.get('/integrations/boards/:b/atf-specs', async (c) => {
     const boardId = boardOf(c);
     const bearer = bearerOf(c.req.header('authorization'));
-    const runner = bearer === null || boardId === null ? null : await deps.authenticate(boardId, bearer);
+    const runner = bearer === null || boardId === null ? null : await deps.authenticate(boardId, bearer, 'atf.read-specs');
     // Plain on purpose: nothing says which check failed.
     if (runner === null) return c.json({ code: 'unauthenticated', message: 'Unauthenticated' }, 401);
     for (const [name, value] of Object.entries(deprecationHeaders(runner))) c.header(name, value);

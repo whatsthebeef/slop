@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AtfRunnerService } from '../src/app/atf-runner-service.js';
-import type { RunnerInput } from '../src/app/atf-runner-service.js';
+import type { RunnerCredentialIssuer, RunnerInput } from '../src/app/atf-runner-service.js';
 import {
   arnAccount,
   claimValueMatches,
@@ -321,6 +321,89 @@ describe('the ATF runner registry', () => {
   });
 });
 
+describe('client credentials issued for a runner', () => {
+  let store: MemoryStore;
+  let boardId: number;
+  const calls: string[] = [];
+  let failIssue = false;
+  let failRevoke = false;
+  const issuer: RunnerCredentialIssuer = {
+    issue: (name) => {
+      calls.push(`issue ${name}`);
+      return failIssue
+        ? Promise.reject(new Error('down'))
+        : Promise.resolve({
+            clientId: 'c1',
+            clientSecret: 'the-secret',
+            tokenUrl: 'https://t.example/token',
+            scope: 'a b',
+          });
+    },
+    revoke: (clientId) => {
+      calls.push(`revoke ${clientId}`);
+      return failRevoke ? Promise.reject(new Error('down')) : Promise.resolve();
+    },
+  };
+  const service = () => new AtfRunnerService({ store, clock: { now: () => START }, issuer });
+  const vendor: RunnerInput = {
+    name: 'Vendor',
+    method: 'client_credentials',
+    environments: ['staging'],
+  };
+
+  beforeEach(async () => {
+    store = new MemoryStore();
+    calls.length = 0;
+    failIssue = false;
+    failRevoke = false;
+    boardId = await store.transaction(async (tx) => {
+      await tx.upsertUser({ email: ADMIN, name: ADMIN, active: true });
+      const board = await tx.insertBoard({
+        name: 'b',
+        repo: 'acme/app',
+        baseBranch: 'main',
+        timeZone: 'UTC',
+        defaultRoutineOwner: null,
+        environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+        sensitivePaths: [],
+      });
+      await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });
+      return board.id;
+    });
+  });
+
+  it('stores only the client ID and hands the secret back on the create call alone', async () => {
+    const created = unwrap(await service().create(ADMIN, boardId, vendor));
+    expect(created.credentials?.clientSecret).toBe('the-secret');
+    expect(created.config).toEqual({ clientId: 'c1' });
+    expect(created.enabled).toBe(true);
+    const stored = await store.transaction((tx) => tx.getAtfRunner(boardId, created.id));
+    expect(JSON.stringify(stored)).not.toContain('the-secret');
+    expect(JSON.stringify(unwrap(await service().list(ADMIN, boardId)))).not.toContain(
+      'the-secret',
+    );
+  });
+
+  it('leaves no usable runner when the provider fails, and frees the name', async () => {
+    failIssue = true;
+    expect(errorCode(await service().create(ADMIN, boardId, vendor))).toBe('invalid_combination');
+    expect(unwrap(await service().list(ADMIN, boardId))).toEqual([]);
+    failIssue = false;
+    expect(unwrap(await service().create(ADMIN, boardId, vendor)).credentials).toBeDefined();
+  });
+
+  it('revokes the runner before its client, and reports a failed cleanup without un-revoking', async () => {
+    const created = unwrap(await service().create(ADMIN, boardId, vendor));
+    failRevoke = true;
+    const revoked = unwrap(await service().revoke(ADMIN, boardId, created.id));
+    expect(revoked).toMatchObject({ enabled: false, cleanup: 'failed' });
+    expect(revoked.revokedAt).not.toBeNull();
+    failRevoke = false;
+    expect(unwrap(await service().revoke(ADMIN, boardId, created.id)).cleanup).toBeUndefined();
+    expect(calls.filter((c) => c.startsWith('revoke'))).toEqual(['revoke c1', 'revoke c1']);
+  });
+});
+
 describe('role ARNs', () => {
   const role = 'arn:aws:iam::123456789012:role/atf';
   it('reduces an assumed-role ARN to its role and reads the account', () => {
@@ -334,8 +417,18 @@ describe('role ARNs', () => {
   it('matches exact, prefix*, and a pathed role against its path-less session ARN', () => {
     expect(roleArnMatches([role], role)).toBe(true);
     expect(roleArnMatches([role], 'arn:aws:sts::123456789012:assumed-role/atf/s')).toBe(true);
-    expect(roleArnMatches(['arn:aws:iam::123456789012:role/ci/atf'], 'arn:aws:sts::123456789012:assumed-role/atf/s')).toBe(true);
-    expect(roleArnMatches(['arn:aws:iam::123456789012:role/atf-*'], 'arn:aws:iam::123456789012:role/atf-dev')).toBe(true);
+    expect(
+      roleArnMatches(
+        ['arn:aws:iam::123456789012:role/ci/atf'],
+        'arn:aws:sts::123456789012:assumed-role/atf/s',
+      ),
+    ).toBe(true);
+    expect(
+      roleArnMatches(
+        ['arn:aws:iam::123456789012:role/atf-*'],
+        'arn:aws:iam::123456789012:role/atf-dev',
+      ),
+    ).toBe(true);
     expect(roleArnMatches([role], 'arn:aws:iam::123456789012:role/other')).toBe(false);
     expect(roleArnMatches([role], 'arn:aws:iam::210987654321:role/atf')).toBe(false);
     expect(roleArnMatches([role], 'arn:aws:iam::123456789012:user/atf')).toBe(false);

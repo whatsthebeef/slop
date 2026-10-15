@@ -18,12 +18,19 @@ export interface ResolvedRunner {
   readonly environments: readonly string[] | null;
 }
 
+/** What a door needs from a credential, for the methods that grant by scope (client credentials). */
+export type AtfScope = 'atf.read-specs' | 'atf.write-results';
+
 /**
  * Recognises one kind of credential. Returns the registered runner it identifies on this board, or null when the
  * credential isn't of its kind, doesn't verify, or matches no runner. A verifier that finds a credential matching more than
  * one runner must return null: the resolver also refuses when two verifiers answer for different runners.
  */
-export type RunnerVerifier = (boardId: number, bearer: string) => Promise<ResolvedRunner | null>;
+export type RunnerVerifier = (
+  boardId: number,
+  bearer: string,
+  scope?: AtfScope,
+) => Promise<ResolvedRunner | null>;
 
 export const ATF_RUNNERS_README_URL =
   'https://github.com/whatsthebeef/slop/blob/main/catalog/scripts/README.md';
@@ -34,15 +41,17 @@ const LEGACY_LOG_PERIOD_MS = 60 * 60 * 1000;
 export interface AtfAuthDeps {
   readonly store: Pick<Store, 'transaction'>;
   readonly tokens: Pick<IntegrationTokenService, 'authenticate'>;
-  /** Identity methods beyond the legacy token; parts for OIDC, AWS and Cognito add theirs here. */
+  /** Identity methods beyond the legacy token; OIDC and AWS identity, and Cognito client credentials, add theirs here. */
   readonly verifiers?: readonly RunnerVerifier[];
   readonly log: (task: string, message: string) => void;
   readonly now?: () => number;
 }
 
+/** `scope` is what the calling door needs; verifiers whose credentials aren't scoped (OIDC, AWS) ignore it. */
 export type RunnerAuthenticator = (
   boardId: number,
   credential: string,
+  scope?: AtfScope,
 ) => Promise<ResolvedRunner | null>;
 
 /**
@@ -54,12 +63,12 @@ export type RunnerAuthenticator = (
 export const createRunnerAuthenticator = (deps: AtfAuthDeps): RunnerAuthenticator => {
   const now = deps.now ?? Date.now;
   const lastLegacyLog = new Map<number, number>();
-  return async (boardId, credential) => {
+  return async (boardId, credential, scope) => {
     const bearer = credential.trim();
     if (bearer === '' || !Number.isSafeInteger(boardId) || boardId <= 0) return null;
     const answers = await Promise.all(
       (deps.verifiers ?? []).map((verify) =>
-        verify(boardId, bearer).catch(() => {
+        verify(boardId, bearer, scope).catch(() => {
           deps.log('atf auth', 'An ATF credential verifier failed');
           return null;
         }),

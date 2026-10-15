@@ -35,6 +35,7 @@ import { codeHostExecutors } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { createRunnerAuthenticator } from './atf-auth.js';
+import { AwsCognitoClients, cognitoRunnerCredentials, createCognitoRunnerVerifier } from './atf-cognito.js';
 import { createOidcRunnerVerifier } from './atf-oidc.js';
 import { atfExecutors } from './atf-executors.js';
 import { CodeBuildAtfStarter } from './atf-starter.js';
@@ -552,7 +553,17 @@ mountSkillZip(app, {
 });
 mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 // ATF runners (spec, ATF runners): each identity method adds a verifier here; the board's integration token is the legacy way in.
-const atfRunners = new AtfRunnerService({ store, clock });
+// Client credentials need slop's own Cognito pool; without its settings (local development) that method can't authenticate or be issued.
+const cognitoClients =
+  config.AUTH_MODE === 'cognito' && config.COGNITO_USER_POOL_ID !== undefined && config.COGNITO_REGION !== undefined
+    ? new AwsCognitoClients({ userPoolId: config.COGNITO_USER_POOL_ID, region: config.COGNITO_REGION })
+    : null;
+const atfRunners = new AtfRunnerService({
+  store,
+  clock,
+  ...(cognitoClients === null ? {} : { issuer: cognitoRunnerCredentials(cognitoClients, `https://${config.COGNITO_DOMAIN ?? ''}/oauth2/token`) }),
+  log: logError,
+});
 const oidcRunnerVerifier = createOidcRunnerVerifier({
   store,
   oidcIssuers: config.ATF_OIDC_ALLOWED_ISSUERS,
@@ -560,7 +571,10 @@ const oidcRunnerVerifier = createOidcRunnerVerifier({
   awsAccounts: config.ATF_AWS_ALLOWED_ACCOUNTS,
   audience: config.ATF_OIDC_AUDIENCE ?? config.PUBLIC_URL,
 });
-const atfVerifiers = oidcRunnerVerifier === null ? [] : [oidcRunnerVerifier];
+const atfVerifiers = [
+  ...(oidcRunnerVerifier === null ? [] : [oidcRunnerVerifier]),
+  ...(cognitoClients === null || config.COGNITO_USER_POOL_ID === undefined ? [] : [createCognitoRunnerVerifier({ store, userPoolId: config.COGNITO_USER_POOL_ID })]),
+];
 const authenticateRunner = createRunnerAuthenticator({ store, tokens: integrationTokens, verifiers: atfVerifiers, log: logError });
 mountAtfSpecs(app, { testRuns, boards, authenticate: authenticateRunner, runners: atfRunners, log: logError });
 mountAtfResults(app, { testRuns, runners: atfRunners, authenticate: authenticateRunner, log: logError });
@@ -594,6 +608,7 @@ const capabilities = new CapabilityReader({
   slackConfigured: config.SLACK_SIGNING_SECRET !== undefined && config.SLACK_BOT_TOKEN !== undefined,
   codeIndexRuns: config.SLOP_JOBS.has('code'),
   deployResultsConfigured: config.AWS_WEBHOOK_KEY.length > 0,
+  atfClients: cognitoClients,
 });
 const outboxBacklog = async (): Promise<Record<string, number>> => {
   const rows = await db

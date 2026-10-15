@@ -56,7 +56,14 @@ export class AuthStack extends Stack {
 
     // The MCP endpoint is the protected resource; tokens for it carry this scope.
     const mcpScope = new ResourceServerScope({ scopeName: 'mcp', scopeDescription: 'Use slop through MCP' });
-    const resourceServer = pool.addResourceServer('Slop', { identifier: 'slop', scopes: [mcpScope] });
+    // ATF runners with client credentials (apps/server/src/atf-cognito.ts): slop creates one app client per runner, limited to
+    // these scopes (slop/atf.read-specs, slop/atf.write-results). No client in this stack uses them.
+    const atfReadScope = new ResourceServerScope({ scopeName: 'atf.read-specs', scopeDescription: 'Read the ATF spec list' });
+    const atfWriteScope = new ResourceServerScope({ scopeName: 'atf.write-results', scopeDescription: 'Post ATF results' });
+    const resourceServer = pool.addResourceServer('Slop', {
+      identifier: 'slop',
+      scopes: [mcpScope, atfReadScope, atfWriteScope],
+    });
 
     // Production's Hosted UI offers Identity Center only; native users stay for development (and for prod until the
     // Identity Center metadata is passed, so the first deploy can happen before the console steps).
