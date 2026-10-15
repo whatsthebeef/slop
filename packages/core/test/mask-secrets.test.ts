@@ -58,6 +58,34 @@ describe('maskSecrets', () => {
   });
 });
 
+describe('maskSecrets cost', () => {
+  const inputs: Record<string, string> = {
+    dotted: 'a.'.repeat(50_000),
+    hyphenated: 'a-'.repeat(50_000),
+    keywords: 'token'.repeat(20_000),
+    passwords: 'password.'.repeat(11_000),
+    schemes: 'a+'.repeat(50_000) + '://',
+    urls: 'x://a'.repeat(20_000),
+  };
+  for (const [name, input] of Object.entries(inputs)) {
+    it(`stays linear on 100k characters of ${name}`, () => {
+      const started = performance.now();
+      maskSecrets(input);
+      expect(performance.now() - started).toBeLessThan(500);
+    });
+  }
+
+  it('masks Slack tokens and bare JWTs', () => {
+    expect(maskSecrets('slack xoxb-123456789012-abcdefABCDEF done')).toBe('slack [masked] done');
+    expect(maskSecrets('jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF_-123 end')).toBe('jwt [masked] end');
+  });
+
+  it('still masks URL credentials and prefixed names', () => {
+    expect(maskSecrets('git clone https://user:pw@host.test/x')).toBe('git clone https://[masked]@host.test/x');
+    expect(maskSecrets('my.service-token_value=abc')).toBe('my.service-token_value=[masked]');
+  });
+});
+
 describe('maskedNote', () => {
   it('masks, trims and keeps short notes whole', () => {
     expect(maskedNote('  failed with password=abc  \n')).toBe('failed with password=[masked]');

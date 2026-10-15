@@ -67,6 +67,12 @@ describe('shared status line', () => {
     expect(top(g)).toEqual(statusLine(g, NOW));
   });
 
+  it('shows a same with open rollout steps as ready for Merge and continue, from the server count', () => {
+    const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge_continue'], rolloutSteps: 1 });
+    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge and continue' });
+    expect(top(g)?.tip).not.toContain('--merge');
+  });
+
   it('keeps waiting for checks off the status line: the position indicator carries it', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: [] });
     expect(statusLine(g, NOW)).toBeNull();
@@ -124,13 +130,16 @@ describe('shared status line', () => {
     const g = prOpen({
       headChecks: { sha: head, state: 'pending' },
       allowedActions: [],
-      humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', who: 'admin', due: 'after_merge', blocks: ['sign_off'], state: 'pending' }],
+      rolloutSteps: 1,
     });
     expect(waitingFor(g, [], 'dev')).toMatchObject([
       { action: 'merge_continue', label: 'Merge and continue', running: true },
     ]);
     // Without steps it is still plain Merge.
-    expect(waitingFor({ ...g, humanSteps: [] }, [], 'dev')).toMatchObject([{ action: 'merge', label: 'Merge' }]);
+    expect(waitingFor({ ...g, rolloutSteps: 0 }, [], 'dev')).toMatchObject([{ action: 'merge', label: 'Merge' }]);
+    // The web reads the server's count, not the step list: a placeholder or non-blocking step does not turn Merge into Merge and continue.
+    const placeholder = { ...g, rolloutSteps: 0, humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', who: 'admin', due: 'after_merge', blocks: ['sign_off'], state: 'pending' }] } as never;
+    expect(waitingFor(placeholder, [], 'dev')).toMatchObject([{ action: 'merge', label: 'Merge' }]);
   });
 
   it('gives QA and PO no wait', () => {

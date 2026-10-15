@@ -370,6 +370,8 @@ export interface GlobView {
   readonly sizeCheck: SizeCheck | null;
   /** Everything a person must do on the glob: steps the machine implies and stored work steps, most pressing first. */
   readonly humanSteps: readonly HumanStep[];
+  /** Open rollout steps holding back sign-off (`openRolloutSteps`): the one count the views read, so none re-derives it from the steps. */
+  readonly rolloutSteps?: number;
   /** The stage the "Arm system" label names (the first environment with an open rollout step), null when no step is open. */
   readonly arm: Arm | null;
   /** Why a person is needed on the glob and what to do first; null when nothing is wrong. */
@@ -484,6 +486,7 @@ export class GlobService {
         relationGroups: await this.relationGroupsOf(tx, glob, relations),
         sizeCheck,
         humanSteps: steps,
+        rolloutSteps,
         arm: board === null ? null : armView(steps, board),
         handover: await handoverOf(tx, this.deps.clock, glob),
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
@@ -2346,7 +2349,7 @@ export class GlobService {
   async deescalate(email: string, id: string, version: number) {
     const refused = await this.refuseTypeChoice(email, id, 'sub');
     if (refused !== null) return refused;
-    return this.command(email, id, version, (glob, ctx) => machine.deescalate(glob, ctx));
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.deescalate(glob, ctx, facts), { rollout: true });
   }
 
   /** Make it a super: a person takes over a failed sub or same whose routine asked for pairing. Counts as a type correction. */

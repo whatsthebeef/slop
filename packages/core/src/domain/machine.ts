@@ -1314,6 +1314,17 @@ export const startAgain = (
 /** Why a sub that gained rollout steps became a same (criterion `risk_path`). */
 export const ROLLOUT_ESCALATION_REASON = 'Has rollout steps: a person merges it with Merge and continue';
 
+/** A sub that has rollout steps becomes a same escalated for `risk_path` (row 13d), so it never merges itself with steps left dangling. */
+const asRolloutSame = (b: Builder, glob: Glob, ctx: Context): void => {
+  b.set({
+    type: 'same',
+    escalation: { reason: ROLLOUT_ESCALATION_REASON, criterion: 'risk_path', by: 'slop', at: ctx.now },
+    ...(glob.mergeHold == null ? {} : { mergeHold: null }),
+  })
+    .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
+    .event('Escalated', { reason: ROLLOUT_ESCALATION_REASON, criterion: 'risk_path' });
+};
+
 /**
  * Row 13d: a work step that holds back sign-off was written for the glob (a person's, the implementation record's or the
  * rollout check's). A sub before its merge becomes a same, so it never merges itself with steps left dangling, and an armed
@@ -1327,13 +1338,7 @@ export const rolloutStepsAdded = (glob: Glob, ctx: Context): Result<Transition> 
     glob.type === 'sub' &&
     (glob.status === 'planning' || glob.status === 'implementing' || glob.status === 'in_progress' || glob.status === 'pr_open')
   ) {
-    b.set({
-      type: 'same',
-      escalation: { reason: ROLLOUT_ESCALATION_REASON, criterion: 'risk_path', by: 'slop', at: ctx.now },
-      ...(glob.mergeHold == null ? {} : { mergeHold: null }),
-    })
-      .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
-      .event('Escalated', { reason: ROLLOUT_ESCALATION_REASON, criterion: 'risk_path' });
+    asRolloutSame(b, glob, ctx);
     if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
   }
   if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'rollout_steps' });
@@ -1360,6 +1365,9 @@ export const rolloutStepFailed = (
   const merged: MergedPr = { number: landed.number, mergeSha: input.mergeSha ?? '', mergedAt: ctx.now };
   const b = new Builder(glob, ctx).endRun('superseded', null, { cause: 'rollout_step_failed' }).bumpGeneration();
   const generation = b.current.generation;
+  // A sub that merged and then gained steps (the rollout check writes them after the merge) is a same from here on, so the
+  // fix generation never goes through the sub gate and merges itself with the reopened step unchecked.
+  if (glob.type === 'sub') asRolloutSame(b, glob, ctx);
   // A person who implements the glob (a super's creator, or whoever picked it up) fixes it themselves; otherwise a run does.
   const person = glob.type === 'super' || glob.implementer !== null;
   b.set({
@@ -2879,10 +2887,14 @@ export const liftRiskAreaEscalation = (
  * A person decides an escalation was unnecessary: the glob is a sub again. On a ready PR whose checks passed, the sub
  * gate runs on the head, so a sub with nothing else to flag merges.
  */
-export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
+export const deescalate = (glob: Glob, ctx: Context, facts: ActionFacts = {}): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.escalation == null || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only an escalated same can be made a sub again');
+  }
+  // A sub merges itself, which would leave the open rollout steps dangling (the same condition as `allowedActions`).
+  if (glob.escalation.criterion === 'risk_path' && (facts.rolloutSteps ?? 0) > 0) {
+    return invalidTransition(glob, actor, 'A same with open rollout steps cannot be made a sub: it must be merged with Merge and continue');
   }
   if (
     glob.status !== 'implementing' &&

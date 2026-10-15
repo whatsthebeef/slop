@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ArtifactService } from '../src/app/artifact-service.js';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { CreateGlobInput } from '../src/app/glob-service.js';
@@ -143,6 +144,23 @@ describe('Pick up on a merged glob with open rollout steps (row 9a)', () => {
   });
 });
 
+describe('deescalate with open rollout steps', () => {
+  const escalated = ready({ escalation: { reason: machine.ROLLOUT_ESCALATION_REASON, criterion: 'risk_path', by: 'slop', at: NOW } });
+
+  it('is refused while rollout steps are open, with a message that names Merge and continue', () => {
+    const refused = machine.deescalate(escalated, ctx(admin), { rolloutSteps: 1 });
+    expect(!refused.ok && refused.error.code).toBe('invalid_transition');
+    expect(!refused.ok && refused.error.message).toContain('Merge and continue');
+  });
+
+  it('works once no step is open, and for an escalation of another criterion', () => {
+    expect(unwrap(machine.deescalate(escalated, ctx(admin), { rolloutSteps: 0 })).glob.type).toBe('sub');
+    expect(unwrap(machine.deescalate(escalated, ctx(admin))).glob.type).toBe('sub');
+    const other = ready({ escalation: { reason: 'x', criterion: 'design_decision', by: 'agent', at: NOW } });
+    expect(unwrap(machine.deescalate(other, ctx(admin), { rolloutSteps: 1 })).glob.type).toBe('sub');
+  });
+});
+
 describe('rolloutStepsAdded (row 13d)', () => {
   it('turns a sub into a same escalated for risk_path and clears its merge hold', () => {
     const sub = ready({ type: 'sub', mergeHold: { since: NOW, sha: 'abc1234', for: ['s1t9'] } });
@@ -182,6 +200,20 @@ describe('rolloutStepsAdded (row 13d)', () => {
 describe('rolloutStepFailed (row 31a)', () => {
   const failed = (g: Glob, patch: Partial<Parameters<typeof machine.rolloutStepFailed>[1]> = {}, actor = dev) =>
     machine.rolloutStepFailed(g, { stepId: 'hs_1', title: 'Roll out the stack', stepState: 'open', mergeSha: 'sha1', ...patch }, ctx(actor));
+
+  it('turns a merged sub that gained steps into a same, so the next generation never goes through the sub gate', () => {
+    const t = unwrap(failed(merged({ type: 'sub', mergeHold: { reason: 'x' } as never })));
+    expect(t.glob).toMatchObject({ type: 'same', escalation: { criterion: 'risk_path', reason: machine.ROLLOUT_ESCALATION_REASON }, mergeHold: null });
+    expect(types(t)).toEqual(expect.arrayContaining(['FieldsChanged', 'Escalated', 'RolloutStepFailed']));
+    const next = { ...t.glob, status: 'implementing' as const };
+    const ready = unwrap(machine.prReadyForReview(next, { number: 8, headSha: 'def5678' }, ctx(null)));
+    expect(effectKinds(ready)).not.toContain('evaluate_sub_gate');
+  });
+
+  it('leaves a same as it is (no second escalation)', () => {
+    const t = unwrap(failed(merged()));
+    expect(types(t)).not.toContain('Escalated');
+  });
 
   it('starts the next generation on a fresh branch with a new run', () => {
     const g = merged({ generation: 2, labels: { FR: 'added' }, checklists: { FR: [{ id: 'c1', text: 'x', done: false, addedBy: dev.email, addedAt: NOW, doneBy: null, doneAt: null }] } });
@@ -424,6 +456,15 @@ describe('through the service', () => {
     expect(view.humanSteps.find((s) => s.kind === 'merge')).toMatchObject({ title: 'Merge and continue' });
   });
 
+  it('de-escalating a rollout same is refused through the service while a step is open', async () => {
+    const g = await readyGlob('sub');
+    unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out the stack' }));
+    const same = await peek(g.id);
+    const refused = await globs.deescalate(ADMIN, g.id, same.version);
+    expect(!refused.ok && refused.error.message).toContain('Merge and continue');
+    expect((await peek(g.id)).type).toBe('same');
+  });
+
   it('a step that holds nothing back (after a deploy) or a prediction leaves a sub alone', async () => {
     const g = await readyGlob('sub');
     unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Later', due: 'after_deploy:prod' }));
@@ -470,6 +511,16 @@ describe('through the service', () => {
       const done = await update(g.id, { status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'abc1234' }, labels: { CR: 'required' }, ...patch });
       return { glob: done, step };
     };
+
+    it('serves the failure attachment in full through get_context, without an include', async () => {
+      const { glob, step } = await setup();
+      unwrap(await globs.failRolloutStep(DEV, glob.id, step.id, 'Policy refused.', (await peek(glob.id)).version));
+      const artifacts = new ArtifactService({ store, clock: { now: () => '2026-10-13T12:00:00.000Z' }, notifier: new RecordingNotifier() });
+      const context = unwrap(await artifacts.context(DEV, glob.id));
+      expect(context.attachments.map((a) => a.label)).toEqual(['Rollout step failed (generation 1)']);
+      expect(context.attachments[0]?.content).toContain('Policy refused.');
+      expect(context.available.map((a) => a.label)).not.toContain('Rollout step failed (generation 1)');
+    });
 
     it('starts the next generation, with a masked attachment for the next run, and reopens a done step', async () => {
       const { glob, step } = await setup();

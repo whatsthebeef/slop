@@ -153,6 +153,12 @@ describe('catalog agents: pre-checks, prerequisites and off-process changes', ()
     expect(text).toContain('strip credentials');
     expect(text).toContain('`Rollout step failed (generation N)`');
     expect(text).toContain('fresh branch from master');
+    expect(text).toContain('returns it in full by default');
+  });
+
+  it('lists risk_path among the orchestrator\'s escalate_to_same criteria', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('`open_findings`, `risk_path` or `other`');
   });
 
   it('has the orchestrator update the steps for changes made outside the flow with the existing step tools, never running paid steps', async () => {

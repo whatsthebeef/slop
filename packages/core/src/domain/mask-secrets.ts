@@ -27,10 +27,15 @@ const RULES: readonly (readonly [RegExp, string])[] = [
   // Authorization header values (the scheme stays), then any other bearer token.
   [/(authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token)\s+)?)(?!\[masked\]|(?:bearer|basic|token)\s)[^\s"',;]+/gi, `$1${MASKED}`],
   [/(\bbearer\s+)(?!\[masked\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1${MASKED}`],
+  // Slack tokens and bare JWTs (three base64url parts).
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, MASKED],
+  [/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, MASKED],
   // Credentials inside a URL: scheme://user:pass@host or scheme://token@host.
-  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${MASKED}@`],
-  // password=..., token: ..., client_secret=..., api_key=... (the name stays).
-  [/(\b[\w.-]*(?:password|passwd|pwd|token|secret|api[_-]?key)[\w.-]*["']?\s*[:=]\s*["']?)(?!\[masked\])[^\s"'&;,]+/gi, `$1${MASKED}`],
+  // The scheme is bounded so a long dotted run can't restart a scan at every word boundary (linear on any input).
+  [/\b([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+@/gi, `$1${MASKED}@`],
+  // password=..., token: ..., client_secret=..., api_key=... (the name stays, so no prefix is matched; the suffix is
+  // bounded, so repeated keywords can't make the scan quadratic).
+  [/((?:password|passwd|pwd|token|secret|api[_-]?key)[\w.-]{0,40}["']?\s*[:=]\s*["']?)(?!\[masked\])[^\s"'&;,]+/gi, `$1${MASKED}`],
 ];
 
 /** The text with credentials replaced by `[masked]`. */

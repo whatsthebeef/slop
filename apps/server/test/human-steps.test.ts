@@ -134,6 +134,10 @@ describe('human steps in Postgres', () => {
       { id: 'hs-2', kind: 'rollout', title: 'Step hs-2', state: 'due', who: 'admin', due: 'now', blocks: [] },
     ]);
     expect(humanSteps(g, {}, open).map((s) => s.id)).toEqual(['hs-2']);
+    // The count the web reads: a step that holds nothing back is not counted; one that blocks sign-off is.
+    expect(view.rolloutSteps).toBe(0);
+    const blocking = step('hs-3', 's9f2', boardId, { due: 'now', blocks: ['sign_off'] });
+    expect(globViewFor(g, DEV, 'dev', [], undefined, [], [blocking]).rolloutSteps).toBe(1);
   });
 
   it('deleting a glob deletes its steps', async () => {

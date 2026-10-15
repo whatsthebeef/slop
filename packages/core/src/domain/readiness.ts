@@ -683,9 +683,10 @@ export interface ReadyStatus {
 /**
  * Your turn ("Merge") for a same or super at pr_open with a ready PR and passed head checks; "Waiting for checks"
  * while they run. Null otherwise, including subs (the sub gate merges them) and any failure or conflict, which
- * the caller ranks first. `reviewSha` is the commit of the latest local review, when there is one.
+ * the caller ranks first. `reviewSha` is the commit of the latest local review, when there is one; `facts.rolloutSteps` is
+ * the server's count of open rollout steps, so a same with any reads "Merge and continue" (not the refused `--merge`).
  */
-export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyStatus | null => {
+export const readyStatus = (glob: Glob, reviewSha: string | null = null, facts: { readonly rolloutSteps?: number } = {}): ReadyStatus | null => {
   if (glob.type === 'sub' || glob.status !== 'pr_open' || glob.pr?.state !== 'ready') return null;
   if (glob.failure !== null || glob.conflict != null) return null;
   const head = glob.pr.headSha ?? '';
@@ -699,7 +700,7 @@ export const readyStatus = (glob: Glob, reviewSha: string | null = null): ReadyS
       ? `\nLocal review is from ${reviewSha.slice(0, 7)}, before the latest push.`
       : '';
   // Your turn is the glob's due Merge step: the same one the glob view lists.
-  const merge = derivedSteps(glob).find((s) => s.kind === 'merge');
+  const merge = derivedSteps(glob, { rolloutSteps: facts.rolloutSteps ?? 0 }).find((s) => s.kind === 'merge');
   if (merge !== undefined) {
     const why =
       glob.escalation == null ? '' : `\nNeeds a person because: ${glob.escalation.reason}`;

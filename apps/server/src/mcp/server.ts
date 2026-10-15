@@ -780,7 +780,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'escalate_to_same',
     {
       description:
-        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, or in-scope review findings still open after the allowed rounds. Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can set its type back to sub.",
+        "Flag a running sub as needing a human: it becomes a same in place (same branch and PR, no auto-merge) with the reason shown on its card, and the owner is told. Only for a concrete reason: a product or design decision the plan didn't settle, a board risk area, a rewrite of existing data, auth/permissions/secrets changes, weakened or deleted tests, changed agent instructions, scope well beyond the plan, in-scope review findings still open after the allowed rounds, or work on risk paths or with rollout steps (criterion `risk_path`: a rule, not a judgement). Otherwise let the sub merge. Routines pass their run ID (a superseded run's call is ignored). A person can set its type back to sub.",
       inputSchema: {
         id: z.string(),
         reason: z.string().min(1).describe('What a human should check, in one or two sentences'),
@@ -953,7 +953,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         suggestedTarget: z
           .string()
           .optional()
-          .describe('Where it belongs: a document, area or agent definition, "local-run" for how sessions build and launch the local servers, or "merge-policy" for which paths clash between globs (exclusivePaths), which are left out when a sub is sized (sizeIgnoredPaths), which need a rollout after merging (rolloutPaths) and the check a sub waits for (subGateCheck)'),
+          .describe('Where it belongs: a document, area or agent definition, "local-run" for how sessions build and launch the local servers, or "merge-policy" for which paths clash between globs (exclusivePaths), which are left out when a sub is sized (sizeIgnoredPaths), which need a rollout after merging (rolloutPaths) which a sub may never touch (riskPaths: they always make it a same) and the check a sub waits for (subGateCheck)'),
         agentSetVersion: z.number().int().nonnegative().optional(),
         runId: z.string().optional(),
         document: z

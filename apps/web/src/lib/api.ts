@@ -142,6 +142,8 @@ export interface GlobView extends Glob {
   readonly gateCheck?: string;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly ListedHumanStep[];
+  /** Open rollout steps holding back sign-off, counted by the server (a same with any is merged with Merge and continue); absent on an older API, read with `?.`. */
+  readonly rolloutSteps?: number;
   /** The "Arm system" label: the first stage with an open rollout step (an environment, or the base branch for after-merge) and that step's title; absent when no step is open or on an older API. */
   readonly arm?: Arm;
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
