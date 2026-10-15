@@ -45,6 +45,7 @@ describe('the board keeps the latest signed-off globs', () => {
   let database: Database;
   let drop: () => Promise<void>;
   let app: Hono<Env>;
+  let globs: GlobService;
   let boardId = 0;
   const auth = { authorization: 'Bearer dev:member@example.com' };
 
@@ -53,7 +54,7 @@ describe('the board keeps the latest signed-off globs', () => {
     const { db } = database;
     const store = new PgStore(db);
     const hub = new HintHub();
-    const globs = new GlobService({
+    globs = new GlobService({
       store,
       notifier: hub,
       clock: { now: () => new Date().toISOString() },
@@ -103,5 +104,15 @@ describe('the board keeps the latest signed-off globs', () => {
     const page = (await (await app.request(`/api/boards/${boardId}/signed-off`, { headers: auth })).json()) as { globs: { id: string }[]; next: string | null };
     expect(page.globs).toHaveLength(30);
     expect(page.globs[0]?.id).toBe(`s${boardId}t30`);
+  });
+
+  it('keeps an older signed-off glob that still has an open rollout step, with its arm stage (s15f176)', async () => {
+    const added = await globs.addHumanStep('member@example.com', `s${boardId}t1`, null, { title: 'Roll out production', due: 'after_deploy:production' });
+    expect(added.ok).toBe(true);
+    const list = (await (await app.request(`/api/boards/${boardId}/globs`, { headers: auth })).json()) as { id: string; status: string; arm?: { stage: string; title: string } }[];
+    const signedOff = list.filter((g) => g.status === 'signed_off');
+    expect(signedOff).toHaveLength(26);
+    expect(signedOff.find((g) => g.id === `s${boardId}t1`)?.arm).toEqual({ stage: 'production', title: 'Roll out production' });
+    expect(signedOff.find((g) => g.id === `s${boardId}t30`)?.arm).toBeUndefined();
   });
 });

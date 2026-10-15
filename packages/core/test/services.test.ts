@@ -135,6 +135,7 @@ describe('services', () => {
           doneBy: null,
           doneAt: null,
           dismissedReason: null,
+          dueSince: null,
         },
       ]),
     );

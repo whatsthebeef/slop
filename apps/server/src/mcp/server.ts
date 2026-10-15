@@ -1241,13 +1241,14 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     doneBy: step.doneBy,
     doneAt: step.doneAt,
     dismissedReason: step.dismissedReason,
+    dueSince: step.dueSince,
   });
 
   server.registerTool(
     'add_human_step',
     {
       description:
-        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env>. `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
+        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env> (falls due once a deploy of the glob's merge to <env> is recorded or mark_environment_deployed is called, and holds nothing back unless `blocks` says so). `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
       inputSchema: {
         id: z.string(),
         version: z.number().int().optional(),
@@ -1294,6 +1295,16 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       inputSchema: { id: z.string(), stepId: z.string(), reason: z.string().min(1), version: z.number().int().optional() },
     },
     async ({ id, stepId, reason, version }) => reply(await globs.dismissHumanStep(email, id, stepId, reason, version ?? null), stepView),
+  );
+
+  server.registerTool(
+    'mark_environment_deployed',
+    {
+      description:
+        "Say that an environment now runs a glob's merge, for boards that report no deploys: the glob's open `after_deploy:<env>` steps for it fall due (once; a rollback later doesn't undo it). Logged on the glob as EnvironmentMarkedDeployed, not Deployed; it changes no status and not the glob's version. `environment` must be one the board lists. Members only.",
+      inputSchema: { id: z.string(), environment: z.string().min(1) },
+    },
+    async ({ id, environment }) => reply(await globs.markEnvironmentDeployed(email, id, environment)),
   );
 
   server.registerTool(

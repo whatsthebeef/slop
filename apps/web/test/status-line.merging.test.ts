@@ -33,7 +33,14 @@ describe('merging status line', () => {
     const line = statusLine(g, NOW);
     expect(line).toMatchObject({ kind: 'merging', full: 'merging' });
     expect(line?.tip).toContain(head.slice(0, 7));
-    expect(line?.tip).toContain('merges by itself');
+    expect(line?.tip).toContain('merges it once the checks pass');
+  });
+
+  it('says the rollout step comes after the merge when a step is due after it', () => {
+    const humanSteps = [{ id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'], source: 'work' }] as never;
+    const g = merging({ headChecks: { sha: head, state: 'passed' }, humanSteps });
+    expect(statusLine(g, NOW)?.tip).toContain('the rollout step comes after');
+    expect(statusLine(merging({ headChecks: { sha: head, state: 'passed' } }), NOW)?.tip).not.toContain('rollout');
   });
 
   it("doesn't show a failure that predates the merge, and leaves failed globs unchanged", () => {

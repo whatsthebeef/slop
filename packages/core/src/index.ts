@@ -35,6 +35,7 @@ export * from './domain/human-steps.js';
 export * from './domain/capabilities.js';
 export * from './domain/ops-state.js';
 export * from './domain/rollout.js';
+export * from './domain/rollout-stages.js';
 export * from './domain/machine-steps.js';
 export * from './domain/whose-move.js';
 export * from './domain/handover.js';
