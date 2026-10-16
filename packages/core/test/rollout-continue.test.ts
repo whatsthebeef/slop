@@ -30,10 +30,10 @@ const types = (t: machine.Transition): string[] => t.events.map((e) => e.type);
 const effectKinds = (t: machine.Transition): string[] => t.effects.map((e) => e.kind);
 
 describe('Merge and continue for a same with rollout steps (allowed actions)', () => {
-  it('offers merge_continue and withholds merge once the checks passed', () => {
+  it('offers merge, never merge_continue, once the checks passed', () => {
     const actions = machine.allowedActions(ready(), dev, { rolloutSteps: 2 });
-    expect(actions).toContain('merge_continue');
-    expect(actions).not.toContain('merge');
+    expect(actions).toContain('merge');
+    expect(actions).not.toContain('merge_continue');
   });
 
   it('offers neither while the checks are still running: no arming for it', () => {
@@ -81,12 +81,13 @@ describe('requestMerge with rollout steps', () => {
     expect(landed.glob.prs).toEqual([]);
   });
 
-  it('refuses a plain merge with steps, and so never arms it', () => {
-    for (const checks of [passed, { sha: 'abc1234', state: 'pending' as const }]) {
-      const refused = machine.requestMerge(ready({ headChecks: checks }), ctx(dev), { continue: false, facts: { rolloutSteps: 1 } });
-      expect(refused.ok).toBe(false);
-      if (!refused.ok) expect(refused.error.message).toContain('Merge and continue');
-    }
+  it('Merge with steps keeps the glob for them, as the alias does, and never arms it', () => {
+    const t = unwrap(machine.requestMerge(ready(), ctx(dev), { continue: false, facts: { rolloutSteps: 1 } }));
+    expect(t.glob.status).toBe('merging');
+    expect(t.glob.mergeMode).toBeNull();
+    expect(effectKinds(t)).toEqual(['squash_merge']);
+    const pending = machine.requestMerge(ready({ headChecks: { sha: 'abc1234', state: 'pending' } }), ctx(dev), { continue: false, facts: { rolloutSteps: 1 } });
+    expect(pending.ok).toBe(false);
   });
 
   it('refuses Merge and continue for a same without steps, and for a sub', () => {
@@ -147,10 +148,10 @@ describe('Pick up on a merged glob with open rollout steps (row 9a)', () => {
 describe('deescalate with open rollout steps', () => {
   const escalated = ready({ escalation: { reason: machine.ROLLOUT_ESCALATION_REASON, criterion: 'risk_path', by: 'slop', at: NOW } });
 
-  it('is refused while rollout steps are open, with a message that names Merge and continue', () => {
+  it('is refused while rollout steps are open, with a message that says it must be merged', () => {
     const refused = machine.deescalate(escalated, ctx(admin), { rolloutSteps: 1 });
     expect(!refused.ok && refused.error.code).toBe('invalid_transition');
-    expect(!refused.ok && refused.error.message).toContain('Merge and continue');
+    expect(!refused.ok && refused.error.message).toContain('must be merged');
   });
 
   it('works once no step is open, and for an escalation of another criterion', () => {
@@ -168,7 +169,7 @@ describe('rolloutStepsAdded (row 13d)', () => {
     expect(t.glob).toMatchObject({ type: 'same', escalation: { criterion: 'risk_path', by: 'slop', reason: machine.ROLLOUT_ESCALATION_REASON }, mergeHold: null });
     expect(types(t)).toEqual(['FieldsChanged', 'Escalated']);
     expect(effectKinds(t)).toEqual(['sync_pr_labels']);
-    expect(machine.ROLLOUT_ESCALATION_REASON).toBe('Has rollout steps: a person merges it with Merge and continue');
+    expect(machine.ROLLOUT_ESCALATION_REASON).toBe('Has rollout steps: a person merges it, and it stays open for them');
   });
 
   it('converts a sub in any state before its merge, and leaves a merged one alone', () => {
@@ -192,8 +193,8 @@ describe('rolloutStepsAdded (row 13d)', () => {
 
   it('a converted sub is a same the sub gate leaves alone: it has no sub status to merge from', () => {
     const t = unwrap(machine.rolloutStepsAdded(ready({ type: 'sub' }), ctx(null)));
-    expect(machine.allowedActions(t.glob, dev, { rolloutSteps: 1 })).toContain('merge_continue');
-    expect(machine.allowedActions(t.glob, dev, { rolloutSteps: 1 })).not.toContain('merge');
+    expect(machine.allowedActions(t.glob, dev, { rolloutSteps: 1 })).toContain('merge');
+    expect(machine.allowedActions(t.glob, dev, { rolloutSteps: 1 })).not.toContain('merge_continue');
   });
 });
 
@@ -288,7 +289,7 @@ describe('rolloutStepFailed (row 31a)', () => {
     expect(stateOf(next, step)).toBe('pending');
     // The next generation goes through its PR and a plain merge, as any same does.
     const open = { ...next, status: 'pr_open' as const, pr: { number: 9, state: 'ready' as const, headSha: 'def5678' }, headChecks: { sha: 'def5678', state: 'passed' as const } };
-    expect(machine.allowedActions(open, dev, { rolloutSteps: 1 })).toContain('merge_continue');
+    expect(machine.allowedActions(open, dev, { rolloutSteps: 1 })).toContain('merge');
     const merging = unwrap(machine.requestMerge(open, ctx(dev), { continue: true, facts: { rolloutSteps: 1 } })).glob;
     expect(stateOf(merging, step)).toBe('pending');
     const landed = unwrap(machine.merged(merging, { sha: 'sha2', number: 9 }, ctx(null))).glob;
@@ -451,9 +452,9 @@ describe('through the service', () => {
     const after = await peek(g.id);
     expect(after).toMatchObject({ type: 'same', escalation: { criterion: 'risk_path' } });
     const view = unwrap(await globs.get(DEV, g.id));
-    expect(view.allowedActions).toContain('merge_continue');
-    expect(view.allowedActions).not.toContain('merge');
-    expect(view.humanSteps.find((s) => s.kind === 'merge')).toMatchObject({ title: 'Merge and continue' });
+    expect(view.allowedActions).toContain('merge');
+    expect(view.allowedActions).not.toContain('merge_continue');
+    expect(view.humanSteps.find((s) => s.kind === 'merge')).toMatchObject({ title: 'Merge' });
   });
 
   it('de-escalating a rollout same is refused through the service while a step is open', async () => {
@@ -461,7 +462,7 @@ describe('through the service', () => {
     unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out the stack' }));
     const same = await peek(g.id);
     const refused = await globs.deescalate(ADMIN, g.id, same.version);
-    expect(!refused.ok && refused.error.message).toContain('Merge and continue');
+    expect(!refused.ok && refused.error.message).toContain('must be merged');
     expect((await peek(g.id)).type).toBe('same');
   });
 
@@ -478,12 +479,10 @@ describe('through the service', () => {
     expect((await peek(g.id)).mergeMode).toBeNull();
   });
 
-  it('merge is refused with steps and merge_continue merges; without steps merge works', async () => {
+  it('merge with steps keeps the glob open for them and merge_continue is an alias; without steps merge works', async () => {
     const withSteps = await readyGlob();
     unwrap(await globs.addHumanStep(DEV, withSteps.id, null, { title: 'Roll out' }));
-    const plain = await globs.merge(DEV, withSteps.id, (await peek(withSteps.id)).version);
-    expect(!plain.ok && plain.error.message).toContain('Merge and continue');
-    const merging = unwrap(await globs.merge(DEV, withSteps.id, (await peek(withSteps.id)).version, true));
+    const merging = unwrap(await globs.merge(DEV, withSteps.id, (await peek(withSteps.id)).version));
     expect(merging).toMatchObject({ status: 'merging', mergeMode: null });
     expect(store.state.outbox.filter((e) => e.kind === 'squash_merge' && e.globId === withSteps.id)).toHaveLength(1);
     const without = await readyGlob();

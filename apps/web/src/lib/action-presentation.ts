@@ -17,7 +17,7 @@ export interface ActionPresentation {
 }
 
 type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
-  Partial<Pick<GlobView, 'headChecks' | 'artifacts' | 'currentRun' | 'actionState'>>;
+  Partial<Pick<GlobView, 'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState'>>;
 
 /**
  * Whether Review code, when offered, retries slop's automatic review: a merged glob with no after-merge review, or a ready
@@ -46,6 +46,12 @@ const discardTip = (glob: Subject, then: string): string =>
  * and every hint say the same thing. A few actions mean different things by glob state: Start now vs Start
  * (start_anyway), three kinds of Pick up, and three kinds of Discard.
  */
+/** The line a Merge tooltip or confirmation adds when the glob has rollout steps: it is merged, then stays open for them. */
+export const rolloutLine = (glob: { readonly rolloutSteps?: number }): string => {
+  const n = glob.rolloutSteps ?? 0;
+  return n > 0 ? `. Then run its ${String(n)} rollout step${n === 1 ? '' : 's'} (it stays open until they're done)` : '';
+};
+
 export const actionPresentation = (
   action: Action,
   glob: Subject,
@@ -171,7 +177,7 @@ export const actionPresentation = (
         ? {
             label: 'Merge',
             icon: 'machine',
-            tip: `Squash-merges ${prRef(glob)}`,
+            tip: `Squash-merges ${prRef(glob)}${rolloutLine(glob)}`,
             placement: 'main',
           }
         : {
@@ -189,13 +195,13 @@ export const actionPresentation = (
         placement: 'more',
       };
     case 'merge_continue':
-      // A same offers it instead of Merge when it has rollout steps: the glob stays open for them, so it is the main step.
+      // A same is never offered it (Merge covers its rollout steps); this only reads an old alias as Merge.
       // A super keeps Merge (final) as its main step; this is its menu item.
       if (glob.type !== 'super')
         return {
-          label: 'Merge and continue',
+          label: 'Merge',
           icon: 'machine',
-          tip: 'Squash-merges; the glob stays open while you run the rollout steps from master, and sign-off waits',
+          tip: `Squash-merges ${prRef(glob)}`,
           placement: 'main',
         };
       return {

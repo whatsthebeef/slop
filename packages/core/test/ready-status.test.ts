@@ -20,11 +20,10 @@ describe('readyStatus', () => {
     expect(s?.tip).not.toMatch(/auto-fix/);
   });
 
-  it('says Merge and continue for a same with open rollout steps, and no longer names the refused --merge', () => {
+  it('says Merge for a same with open rollout steps, whose tip says it stays open', () => {
     const s = readyStatus(ready(), null, { rolloutSteps: 2 });
-    expect(s).toMatchObject({ kind: 'ready', text: 'Merge and continue' });
-    expect(s?.tip).toMatch(/^Merge and continue: checks passed/);
-    expect(s?.tip).not.toMatch(/--merge/);
+    expect(s).toMatchObject({ kind: 'ready', text: 'Merge' });
+    expect(s?.tip).toMatch(/^Merge: checks passed/);
     expect(readyStatus(ready(), null, { rolloutSteps: 0 })?.text).toBe('Merge');
   });
 

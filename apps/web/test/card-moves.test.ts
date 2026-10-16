@@ -53,9 +53,15 @@ describe('card moves', () => {
     });
 
     it('offers nothing when the main action is something else, or Fix conflict is not allowed', () => {
-      expect(actions(doing({ allowedActions: ['merge', 'take_over'] }))).toEqual([]);
+      expect(actions(doing({ allowedActions: ['take_over'] }))).toEqual([]);
       expect(actions(doing({ status: 'implementing', type: 'same', allowedActions: ['take_over'] }))).toEqual([]);
       expect(actions(doing({ provisioning: 'pending' }))).toEqual([]);
+    });
+
+    it('offers Merge in place, labelled Merge with a confirming click, when it is the main action', () => {
+      const [merge, ...rest] = cardMoves(doing({ type: 'same', allowedActions: ['merge', 'take_over'] }));
+      expect(rest).toEqual([]);
+      expect(merge?.move).toMatchObject({ action: 'merge', direction: 'none', confirm: true, label: 'Merge' });
     });
 
     it('keeps Planning moves as they were', () => {

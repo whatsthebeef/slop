@@ -85,17 +85,17 @@ describe('actionPresentation', () => {
       });
     }
     expect(actionPresentation('cancel_merge', g)).toMatchObject({ label: 'Cancel merge', placement: 'more' });
-    // A super keeps Merge & keep working in the menu; a same's Merge and continue replaces Merge.
+    // A super keeps Merge & keep working in the menu; a same's Merge covers its rollout steps.
     expect(actionPresentation('merge_continue', { ...g, type: 'super' })).toMatchObject({
       label: 'Merge & keep working',
       placement: 'more',
     });
-    expect(actionPresentation('merge_continue', g)).toMatchObject({
-      label: 'Merge and continue',
-      icon: 'machine',
-      placement: 'main',
-      tip: 'Squash-merges; the glob stays open while you run the rollout steps from master, and sign-off waits',
-    });
+    // A same is never offered merge_continue; an old alias reads as Merge.
+    expect(actionPresentation('merge_continue', g)).toMatchObject({ label: 'Merge', icon: 'machine', placement: 'main' });
+    // Merge says what follows when the glob has rollout steps.
+    expect(actionPresentation('merge', { ...g, headChecks: { sha: 'abc', state: 'passed' }, rolloutSteps: 3 }).tip).toContain(
+      "Then run its 3 rollout steps (it stays open until they're done)",
+    );
     expect(actionPresentation('investigate', g).label).toBe('Investigate plan');
     expect(actionPresentation('review_now', g).label).toBe('Review code');
     expect(actionPresentation('delete', g)).toMatchObject({ icon: null, placement: 'reset' });

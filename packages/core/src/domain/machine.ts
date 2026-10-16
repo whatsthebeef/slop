@@ -1423,7 +1423,7 @@ export const startAgain = (
 };
 
 /** Why a sub that gained rollout steps became a same (criterion `risk_path`). */
-export const ROLLOUT_ESCALATION_REASON = 'Has rollout steps: a person merges it with Merge and continue';
+export const ROLLOUT_ESCALATION_REASON = 'Has rollout steps: a person merges it, and it stays open for them';
 
 /** A sub that has rollout steps becomes a same escalated for `risk_path` (row 13d), so it never merges itself with steps left dangling. */
 const asRolloutSame = (b: Builder, glob: Glob, ctx: Context): void => {
@@ -1535,8 +1535,6 @@ const gateText = (held: readonly Unmet[]): string => {
 const hasRolloutSteps = (glob: Glob, facts: ActionFacts | undefined): boolean =>
   glob.type === 'same' && (facts?.rolloutSteps ?? 0) > 0;
 
-export const ROLLOUT_MERGE_REFUSAL = 'Has rollout steps: use Merge and continue, which keeps the glob open for them';
-
 /** Why Merge can't be pressed on a ready same or super right now (not armed, no conflict, checks not failed), or null. */
 const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
   if (glob.status !== 'pr_open' || glob.type === 'sub')
@@ -1562,7 +1560,7 @@ const mergeBlockerBesidesRelations = (glob: Glob): string | null => {
 };
 
 /**
- * Rows 14 and 31: the Merge (or Merge and continue) button on a same or super. With the head's checks passed it merges
+ * Rows 14 and 31: the Merge button on a same or super. With the head's checks passed it merges
  * now; with them pending or not reported yet it arms "merge when checks pass" instead (a hand-off to slop), updating a
  * branch that is behind its base so the checks run on what will merge. Merge and continue waits for passed checks.
  */
@@ -1577,15 +1575,15 @@ export const requestMerge = (
   const head = glob.pr?.headSha ?? '';
   const passed = headChecksPassed(glob);
   const rollout = hasRolloutSteps(glob, options.facts);
-  if (options.continue) {
+  // Merge on a same with rollout steps is the same as the old Merge and continue alias.
+  const keepOpen = options.continue || rollout;
+  if (keepOpen) {
     if (glob.type !== 'super' && !rollout)
       return invalidTransition(glob, actor, 'Only a super, or a same with rollout steps, can merge and continue');
     if (!passed) return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
     // A same's record is not required at the head: the steps are what Merge and continue is for.
     if (glob.type === 'super' && !recordAtHead(glob, options.facts ?? {}))
       return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
-  } else if (rollout) {
-    return invalidTransition(glob, actor, ROLLOUT_MERGE_REFUSAL);
   }
   if (!passed) {
     const b = new Builder(glob, ctx)
@@ -1600,7 +1598,7 @@ export const requestMerge = (
   return new Builder(glob, ctx)
     // A same with rollout steps lands as a plain merge (Reviewing, steps due): only a super keeps `mergeMode: 'continue'`.
     .set({ mergeMode: options.continue && glob.type === 'super' ? 'continue' : null, mergeUpdates: 0, ...leavesQueue(glob) })
-    .status('merging', options.continue ? { mode: glob.type === 'super' ? 'continue' : 'rollout' } : {})
+    .status('merging', keepOpen ? { mode: glob.type === 'super' ? 'continue' : 'rollout' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
     .done();
 };
@@ -3136,7 +3134,7 @@ export const deescalate = (glob: Glob, ctx: Context, facts: ActionFacts = {}): R
   }
   // A sub merges itself, which would leave the open rollout steps dangling (the same condition as `allowedActions`).
   if (glob.escalation.criterion === 'risk_path' && (facts.rolloutSteps ?? 0) > 0) {
-    return invalidTransition(glob, actor, 'A same with open rollout steps cannot be made a sub: it must be merged with Merge and continue');
+    return invalidTransition(glob, actor, 'A same with open rollout steps cannot be made a sub: it must be merged, which keeps it open for them');
   }
   if (
     glob.status !== 'implementing' &&
@@ -3698,13 +3696,11 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (isMergeArmed(glob) || isMergeQueued(glob)) {
     if (!restricted) actions.push('cancel_merge');
   } else if (mergeBlocker(glob, facts.relations) === null) {
-    if (hasRolloutSteps(glob, facts)) {
-      // Merge and continue replaces Merge (and arming) once the checks have passed.
-      if (headChecksPassed(glob)) actions.push('merge_continue');
-    } else {
-      actions.push('merge');
-      if (headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
-    }
+    // One Merge for everyone: a same with rollout steps is merged and kept open for them by slop itself, once the checks have
+    // passed (it replaces arming). `merge_continue` is never offered to a same (it stays accepted as an alias for one
+    // release); a super's checkpoint merge keeps it.
+    if (!hasRolloutSteps(glob, facts) || headChecksPassed(glob)) actions.push('merge');
+    if (glob.type === 'super' && headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
   }
   // A `merge` relation is all that holds a ready PR back (a sub, or a merge already armed, too): it can be forced through.
   if (!restricted && facts.relations !== undefined && !isMergeQueued(glob) && mergeHeldOnlyByRelations(glob, facts, mergeGate(facts.relations), facts.relations) === null)
@@ -4459,7 +4455,8 @@ const overriding = (inner: Result<Transition>, event: DomainEvent, edits: readon
 const mergeHeldOnlyByRelations = (glob: Glob, facts: ActionFacts | undefined, held: readonly Unmet[], relations: RelationFacts): string | null => {
   if (glob.status !== 'pr_open') return 'Only a glob with a ready PR can be merged anyway';
   if (held.length === 0) return 'Nothing holds this merge; use Merge';
-  if (hasRolloutSteps(glob, facts)) return ROLLOUT_MERGE_REFUSAL;
+  // As Merge: a same with rollout steps is merged (and kept open for them) once the checks have passed, never armed.
+  if (hasRolloutSteps(glob, facts) && !headChecksPassed(glob)) return 'Required checks have not passed on the current head';
   const lifted = withEdits(relations, gateOverrideEdits(held, ''));
   // A same or super asks for Merge; a sub, or a merge already armed, only waits for its gate (`gateReleased`).
   return glob.type === 'sub' || isMergeArmed(glob) ? mergeBlockerBesidesRelations(glob) : mergeBlocker(glob, lifted);

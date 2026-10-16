@@ -195,6 +195,17 @@ describe('Merge anyway and Sign off anyway (machine)', () => {
       expect(ids(t.events)).toEqual(['MergeOverridden', 'MergeArmed']);
     });
 
+    it('merges a same with rollout steps as Merge does: now once the checks passed (kept open for them), never armed', () => {
+      const withSteps = { relations: held, rolloutSteps: 2 };
+      const t = unwrap(machine.mergeAnyway(open(), WHY, ctx(dev), { continue: false, facts: withSteps }));
+      expect(t.glob).toMatchObject({ status: 'merging', mergeMode: null });
+      expect(t.effects.some((e) => e.kind === 'squash_merge')).toBe(true);
+      const pending = open({ headChecks: { sha: HEAD, state: 'pending' } });
+      expect(message(machine.mergeAnyway(pending, WHY, ctx(dev), { continue: false, facts: withSteps }))).toBe('Required checks have not passed on the current head');
+      expect(machine.allowedActions(open(), dev, withSteps)).toContain('merge_anyway');
+      expect(machine.allowedActions(pending, dev, withSteps)).not.toContain('merge_anyway');
+    });
+
     it('lifts only the unmet merge relations, of any source: a person-made one included', () => {
       const relations = {
         relations: [

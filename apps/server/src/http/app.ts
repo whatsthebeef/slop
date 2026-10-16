@@ -786,7 +786,8 @@ export const createApp = (deps: AppDeps) => {
     'make-super': (email: string, id: string, b: ActionBody) => globs.makeSuper(email, id, b.version),
     'cancel-merge': (email: string, id: string, b: ActionBody) => globs.cancelMerge(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
-    // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
+    // Alias for one release: `merge` already keeps a same with rollout steps open. A super's checkpoint merge (row 31) needs
+    // the latest postplan at the head.
     'merge-continue': async (email: string, id: string, b: ActionBody) => {
       const gate = await deps.mergeGate?.(email, id);
       return gate !== undefined && !gate.ok ? gate : globs.merge(email, id, b.version, true);
