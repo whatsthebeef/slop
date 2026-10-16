@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tip } from '@/components/ui/tip';
 import type { TypeOption } from '@/lib/type-change';
 import { cn } from '@/lib/utils';
+import { TAG } from './glob-view/tag-style';
 
 /**
  * The glob's type as a chip that opens a popover of the three types. Choosing one says what follows first;
@@ -25,7 +26,7 @@ export const TypePopover = ({
   readonly busy: boolean;
   readonly failure: EditFailure | null;
   readonly onChange: (option: TypeOption) => Promise<void>;
-  /** The top bar's style: no border or box, text-sm, so it reads as part of the line. */
+  /** The group tag's style (muted box, mono, same height), so the control sits with the group tags. */
   readonly compact?: boolean;
 }) => {
   const [open, setOpen] = useState(false);
@@ -44,7 +45,7 @@ export const TypePopover = ({
             type="button"
             className={cn(
               'inline-flex items-center gap-1 rounded hover:bg-muted',
-              compact ? 'px-1 text-sm text-muted-foreground hover:text-foreground' : 'border px-2 py-0.5 text-xs',
+              compact ? `${TAG} bg-muted text-muted-foreground hover:text-foreground` : 'border px-2 py-0.5 text-xs',
             )}
             data-testid="glob-type"
           >
