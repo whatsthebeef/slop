@@ -308,7 +308,8 @@ describe('a stuck head (row 16e)', () => {
     expect(mergeHeadStuck(rechecked, nowMs(40))).toBeNull();
     expect(mergeHeadStuck(rechecked, nowMs(42))).toBe('fail');
     expect(MERGE_HEAD_STUCK_MS).toBe(20 * 60_000);
-    expect(mergeHeadStuck(head(), nowMs(120))).toBeNull();
+    expect(mergeHeadStuck(head({ headChecks: { sha: HEAD, state: 'pending' } }), nowMs(120))).toBe('recheck'); // still running: as before
+    expect(mergeHeadStuck(head({ headChecks: { sha: HEAD, state: 'failed' } }), nowMs(120))).toBeNull();
     expect(mergeHeadStuck(waiting({ headChecks: null }), nowMs(120))).toBeNull();
     expect(mergeHeadStuck(open(), nowMs(120))).toBeNull();
   });
@@ -321,6 +322,22 @@ describe('a stuck head (row 16e)', () => {
     const second = value(m.mergeHeadChecked(first.glob, nowMs(46), { ...ctx(null), now: at(46) }));
     expect(second.glob).toMatchObject({ status: 'failed', mergeLine: null, failure: { kind: 'merge' } });
     expect(second.glob.failure?.reason).toBe('No check result 46 minutes after the last push: recheck the checks or push again');
+    expect(kinds(second)).toEqual(['advance_merge_line']);
+  });
+
+  it('a head with passed checks and no merge is stuck the same way: recheck queues the merge again, then it fails', () => {
+    const passed = (patch: Partial<Glob> = {}): Glob => head({ updatedAt: NOW, ...patch });
+    expect(mergeHeadStuck(passed(), nowMs(19))).toBeNull();
+    expect(mergeHeadStuck(passed(), nowMs(21))).toBe('recheck');
+    expect(reconcileDue(passed(), nowMs(21))).toBe(true);
+    expect(mergeHeadStuck(passed({ updatedAt: at(15) }), nowMs(21))).toBeNull();
+    const first = value(m.mergeHeadChecked(passed(), nowMs(25), { ...ctx(null), now: at(25) }));
+    expect(kinds(first)).toEqual(['refresh_checks', 'reconcile_pr', 'squash_merge']);
+    expect(first.effects.at(-1)).toEqual({ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: HEAD });
+    expect(mergeHeadStuck(first.glob, nowMs(40))).toBeNull();
+    const second = value(m.mergeHeadChecked(first.glob, nowMs(46), { ...ctx(null), now: at(46) }));
+    expect(second.glob).toMatchObject({ status: 'failed', mergeLine: null, failure: { kind: 'merge' } });
+    expect(second.glob.failure?.reason).toBe('Not merged: no merge result 46 minutes after the checks passed');
     expect(kinds(second)).toEqual(['advance_merge_line']);
   });
 

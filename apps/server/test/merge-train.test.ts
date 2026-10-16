@@ -347,6 +347,29 @@ describe('the merge train: one glob per board updates, rechecks and merges at a 
     expect(host.merged).toContain(b);
   });
 
+  it('a head with passed checks whose merge never happens is asked again (merge queued once more), then fails, and the next one goes', async () => {
+    const board = await newBoard();
+    const a = await ready(board, 'A');
+    const b = await ready(board, 'B');
+    await globs.advanceMergeLine(board);
+    expect(await headsOf(board)).toEqual([a]);
+    // A's squash_merge is never run (the job is lost or failed); drop the queued ones so the new one is countable.
+    await database.db.update(schema.outbox).set({ state: 'done' }).where(eq(schema.outbox.state, 'pending'));
+    const watch = new ReconcileWatch(store, globs, () => undefined, () => clockMs);
+    clockMs += 21 * 60_000;
+    await watch.sweep(false);
+    expect((await current(a)).mergeLine?.head?.recheckedAt).toBeDefined();
+    expect((await effectsOf(a, ['squash_merge'])).length).toBeGreaterThan(0);
+    expect((await current(b)).mergeLine?.head).toBeUndefined();
+    clockMs += 21 * 60_000;
+    await watch.sweep(false);
+    expect(await current(a)).toMatchObject({ status: 'failed', failure: { kind: 'merge' } });
+    expect((await current(a)).failure?.reason).toMatch(/no merge result \d+ minutes after the checks passed/);
+    await drain();
+    expect(host.merged).toContain(b);
+    expect(host.merged).not.toContain(a);
+  });
+
   it('the sweep gives a board with merging globs and no head one', async () => {
     const board = await newBoard();
     const a = await ready(board, 'A');

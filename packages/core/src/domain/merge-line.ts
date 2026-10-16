@@ -6,7 +6,10 @@ import type { Glob, MergeLinePlace } from './types.js';
  * Nothing here is stored: a glob that leaves `merging` leaves the line by definition, so the line can't keep a ghost.
  */
 
-/** A head with no check result for its current commit this long is asked again; a second silence this long fails the merge. */
+/**
+ * A head with no check result for its current commit this long is asked again; a second silence this long fails the merge.
+ * The same periods apply to a head whose checks passed but whose merge has not happened.
+ */
 export const MERGE_HEAD_STUCK_MS = 20 * 60_000;
 
 /** Whether the glob is in its board's merge line, as the head or waiting. */
@@ -57,15 +60,19 @@ export const mergeLinePlaces = (globs: readonly Glob[]): Map<string, MergeLinePl
 const headReported = (glob: Glob): boolean =>
   glob.pr?.headSha != null && glob.headChecks?.sha === glob.pr.headSha && glob.headChecks.state !== 'pending';
 
+/** Whether the head's checks passed on its current commit (so the merge is due, not the checks). */
+export const mergeHeadChecksPassed = (glob: Glob): boolean => headReported(glob) && glob.headChecks?.state === 'passed';
+
 /**
  * Whether the head has gone quiet: `recheck` (nothing for its current commit since it became head, pushed or was updated:
- * ask for the result again) or `fail` (still nothing after the recheck). Null for a waiting glob, which holds no work, and
- * while a result is in. `updatedAt` counts as a sign of life (every webhook that matters changes the glob), so the clock is
+ * ask for the result again) or `fail` (still nothing after the recheck). A head whose checks passed is quiet the same way when
+ * no merge follows (the merge result changes the glob; a lost or failing `squash_merge` does not). Null for a waiting glob,
+ * which holds no work, and for a head whose checks failed (that leaves the line by itself). `updatedAt` counts as a sign of life (every webhook that matters changes the glob), so the clock is
  * its later of the two; after a recheck the clock restarts at `recheckedAt`.
  */
 export const mergeHeadStuck = (glob: Glob, nowMs: number): 'recheck' | 'fail' | null => {
   const head = glob.status === 'merging' ? glob.mergeLine?.head : undefined;
-  if (head === undefined || headReported(glob)) return null;
+  if (head === undefined || (headReported(glob) && !mergeHeadChecksPassed(glob))) return null;
   if (head.recheckedAt !== undefined) return nowMs - Date.parse(head.recheckedAt) > MERGE_HEAD_STUCK_MS ? 'fail' : null;
   const quietSince = Math.max(Date.parse(head.since), Date.parse(glob.updatedAt));
   return nowMs - quietSince > MERGE_HEAD_STUCK_MS ? 'recheck' : null;
@@ -75,6 +82,7 @@ export const mergeHeadStuck = (glob: Glob, nowMs: number): 'recheck' | 'fail' | 
 export const mergeHeadStuckReason = (glob: Glob, nowMs: number): string => {
   const since = glob.mergeLine?.head?.since ?? glob.updatedAt;
   const minutes = Math.max(1, Math.round((nowMs - Date.parse(since)) / 60_000));
+  if (mergeHeadChecksPassed(glob)) return `Not merged: no merge result ${String(minutes)} minutes after the checks passed`;
   const after = (glob.mergeUpdates ?? 0) > 0 ? 'updating the branch' : 'the last push';
   return `No check result ${String(minutes)} minutes after ${after}: recheck the checks or push again`;
 };

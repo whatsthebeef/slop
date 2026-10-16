@@ -126,7 +126,7 @@ export const mergingFromBaseText = (base: string): string => `merging from ${bas
 /**
  * The one wording for a glob in its board's merge line, by place (1 is the head): "merging" for the head (the status line says
  * "running checks" instead while its checks run), "next to merge" for the second and "N ahead in the merge line" from the third
- * (N is the globs ahead of it, the head included, minus the one that is next). The place is the line's, derived on the server;
+ * (N is the number of globs ahead of it in the line: the head and the one that is next count). The place is the line's, derived on the server;
  * without it (an older API, a card that has no line) a waiting glob reads plain "in the merge line".
  */
 export const MERGE_LINE_TEXT = 'in the merge line';

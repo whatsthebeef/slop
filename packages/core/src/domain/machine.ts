@@ -7,7 +7,7 @@ import { canChooseType } from '../app/access.js';
 import { err, forbidden, invalidCombination, invalidInput, ok, runActive } from './errors.js';
 import type { Result } from './errors.js';
 import { advanceMergeLineEffect, suggestEffect } from './events.js';
-import { isInMergeLine, mergeHeadStuck, mergeHeadStuckReason } from './merge-line.js';
+import { isInMergeLine, mergeHeadChecksPassed, mergeHeadStuck, mergeHeadStuckReason } from './merge-line.js';
 import type { DomainEvent, DomainEventType, Effect, JsonValue } from './events.js';
 import type { ConflictKind, ConflictResolvedBy } from './conflict-record.js';
 import type { ArtifactSummary, IndependentReviewMeta } from './knowledge.js';
@@ -3517,20 +3517,24 @@ export const adoptIntoMergeLine = (glob: Glob, ctx: Context): Result<Transition>
 };
 
 /**
- * Row 16e: the sweep found the head quiet (no check result for its current commit past `MERGE_HEAD_STUCK_MS`). The first time
- * it asks for the checks and the PR again; still silent a full period after that, the merge fails with the reason, which
- * leaves the line and advances it. Nothing changes while the head is fresh, has its result, or for any other glob.
+ * Row 16e: the sweep found the head quiet (no check result for its current commit past `MERGE_HEAD_STUCK_MS`, or checks that
+ * passed and no merge). The first time it asks for the checks and the PR again, and queues the merge again when the checks
+ * passed; still silent a full period after that, the merge fails with the reason, which leaves the line and advances it. Nothing changes while the head is fresh, has its result, or for any other glob.
  */
 export const mergeHeadChecked = (glob: Glob, nowMs: number, ctx: Context): Result<Transition> => {
   const line = glob.mergeLine;
   const stuck = mergeHeadStuck(glob, nowMs);
   if (stuck === null || line?.head == null) return unchanged(glob);
   if (stuck === 'fail') return mergeFailed(glob, mergeHeadStuckReason(glob, nowMs), ctx);
-  return new Builder(glob, ctx)
+  const b = new Builder(glob, ctx)
     .set({ mergeLine: { joinedAt: line.joinedAt, head: { ...line.head, recheckedAt: ctx.now } } })
     .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
-    .effect({ kind: 'reconcile_pr', globId: glob.id, generation: glob.generation })
-    .done();
+    .effect({ kind: 'reconcile_pr', globId: glob.id, generation: glob.generation });
+  const sha = glob.pr?.headSha;
+  return (mergeHeadChecksPassed(glob) && sha != null
+    ? b.effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha })
+    : b
+  ).done();
 };
 
 /**
