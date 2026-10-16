@@ -135,10 +135,31 @@ export interface ActionOutcome {
   readonly reason?: string;
 }
 
-/** An action glob: who is meant to do it (null: anyone) and how it ended (null while open). */
+/**
+ * Where a prepared action's record lives: `branch` (a repo file later work edits, written on the action's own branch and merged after
+ * the person's run worked), `artifact` (a one-shot script stored as a `rollout_script` artifact, no branch) or `attachment` (not
+ * code: a document or checklist).
+ */
+export const ACTION_RECORD_KINDS = ['branch', 'artifact', 'attachment'] as const;
+export type ActionRecordKind = (typeof ACTION_RECORD_KINDS)[number];
+
+/** Machine preparation of an action: what the routine prepares for the person and how many preparation rounds were started. */
+export interface ActionPreparation {
+  readonly record: ActionRecordKind;
+  readonly rounds: number;
+}
+
+/** Most preparation rounds an action can record (a guard against a runaway loop, far above any real use). */
+export const PREPARATION_ROUNDS_MAX = 1000;
+
+/**
+ * An action glob: who is meant to do it (null: anyone) and how it ended (null while open). `preparation` is absent on a plain
+ * action (a person does it from its plan) and present when a routine prepares what the person runs.
+ */
 export interface ActionAttributes {
   readonly assignee: string | null;
   readonly outcome: ActionOutcome | null;
+  readonly preparation?: ActionPreparation;
 }
 
 export type GlobAttributes = DecisionAttributes | ActionAttributes | WorkAttributes;
@@ -472,10 +493,24 @@ const validateActionOutcome = (value: unknown): Result<ActionOutcome | null> => 
   return ok({ kind, by: by.value, at: at.value, ...text });
 };
 
+const validatePreparation = (value: unknown): Result<ActionPreparation | undefined> => {
+  if (value === undefined || value === null) return ok(undefined);
+  if (!isRecord(value)) return invalidInput('preparation must be an object');
+  const keys = unknownKeys(value, ['record', 'rounds'], 'preparation');
+  if (!keys.ok) return keys;
+  const record = ACTION_RECORD_KINDS.find((k) => k === value['record']);
+  if (record === undefined) return invalidInput(`preparation.record must be one of ${ACTION_RECORD_KINDS.join(', ')}`);
+  const rounds = value['rounds'] ?? 0;
+  if (typeof rounds !== 'number' || !Number.isInteger(rounds) || rounds < 0 || rounds > PREPARATION_ROUNDS_MAX) {
+    return invalidInput(`preparation.rounds must be a whole number from 0 to ${PREPARATION_ROUNDS_MAX}`);
+  }
+  return ok({ record, rounds });
+};
+
 /** An action's attributes in full; a new action has no outcome (the transitions set it). */
 const validateAction = (value: unknown): Result<ActionAttributes> => {
   if (!isRecord(value)) return invalidInput('An action needs attributes');
-  const keys = unknownKeys(value, ['assignee', 'outcome'], 'attributes');
+  const keys = unknownKeys(value, ['assignee', 'outcome', 'preparation'], 'attributes');
   if (!keys.ok) return keys;
   const raw = value['assignee'];
   let assignee: string | null = null;
@@ -486,7 +521,9 @@ const validateAction = (value: unknown): Result<ActionAttributes> => {
   }
   const outcome = validateActionOutcome(value['outcome']);
   if (!outcome.ok) return outcome;
-  return ok({ assignee, outcome: outcome.value });
+  const preparation = validatePreparation(value['preparation']);
+  if (!preparation.ok) return preparation;
+  return ok({ assignee, outcome: outcome.value, ...(preparation.value === undefined ? {} : { preparation: preparation.value }) });
 };
 
 /** Checks a glob's attributes against its category's schema; unknown keys are refused. Absent work attributes are `{}`. */

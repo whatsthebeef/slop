@@ -225,6 +225,98 @@ describe('action globs over REST and MCP (Postgres)', () => {
     expect(dismissed.body).toMatchObject({ status: 'signed_off', attributes: { outcome: { kind: 'dismissed', reason: 'no longer needed' } } });
   });
 
+  describe('a prepared action', () => {
+    const stored = async (id: string) => unwrap(await globs.get(DEV, id));
+    const labels = async (id: string) => (await store.transaction((tx) => tx.listArtifacts(id))).map((a) => `${a.kind}:${a.label}`);
+
+    it('create_glob prepare starts a preparation run on a branch record; record needs prepare', async () => {
+      const made = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-1', actor: 'human', title: 'Grant the permission set', prepare: true, group: null });
+      expect(made.error).toBe(false);
+      expect(made.body).toMatchObject({ category: 'action', type: null, status: 'implementing', actionState: 'preparing', preparation: { record: 'branch', rounds: 1 } });
+      const view = await stored(made.body.id);
+      expect(view.glob.runs.map((r) => r.purpose)).toEqual(['prepare']);
+      expect(view.allowedActions).not.toContain('merge');
+      expect((await tool('create_glob', { board: boardId, idempotencyKey: 'prep-2', actor: 'human', title: 'x', record: 'artifact', group: null })).error).toBe(true);
+    });
+
+    it('REST create with prepare and an artifact record has no branch to provision; the view says preparing', async () => {
+      const made = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'One-shot script', category: 'action', prepare: true, record: 'artifact', group: null });
+      expect(made.status).toBe(200);
+      expect(made.body).toMatchObject({ status: 'implementing', provisioning: 'none', actionState: 'preparing', preparation: { record: 'artifact', rounds: 1 } });
+    });
+
+    it('artifact record: rollout_script, ready to run with the fetch command, Failed… starts round 2 with a masked attachment, Done closes', async () => {
+      const made = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-3', actor: 'human', title: 'Account setting', prepare: true, record: 'artifact', group: null });
+      const id = made.body.id;
+      expect((await tool('put_artifact', { id, kind: 'rollout_script', content: '#!/bin/sh\necho hi\n' })).error).toBe(true);
+      const put = await tool('put_artifact', { id, kind: 'rollout_script', label: 'action: account-setting', content: '#!/bin/sh\necho hi\n' });
+      expect(put.error).toBe(false);
+      unwrap(await globs.requestReady(DEV, id, null));
+      const ready = await rest('GET', `/api/globs/${id}`);
+      expect(ready.body).toMatchObject({ status: 'in_progress', actionState: 'ready' });
+      expect(ready.body.allowedActions).toEqual(expect.arrayContaining(['complete_action', 'fail_action', 'dismiss_action']));
+      const step = ready.body.humanSteps?.find((st) => st.title.startsWith('Run:')) as { commands?: string[] } | undefined;
+      expect(step?.commands?.[0]).toContain('slop get-artifact');
+      // Failed… needs output; the output is masked in the attachment.
+      expect((await rest('POST', `/api/globs/${id}/actions/fail`, { version: ready.body.version })).status).toBe(422);
+      const failed = await rest('POST', `/api/globs/${id}/actions/fail`, { version: ready.body.version, output: 'AccessDenied for AKIAIOSFODNN7EXAMPLE' });
+      expect(failed.status).toBe(200);
+      expect(failed.body).toMatchObject({ status: 'implementing', actionState: 'preparing', preparation: { record: 'artifact', rounds: 2 } });
+      const kept = await labels(id);
+      expect(kept).toContain('attachment:Action run failed (round 1)');
+      const text = (await store.transaction((tx) => tx.listArtifacts(id))).find((a) => a.label.startsWith('Action run failed'))?.content ?? '';
+      expect(text).toContain('AccessDenied');
+      expect(text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      // A second round stores the fix, and Done closes at once (no branch to merge).
+      unwrap(await globs.requestReady(DEV, id, null));
+      const again = await rest('GET', `/api/globs/${id}`);
+      const done = await rest('POST', `/api/globs/${id}/actions/done`, { version: again.body.version, note: 'ran fine' });
+      expect(done.status).toBe(200);
+      expect(done.body).toMatchObject({ status: 'signed_off', actionState: 'closed', attributes: { outcome: { kind: 'done', note: 'ran fine' } } });
+      // Failed… is refused after Done.
+      expect((await rest('POST', `/api/globs/${id}/actions/fail`, { version: done.body.version, output: 'late' })).status).toBe(409);
+    });
+
+    it('rollout_script is refused on a branch record and on other globs; ready is refused before the script is stored', async () => {
+      const branch = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-4', actor: 'human', title: 'Branch record', prepare: true, group: null });
+      expect((await tool('put_artifact', { id: branch.body.id, kind: 'rollout_script', label: 'action: x', content: 'echo' })).error).toBe(true);
+      const art = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-5', actor: 'human', title: 'No script yet', prepare: true, record: 'artifact', group: null });
+      const early = await globs.requestReady(DEV, art.body.id, null);
+      expect(early.ok).toBe(false);
+      const plain = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-6', category: 'action', title: 'Plain', group: null });
+      expect((await tool('put_artifact', { id: plain.body.id, kind: 'rollout_script', label: 'action: x', content: 'echo' })).error).toBe(true);
+    });
+
+    it('prepare_action and fail_action over MCP: a held action starts when its prerequisite is done', async () => {
+      const first = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-7a', category: 'action', title: 'Set up the account', group: null });
+      const held = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-7b', actor: 'human', title: 'Then the policy', prepare: true, record: 'attachment', needs: [first.body.id], reason: 'needs the account', group: null });
+      expect(held.body).toMatchObject({ status: 'planning', actionState: 'waiting' });
+      const refused = await tool('prepare_action', { id: held.body.id, version: held.body.version });
+      expect(refused.error).toBe(true);
+      expect((await tool('fail_action', { id: held.body.id, note: 'nope' })).error).toBe(true);
+      await tool('complete_action', { id: first.body.id, version: first.body.version });
+      // The outbox's release_waiting job does this in production (the test's runner has no executors).
+      await globs.releaseDependents(first.body.id, boardId);
+      const started = await stored(held.body.id);
+      expect(started.glob.status).toBe('implementing');
+      expect(started.glob.attributes).toMatchObject({ preparation: { record: 'attachment', rounds: 1 } });
+    });
+
+    it('a plain action refuses prepare_action, and dismiss closes a prepared one in any open state', async () => {
+      const plain = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-8a', category: 'action', title: 'Just do it', group: null });
+      expect((await tool('prepare_action', { id: plain.body.id, version: plain.body.version })).error).toBe(true);
+      const prepared = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-8b', actor: 'human', title: 'Not needed', prepare: true, record: 'artifact', group: null });
+      const dismissed = await tool('dismiss_action', { id: prepared.body.id, version: prepared.body.version, reason: 'no longer needed' });
+      expect(dismissed.body).toMatchObject({ status: 'signed_off', actionState: 'closed' });
+    });
+
+    it('get_context carries the action state', async () => {
+      const made = await tool('create_glob', { board: boardId, idempotencyKey: 'prep-9', actor: 'human', title: 'Context', prepare: true, record: 'artifact', group: null });
+      const ctx = await tool('get_context', { id: made.body.id });
+      expect(ctx.body).toMatchObject({ glob: { actionState: 'preparing' }, attributes: { preparation: { record: 'artifact', rounds: 1 } } });
+    });
+  });
+
   describe('an action waits for its script to be on the base branch', () => {
     const plan = (path: string): string => `## Why\n\nRoll it out.\n\n## Do this\n\nscript: ${path}\n\nbash ${path}\n`;
     const make = async (key: string, path: string, extra: Record<string, unknown> = {}) =>

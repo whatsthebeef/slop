@@ -17,7 +17,7 @@ export interface ActionPresentation {
 }
 
 type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
-  Partial<Pick<GlobView, 'headChecks' | 'artifacts' | 'currentRun'>>;
+  Partial<Pick<GlobView, 'headChecks' | 'artifacts' | 'currentRun' | 'actionState'>>;
 
 /**
  * Whether Review code, when offered, retries slop's automatic review: a merged glob with no after-merge review, or a ready
@@ -251,8 +251,32 @@ export const actionPresentation = (
       return {
         label: 'Done',
         icon: 'human',
-        tip: 'You did it: marks the action done, with a note of what you checked if you like',
+        tip:
+          glob.actionState === 'ready'
+            ? 'You ran it and it worked: slop records what was prepared and closes the action, with a note of what you checked if you like'
+            : 'You did it: marks the action done, with a note of what you checked if you like',
         placement: 'main',
+      };
+    case 'prepare_action':
+      return glob.actionState === 'preparation_failed'
+        ? {
+            label: 'Retry',
+            icon: 'machine',
+            tip: 'A new preparation run on the same branch',
+            placement: 'main',
+          }
+        : {
+            label: 'Prepare',
+            icon: 'machine',
+            tip: 'The machine writes the script or document you then run; it never runs it itself',
+            placement: 'main',
+          };
+    case 'fail_action':
+      return {
+        label: 'Failed…',
+        icon: null,
+        tip: 'It did not work: paste the output (secrets are masked) and the machine prepares another round on the same branch',
+        placement: 'more',
       };
     case 'dismiss_action':
       return {

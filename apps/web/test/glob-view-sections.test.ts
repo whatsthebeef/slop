@@ -57,7 +57,7 @@ describe('glob view section registry', () => {
   });
 
   it('leaves a work glob’s sections out of a learning’s view, and keeps the decision block above the action row', () => {
-    for (const name of ['plan', 'artifacts', 'deploys', 'environments', 'tests', 'findings', 'size'] as const) {
+    for (const name of ['plan', 'artifacts', 'deploys', 'tests', 'findings', 'size'] as const) {
       expect(LEARNING_VIEW_SECTIONS).not.toContain(name);
     }
     expect(LEARNING_VIEW_SECTIONS.indexOf('decision')).toBeLessThan(LEARNING_VIEW_SECTIONS.indexOf('actions'));

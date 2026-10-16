@@ -433,6 +433,28 @@ describe('slop new', () => {
     expect(run.out.join('')).toContain('it waits in Planning until you pick it up to pair: sstor --glob s1t9');
   });
 
+  it('creates an action; --prepare and --record go to create_glob, and an action takes no code flags', async () => {
+    const action = (patch: Record<string, unknown> = {}) => ({ id: 's1a2', version: 1, status: 'implementing', type: null, category: 'action', actionState: 'preparing', provisioning: 'pending', ...patch });
+    const run = setup({ create_glob: () => action() }, { board: '1' });
+    await newCommand(['--action', '--prepare', '--record', 'artifact', 'Grant', 'the', 'permission', 'set'], run.deps);
+    expect(run.slop.calls[0]?.args).toEqual({ board: 1, idempotencyKey: 'key-1', actor: 'human', mode: 'action', title: 'Grant the permission set', prepare: true, record: 'artifact' });
+    expect(run.out.join('')).toBe('s1a2 [human action] implementing: a routine is preparing it; it shows "ready to run" when done\n');
+
+    const plain = setup({ create_glob: () => action({ status: 'planning', actionState: 'open' }) }, { board: '1' });
+    await newCommand(['--action', '--json', 'Rotate', 'the', 'token'], plain.deps);
+    expect(plain.slop.calls[0]?.args).not.toHaveProperty('prepare');
+    expect(JSON.parse(plain.out.join(''))).toMatchObject({ id: 's1a2', branch: null, type: null, actionState: 'open' });
+
+    const waiting = setup({ create_glob: () => action({ status: 'planning', actionState: 'waiting', after: ['s1t3'], waiting: true }) }, { board: '1' });
+    await newCommand(['--action', '--prepare', '--after', 's1t3', 'Then', 'run', 'it'], waiting.deps);
+    expect(waiting.slop.calls[0]?.args).toMatchObject({ prepare: true, after: ['s1t3'] });
+    expect(waiting.out.join('')).toContain('waits for s1t3, then a routine prepares it');
+
+    for (const bad of [['--action', '--same', 'x'], ['--action', '--record', 'branch', 'x'], ['--action', '--prepare', '--record', 'zip', 'x'], ['--prepare', 'x'], ['--record', 'branch', 'x'], ['--action', '--prepare']]) {
+      await expect(newCommand(bad, setup({}, { board: '1' }).deps)).rejects.toBeInstanceOf(UsageError);
+    }
+  });
+
   it('creates through intake with the prompt and a fresh idempotency key', async () => {
     const run = setup({ create_glob: () => created() }, { board: '1' });
     await newCommand(['fix', 'the', 'login', 'timeout'], run.deps);

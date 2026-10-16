@@ -1,6 +1,6 @@
 import { decisionOf, isHumanCategory, machine } from '@slop/core';
 import { isLearning } from '../decision-outcomes';
-import type { Action, EditFailure, EnvironmentIndicator } from '@slop/core';
+import type { Action, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ChevronDown, Ellipsis, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -30,9 +30,6 @@ import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { ArmSystemLabel } from '../glob-card';
 import { armLabel } from '@/lib/rollout-stages';
-import { api } from '@/lib/api';
-import { globEnvironmentsKey } from '@/lib/live';
-import { useQuery } from '@tanstack/react-query';
 import { META } from './tag-style';
 import { Dot } from './status';
 import { TypePopover } from '../type-popover';
@@ -109,7 +106,7 @@ export const useGlobActions = ({
   // A super's local review normally comes first (/finalise); the board warns, then allows.
   const [confirmingReady, setConfirmingReady] = useState(false);
   // An action's Done asks for an optional note, and its Dismiss for a reason, before it ends the action.
-  const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | null>(null);
+  const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | 'fail_action' | null>(null);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   // "Why you're needed": shown in the problem block while nobody is on the problem.
@@ -173,7 +170,7 @@ export const useGlobActions = ({
       else setConfirmingReady(true);
       return;
     }
-    if (action === 'complete_action' || action === 'dismiss_action') {
+    if (action === 'complete_action' || action === 'dismiss_action' || action === 'fail_action') {
       setFinishing(action);
       return;
     }
@@ -211,7 +208,7 @@ export const useGlobActions = ({
   };
 
   /** Ends the action glob: Done with the note, or Dismiss with the reason. */
-  const finish = (action: 'complete_action' | 'dismiss_action', text: string) =>
+  const finish = (action: 'complete_action' | 'dismiss_action' | 'fail_action', text: string) =>
     run(async () => {
       if (await onAction(action, undefined, text)) setFinishing(null);
     });
@@ -304,59 +301,19 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
     />
   );
 
-/** The environments the glob is in, as chips; nothing until the board observes environments and the glob is in one. */
-const EnvironmentLine = ({ ctx }: { ctx: GlobViewContext }) => {
-  const { glob } = ctx;
-  const query = useQuery({ queryKey: globEnvironmentsKey(glob.id), queryFn: () => api.globEnvironments(glob.id) });
-  const held = (query.data ?? []).flatMap((env): EnvironmentIndicator[] => {
-    const presence = env.presence;
-    if (presence?.contained !== true) return [];
-    return [
-      {
-        environment: env.environment,
-        role: env.role,
-        production: env.production,
-        sha: presence.checkedSha,
-        since: presence.since,
-        ...(env.production && glob.status !== 'signed_off' && { warning: 'before_sign_off' as const }),
-      },
-    ];
-  });
-  return (
-    <>
-      {held.map((env) => {
-        const warned = env.warning === 'before_sign_off';
-        const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}`;
-        return (
-          <Tip key={env.environment} text={tip}>
-            <span
-              className={`${META} whitespace-nowrap ${warned ? 'text-required' : 'text-signal-strong'}`}
-              data-testid="environment-chip"
-              data-warning={env.warning}
-            >
-              {env.environment} ✓
-            </span>
-          </Tip>
-        );
-      })}
-    </>
-  );
-};
-
 /**
- * Beside the action row (under it on narrow widths): the Arm system label, the branch and the environments, one quiet mono line.
- * Human work has no branch, deploy or environments.
+ * Beside the action row (under it on narrow widths): the Arm system label and the branch, one quiet mono line.
+ * Human work has no branch or deploy.
  */
-const actionLine = ({ glob, board }: GlobViewContext) => {
+const actionLine = ({ glob }: GlobViewContext) => {
   if (isHumanCategory(glob.category)) return null;
   const arming = armLabel(glob);
-  const observed = board.environments.some((e) => e.role !== undefined);
-  return { arming, observed };
+  return { arming };
 };
 
 const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable<ReturnType<typeof actionLine>> }) => {
   const { glob } = ctx;
-  const { arming, observed } = line;
+  const { arming } = line;
   return (
     <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="action-line-info">
       {arming !== null && (
@@ -368,7 +325,6 @@ const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable
       <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
         {glob.branch}
       </span>
-      {observed && <EnvironmentLine ctx={ctx} />}
     </div>
   );
 };
@@ -450,26 +406,41 @@ const FinishAction = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActions
   useEffect(() => setText(''), [kind, ctx.glob.id]);
   if (kind === null) return null;
   const dismissing = kind === 'dismiss_action';
+  const failing = kind === 'fail_action';
   return (
     <div
       role="alertdialog"
-      aria-label={dismissing ? 'Dismiss this action' : 'Mark this action done'}
+      aria-label={dismissing ? 'Dismiss this action' : failing ? 'Report that the run failed' : 'Mark this action done'}
       className="grid gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
-      data-testid={dismissing ? 'dismiss-action-confirmation' : 'done-action-confirmation'}
+      data-testid={dismissing ? 'dismiss-action-confirmation' : failing ? 'fail-action-confirmation' : 'done-action-confirmation'}
     >
       <label className="grid gap-1">
         <span>
           {dismissing
             ? 'Why is it not needed? Whatever waits for it is released, so say why.'
-            : 'What did you check? (optional) You are saying the work is done.'}
+            : failing
+              ? 'Paste the output of the run (secrets are masked). The machine prepares another round on the same branch.'
+              : 'What did you check? (optional) You are saying the work is done.'}
         </span>
-        <Input
-          value={text}
-          autoFocus
-          maxLength={2000}
-          data-testid="action-note"
-          onChange={(e) => setText(e.target.value)}
-        />
+        {failing ? (
+          <textarea
+            value={text}
+            autoFocus
+            rows={6}
+            maxLength={20000}
+            className="w-full rounded border bg-background p-2 font-mono text-xs"
+            data-testid="action-failure-output"
+            onChange={(e) => setText(e.target.value)}
+          />
+        ) : (
+          <Input
+            value={text}
+            autoFocus
+            maxLength={2000}
+            data-testid="action-note"
+            onChange={(e) => setText(e.target.value)}
+          />
+        )}
       </label>
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={() => state.setFinishing(null)}>
@@ -477,11 +448,11 @@ const FinishAction = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActions
         </Button>
         <Button
           size="sm"
-          disabled={state.busy || (dismissing && text.trim() === '')}
+          disabled={state.busy || ((dismissing || failing) && text.trim() === '')}
           data-testid="confirm-finish-action"
           onClick={() => void state.finish(kind, text)}
         >
-          {dismissing ? 'Dismiss' : 'Done'}
+          {dismissing ? 'Dismiss' : failing ? 'Failed' : 'Done'}
         </Button>
       </div>
     </div>

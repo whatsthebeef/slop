@@ -14,7 +14,8 @@ const UPLOAD_PREFIX = '/uploads/artifact/';
 
 const payloadSchema = z.object({
   id: z.string(),
-  kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan']),
+  kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan', 'rollout_script']),
+  label: z.string().nullable().default(null),
   email: z.string(),
   commitSha: z.string().nullable(),
   runId: z.string().nullable(),
@@ -34,6 +35,8 @@ const payloadSchema = z.object({
 export interface UploadRequest {
   readonly id: string;
   readonly kind: ArtifactKind;
+  /** `rollout_script` only: its label. */
+  readonly label: string | null;
   readonly email: string;
   readonly commitSha: string | null;
   readonly runId: string | null;
@@ -111,7 +114,7 @@ export const mountArtifactUploads = (app: Hono<Env>, deps: ArtifactUploadDeps) =
       runId: parsed.runId,
       agentSetVersion: parsed.agentSetVersion,
       reviewStats: parsed.reviewStats,
-    });
+    }, parsed.label ?? undefined);
     if (!result.ok) {
       // A failed store doesn't spend the link.
       used.delete(signature);

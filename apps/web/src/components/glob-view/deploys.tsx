@@ -4,4 +4,4 @@ import type { GlobViewContext } from './context';
 
 /** The deploys section; human work (a decision, an action) has none. */
 export const DeploysPanel = ({ ctx }: { ctx: GlobViewContext }) =>
-  !isHumanCategory(ctx.glob.category) ? <DeploysSection board={ctx.board} glob={ctx.glob} /> : null;
+  !isHumanCategory(ctx.glob.category) ? <DeploysSection glob={ctx.glob} /> : null;
