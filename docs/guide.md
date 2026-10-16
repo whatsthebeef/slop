@@ -83,6 +83,14 @@ The flag **advises and never holds**. A flagged glob can start at once, and slop
 
 A **split** is a scope cut, not a way to parallelise: use it when the work holds pieces that could each ship alone. It turns one glob in Planning (no branch, run or pull request) into **independent globs**, each with its own plan, and with no parent. There is no gate between the parts and the original does not wait for them: part one keeps the original's ID and signs off on its own, like any glob. A part has needs only when you name them (the earlier parts it needs merged first); those are ordinary start relations that you can dismiss. Each part's plan says "Split from" the original; the glob view's Related section links them (the cards show nothing about a split).
 
+## Questions, steps and decisions
+
+Three records ask something of a person; use the one that fits.
+
+- **Question:** a choice only this glob's work depends on (scope, approach, an assumption to confirm), with 2-4 options. Whoever raises it sets `blocking`: `start` holds the glob in Planning, `merge` lets the run go on but holds the merge, `none` is a notice. A question never holds sign-off, and its answer goes back into the glob's context.
+- **Human step:** anything a person runs or does (commands, checks, pasting a result). A command to run is never a question; slop refuses a question from an agent or routine that tells a person to run a command in a code span with no options other than done or failed. A step's `blocks` say what it holds: `sign_off`, `reviewing` or `dependants`.
+- **Decision glob:** a choice whose answer matters beyond this glob (a policy, a convention, something other globs follow or wait on). It is linked with a relation, and the relation's gate (start, merge or sign_off) says what it holds.
+
 ## Decision globs and Suggest
 
 A decision glob (ID like `s1k4`) is a proposed change to what the project knows, usually a learning an agent submitted or slop found. It is not work: no branch, no pull request. A person decides it: accept, accept with edits, reject, or send it back for more work. Accepting changes the knowledge base or the agent set.

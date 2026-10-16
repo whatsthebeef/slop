@@ -2775,7 +2775,9 @@ export const checksCompleted = (
         .done();
     }
     if (!passed) {
-      const reason = `Checks failed after updating the branch${failure === undefined ? '' : `: ${failureSummary(failure)}`}`;
+      // Only a head slop itself produced (an update-branch for this merge) is "after updating"; otherwise the push that failed is the branch's own.
+      const cause = (glob.mergeUpdates ?? 0) > 0 ? 'after updating the branch' : glob.implementer !== null ? `on ${glob.implementer}'s push` : "on the run's push";
+      const reason = `Checks failed ${cause}${failure === undefined ? '' : `: ${failureSummary(failure)}`}`;
       const mergeFailure: Failure = { reason, at: ctx.now, kind: 'merge' };
       return b
         .endRunsOnFailure(reason, mergeFailure)
