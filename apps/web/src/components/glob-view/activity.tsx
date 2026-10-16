@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router';
 import { GitPullRequest, TriangleAlert } from 'lucide-react';
 import { HumanIcon, MachineIcon } from '@/components/actor-icons';
-import { ACTIVITY_SHOWN, activityOf } from '@/lib/activity';
+import { ACTIVITY_SHOWN, CONTINUE_LOCALLY_TITLE, activityOf } from '@/lib/activity';
 import type { ActivityEntry } from '@/lib/activity';
 import { turnKey } from '@/lib/dismissals';
 import type { GlobActionsState } from './actions';
@@ -39,6 +39,11 @@ const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
         {entry.text}
         {entry.count > 1 && ` ×${String(entry.count)}`}
       </span>
+      {entry.command !== null && (
+        <code className="shrink-0 rounded bg-muted px-1.5 py-0.5" title={CONTINUE_LOCALLY_TITLE} data-testid="continue-locally">
+          {entry.command}
+        </code>
+      )}
       {entry.link !== null &&
         (external ? (
           <a className="shrink-0 underline" href={entry.link} target="_blank" rel="noreferrer">
@@ -59,7 +64,7 @@ const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
  * few with "Show all", the only control in it.
  */
 export const ActivityLog = ({
-  ctx: { board, glob },
+  ctx,
   state,
   actions,
 }: {
@@ -67,12 +72,13 @@ export const ActivityLog = ({
   state: NowState;
   actions: GlobActionsState;
 }) => {
+  const { board, glob } = ctx;
   const { move, turn, steps, seen, turnDismissed } = state;
   const [all, setAll] = useState(false);
   useEffect(() => {
     setAll(false);
   }, [glob.id, seen?.key]);
-  const feed = activityOf(glob, board.repo, steps);
+  const feed = activityOf(glob, board.repo, steps, actions.viewer?.email);
   const shown = all ? feed : feed.slice(0, ACTIVITY_SHOWN);
   const now = Date.now();
   return (

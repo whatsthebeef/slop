@@ -122,3 +122,20 @@ describe('activityOf', () => {
     expect(entries.map((e) => e.text).join('|')).not.toMatch(/Nope|Auth/);
   });
 });
+
+describe('Continue locally on the current run', () => {
+  const live = run('r1', { state: 'active', outcome: null, endedAt: null, routineOwner: 'Me@x.com' });
+  const start = (email?: string) =>
+    activityOf(view({ id: 's1t1', runs: [live], currentRun: live }), 'o/r', [], email).find((e) => e.id === 'run:r1:start');
+  it('shows Open in Claude with the session link, and the command only for the routine owner', () => {
+    expect(start('me@x.com')).toMatchObject({ linkLabel: 'Open in Claude', link: 'https://claude.ai/code/x', command: 'sstor --glob s1t1' });
+    expect(start('other@x.com')).toMatchObject({ linkLabel: 'Open in Claude', command: null });
+    expect(start()?.command).toBeNull();
+  });
+  it('offers no command without a session URL or once the run ended', () => {
+    const noSession = { ...live, sessionUrl: null };
+    expect(activityOf(view({ runs: [noSession], currentRun: noSession }), 'o/r', [], 'me@x.com').find((e) => e.id === 'run:r1:start')?.command).toBeNull();
+    const ended = run('r1', { routineOwner: 'me@x.com' });
+    expect(activityOf(view({ runs: [ended], currentRun: ended }), 'o/r', [], 'me@x.com').find((e) => e.id === 'run:r1:start')?.command).toBeNull();
+  });
+});

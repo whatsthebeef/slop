@@ -21,7 +21,17 @@ export interface ActivityEntry {
   readonly title: string;
   /** How many consecutive identical events this entry stands for. */
   readonly count: number;
+  /** The sstor command the routine owner copies to carry on the run's conversation locally; null on every other entry. */
+  readonly command: string | null;
 }
+
+/** What Continue locally does, for its tooltip. */
+export const CONTINUE_LOCALLY_TITLE =
+  "Picks the glob up and carries on this run's conversation in your terminal (claude --teleport). The cloud run stops.";
+
+/** Whether the viewer owns the routine of a run with a cloud session, so they can carry its conversation on locally. */
+export const canContinueLocally = (run: { state: string; sessionUrl: string | null; routineOwner: string } | null | undefined, email: string | undefined): boolean =>
+  run != null && run.state !== 'ended' && run.sessionUrl !== null && email !== undefined && run.routineOwner.toLowerCase() === email.toLowerCase();
 
 /** The entries shown before "Show all". */
 export const ACTIVITY_SHOWN = 8;
@@ -38,7 +48,7 @@ const entry = (
   link: string | null = null,
   linkLabel = 'open',
   title = text,
-): ActivityEntry => ({ id, actor, text: stripMarkdown(text), at, link, linkLabel, title: stripMarkdownLines(title), count: 1 });
+): ActivityEntry => ({ id, actor, text: stripMarkdown(text), at, link, linkLabel, title: stripMarkdownLines(title), count: 1, command: null });
 
 /** A reason on one line: its first line, cut at `LINE_MAX`. */
 const oneLine = (reason: string): string => {
@@ -63,14 +73,20 @@ const collapse = (entries: readonly ActivityEntry[]): ActivityEntry[] => {
  * the head's checks, the conflict, the failure, the escalation, human steps). No new table: routine noise (version bumps,
  * provisioning retries, hint refreshes) never reaches it. Entries without a time (the PR's state) sort by `updatedAt`.
  */
-export const activityOf = (glob: GlobView, repo: string | null, steps: readonly MachineStep[] = []): ActivityEntry[] => {
+export const activityOf = (glob: GlobView, repo: string | null, steps: readonly MachineStep[] = [], viewerEmail?: string): ActivityEntry[] => {
   const github = (path: string): string | null => (repo === null ? null : `https://github.com/${repo}/${path}`);
   const out: ActivityEntry[] = [];
 
   for (const run of glob.runs) {
     const what =
       run.purpose === 'investigate' ? 'Investigation' : run.purpose === 'resolve_conflict' ? 'Conflict fix' : 'Run';
-    out.push(entry(`run:${run.id}:start`, 'machine', `${what} started`, run.startedAt ?? run.queuedAt, run.sessionUrl, 'session'));
+    const started = entry(`run:${run.id}:start`, 'machine', `${what} started`, run.startedAt ?? run.queuedAt, run.sessionUrl, 'session');
+    const current = glob.currentRun?.id === run.id && canContinueLocally(run, viewerEmail);
+    out.push({
+      ...started,
+      linkLabel: run.sessionUrl === null ? started.linkLabel : 'Open in Claude',
+      command: current ? `sstor --glob ${glob.id}` : null,
+    });
     if (run.state === 'ended') {
       const failed = run.outcome === 'failed';
       // The glob's own failure is pinned in full above the feed, so a run that failed with the same reason doesn't repeat it.
