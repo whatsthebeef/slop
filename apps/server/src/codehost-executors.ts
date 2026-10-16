@@ -161,6 +161,14 @@ export const codeHostExecutors = (
       }
     },
 
+    rerun_checks: async (effect, glob) => {
+      if (effect.kind !== 'rerun_checks' || glob === null) return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      await host.rerunFailedJobs(repo, effect.sha, { force: true });
+      return 'done';
+    },
+
     sync_pr_labels: async (_effect, glob) => {
       if (glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);

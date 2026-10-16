@@ -455,9 +455,9 @@ export class GitHub implements CodeHost {
     }
   }
 
-  async rerunFailedJobs(repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'> {
+  async rerunFailedJobs(repo: Repo, sha: string, opts?: { force?: boolean }): Promise<'rerun' | 'already_rerun' | 'unavailable'> {
     const gh = await this.octokit(repo);
-    return rerunFailedJobs((route, params) => gh.request(route, params), repo, sha);
+    return rerunFailedJobs((route, params) => gh.request(route, params), repo, sha, opts);
   }
 
   async updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'> {

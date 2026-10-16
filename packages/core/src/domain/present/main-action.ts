@@ -32,7 +32,7 @@ export const failedRepeatedly = (glob: Pick<Subject, 'runs'>): boolean => {
 const TAKE_OVERS: readonly Action[] = ['take_over', 'pick_up'];
 
 /** Recoveries first, most specific to least: a conflict hides the checks, failed checks hide a failed merge. */
-const FIXES: readonly Action[] = ['resolve_conflict', 'retry_autofix', 'retry_merge', 'retrigger'];
+const FIXES: readonly Action[] = ['resolve_conflict', 'retry_autofix', 'retry_checks', 'retry_merge', 'retrigger'];
 
 /** Otherwise the state's next step: land it, hand it in, start it, work through a decision, or do an action. */
 const NEXT_STEPS: readonly Action[] = [

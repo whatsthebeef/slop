@@ -530,6 +530,7 @@ export type ActionPath =
   | 'sign-off-anyway'
   | 'prepare'
   | 'retrigger'
+  | 'retry_checks'
   | 'retry-autofix'
   | 'resolve-conflict'
   | 'pick-up'
@@ -537,6 +538,7 @@ export type ActionPath =
   | 'start-again'
   | 'merge'
   | 'retry-merge'
+  | 'retry-checks'
   | 'cancel-merge'
   | 'deescalate'
   | 'make-super'
@@ -1041,6 +1043,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   start_again: 'start-again',
   merge: 'merge',
   retry_merge: 'retry-merge',
+  retry_checks: 'retry-checks',
   cancel_merge: 'cancel-merge',
   deescalate: 'deescalate',
   make_super: 'make-super',

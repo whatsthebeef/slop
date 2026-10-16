@@ -147,6 +147,8 @@ export type Action =
   | 'merge'
   /** A failed merge that GitHub never decided (no conflict, checks passed at the head): ask slop to merge again. */
   | 'retry_merge'
+  /** Failed checks on a head nobody fixes in code (an agent-set glob, or a failure the base explains): re-run the failed jobs. */
+  | 'retry_checks'
   | 'deescalate'
   /** A failed sub or same whose routine said a person must decide something: becomes a super with the person implementing. */
   | 'make_super'
@@ -1717,6 +1719,34 @@ const canRetryMerge = (glob: Glob): boolean =>
   glob.pr.headSha != null &&
   glob.headChecks?.sha === glob.pr.headSha &&
   glob.headChecks.state === 'passed';
+
+/**
+ * Failed checks a code fix can't help: an agent-set glob (slop commits the set, no run fixes code) or a failure the base
+ * branch explains. A glob a routine run or a person works on is fixed by pushing instead.
+ */
+const canRetryChecks = (glob: Glob): boolean =>
+  (glob.status === 'failed' || glob.status === 'pr_open') &&
+  glob.pr?.state === 'ready' &&
+  glob.conflict == null &&
+  glob.type !== 'super' &&
+  headChecksFailed(glob) &&
+  (isAgentSetGlob(glob) || glob.headChecks?.inheritedFrom !== undefined);
+
+/**
+ * Retry checks: re-runs the failed jobs of the head's checks and clears the failure while they run. A failed merge goes
+ * back to waiting for the checks, so the glob merges when they pass.
+ */
+export const retryChecks = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (!canRetryChecks(glob) || hasWorkingRun(glob))
+    return invalidTransition(glob, actor, 'Only a ready PR whose checks failed on the current head can retry them');
+  const sha = glob.pr?.headSha ?? '';
+  const b = new Builder(glob, ctx).set({ failure: null });
+  if (glob.failure?.kind === 'merge') {
+    b.status('pr_open', { retryChecks: true }).set({ mergeMode: 'when_green' }).event('MergeArmed', { sha });
+  }
+  return b.effect({ kind: 'rerun_checks', globId: glob.id, generation: glob.generation, sha }).done();
+};
 
 /** Retry merge: a glob whose merge failed (e.g. GitHub hadn't decided mergeability) goes back to merging. */
 export const retryMerge = (glob: Glob, ctx: Context, relations?: RelationFacts): Result<Transition> => {
@@ -3755,7 +3785,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     actions.push('take_over');
   }
   // A merge failure on a glob a person implements is theirs to fix and push: a routine run is the wrong answer.
-  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
+  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null && !isAgentSetGlob(glob);
   if (
     !restricted &&
     glob.status === 'failed' &&
@@ -3767,6 +3797,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   }
   if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob)) actions.push('retry_autofix');
   if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
+  if (!restricted && !hasLiveRun(glob) && canRetryChecks(glob)) actions.push('retry_checks');
   if (!restricted && canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (!restricted && glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
   if (isMergeArmed(glob) || isMergeQueued(glob)) {
@@ -3820,6 +3851,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
 const agentSetActions = (glob: Glob, actor: Actor): Action[] => {
   const actions: Action[] = [];
   const restricted = restrictedFrom(actor, glob);
+  if (!restricted && canRetryChecks(glob)) actions.push('retry_checks');
   if (canReviewNow(glob)) actions.push('review_now');
   if (
     !restricted &&

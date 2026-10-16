@@ -1,3 +1,4 @@
+import { isAgentSetGlob } from './agent-set.js';
 import { actionState } from './action-glob.js';
 import { doThisCommands, fetchCommandFor } from './action-script.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
@@ -264,7 +265,7 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
     (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
     (glob.status === 'pr_open' || glob.status === 'in_progress');
   // A person who implements the glob fixes its conflict or failed merge themselves: no routine run will.
-  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
+  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null && !isAgentSetGlob(glob);
   if (glob.implementer !== null && ((hasOpenPr && glob.conflict != null) || personMergeFailure))
     steps.push(derived('resolve_conflict', 'Resolve conflict', 'implementer'));
   const run = glob.runs[glob.runs.length - 1];

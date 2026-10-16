@@ -770,6 +770,7 @@ export const createApp = (deps: AppDeps) => {
     'make-super': (email: string, id: string, b: ActionBody) => globs.makeSuper(email, id, b.version),
     'cancel-merge': (email: string, id: string, b: ActionBody) => globs.cancelMerge(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
+    'retry-checks': (email: string, id: string, b: ActionBody) => globs.retryChecks(email, id, b.version),
     // Alias for one release: `merge` already keeps a same with rollout steps open. A super's checkpoint merge (row 31) needs
     // the latest postplan at the head.
     'merge-continue': async (email: string, id: string, b: ActionBody) => {
@@ -814,6 +815,7 @@ export const createApp = (deps: AppDeps) => {
     'merge-anyway': 'merge_anyway',
     'merge-continue': 'merge_continue',
     'retry-merge': 'retry_merge',
+    'retry-checks': 'retry_checks',
     'mark-ready': 'mark_ready',
     prepare: 'prepare_action',
   } as const satisfies { readonly [route: string]: machine.Action };

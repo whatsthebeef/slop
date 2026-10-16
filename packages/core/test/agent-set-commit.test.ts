@@ -210,7 +210,7 @@ describe("slop's agent-set glob in the machine", () => {
     expect(machine.allowedActions(ready, dev)).toEqual(['review_now', 'merge', 'delete']);
     expect(machine.allowedActions({ ...ready, headChecks: passed }, dev)).toEqual(['review_now', 'merge', 'delete']);
     expect(machine.allowedActions({ ...ready, mergeMode: 'when_green' }, dev)).toEqual(['review_now', 'cancel_merge', 'delete']);
-    expect(machine.allowedActions({ ...ready, headChecks: { sha: 'a', state: 'failed' } }, dev)).toEqual(['review_now', 'delete']);
+    expect(machine.allowedActions({ ...ready, headChecks: { sha: 'a', state: 'failed' } }, dev)).toEqual(['retry_checks', 'review_now', 'delete']);
   });
 
   it('is marked ready from the board without an implementation record', () => {

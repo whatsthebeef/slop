@@ -163,6 +163,13 @@ export const actionPresentation = (
         tip: 'A machine run merges the base branch into this branch, resolves the conflicts and pushes; a failed attempt can be tried again',
         placement: 'main',
       };
+    case 'retry_checks':
+      return {
+        label: 'Retry checks',
+        icon: 'machine',
+        tip: 'Runs the failed checks of this head again; the glob merges when they pass',
+        placement: 'main',
+      };
     case 'retry_merge':
       return {
         label: 'Retry merge',
