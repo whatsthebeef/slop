@@ -38,6 +38,7 @@ import { SectionToggle } from './section-toggle';
 import { StepDetail } from './step-detail';
 import { MarkdownView } from './markdown-view';
 import { stripMarkdown } from '@/lib/markdown-text';
+import { blocksReadOnly } from '@/lib/blocking-item';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 
@@ -412,7 +413,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
           waits for {step.check} to turn on; slop ticks this itself
         </span>
       )}
-      {!dismissing && !failing && (
+      {!dismissing && !failing && !blocksReadOnly(glob) && (
         <div className='flex flex-wrap gap-2'>
           <Button size='sm' disabled={busy || waits} data-testid='due-done' onClick={() => void actions.onComplete(step.id)}>
             Done
