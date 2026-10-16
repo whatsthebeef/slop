@@ -9,7 +9,6 @@ import type { CardMove } from '../src/components/glob-card';
 import { actionPresentation } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import type { WorkstreamsSummary, WorkstreamState } from '@slop/core';
-import { cornerStatus } from '../src/lib/card-rows';
 import { CONFIRM_MS } from '../src/lib/chip-actions';
 import { cardMoves } from '../src/lib/card-moves';
 import { armLabel } from '../src/lib/rollout-stages';
@@ -154,7 +153,7 @@ describe('card rows', () => {
       ['machine running', () => view({ status: 'in_progress', ...live('active') }), 'machine-spinning', 'implementing', 'The machine is working on it'],
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
-      ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Asks you to confirm.'],
+      ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob.'],
       ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 to be merged and rolled out (Doing)'],
       ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'running checks', 'Checks are running on d16d563'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
@@ -516,19 +515,43 @@ describe('card interaction', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('merges from the corner in two clicks, never opening the card', async () => {
+  it('the corner is status only: its click opens the glob view and never runs Merge', async () => {
     const user = userEvent.setup();
     const { onAct, onOpen, onOpenSection } = renderCard(prOpen({ allowedActions: ['merge'] }));
-    expect(screen.queryByTestId('your-turn-chip')).toBeNull();
+    expect(screen.getByTestId('position').textContent).toBe('Merge');
     await user.click(screen.getByTestId('position'));
-    expect(screen.getByTestId('position').textContent).toBe('confirm merge');
-    expect(screen.getByTestId('position').getAttribute('data-confirming')).toBe('true');
     expect(onAct).not.toHaveBeenCalled();
-    await user.click(screen.getByTestId('position'));
-    expect(onAct).toHaveBeenCalledWith('merge');
-    expect(onAct).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
-    expect(onOpenSection).not.toHaveBeenCalled();
+    expect(onOpenSection).toHaveBeenCalledTimes(1);
+  });
+
+  describe('Merge button', () => {
+    const mergeable = (patch: Partial<GlobView> = {}) => prOpen({ list: 'doing', allowedActions: ['merge'], ...patch });
+    const withMerge = (g = mergeable()) => {
+      const onMove = vi.fn();
+      const out = renderCard(g, { moves: cardMoves(g).map((m) => m.move), onMove });
+      return { ...out, onMove, button: () => screen.getByTestId('move-merge') };
+    };
+
+    it('reads Merge, with or without rollout steps, and says what follows in its tip', () => {
+      expect(withMerge().button().textContent).toBe('Merge');
+      cleanup();
+      const { button } = withMerge(mergeable({ rolloutSteps: 2 }));
+      expect(button().textContent).toBe('Merge');
+      expect(button().getAttribute('aria-label')).toContain("Then run its 2 rollout steps (it stays open until they're done)");
+    });
+
+    it('the first click only arms it; the second runs it, never opening the card', async () => {
+      const user = userEvent.setup();
+      const { button, onMove, onOpen } = withMerge();
+      await user.click(button());
+      expect(button().textContent).toBe('Confirm merge');
+      expect(onMove).not.toHaveBeenCalled();
+      await user.click(button());
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove.mock.calls[0]?.[0]).toMatchObject({ action: 'merge' });
+      expect(onOpen).not.toHaveBeenCalled();
+    });
   });
 
   describe('Fix conflict button', () => {
@@ -590,40 +613,6 @@ describe('card interaction', () => {
       expect(screen.getByTestId('card-pending').textContent).toBe('Fixing conflict…');
       expect(screen.getByTestId<HTMLButtonElement>('move-resolve_conflict').disabled).toBe(true);
     });
-  });
-
-  it('reverts the corner merge confirm on Esc', async () => {
-    const user = userEvent.setup();
-    const { onAct } = renderCard(prOpen({ allowedActions: ['merge'] }));
-    await user.click(screen.getByTestId('position'));
-    expect(screen.getByTestId('position').textContent).toBe('confirm merge');
-    await user.keyboard('{Escape}');
-    expect(screen.getByTestId('position').textContent).toMatch(/^merge/i);
-    expect(onAct).not.toHaveBeenCalled();
-  });
-
-  it('shows the working state in the corner while an action is pending', () => {
-    renderCard(prOpen({ allowedActions: ['merge'] }), { pending: 'merge' });
-    expect(screen.getByTestId<HTMLButtonElement>('position').disabled).toBe(true);
-  });
-
-  it('runs Done from the corner on one click', async () => {
-    const user = userEvent.setup();
-    const g = prOpen({ allowedActions: ['mark_ready'] });
-    const real = vi.mocked(cornerStatus).getMockImplementation();
-    vi.mocked(cornerStatus).mockImplementation((...args) => {
-      const status = real?.(...args) ?? null;
-      return status === null ? null : { ...status, text: 'done', click: { kind: 'act', action: 'mark_ready', confirm: false } };
-    });
-    try {
-      const { onAct, onOpen } = renderCard(g);
-      await user.click(screen.getByTestId('position'));
-      expect(onAct).toHaveBeenCalledTimes(1);
-      expect(onAct).toHaveBeenCalledWith('mark_ready');
-      expect(onOpen).not.toHaveBeenCalled();
-    } finally {
-      vi.mocked(cornerStatus).mockImplementation((...args) => real?.(...args) ?? null);
-    }
   });
 
   it('opens the glob view from a ready status that needs input, without running anything', async () => {

@@ -44,14 +44,10 @@ export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedA
   if (status.turn === 'unstick' && status.action !== undefined)
     return allowed.includes(status.action) ? { kind: 'act', action: status.action, confirm: false } : { kind: 'section', target: cardTargets.actions() };
   switch (status.turn) {
+    // The card's corner is status only: Merge and Done are bottom buttons on the card and the glob view's main button.
     case 'merge':
-      // A same with rollout steps is offered Merge and continue instead of Merge.
-      if (allowed.includes('merge')) return { kind: 'act', action: 'merge', confirm: true };
-      return allowed.includes('merge_continue')
-        ? { kind: 'act', action: 'merge_continue', confirm: true }
-        : { kind: 'section', target: cardTargets.actions() };
     case 'done':
-      return allowed.includes('mark_ready') ? { kind: 'act', action: 'mark_ready', confirm: false } : { kind: 'section', target: cardTargets.actions() };
+      return { kind: 'section', target: cardTargets.actions() };
     case 'decide':
       return { kind: 'section', target: cardTargets.decision() };
     case 'sign_off':
