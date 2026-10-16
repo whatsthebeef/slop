@@ -14,7 +14,6 @@ export const GLOB_SECTIONS = [
   'problem',
   'size',
   'deploys',
-  'environments',
   'tests',
   'choices',
   'decision',
