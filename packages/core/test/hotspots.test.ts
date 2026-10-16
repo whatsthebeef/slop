@@ -7,7 +7,7 @@ import type { FileConflict } from '../src/domain/conflict-record.js';
 import { DEFAULT_CONTEXT_SETTINGS } from '../src/domain/context-settings.js';
 import type { Result } from '../src/domain/errors.js';
 import type { DomainEvent } from '../src/domain/events.js';
-import { detectHotspots, hotspotSettingsOf } from '../src/domain/hotspots.js';
+import { detectHotspots, hotspotFacts, hotspotSettingsOf } from '../src/domain/hotspots.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 
@@ -81,10 +81,32 @@ describe('detectHotspots', () => {
         globs: ['s1t1', 's1t2', 's1t3'],
         real: 1,
         lastConflictAt: day(12),
+        firstConflictAt: day(10),
+        additive: 2,
+        burst: false,
         merges: null,
         lines: null,
       },
     ]);
+  });
+
+  it('marks a file whose conflicts all fell within a day as a burst, and one spread over days as not', () => {
+    const at = (h: number): string => `2026-10-12T${String(h).padStart(2, '0')}:00:00.000Z`;
+    const burst = detectHotspots([conflict('a.ts', 's1t1', at(1)), conflict('a.ts', 's1t2', at(5)), conflict('a.ts', 's1t3', at(20))], NOW, settings);
+    expect(burst.map((h) => [h.path, h.burst, h.additive])).toEqual([['a.ts', true, 3]]);
+    const spread = detectHotspots([conflict('a.ts', 's1t1', day(8)), conflict('a.ts', 's1t2', day(10)), conflict('a.ts', 's1t3', day(12))], NOW, settings);
+    expect(spread.map((h) => h.burst)).toEqual([false]);
+  });
+
+  it('reads one file\'s conflicts as facts: kind, who fixed it and how fast', () => {
+    const rows: FileConflict[] = [
+      { ...conflict('a.ts', 's1t1', day(10), 'real'), resolvedAt: '2026-10-10T00:45:00.000Z' },
+      conflict('a.ts', 's1t2', day(12)),
+      conflict('b.ts', 's1t3', day(11)),
+    ];
+    const facts = hotspotFacts('a.ts', rows, NOW, 7);
+    expect(facts).toMatchObject({ path: 'a.ts', additive: 1, real: 1, burst: false, spanHours: 48 });
+    expect(facts.conflicts.map((c) => [c.globId, c.kind, c.by, c.minutesToFix])).toEqual([['s1t1', 'real', 'run', 45], ['s1t2', 'additive', 'run', 0]]);
   });
 
   it('counts globs, not conflicts: one glob conflicting repeatedly on additive changes is not enough', () => {

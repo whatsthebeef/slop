@@ -2,6 +2,7 @@ import { assessmentOf } from './decision-glob.js';
 import type { AssessmentInput } from './decision-glob.js';
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
+import type { HotspotFacts } from './hotspots.js';
 import type { KbTarget, LearningStatus } from './kb.js';
 import { learningDecision, learningDraft, learningFacts, learningStatement, learningStatus, learningTarget } from './learning.js';
 import type { LearningRead } from './learning.js';
@@ -25,7 +26,7 @@ export const SUGGESTION_LABEL = 'suggestion';
 export const RULES_MODEL = 'rules';
 
 /** Bumped when the prompt or the output contract changes, so older suggestions read as stale. */
-export const SUGGEST_PROMPT_VERSION = 2;
+export const SUGGEST_PROMPT_VERSION = 3;
 
 export const SUGGEST_SIBLINGS_MAX = 8;
 export const SUGGEST_MERGES_MAX = 8;
@@ -105,6 +106,21 @@ export interface SuggestOutcome {
   readonly reason: string | null;
 }
 
+/** What a hotspot decision adds to the input: the conflicts and the file around them, for weighing the proposed refactor. */
+export interface SuggestHotspot {
+  readonly facts: HotspotFacts;
+  /** The proposed refactor, as the decision's plan.md states it (cut). */
+  readonly proposal: string;
+  /** The file's size on the base branch; null when it couldn't be read. */
+  readonly lines: number | null;
+  /** Merges that changed the file inside the window; null when the code host couldn't say. */
+  readonly merges: number | null;
+  /** Open work globs whose branch or plan touches the file. */
+  readonly openGlobs: readonly SuggestMerge[];
+  /** Work globs merged on the board inside the window: the board's merge rate. */
+  readonly boardMerges: number;
+}
+
 /** Everything the model reads, already bounded. `learning` is null for a decision with no knowledge item. */
 export interface SuggestInputs {
   readonly glob: { readonly id: string; readonly title: string };
@@ -126,6 +142,8 @@ export interface SuggestInputs {
   readonly flags: SuggestFlags;
   /** The signals an approval may watch; empty when the learning has a signal of its own or none is measured. */
   readonly signals: readonly SuggestSignal[];
+  /** Set for a hotspot decision, which is judged on cost and benefit, not as a learning. */
+  readonly hotspot?: SuggestHotspot | null;
 }
 
 const sameTarget = (a: KbTarget | null, b: KbTarget | null): boolean => a !== null && b !== null && a.kind === b.kind && a.name === b.name;
@@ -187,6 +205,24 @@ export const overlappingMerges = (self: Glob, area: readonly string[], merged: r
     .map(({ g }) => ({ id: g.id, title: g.title }));
 };
 
+/** The system prompt for a hotspot decision: a refactor proposed because a file kept conflicting, weighed against what the conflicts cost. */
+export const hotspotSystem = (): string => `You advise a board's admin on one open decision: a file kept conflicting between parallel globs, and a refactor of it is proposed. Judge the proposal's cost against the conflicts' real cost, then recommend.
+
+Choose exactly one action:
+- "approve": the conflicts cost enough, and the refactor is small and safe enough, that it pays for itself.
+- "reject": the conflicts were cheap or came from a burst, or the refactor costs more than it buys. Name the cheaper alternative in the reason (chain or batch the globs that edit the file, split only the hottest section, or leave it), so a person can act on it.
+
+Weigh, in this order:
+1. The conflicts' real cost: how many there were, how many were additive (both sides added different things, resolved by the conflict-fix run) against real clashes of logic, how long each took to fix, and whether they came from one burst of related globs within a day or from a standing pattern over weeks. A burst of additive conflicts that a run fixed in minutes is cheap; repeated logic conflicts over weeks are not.
+2. The refactor's cost: new machinery (loaders, assembly steps, generated files), its blast radius, what it does to how knowledge, learnings and agents find and route to the file's sections, and whether a person can still read and review the result.
+3. Cheaper alternatives and what already reduces the conflicts (open globs touching the file now, the board's merge rate, ordering or a merge queue).
+
+Rules:
+- Never approve because nothing contradicts the proposal: a proposal needs reasons to be done, not an absence of reasons against. The conflict count alone is not a reason.
+- Ground the reason in the input: cite the conflicting glob IDs and the numbers given. Do not invent IDs, files or facts that are not in the input.
+- "reason" is 3 to 5 sentences: the conflicts' cost, the refactor's cost, then the call.
+- Answer with one JSON object and nothing else: {"action": "...", "reason": "...", "editedDraft": null, "mergeInto": null, "mergedText": null, "checkSignal": null, "checkReason": null}. Leave every field except action and reason null.`;
+
 export const suggestSystem = (learning: boolean): string => `You advise a board's admin on one open decision about the project's knowledge base. You are given the proposal and what surrounds it, and you recommend what to do with it.
 
 ${
@@ -206,8 +242,22 @@ Rules:
 - When the input lists signals the board measures, also name the one signal most likely to improve if the learning works, as "checkSignal" (its key, exactly as listed) with a one-line "checkReason" in plain words, e.g. "Runs failing with 'no progress for 2 hours' should drop." Pick none (both null) when no listed signal clearly relates to the learning; never pick one only because it is listed. Both are null when the action is "reject" or when no signals are listed.
 - Answer with one JSON object and nothing else: {"action": "...", "reason": "...", "editedDraft": null, "mergeInto": null, "mergedText": null, "checkSignal": null, "checkReason": null}. Fill only the fields the action needs.`;
 
+const hotspotPrompt = (inputs: SuggestInputs, h: SuggestHotspot): string => {
+  const f = h.facts;
+  const out: string[] = [`Decision ${inputs.glob.id}: ${inputs.glob.title}`, '', '## The file', `${f.path}: ${h.lines === null ? 'size not known' : `${String(h.lines)} lines`}; ${h.merges === null ? 'merges that changed it not known' : `${String(h.merges)} merges changed it in ${String(f.windowDays)} days`}; the board merged ${String(h.boardMerges)} work globs in the same days.`];
+  out.push('', `## Conflicts on it in the last ${String(f.windowDays)} days`);
+  out.push(`${String(f.conflicts.length)} conflicts: ${String(f.additive)} additive, ${String(f.real)} real clashes, ${String(f.conflicts.length - f.additive - f.real)} not known. First to last spanned ${String(f.spanHours)} hours${f.burst ? ' (all within one day: a burst)' : ''}.`);
+  out.push(...f.conflicts.map((c) => `- ${c.globId}${c.workstream === null ? '' : ` (workstream ${c.workstream})`}, ${c.flaggedAt.slice(0, 16)}Z: ${c.kind}${c.by === null ? '' : `, fixed by ${c.by === 'run' ? 'a conflict-fix run' : 'a person'}`}${c.minutesToFix === null ? ', still open' : c.minutesToFix === 0 ? ', fixed at once' : `, fixed in ${String(c.minutesToFix)} min`}`));
+  out.push('', '## Open work touching the file now');
+  out.push(...(h.openGlobs.length === 0 ? ['None.'] : h.openGlobs.map((g) => `- ${g.id}: ${g.title}`)));
+  out.push('', '## The proposed refactor', h.proposal);
+  out.push('', '## Automatic flags', `Rule-based outcome: ${inputs.flags.suggestedOutcome ?? 'none'}`, ...(inputs.flags.flags.length === 0 ? ['No flags.'] : inputs.flags.flags.map((x) => `- ${x}`)));
+  return out.join('\n');
+};
+
 /** The user prompt: the inputs as labelled sections the model can cite. */
 export const suggestPrompt = (inputs: SuggestInputs): string => {
+  if (inputs.hotspot !== undefined && inputs.hotspot !== null) return hotspotPrompt(inputs, inputs.hotspot);
   const out: string[] = [`Decision ${inputs.glob.id}: ${inputs.glob.title}`];
   const l = inputs.learning;
   if (l !== null) {
