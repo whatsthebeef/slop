@@ -1,4 +1,4 @@
-import { ArtifactService, BoardService, GlobService, machine, IntakeService, LlmUnavailable } from '@slop/core';
+import { ArtifactService, BoardService, GlobService, machine, IntakeService, LlmUnavailable, SpendService } from '@slop/core';
 import type { Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -56,6 +56,7 @@ describe('relations over REST and MCP (Postgres)', () => {
   let app: Hono<Env>;
   let boardId: number;
   let other: number;
+  let solo: number;
 
   const make = async (title: string, patch: Record<string, unknown> = {}): Promise<Glob> =>
     unwrap(await globs.create(DEV, { boardId, title, type: 'same', category: 'task', group: 'grp', environment: null, autoTrigger: false, idempotencyKey: null, plan: title, ...patch }));
@@ -110,6 +111,8 @@ describe('relations over REST and MCP (Postgres)', () => {
     });
     boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    // A board only the admin is on: its globs are invisible to DEV.
+    solo = unwrap(await boards.create(ADMIN, { name: 'solo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await boards.setMember(ADMIN, other, DEV, 'dev'));
     const outbox = new OutboxRunner(database.db, { globs }, {}, () => undefined);
@@ -120,6 +123,7 @@ describe('relations over REST and MCP (Postgres)', () => {
       globs,
       hub: notifier,
       outbox,
+      spend: new SpendService({ store, clock }),
       onBoardCreated: () => Promise.resolve(),
     });
     const server = buildServer({ artifacts, globs, intake: new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('off', 'none')) } }), outbox, boards, deploys: { history: () => Promise.resolve({ ok: true as const, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
@@ -146,16 +150,101 @@ describe('relations over REST and MCP (Postgres)', () => {
       idempotencyKey: 'rel-create-1',
       needs: [a.id],
       relations: [{ to: b.id, gate: 'merge', reason: 'ships with B' }, { to: d.id, reason: 'the store is open' }],
+      reason: 'uses its table',
     });
     expect(made.error).toBe(false);
     const stored = await rows(made.body.id);
     expect(stored.map((r) => [r.to, r.gate, r.until, r.source, r.reason]).sort()).toEqual(
       [
-        [a.id, 'start', 'merged', 'agent', null],
+        [a.id, 'start', 'merged', 'agent', 'uses its table'],
         [b.id, 'merge', 'merged', 'agent', 'ships with B'],
         [d.id, 'start', 'decided', 'agent', 'the store is open'],
       ].sort(),
     );
+  });
+
+  it('an agent relation without a reason is refused (create_glob, update_glob, add_relation); a reason in any form is accepted', async () => {
+    const a = await make('Needs reason target');
+    const g = await make('Needs reason holder');
+    const created = await tool('create_glob', { board: boardId, title: 'No reason', type: 'same', group: 'grp', plan: 'p', idempotencyKey: 'rel-noreason', after: [a.id] });
+    expect(created.error).toBe(true);
+    expect(created.body.message).toContain(`Relation to ${a.id} needs a one-line reason`);
+    expect((await tool('update_glob', { id: g.id, version: g.version, relations: [{ to: a.id, gate: 'merge' }] })).error).toBe(true);
+    expect((await tool('add_relation', { id: g.id, version: g.version, to: a.id, gate: 'merge' })).error).toBe(true);
+    expect(await rows(g.id)).toEqual([]);
+    const shorthand = await tool('update_glob', { id: g.id, version: g.version, after: [a.id], reason: 'uses its helper' });
+    expect(shorthand.error).toBe(false);
+    expect((await rows(g.id)).map((r) => [r.source, r.reason])).toEqual([['agent', 'uses its helper']]);
+  });
+
+  it('people over REST need no reason, and until accepts rolled_out as merged (REST and MCP)', async () => {
+    const a = await make('Alias A');
+    const b = await make('Alias B');
+    const c = await make('Alias C');
+    const viaRest = await rest('POST', `/api/globs/${a.id}/relations`, { version: a.version, to: b.id, gate: 'sign_off', until: 'rolled_out' });
+    expect(viaRest.status).toBe(200);
+    expect(viaRest.body.relations?.holding).toMatchObject([{ to: b.id, gate: 'sign_off', until: 'merged', reason: null, source: 'person' }]);
+    const viaMcp = await tool('add_relation', { id: b.id, version: b.version, to: c.id, gate: 'merge', until: 'rolled_out', reason: 'ships with C' });
+    expect(viaMcp.error).toBe(false);
+    expect(viaMcp.body.relations?.holding).toMatchObject([{ to: c.id, until: 'merged', source: 'agent' }]);
+    const created = await rest('POST', `/api/boards/${String(boardId)}/globs`, { title: 'Alias create', plan: 'p', group: 'grp', relations: [{ to: c.id, gate: 'sign_off', until: 'rolled_out' }] });
+    expect((await rows(created.body.id)).map((r) => r.until)).toEqual(['merged']);
+    expect((await rest('POST', `/api/globs/${a.id}/relations`, { version: await version(a.id), to: c.id, until: 'bogus' })).status).toBe(422);
+  });
+
+  it('REST: create takes holds and supersedes, add relation takes supersedes', async () => {
+    const old = await make('Old plan');
+    const obsolete = await make('Obsolete one');
+    const made = await rest('POST', `/api/boards/${String(boardId)}/globs`, {
+      title: 'Follow-up', plan: 'p', group: 'grp', holds: [{ id: old.id, reason: 'finishes it' }], supersedes: [{ id: obsolete.id, reason: 'replaces it' }],
+    });
+    expect(made.status).toBe(200);
+    expect((await rows(old.id)).map((r) => [r.to, r.gate, r.source])).toEqual([[made.body.id, 'sign_off', 'person']]);
+    expect((await rest('GET', `/api/globs/${obsolete.id}`)).body.relations).toMatchObject({ supersededBy: { id: made.body.id, reason: 'replaces it' } });
+    const replacer = await make('Replacer');
+    const replaced = await make('Replaced');
+    const added = await rest('POST', `/api/globs/${replacer.id}/relations`, { supersedes: replaced.id, reason: 'same work' });
+    expect(added.status).toBe(200);
+    expect(added.body.relations).toMatchObject({ supersedes: [{ id: replaced.id }] });
+  });
+
+  it('REST: a failed step leaves a suggestion; accepting with a glob links the fix, dismissing remembers; both routes map errors', async () => {
+    const g = await make('Rolls out');
+    unwrap(await globs.applyEvent(g.id, (x, c) => machine.merged(x, { sha: 'abc123' }, c)));
+    const step = unwrap(await globs.addHumanStep(ADMIN, g.id, null, { title: 'Provision it', kind: 'rollout' }));
+    expect((await rest('POST', `/api/globs/${g.id}/steps/${step.id}/fail`, { note: '' })).status).toBe(422);
+    expect((await rest('POST', `/api/globs/${g.id}/steps/hs_nope/fail`, { note: 'x' })).status).toBe(404);
+    const failed = await rest('POST', `/api/globs/${g.id}/steps/${step.id}/fail`, { note: 'did not provision', version: null });
+    expect(failed.status).toBe(200);
+    const suggestions = (failed.body as unknown as { suggestions?: { id: string; kind: string; stepId?: string }[] }).suggestions ?? [];
+    expect(suggestions).toMatchObject([{ kind: 'step_failed', stepId: step.id }]);
+    const sid = encodeURIComponent(suggestions[0]?.id ?? '');
+    // The board list carries the suggestion too.
+    const list = await rest('GET', `/api/boards/${String(boardId)}/globs`);
+    expect(((list.body as unknown as { id: string; suggestions?: unknown[] }[]).find((v) => v.id === g.id))?.suggestions).toHaveLength(1);
+    expect((await rest('POST', `/api/globs/${g.id}/suggestions/${sid}/accept`, {})).status).toBe(422);
+    const fix = await make('Fix it');
+    const accepted = await rest('POST', `/api/globs/${g.id}/suggestions/${sid}/accept`, { glob: fix.id });
+    expect(accepted.status).toBe(200);
+    expect((await rows(g.id)).map((r) => [r.to, r.gate, r.until])).toEqual([[fix.id, 'sign_off', 'merged']]);
+    expect((accepted.body as unknown as { suggestions?: unknown }).suggestions).toBeUndefined();
+    // Another failure, dismissed.
+    const again = await rest('POST', `/api/globs/${g.id}/steps/${step.id}/fail`, { note: 'still' });
+    const next = (again.body as unknown as { suggestions?: { id: string }[] }).suggestions ?? [];
+    expect(next).toHaveLength(1);
+    const dismissed = await rest('POST', `/api/globs/${g.id}/suggestions/${encodeURIComponent(next[0]?.id ?? '')}/dismiss`, {});
+    expect(dismissed.status).toBe(200);
+    expect((dismissed.body as unknown as { suggestions?: unknown }).suggestions).toBeUndefined();
+    expect((await rest('POST', `/api/globs/${g.id}/suggestions/nope/dismiss`, {})).status).toBe(404);
+  });
+
+  it('the board spend route lists relation_scan in bySource', async () => {
+    await store.transaction((tx) =>
+      tx.insertLlmSpend({ boardId, globId: null, source: 'relation_scan', model: 'claude-haiku-4-5', inputTokens: 2000, outputTokens: 300, costUsd: 0.0035, ref: null, createdAt: new Date().toISOString() }),
+    );
+    const res = await rest('GET', `/api/boards/${String(boardId)}/spend`);
+    expect(res.status).toBe(200);
+    expect((res.body as unknown as { bySource: Record<string, number> }).bySource.relation_scan).toBeCloseTo(0.0035);
   });
 
   it('get_glob and the REST read carry relations (holding, holdsBack, done) and no edges; the board list carries holding and the move', async () => {
@@ -201,10 +290,11 @@ describe('relations over REST and MCP (Postgres)', () => {
     expect(cycle.body.message).toContain('cycle');
     const self = await tool('add_relation', { id: a.id, version: await version(a.id), to: a.id });
     expect(self.error).toBe(true);
+    // A glob on a board the caller is not on answers like a missing one.
     const foreign = unwrap(
-      await globs.create(DEV, { boardId: other, title: 'Elsewhere', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'x' }),
+      await globs.create(ADMIN, { boardId: solo, title: 'Elsewhere', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null, plan: 'x' }),
     );
-    expect((await tool('add_relation', { id: a.id, version: await version(a.id), to: foreign.id })).body.message).toContain('on this board');
+    expect((await tool('add_relation', { id: a.id, version: await version(a.id), to: foreign.id, reason: 'x' })).body.message).toBe(`No glob ${foreign.id}`);
 
     const dismissed = await tool('dismiss_relation', { id: a.id, version: await version(a.id), relationId: row?.relationId ?? '' });
     expect(dismissed.error).toBe(false);

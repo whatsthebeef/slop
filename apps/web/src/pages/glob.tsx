@@ -131,6 +131,10 @@ export const GlobPage = () => {
       onCompleteStep={(stepId) => change(() => api.completeHumanStep(open.id, stepId))}
       onMarkDeployed={(env) => change(() => api.markEnvironmentDeployed(open.id, env))}
       onDismissStep={(stepId, reason) => change(() => api.dismissHumanStep(open.id, stepId, reason))}
+      onFailStep={(stepId, note) => change(() => api.failStep(open.id, stepId, note, open.version))}
+      onSuggestion={(suggestionId, action, glob) =>
+        change(() => (action === 'accept' ? api.acceptSuggestion(open.id, suggestionId, glob === undefined ? {} : { glob }) : api.dismissSuggestion(open.id, suggestionId)))
+      }
       onDelete={async () => {
         try {
           await api.deleteGlob(open.id, open.version);

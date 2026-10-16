@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -12,7 +12,7 @@ import type { MergeGate, ReadyGate } from '../ready-gate.js';
 import type { HintHub } from '../notifier.js';
 import type { SignedLinks } from '../signed-links.js';
 import { labelCommandSchema } from './labels.js';
-import { addRelationSchema, relationInput, relationInputs, relationListSchema } from './relation-schemas.js';
+import { addRelationSchema, holdInputSchema, holdInputs, relationInput, relationInputs, relationListSchema, supersedeInputSchema, supersedeInputs } from './relation-schemas.js';
 import { requestTiming } from '../request-metrics.js';
 import { requestOrigin } from './origin.js';
 import { checkSignInState, issueSignInState, safeReturnPath } from './sign-in-state.js';
@@ -177,6 +177,11 @@ export const createGlobSchema = z.object({
   after: z.array(z.string().min(1)).max(20).optional(),
   /** Relations of any gate beside `needs`/`after`: `[{to, gate?, until?, reason?}]`. */
   relations: relationListSchema.optional(),
+  /** Globs (on any board the person can edit) this one holds back until it merges: a follow-up or a fix. Alias: `follows_up`. */
+  holds: z.array(holdInputSchema).max(20).optional(),
+  follows_up: z.array(holdInputSchema).max(20).optional(),
+  /** Globs this one makes obsolete (the row lands on each: "superseded by this"). */
+  supersedes: z.array(supersedeInputSchema).max(20).optional(),
   /** Files intake guessed the work changes: with the plan, they decide whether the merge policy's exclusive paths hold it. */
   files: z.array(z.string().min(1).max(200)).max(20).optional(),
   /** Questions the intake proposal raised, passed back by the form: they hold the new glob's start until a person answers. */
@@ -200,6 +205,8 @@ export const createGlobSchema = z.object({
       model: z.string().max(200).nullable().default(null),
       promptVersion: z.number().int().nullable().default(null),
       examples: z.array(z.string().min(1).max(40)).max(10).default([]),
+      /** What intake decided the request waits for: passed back so the create-time path makes no second model call. */
+      prerequisites: z.array(z.object({ id: z.string().min(1).max(40), gate: z.enum(RELATION_GATES), sentence: z.string().max(1000) })).max(20).optional(),
     })
     .optional(),
 });
@@ -243,6 +250,8 @@ const updateGlobSchema = z.object({
   after: z.array(z.string().min(1)).max(20).optional(),
   /** Relations to add or change (any gate); additive, unlike `after`, which replaces the start list. */
   relations: relationListSchema.optional(),
+  /** Globs this one makes obsolete. */
+  supersedes: z.array(supersedeInputSchema).max(20).optional(),
   /** A decision's scope or an action's assignee, the only attributes a client edits; core validates them. */
   attributes: z
     .union([
@@ -573,7 +582,7 @@ export const createApp = (deps: AppDeps) => {
     // A picked-up learning's recommendation job reads as a machine step ("getting a recommendation").
     const recommending = result.ok ? await globs.recommendationEffectsOf(result.value.map((r) => r.glob)) : new Map<string, PendingEffect[]>();
     return send(c, result, (list) =>
-      list.map(({ glob, artifacts, relations, holding }) => {
+      list.map(({ glob, artifacts, relations, holding, holdsBack, suggestions }) => {
         const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id), scripts.get(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
@@ -582,6 +591,9 @@ export const createApp = (deps: AppDeps) => {
         const move = whoseMove(glob, human, facts, holding, now, { viewer, thresholds, complete: false });
         return {
           ...view,
+          // Who waits for this glob (other boards' too, redacted for a viewer outside them) and the open card suggestions: only when there are some.
+          ...(holdsBack === undefined ? {} : { holdsBack }),
+          ...(suggestions === undefined ? {} : { suggestions }),
           // A stalled glob also hands a step to its implementer (or planner).
           humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
@@ -622,7 +634,7 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, createGlobSchema);
     if (body instanceof Response) return body;
     const email = c.get('email');
-    const { intake, needs, group, relations, type, actor, mode, fix, workKind, fixSource, workKindSource, inferenceReason, category, questions, ...fields } = body;
+    const { intake, needs, group, relations, holds, follows_up: followsUp, supersedes, type, actor, mode, fix, workKind, fixSource, workKindSource, inferenceReason, category, questions, ...fields } = body;
     const boardId = Number(c.req.param('b'));
     const kind = resolveKind({ actor, mode, type, category, fix, workKind }, true);
     if (!kind.ok) return send(c, invalidInput(kind.message));
@@ -654,6 +666,8 @@ export const createApp = (deps: AppDeps) => {
       group: chosen,
       ...(needs === undefined && fields.after === undefined ? {} : { after: needs ?? fields.after ?? [] }),
       ...(relations === undefined ? {} : { relations: relationInputs(relations) }),
+      ...(holds === undefined && followsUp === undefined ? {} : { holds: holdInputs([...(holds ?? []), ...(followsUp ?? [])]) }),
+      ...(supersedes === undefined ? {} : { supersedes: supersedeInputs(supersedes) }),
       source: 'web',
       ...(intake === undefined ? {} : { intake: { ...intake, source: 'web' } }),
       ...(questions === undefined || questions.length === 0
@@ -684,14 +698,14 @@ export const createApp = (deps: AppDeps) => {
   app.patch('/api/globs/:id', async (c) => {
     const body = await parse(c, updateGlobSchema);
     if (body instanceof Response) return body;
-    const { version, needs, relations, mode, ...changes } = body;
+    const { version, needs, relations, supersedes, mode, ...changes } = body;
     const kind = resolveKind({ mode, type: changes.type }, false);
     if (!kind.ok) return send(c, invalidInput(kind.message));
     if (kind.type !== undefined && kind.type !== null) changes.type = kind.type;
     const after = needs ?? changes.after;
     return withView(
       c,
-      await globs.update(c.get('email'), c.req.param('id'), version, { ...changes, ...(after === undefined ? {} : { after }), ...(relations === undefined ? {} : { relations: relationInputs(relations) }) }),
+      await globs.update(c.get('email'), c.req.param('id'), version, { ...changes, ...(after === undefined ? {} : { after }), ...(relations === undefined ? {} : { relations: relationInputs(relations) }), ...(supersedes === undefined ? {} : { supersedes: supersedeInputs(supersedes) }) }),
     );
   });
 
@@ -804,8 +818,14 @@ export const createApp = (deps: AppDeps) => {
   app.post('/api/globs/:id/relations', async (c) => {
     const body = await parse(c, addRelationSchema);
     if (body instanceof Response) return body;
-    const { to, holdsBack, holdsBackGroup, version, ...rest } = body;
+    const { to, holdsBack, holdsBackGroup, supersedes, version, ...rest } = body;
     const id = c.req.param('id');
+    if (supersedes !== undefined) {
+      // This glob replaces `supersedes`: the row lands on that one, whose open steps are dismissed. Answers with this glob's view.
+      const done = await globs.addSupersession(c.get('email'), id, supersedes, { reason: rest.reason ?? null });
+      if (done.ok) void deps.outbox.drain(done.value.id).catch(() => undefined);
+      return done.ok ? send(c, await globs.get(c.get('email'), id), globViewOf) : send(c, done);
+    }
     if (holdsBackGroup !== undefined) {
       const held = await globs.holdGroup(c.get('email'), id, holdsBackGroup, relationInput({ ...rest, to: id }));
       if (held.ok) void deps.outbox.drain(id).catch(() => undefined);
@@ -931,6 +951,28 @@ export const createApp = (deps: AppDeps) => {
     if (body instanceof Response) return body;
     return afterStep(c, await globs.dismissHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.reason, body.version ?? null));
   });
+
+  // "It failed": a rollout step's run failed. The step stays open; slop asks whether a glob fixes it (a suggestion on the glob).
+  app.post('/api/globs/:id/steps/:stepId/fail', async (c) => {
+    const body = await parse(c, z.object({ note: z.string().trim().min(1).max(2000), version: z.number().int().nullable().optional() }));
+    if (body instanceof Response) return body;
+    const failed = await globs.failHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.note, body.version ?? null);
+    return afterStep(c, failed);
+  });
+
+  // A card suggestion (a possible prerequisite, supersedes, reverse relation or a failed step): accept writes the relation (for a
+  // failed step, `glob` names the fix glob to link), dismiss remembers that it was declined. Both answer with the glob's view.
+  const resolveSuggestion = async (c: Context<Env>, action: 'accept' | 'dismiss', glob: string | null) => {
+    const result = await globs.resolveSuggestion(c.get('email'), c.req.param('id') ?? '', c.req.param('sid') ?? '', action, { glob });
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
+  };
+  app.post('/api/globs/:id/suggestions/:sid/accept', async (c) => {
+    const body = await parse(c, z.object({ glob: z.string().min(1).nullable().optional() }));
+    if (body instanceof Response) return body;
+    return resolveSuggestion(c, 'accept', body.glob ?? null);
+  });
+  app.post('/api/globs/:id/suggestions/:sid/dismiss', async (c) => resolveSuggestion(c, 'dismiss', null));
 
   /** Responds with the updated glob and the actions now open to the caller. */
   const withView = async (c: Context<Env>, result: Awaited<ReturnType<GlobService['start']>>) => {

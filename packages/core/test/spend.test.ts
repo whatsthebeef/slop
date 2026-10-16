@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SpendService } from '../src/app/spend-service.js';
-import { costOf, monthStart, summariseSpend } from '../src/domain/spend.js';
+import { LLM_SPEND_SOURCES, costOf, monthStart, summariseSpend } from '../src/domain/spend.js';
 import { MemoryStore } from '../src/testing/memory-store.js';
 
 describe('spend (domain)', () => {
@@ -26,6 +26,15 @@ describe('spend (domain)', () => {
     // An in-region ID pays the regional price; another Claude model is unpriced.
     expect(million('anthropic.claude-sonnet-5-5')).toBeCloseTo(13.2);
     expect(costOf('us.anthropic.claude-3-haiku-20240307-v1:0', 10, 10)).toBeNull();
+  });
+
+  it('knows the relation scan as a source and sums its Haiku cost by source', () => {
+    expect(LLM_SPEND_SOURCES).toContain('relation_scan');
+    const cost = costOf('us.anthropic.claude-haiku-4-5-20251001-v1:0', 2_000, 500);
+    expect(cost).toBeCloseTo((2_000 * 1.1 + 500 * 5.5) / 1_000_000);
+    const row = { id: 1, boardId: 1, globId: 's1t1', source: 'relation_scan', model: 'm', inputTokens: 2_000, outputTokens: 500, costUsd: cost, ref: null, createdAt: '2026-10-15T00:00:00.000Z' } as const;
+    const summary = summariseSpend([row, row]);
+    expect(summary.bySource.relation_scan).toBeCloseTo((cost ?? 0) * 2);
   });
 
   it('starts the month in the board time zone', () => {

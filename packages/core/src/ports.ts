@@ -32,6 +32,7 @@ import type { LlmSpend, SpendSummary } from './domain/spend.js';
 import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
+import type { RelationScanPatch, RelationScanRow } from './domain/relation-scan.js';
 import type { AtfIntegration, BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
 
 import type { GlobInclude } from './domain/types.js';
@@ -255,13 +256,17 @@ export interface Tx {
   /** Writes work steps (insert or replace by ID). */
   saveHumanSteps(steps: readonly StoredHumanStep[]): Promise<void>;
 
-  /** Every relation of a board, oldest first. */
+  /** Every `waits` relation of a board, oldest first (supersessions are read with `listSupersessions`). */
   listRelations(boardId: number): Promise<Relation[]>;
-  /** The relations that start at these globs (any gate), oldest first; none for an empty list. */
+  /** The `waits` relations that start at these globs (any gate), oldest first; none for an empty list. */
   listRelationsFrom(globIds: readonly string[]): Promise<Relation[]>;
-  /** The relations that point at these globs (any gate), oldest first; none for an empty list. */
+  /** The `waits` relations that point at these globs (any gate), on any board, oldest first; none for an empty list. */
   listRelationsTo(globIds: readonly string[]): Promise<Relation[]>;
-  /** Inserts a relation; false when the glob already has one to the same glob for the same gate. */
+  /** The `superseded_by` rows of these globs (they are the superseded ones: `from` is in the list), oldest first; none for an empty list. */
+  listSupersessions(globIds: readonly string[]): Promise<Relation[]>;
+  /** The `superseded_by` rows that point at these globs (they are the superseders: `to` is in the list), oldest first; none for an empty list. */
+  listSupersededBy(globIds: readonly string[]): Promise<Relation[]>;
+  /** Inserts a relation (`kind` absent: `waits`); false when the glob already has one to the same glob for the same gate and kind. */
   insertRelation(relation: Relation): Promise<boolean>;
   /** Changes a relation's dismissal, override, reason, evidence or until; the rest of it stays. */
   updateRelation(id: string, patch: RelationPatch): Promise<void>;
@@ -270,6 +275,20 @@ export interface Tx {
   deleteRelationsFrom(globId: string): Promise<void>;
   /** Serialises a board's relation writes until the transaction ends, so two cycle checks can't both pass (a no-op where transactions don't overlap). */
   lockBoardRelations(boardId: number): Promise<void>;
+  /**
+   * Serialises every relation write on the instance until the transaction ends (the same lock `lockBoardRelations` takes), so two
+   * writers on different boards can't add opposite cross-board edges that would each pass the cycle check. A no-op in memory.
+   */
+  lockRelations(): Promise<void>;
+
+  /** The automatic pass's remembered decisions for a glob (any state), oldest first. */
+  listRelationScans(globId: string): Promise<RelationScanRow[]>;
+  /** Writes decisions; a row for a (glob, mentioned ID, sentence hash) that exists is left as it is (a decided or dismissed pair is never overwritten). */
+  upsertRelationScans(rows: readonly RelationScanRow[]): Promise<void>;
+  /** The `open` decisions of these globs (the card suggestions), oldest first; none for an empty list. */
+  listOpenSuggestions(globIds: readonly string[]): Promise<RelationScanRow[]>;
+  /** Changes one remembered decision (accepted, dismissed, decided later); the rest of it stays. */
+  updateRelationScan(globId: string, mentionedId: string, sentenceHash: string, patch: RelationScanPatch): Promise<void>;
 
   /** The status messages this person dismissed on the board's globs: the glob and the message key. */
   listStatusDismissals(email: string, boardId: number): Promise<{ globId: string; key: string }[]>;

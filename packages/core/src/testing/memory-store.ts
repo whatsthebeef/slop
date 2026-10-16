@@ -5,7 +5,9 @@ import type { IntegrationToken } from '../domain/integration-tokens.js';
 import type { Deploy } from '../domain/deploys.js';
 import type { StoredHumanStep } from '../domain/human-steps.js';
 import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js';
+import { RELATION_SCAN_DEBOUNCE_MS } from '../domain/events.js';
 import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
+import type { RelationScanRow } from '../domain/relation-scan.js';
 import { sameCommit } from '../domain/signals.js';
 import type { AtfRunner } from '../domain/atf-runners.js';
 import type { AtfBatch, StoredRunSpec, TestRun } from '../domain/test-runs.js';
@@ -56,6 +58,10 @@ export interface MemoryOutboxJob extends OutboxJob {
 /** Memory has no clock: a queued job may run at once. */
 const QUEUED_AT = '1970-01-01T00:00:00.000Z';
 
+/** Whether a relation row is an ordinary wait (a row written before `kind` existed has none). */
+const waitsKind = (r: Relation): boolean => (r.kind ?? 'waits') === 'waits';
+const scanKey = (globId: string, mentionedId: string, sentenceHash: string): string => `${globId}|${mentionedId}|${sentenceHash}`;
+
 interface State {
   globs: Map<string, { glob: Glob; creationKey: string | null }>;
   boards: Map<number, Board>;
@@ -76,6 +82,8 @@ interface State {
   humanSteps: Map<string, StoredHumanStep>;
   /** Relations by ID, in the order they were made. */
   relations: Map<string, Relation>;
+  /** The automatic relation pass's decisions, by glob, mentioned ID and sentence hash. */
+  relationScans: Map<string, RelationScanRow>;
   /** Status dismissals by user, glob and message key. */
   statusDismissals: Map<string, { email: string; globId: string; key: string; at: string }>;
   reviewSources: ReviewSource[];
@@ -181,6 +189,7 @@ const clone = (state: State): State => ({
   deploys: new Map(state.deploys),
   humanSteps: new Map(state.humanSteps),
   relations: new Map(state.relations),
+  relationScans: new Map(state.relationScans),
   statusDismissals: new Map(state.statusDismissals),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
@@ -259,6 +268,7 @@ export class MemoryStore implements Store {
     deploys: new Map(),
     humanSteps: new Map(),
     relations: new Map(),
+    relationScans: new Map(),
     statusDismissals: new Map(),
     reviewSources: [],
     findings: [],
@@ -347,7 +357,8 @@ export class MemoryStore implements Store {
         s.findings = s.findings.filter((f) => f.globId !== id);
         s.reviewSources = s.reviewSources.filter((r) => r.globId !== id);
         for (const [key, step] of s.humanSteps) if (step.globId === id) s.humanSteps.delete(key);
-        for (const [key, r] of s.relations) if (r.from === id) s.relations.delete(key);
+        for (const [key, r] of s.relations) if (r.from === id || (r.to === id && r.kind === 'superseded_by')) s.relations.delete(key);
+        for (const [key, r] of s.relationScans) if (r.globId === id) s.relationScans.delete(key);
         for (const [key, d] of s.statusDismissals) if (d.globId === id) s.statusDismissals.delete(key);
         for (const [key, p] of s.globPresence) if (p.globId === id) s.globPresence.delete(key);
         const goneRuns = new Set(s.testRuns.filter((r) => r.globId === id).map((r) => r.id));
@@ -704,11 +715,15 @@ export class MemoryStore implements Store {
         for (const h of steps) s.humanSteps.set(h.id, h);
         return Promise.resolve();
       },
-      listRelations: (boardId) => Promise.resolve([...s.relations.values()].filter((r) => r.boardId === boardId)),
-      listRelationsFrom: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from))),
-      listRelationsTo: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to))),
+      // The three list methods the gate code reads return only `waits` rows; a supersession is read with its own two.
+      listRelations: (boardId) => Promise.resolve([...s.relations.values()].filter((r) => r.boardId === boardId && waitsKind(r))),
+      listRelationsFrom: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from) && waitsKind(r))),
+      listRelationsTo: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to) && waitsKind(r))),
+      listSupersessions: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from) && !waitsKind(r))),
+      listSupersededBy: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to) && !waitsKind(r))),
       insertRelation: (relation) => {
-        if ([...s.relations.values()].some((r) => r.from === relation.from && r.to === relation.to && r.gate === relation.gate)) return Promise.resolve(false);
+        const kind = relation.kind ?? 'waits';
+        if ([...s.relations.values()].some((r) => r.from === relation.from && r.to === relation.to && r.gate === relation.gate && (r.kind ?? 'waits') === kind)) return Promise.resolve(false);
         s.relations.set(relation.id, relation);
         return Promise.resolve(true);
       },
@@ -727,6 +742,22 @@ export class MemoryStore implements Store {
       },
       // Memory transactions run one at a time, so there is nothing to serialise.
       lockBoardRelations: () => Promise.resolve(),
+      lockRelations: () => Promise.resolve(),
+      listRelationScans: (globId) => Promise.resolve([...s.relationScans.values()].filter((r) => r.globId === globId)),
+      upsertRelationScans: (rows) => {
+        for (const row of rows) {
+          const key = scanKey(row.globId, row.mentionedId, row.sentenceHash);
+          if (!s.relationScans.has(key)) s.relationScans.set(key, row);
+        }
+        return Promise.resolve();
+      },
+      listOpenSuggestions: (globIds) => Promise.resolve([...s.relationScans.values()].filter((r) => r.state === 'open' && globIds.includes(r.globId))),
+      updateRelationScan: (globId, mentionedId, sentenceHash, patch) => {
+        const key = scanKey(globId, mentionedId, sentenceHash);
+        const found = s.relationScans.get(key);
+        if (found !== undefined) s.relationScans.set(key, { ...found, ...patch });
+        return Promise.resolve();
+      },
       listStatusDismissals: (email, boardId) =>
         Promise.resolve(
           [...s.statusDismissals.values()]
@@ -1452,6 +1483,18 @@ export class MemoryStore implements Store {
             }
           }
           // One unclaimed agent-set commit per board (the debounce's runAfter isn't modelled here).
+          // One unclaimed relation scan per glob; every trigger pushes its runAfter out (the trailing debounce).
+          if (effect.kind === 'scan_relations') {
+            const runAfter = new Date(Date.now() + RELATION_SCAN_DEBOUNCE_MS).toISOString();
+            const waiting = s.outboxJobs.find((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0);
+            if (waiting !== undefined) {
+              s.outboxJobs = s.outboxJobs.map((j) => (j === waiting ? { ...j, runAfter } : j));
+              continue;
+            }
+            s.outbox.push(effect);
+            s.outboxJobs.push({ id: this.nextRowId++, globId: effect.globId, kind: effect.kind, state: 'pending', attempts: 0, lastError: null, runAfter, effect });
+            continue;
+          }
           if (effect.kind === 'commit_agent_set' && s.outboxJobs.some((j) => j.kind === effect.kind && j.globId === effect.globId && j.state === 'pending' && j.attempts === 0)) continue;
           // One unclaimed KB pipeline job per item and kind: it re-reads the item when it runs. A claimed one (running, or
           // backing off) gets a sibling, so a change it may not have seen still gets its step.

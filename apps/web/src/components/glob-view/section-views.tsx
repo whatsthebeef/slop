@@ -25,6 +25,7 @@ import { PlanSection } from './plan';
 import { QuestionsSection } from './questions';
 import { ProblemSection } from './problem';
 import { RelatedSection } from './related';
+import type { SuggestionHandler } from './related';
 import { SizeSection } from './size';
 import type { OversizedState } from '../oversized-glob';
 import type { NowState } from './status';
@@ -62,6 +63,10 @@ export interface SectionProps {
   onCompleteStep: (stepId: string) => Promise<boolean>;
   onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
+  /** "It failed" on a due step; without it the button is absent. */
+  onFailStep?: (stepId: string, note: string) => Promise<boolean>;
+  /** Accept (with the fix glob for a failed step) or dismiss a card suggestion; without it the suggestions show without buttons. */
+  onSuggestion?: SuggestionHandler;
 }
 
 /** Renders one section of the glob page (the content inside its anchor). */
@@ -81,7 +86,9 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.human && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  related: ({ ctx, onDismissEdge, onAddRelation }) => <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} />,
+  related: ({ ctx, onDismissEdge, onAddRelation, onSuggestion }) => (
+    <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} {...(onSuggestion === undefined ? {} : { onSuggestion })} />
+  ),
   size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection
       ctx={ctx}
@@ -101,7 +108,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
   environments: ({ ctx }) => <EnvironmentsPanel ctx={ctx} />,
   tests: ({ ctx }) => <TestsPanel ctx={ctx} />,
-  'due-steps': ({ ctx, actions, onAddStep, onCompleteStep, onDismissStep }) => (
+  'due-steps': ({ ctx, actions, onAddStep, onCompleteStep, onDismissStep, onFailStep }) => (
     <HumanSteps
       part='due'
       glob={ctx.glob}
@@ -112,9 +119,10 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       onAdd={onAddStep}
       onComplete={onCompleteStep}
       onDismiss={onDismissStep}
+      {...(onFailStep === undefined ? {} : { onFail: onFailStep })}
     />
   ),
-  'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep, onMarkDeployed }) => (
+  'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep, onFailStep, onMarkDeployed }) => (
     <HumanSteps
       part='rest'
       glob={ctx.glob}
@@ -130,6 +138,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       onAdd={onAddStep}
       onComplete={onCompleteStep}
       onDismiss={onDismissStep}
+      {...(onFailStep === undefined ? {} : { onFail: onFailStep })}
     />
   ),
   artifacts: ({ ctx, artifact, onSelectArtifact }) => (
