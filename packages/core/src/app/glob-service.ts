@@ -21,7 +21,7 @@ import type { HumanStep, HumanStepBlock, HumanStepKind, HumanStepScript, StoredH
 import type { ActionFacts, Context, CreateInput, FieldChanges, LabelCommand, Transition } from '../domain/machine.js';
 import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
-import { HANDOVER_LABEL, handoverMarkdown } from '../domain/handover.js';
+import { HANDOVER_LABEL, handoverMarkdown, mergedPickUpNotice } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
 import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, InferenceSource, LabelName, Relation, RelationGate, RelationUntil, SlopType, WorkKind } from '../domain/types.js';
 import { parseWorkstreams, summariseWorkstreams } from '../domain/workstreams.js';
@@ -3009,7 +3009,13 @@ export class GlobService implements AutomaticRelations {
       { relations: true, rollout: true, applies: 'any', record: this.handoverRecorder(wrote) },
     );
     if (result.ok) this.publishHandover(wrote, result.value);
-    return result.ok ? ok({ glob: result.value, warning }) : result;
+    if (result.ok) return ok({ glob: result.value, warning });
+    // A merged glob can't be picked up: say what is left and how to follow up, not just that it merged.
+    if (result.error.code === 'invalid_transition' && (result.error.status === 'reviewing' || result.error.status === 'signed_off')) {
+      const view = await this.get(email, id);
+      if (view.ok) return err({ ...result.error, message: mergedPickUpNotice(view.value.glob, view.value.humanSteps) });
+    }
+    return result;
   }
 
   /** Review now: queues a fresh independent review of a glob with a PR in Doing or Reviewing (any board member; no version needed). */

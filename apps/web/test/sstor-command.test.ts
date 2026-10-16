@@ -104,3 +104,17 @@ describe('--resolve advice', () => {
     expect(found).toEqual(['../../apps/web/src/lib/sstor-command.ts']);
   });
 });
+
+describe('takeOverConfirmation text', () => {
+  const currentRun = { state: 'active', sessionUrl: 'https://claude.ai/code/x', routineOwner: 'me@x.com' };
+  const glob = { id: 's1t1', branch: 's1t1', currentRun };
+  it("says the command carries on the routine's conversation for its owner", async () => {
+    const { takeOverConfirmation } = await import('../src/lib/sstor-command');
+    expect(takeOverConfirmation(glob, 'ME@x.com').how).toContain('carries on the routine run');
+  });
+  it('keeps the plain text for anyone else or a run without a session', async () => {
+    const { takeOverConfirmation } = await import('../src/lib/sstor-command');
+    expect(takeOverConfirmation(glob, 'other@x.com').how).toContain("opens the glob's Claude session");
+    expect(takeOverConfirmation({ ...glob, currentRun: { ...currentRun, sessionUrl: null } }, 'me@x.com').how).toContain('opens the glob');
+  });
+});
