@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TEST_KB_WRITES } from '../src/testing/kb-queue.js';
 import { learningSeed } from '../src/testing/learning-seed.js';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -309,5 +312,24 @@ describe('layered agent set on a board', () => {
     const refused = await knowledge.approve(ADMIN, id, 2, { as: 'draft' });
     expect(errorCode(refused)).toBe('not_found');
     expect(await row('agent', 'agents/tester.md')).toMatchObject({ content: '- Rule one.\n', version: 1 });
+  });
+});
+
+describe('catalog agent files: questions, steps and decisions', () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), '../../../catalog/agents/agents');
+  const text = (name: string): string => readFileSync(join(dir, `${name}.md`), 'utf8');
+
+  it('the orchestrator, investigator and implementer say a command is never a question and a cross-glob choice is a decision', () => {
+    for (const name of ['orchestrator', 'investigator', 'implementer']) {
+      const t = text(name);
+      expect(t, name).toContain('## Questions, steps and decisions');
+      expect(t, name).toMatch(/human step/i);
+      expect(t, name).toMatch(/decision glob/i);
+      expect(t, name).toMatch(/never a question/i);
+    }
+  });
+
+  it('the change_reviewer flags a question that is really a step or a decision', () => {
+    expect(text('change_reviewer')).toMatch(/really a human step/);
   });
 });
