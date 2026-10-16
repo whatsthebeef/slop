@@ -47,7 +47,10 @@ const NEXT_STEPS: readonly Action[] = [
 ];
 
 /** Never the main button: they jump ahead, throw work away or remove the glob. */
-const NEVER_MAIN: readonly Action[] = ['start_anyway', 'start_again', 'delete'];
+const NEVER_MAIN: readonly Action[] = ['start_anyway', 'merge_anyway', 'sign_off_anyway', 'start_again', 'delete'];
+
+/** Led with only when nothing else is left, so a glob held for a merge or sign-off still has its ▾ and the way to force it through. */
+const LAST_RESORT: readonly Action[] = ['merge_anyway', 'sign_off_anyway'];
 
 /**
  * The one expected next step among the allowed actions, or null when nothing qualifies (the glob view then
@@ -121,7 +124,7 @@ export const promotedAction = (available: readonly Action[], glob: Subject): Act
   const rest = available.filter((a) => !NEVER_MAIN.includes(a));
   const leading = rest.filter((a) => a !== 'review_now' || isReviewRetry(glob));
   // Only when nothing else is left does a person's own Review code lead, so the row isn't empty.
-  return PROMOTION.find((a) => leading.includes(a)) ?? leading[0] ?? rest[0] ?? null;
+  return PROMOTION.find((a) => leading.includes(a)) ?? leading[0] ?? rest[0] ?? LAST_RESORT.find((a) => available.includes(a)) ?? null;
 };
 
 /**

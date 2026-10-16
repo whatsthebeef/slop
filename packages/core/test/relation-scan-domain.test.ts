@@ -109,6 +109,15 @@ describe('sentenceHash and quoteReason', () => {
     expect(quoted.startsWith('after s14t17 x')).toBe(true);
     expect(quoteReason('x'.repeat(REASON_MAX_CHARS))).toHaveLength(REASON_MAX_CHARS);
   });
+
+  it('quotes at 300 characters and as plain text: links keep their words, code and emphasis marks go, identifiers stay', () => {
+    expect(REASON_MAX_CHARS).toBe(300);
+    expect(quoteReason('**Only** after `s14t17` ([the PR](https://x.test/1)) is in place, see *note* and snake_case_name and 2 * 3.')).toBe(
+      'Only after s14t17 (the PR) is in place, see note and snake_case_name and 2 * 3.',
+    );
+    expect(quoteReason('## Wait for s14t17')).toBe('Wait for s14t17');
+    expect(quoteReason('> ~~Old~~ __bold__ s14t17')).toBe('Old bold s14t17');
+  });
 });
 
 describe('relation scan rows in the memory store', () => {

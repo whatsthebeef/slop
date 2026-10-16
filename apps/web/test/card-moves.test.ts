@@ -31,6 +31,11 @@ describe('card moves', () => {
     expect(actions(planning({ type: 'sub', allowedActions: ['start_anyway'] }))).toEqual([]);
   });
 
+  it('never offers Merge anyway or Sign off anyway on a card', () => {
+    expect(actions(planning({ list: 'reviewing', status: 'pr_open', allowedActions: ['merge_anyway', 'pick_up'] }))).toEqual([]);
+    expect(actions(planning({ list: 'reviewing', status: 'reviewing', allowedActions: ['sign_off_anyway'] }))).toEqual([]);
+  });
+
   it('has no moves outside Planning or while the branch is being created', () => {
     expect(actions(planning({ list: 'doing', status: 'implementing', allowedActions: ['retrigger', 'start_anyway'] }))).toEqual([]);
     expect(actions(planning({ provisioning: 'pending', allowedActions: ['start'] }))).toEqual([]);

@@ -284,7 +284,7 @@ const actionSchema = versionSchema.extend({
   anyway: z.boolean().optional(),
   /** Done: what the person checked (optional). */
   note: z.string().max(OUTCOME_REASON_MAX).optional(),
-  /** Dismiss: why the action is not needed (required by the action). */
+  /** Dismiss: why the action is not needed (required by the action). Start now: optional. Merge anyway and Sign off anyway: required. */
   reason: z.string().max(OUTCOME_REASON_MAX).optional(),
   /** Failed…: the output of the run that failed (secrets are masked; required by the action). */
   output: z.string().max(100_000).optional(),
@@ -750,7 +750,8 @@ export const createApp = (deps: AppDeps) => {
 
   const actions = {
     start: (email: string, id: string, b: ActionBody) => globs.start(email, id, b.version),
-    'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version),
+    // `reason` is optional for Start now (older callers send none); Merge anyway and Sign off anyway need one.
+    'start-anyway': (email: string, id: string, b: ActionBody) => globs.startAnyway(email, id, b.version, b.reason),
     investigate: (email: string, id: string, b: ActionBody) => globs.investigate(email, id, b.version),
     // Queues an independent review of the PR as it is now (any member; the version is not checked, nothing on the glob changes).
     'review-now': (email: string, id: string) => globs.reviewNow(email, id),
@@ -774,6 +775,13 @@ export const createApp = (deps: AppDeps) => {
       const gate = await deps.mergeGate?.(email, id);
       return gate !== undefined && !gate.ok ? gate : globs.merge(email, id, b.version);
     },
+    // A merge a `merge` relation holds back, forced through with a reason (same gate as Merge).
+    'merge-anyway': async (email: string, id: string, b: ActionBody) => {
+      const gate = await deps.mergeGate?.(email, id);
+      return gate !== undefined && !gate.ok ? gate : globs.mergeAnyway(email, id, b.version, b.reason ?? '');
+    },
+    // A sign-off a `sign_off` relation holds back (a merged glob with approved labels, or an accepted decision), with a reason.
+    'sign-off-anyway': (email: string, id: string, b: ActionBody) => globs.signOffAnyway(email, id, b.version, b.reason ?? ''),
     deescalate: (email: string, id: string, b: ActionBody) => globs.deescalate(email, id, b.version),
     'make-super': (email: string, id: string, b: ActionBody) => globs.makeSuper(email, id, b.version),
     'cancel-merge': (email: string, id: string, b: ActionBody) => globs.cancelMerge(email, id, b.version),
@@ -987,8 +995,8 @@ export const createApp = (deps: AppDeps) => {
     return afterStep(c, failed);
   });
 
-  // A card suggestion (a possible prerequisite, supersedes, reverse relation or a failed step): accept writes the relation (for a
-  // failed step, `glob` names the fix glob to link), dismiss remembers that it was declined. Both answer with the glob's view.
+  // A failed step's open question ("is there a fix glob?"): accept links the glob `glob` names, dismiss remembers that it was
+  // declined. Both answer with the glob's view. A mentioned glob is never asked about: it becomes a relation by itself.
   const resolveSuggestion = async (c: Context<Env>, action: 'accept' | 'dismiss', glob: string | null) => {
     const result = await globs.resolveSuggestion(c.get('email'), c.req.param('id') ?? '', c.req.param('sid') ?? '', action, { glob });
     if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
