@@ -318,6 +318,10 @@ describe('glob view: main button', () => {
       expect(screen.getByTestId('take-over-happens').textContent).toContain("The machine's run is stopped");
       expect(screen.getByTestId('take-over-happens').textContent).toContain('branch s1t1');
       expect(screen.getByTestId('take-over-command').textContent).toBe('sstor --glob s1t1');
+      expect(screen.getByTestId('take-over-how').textContent).toContain('copied to your clipboard when you confirm');
+      expect(screen.queryByTestId('take-over-copy')).toBeNull();
+      expect(within(screen.getByTestId('take-over-confirmation')).queryByRole('button', { name: 'Copy' })).toBeNull();
+      expect(screen.getByTestId('confirm-take-over').textContent).toBe('Confirm pick up');
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(screen.queryByTestId('take-over-confirmation')).toBeNull();
       expect(cb.onAction).not.toHaveBeenCalled();
