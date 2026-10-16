@@ -25,6 +25,7 @@ import {
   stateText,
   stepInput,
   whoText,
+  reviewOpen,
   writeStepsOpen,
 } from '@/lib/human-steps';
 import type { StepDraft } from '@/lib/human-steps';
@@ -620,6 +621,11 @@ export const HumanSteps = ({
           testId='due-steps'
           title={due.length === 1 ? 'A step needs you' : `${String(due.length)} steps need you`}
         >
+          {glob.status === 'reviewing' && !reviewOpen(glob) && (
+            <p className='text-xs text-muted-foreground' data-testid='review-opens-later'>
+              Rollout steps due; review opens when they&apos;re done.
+            </p>
+          )}
           <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
             {due.map((s) => (
               <DueStep key={s.id} {...stepProps(s)} />

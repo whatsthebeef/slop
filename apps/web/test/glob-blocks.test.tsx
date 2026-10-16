@@ -140,17 +140,38 @@ const blocksAbove = (): string[] => {
 describe('the blocks above the action button', () => {
   it('come in one order: problems, then what needs a person, then information', () => {
     renderGlob(everything());
+    // A glob in Doing shows no review block, whatever labels it carries.
     expect(blocksAbove()).toEqual([
       'conflict-block',
       'problem-block',
-      'label-reviews',
       'due-steps',
       'escalation-note',
     ]);
     const tones = Array.from(document.querySelectorAll('[data-block]')).map((n) =>
       n.getAttribute('data-block'),
     );
-    expect(tones).toEqual(['problem', 'problem', 'person', 'person', 'info']);
+    expect(tones).toEqual(['problem', 'problem', 'person', 'info']);
+  });
+
+  it('shows the review blocks only once the glob is in Reviewing, not merged and still in Doing with its steps due', () => {
+    const merged = {
+      status: 'reviewing' as const,
+      list: 'doing' as const,
+      pr: { number: 7, state: 'merged' as const, headSha: 'abcdef1234567' },
+      conflict: null,
+      headChecks: null,
+      handover: null,
+      escalation: null,
+      allowedActions: [],
+      labels: { CR: 'required' as const, FR: 'required' as const, QA: 'required' as const },
+      humanSteps: [dueStep],
+    };
+    renderGlob(everything(merged));
+    expect(blocksAbove()).not.toContain('label-reviews');
+    expect(screen.getByTestId('review-opens-later').textContent).toContain('review opens when they');
+    cleanup();
+    renderGlob(everything({ ...merged, list: 'reviewing', humanSteps: [] }));
+    expect(blocksAbove()).toContain('label-reviews');
   });
 
   it('puts the size advice after the escalation, still above the action button', () => {

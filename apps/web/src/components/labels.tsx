@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tip';
 import type { GlobView } from '@/lib/api';
-import { approveHold } from '@/lib/human-steps';
+import { approveHold, reviewOpen } from '@/lib/human-steps';
 import { cn } from '@/lib/utils';
 import { Block } from './glob-view/block';
 
@@ -21,7 +21,7 @@ const LABEL_TITLES: Record<LabelName, string> = {
 export type ReviewLabel = (label: LabelName, command: LabelCommand) => Promise<boolean>;
 
 const presentLabels = (glob: GlobView): LabelName[] =>
-  LABEL_NAMES.filter((name) => glob.labels[name] !== undefined);
+  reviewOpen(glob) ? LABEL_NAMES.filter((name) => glob.labels[name] !== undefined) : [];
 
 /** A server from before checklists sends none, so they're treated as optional here. */
 const allItemsOf = (glob: GlobView, name: LabelName): readonly ChecklistItem[] =>

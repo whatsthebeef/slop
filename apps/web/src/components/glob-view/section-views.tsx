@@ -5,6 +5,7 @@ import type { GlobSection } from '@/lib/glob-section';
 import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
 import { LabelReviews } from '../labels';
+import { reviewOpen } from '@/lib/human-steps';
 import type { ReviewLabel } from '../labels';
 import { ActionOutcome } from './action';
 import { ActivityLog } from './activity';
@@ -83,7 +84,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     <EscalationSection ctx={ctx} startOpen={section === 'escalation'} />
   ),
   labels: ({ ctx, actions, onReviewLabel, openLabel }) =>
-    !actions.human && (
+    !actions.human && reviewOpen(ctx.glob) && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
   related: ({ ctx, onDismissEdge, onAddRelation, onSuggestion }) => (

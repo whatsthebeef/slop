@@ -10,7 +10,7 @@ afterEach(cleanup);
 
 const view = (): GlobView =>
   ({
-    ...glob(),
+    ...glob({status: 'reviewing'}),
     labels: { CR: 'required', FR: 'required', QA: 'approved' },
     checklists: { CR: [], FR: [], QA: [] },
   }) as unknown as GlobView;
@@ -54,7 +54,7 @@ describe('card label popover width', () => {
   it('reserves the same room after each label whether required or approved', async () => {
     const collect = async (state: 'required' | 'approved') => {
       const g = {
-        ...glob(),
+        ...glob({status: 'reviewing'}),
         labels: { CR: state, FR: state, QA: state },
         checklists: { CR: [], FR: [], QA: [] },
       } as unknown as GlobView;
@@ -81,7 +81,7 @@ describe('label popover reserved width without items', () => {
   it('reserves only what each label can show: nothing wider than "Approved" when it has no items', async () => {
     const item = { id: 'a', text: 'a', done: true, addedBy: 'x', doneBy: 'y' };
     const g = {
-      ...glob(),
+      ...glob({status: 'reviewing'}),
       labels: { CR: 'approved', FR: 'approved', QA: 'approved' },
       checklists: { CR: [], FR: [], QA: [item] },
     } as unknown as GlobView;
@@ -104,7 +104,7 @@ describe('outstanding label chips', () => {
   const withLabels = (
     labels: Record<string, string>,
     checklists: Record<string, ReturnType<typeof item>[]>,
-  ) => ({ ...glob(), labels, checklists }) as unknown as GlobView;
+  ) => ({ ...glob({status: 'reviewing'}), labels, checklists }) as unknown as GlobView;
   const chipOf = (container: HTMLElement, name: string) =>
     [...container.querySelectorAll('span')].find((e) => e.textContent === name) as HTMLElement;
 
