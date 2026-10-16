@@ -983,7 +983,12 @@ export const createApp = (deps: AppDeps) => {
   /** Responds with the updated glob and the actions now open to the caller. */
   const withView = async (c: Context<Env>, result: Awaited<ReturnType<GlobService['start']>>) => {
     if (!result.ok) return send(c, result);
-    return send(c, await globs.get(c.get('email'), result.value.id), globViewOf);
+    // The same machine steps as the glob read, so the answer shows a picked-up decision's recommendation job ("investigating")
+    // at once: the live hint that follows is skipped for a version the page already has.
+    const view = await globs.get(c.get('email'), result.value.id);
+    if (!view.ok) return send(c, view);
+    const effects = (await globs.recommendationEffectsOf([view.value.glob])).get(view.value.glob.id) ?? [];
+    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob, { effects }) }));
   };
 
   // ---------------------------------------------------------------------------
