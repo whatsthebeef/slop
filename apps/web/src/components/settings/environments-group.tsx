@@ -1,4 +1,5 @@
 import { ENVIRONMENT_ROLES } from '@slop/core';
+import { RecordDeployButton } from '@/components/board-environments';
 import type { AtfIntegration, DeployIntegration } from '@slop/core';
 import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
@@ -166,8 +167,10 @@ const AtfSettings = ({
   </SettingBlock>
 );
 
-export const EnvironmentsGroup = ({ admin, form }: { admin: boolean; form: SettingsForm }) => {
+export const EnvironmentsGroup = ({ admin, form, boardId, savedManual }: { admin: boolean; form: SettingsForm; boardId: number; savedManual: readonly string[] }) => {
   const { envs, setEnvs } = form;
+  // Record a deploy works on what is saved: a manual setting just chosen takes effect once it is.
+  const saved = new Set(savedManual);
   return (
     <SettingsGroup id='environments'>
       <SettingBlock title='Environments' hint='The places this board deploys to. Each one can take branch deploys, be a default for subs and have a pipeline role.' testId='environments'>
@@ -175,6 +178,7 @@ export const EnvironmentsGroup = ({ admin, form }: { admin: boolean; form: Setti
           <li>Branch deploys: glob branches may be deployed to this environment.</li>
           <li>Default for subs: subs created without an environment get this one (needs branch deploys).</li>
           <li>Pipeline: integration means the base branch pipeline deploys here; release means release refs are deployed here. Slop shows which globs each one holds.</li>
+          <li>Deploys known by: a pipeline reports each deploy (<code>.sstor/report-deploy.sh &lt;env&gt;</code>), or you record each release in slop and its globs' after-deploy steps fall due.</li>
           <li>Production: cards warn when a glob reaches production before sign-off (a release environment only).</li>
         </ul>
         {envs.map((env, i) => (
@@ -230,13 +234,38 @@ export const EnvironmentsGroup = ({ admin, form }: { admin: boolean; form: Setti
               onChange={(e) => {
                 const role = ENVIRONMENT_ROLES.find((r) => r === e.target.value);
                 // Only a release environment can be production.
-                setEnvs(envs.map((x, j) => (j !== i ? x : { ...x, role, production: role === 'release' ? x.production : undefined })));
+                // Without a role there is nothing to report or record.
+                setEnvs(
+                  envs.map((x, j) =>
+                    j !== i
+                      ? x
+                      : { ...x, role, production: role === 'release' ? x.production : undefined, deployKnown: role === undefined ? undefined : x.deployKnown },
+                  ),
+                );
               }}
             >
               <option value=''>no pipeline</option>
               <option value='integration'>integration</option>
               <option value='release'>release</option>
             </Select>
+            <Select
+              className='w-40 shrink-0 text-xs'
+              aria-label={`How ${env.name || 'this environment'}'s deploys are known`}
+              disabled={!admin || env.role === undefined}
+              value={env.deployKnown ?? 'pipeline'}
+              onChange={(e) => setEnvs(envs.map((x, j) => (j !== i ? x : { ...x, deployKnown: e.target.value === 'manual' ? 'manual' : undefined })))}
+            >
+              <option value='pipeline'>reported by pipeline</option>
+              <option value='manual'>recorded by hand</option>
+            </Select>
+            {env.role !== undefined && (
+              <span className='basis-full text-xs text-muted-foreground' data-testid='deploy-known-hint'>
+                {env.deployKnown === 'manual'
+                  ? "You record each release in slop; its globs' after-deploy steps fall due."
+                  : 'A pipeline reports each deploy with .sstor/report-deploy.sh.'}
+              </span>
+            )}
+            {env.deployKnown === 'manual' && saved.has(env.name) && <RecordDeployButton boardId={boardId} environment={env.name} />}
             <label className='flex shrink-0 items-center gap-1 text-xs'>
               <input
                 type='checkbox'
