@@ -117,6 +117,17 @@ const trimReview = (review: Partial<ReviewBoardSettings>): Partial<ReviewBoardSe
   ...(review.ignoredPaths === undefined ? {} : { ignoredPaths: review.ignoredPaths.map((p) => p.trim()) }),
 });
 
+/** With CodeBuild, every environment that takes branch deploys names its own deploy project. */
+const validateDeployProjects = (board: Pick<Board, 'environments' | 'deploy'>): Result<null> => {
+  const deploy = board.deploy;
+  if (deploy?.provider !== 'codebuild') return ok(null);
+  const missing = board.environments.filter((e) => e.allowBranchDeploy && (deploy.projects[e.name] ?? '').trim() === '');
+  if (missing.length > 0) {
+    return invalidInput(`CodeBuild deploys need a project for each environment: ${missing.map((e) => e.name).join(', ')}`);
+  }
+  return ok(null);
+};
+
 const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.name?.trim() === '') return invalidInput('A board needs a name');
   if (settings.review !== undefined) {
@@ -145,9 +156,7 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
   }
   const deploy = settings.deploy;
   if (deploy?.provider === 'codebuild') {
-    if (deploy.region.trim() === '' || deploy.defaultProject.trim() === '') {
-      return invalidInput('CodeBuild deploys need a region and a default project');
-    }
+    if (deploy.region.trim() === '') return invalidInput('CodeBuild deploys need a region');
   }
   if (deploy?.provider === 'github_actions' && deploy.workflow.trim() === '') {
     return invalidInput('GitHub Actions deploys need a workflow file');
@@ -290,6 +299,10 @@ export class BoardService {
         review: settings.review === undefined ? board.review : mergeReviewSettings(board.review, trimReview(settings.review)),
         version: board.version + 1,
       };
+      if (settings.deploy !== undefined || settings.environments !== undefined) {
+        const projects = validateDeployProjects(next);
+        if (!projects.ok) return projects;
+      }
       if (!(await tx.updateBoard(next, version))) {
         return invalidInput('The board settings have changed; reload them');
       }

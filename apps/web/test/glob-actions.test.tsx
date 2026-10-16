@@ -972,7 +972,7 @@ describe('glob view: the notice beside the primary action', () => {
     await user.click(mainButton() as HTMLElement);
     await waitFor(() => expect(mainButton()).toBeNull());
     expect(screen.queryByTestId('more-actions')).toBeNull();
-    expect(screen.getByTestId('header-status-text').textContent).toBe('fixing the conflict');
+    expect(screen.getByTestId('header-status-text').textContent).toBe('fixing conflict');
     sent.resolve(true);
   });
 });
@@ -1105,13 +1105,15 @@ describe('glob view: split moves in the action ▾', () => {
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
     });
 
-    it('shows the Arm system label and the branch on a quiet line beside the action row, not in the top bar', () => {
+    it('shows the Arm system label and the step title, with no branch or stage, on a quiet line beside the action row, not in the top bar', () => {
       const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
       renderGlob(view({ branch: 's1t1', humanSteps: [step] }));
       const row = screen.getByTestId('glob-actions');
       const info = within(row).getByTestId('action-line-info');
       expect(within(info).getByTestId('arm-system-label').textContent).toBe('Arm system');
-      expect(within(info).getByTestId('glob-branch').textContent).toBe('s1t1');
+      expect(within(info).getByTestId('arm-step-title').textContent).toContain('Run the migration');
+      expect(within(info).queryByTestId('glob-branch')).toBeNull();
+      expect(info.textContent).not.toContain('s1t1');
       expect(info.className).toContain('ml-auto');
       expect(info.className).toContain('flex-wrap');
       expect(within(screen.getByTestId('glob-header')).queryByTestId('arm-system-label')).toBeNull();

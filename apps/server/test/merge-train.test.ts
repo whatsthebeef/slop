@@ -372,11 +372,11 @@ describe('the merge train: one glob per board updates, rechecks and merges at a 
   });
 });
 
-describe('migration 0086: the merge head index', () => {
+describe('migration 0087: the merge head index', () => {
   const ADMIN_URL = process.env.TEST_ADMIN_DATABASE_URL ?? 'postgres://slop:slop@localhost:5432/slop';
   const DB = `slop_test_mergehead_${process.pid}`;
   const URL_ = ADMIN_URL.replace(/\/[^/]+$/, `/${DB}`);
-  const TAG = '0086_merge_line_head';
+  const TAG = '0087_merge_line_head';
   let admin: Database;
   let database: Database;
 

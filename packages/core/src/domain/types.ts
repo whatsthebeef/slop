@@ -571,9 +571,7 @@ export type DeployIntegration =
   | {
       readonly provider: 'codebuild';
       readonly region: string;
-      /** The CodeBuild project for environments without their own. */
-      readonly defaultProject: string;
-      /** Per environment, a CodeBuild project overriding the default. */
+      /** Per environment, the CodeBuild project its deploys start; every branch-deploy environment names its own. */
       readonly projects: Readonly<Record<string, string>>;
     }
   | {

@@ -666,7 +666,7 @@ export const chainTip = (glob: PresentableGlob): string =>
     .join(', ');
 
 export interface HoldLine {
-  /** "waiting · s15f145", "waiting · decision s15k123", "merge held · s15f145", plus " +N" for the other holds. */
+  /** The holder's ID ("s15f145", "decision s15k123"), or "merge held · s15f145" / "sign-off held · s15f145" for a later gate; the other holds are in the tip. */
   readonly text: string;
   /** One line per hold: what it waits for, where that stands and why. */
   readonly tip: string;
@@ -698,10 +698,10 @@ const scriptHoldTip = (glob: PresentableGlob, h: Holding): string | null => {
  */
 export const holdLine = (glob: PresentableGlob): HoldLine | null => {
   const held = appliedHolding(glob, glob.holding ?? []);
-  const [first, ...rest] = held;
+  const [first] = held;
   if (first === undefined) return null;
   return {
-    text: `${GATE_WORDS[first.gate].head} · ${named(first)}${rest.length > 0 ? ` +${String(rest.length)}` : ''}`,
+    text: first.gate === 'start' ? named(first) : `${GATE_WORDS[first.gate].head} · ${named(first)}`,
     tip: held
       .map(
         (h) =>

@@ -111,7 +111,7 @@ describe('activityOf', () => {
         { id: 'c', kind: 'merge', state: 'done', startedAt: T(12), lastProgressAt: null, detail: null, holdsBall: false },
       ],
     );
-    expect(entries.find((e) => e.id === 'step:a')).toMatchObject({ text: 'fixing the conflict · running', actor: 'machine', link: 'https://claude.ai/code/s', linkLabel: 'session' });
+    expect(entries.find((e) => e.id === 'step:a')).toMatchObject({ text: 'fixing conflict · running', actor: 'machine', link: 'https://claude.ai/code/s', linkLabel: 'session' });
     expect(entries.find((e) => e.id === 'step:b')).toMatchObject({ text: 'fixing CI · failed: merge conflict', link: null });
     expect(entries.some((e) => e.id === 'step:c')).toBe(false);
   });

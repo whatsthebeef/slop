@@ -140,7 +140,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob.'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 to be merged and rolled out (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 's1t1', 'Waits for s1t1 to be merged and rolled out (Doing)'],
       ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'running checks', 'Checks are running on d16d563'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -203,7 +203,7 @@ describe('card rows', () => {
       ...patch,
     });
     const decisionHeld = dom(markup(view({ status: 'planning', holding: [hold('s1k9', { toIsDecision: true, until: 'decided', state: 'planning' })] })));
-    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('waiting · decision s1k9');
+    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('decision s1k9');
     // A start relation holds nothing once the glob has started, and nothing relation-shaped is left on the card.
     const started = dom(markup(view({ status: 'in_progress', holding: [hold('s1t1')] })));
     expect(started.textContent).not.toContain('waiting on');
@@ -328,7 +328,7 @@ describe('card rows', () => {
     const html = markup(waitingOn());
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
-    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting · s1t1 +3');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('s1t1');
     expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
@@ -582,7 +582,7 @@ describe('card in progress: after a click', () => {
 
   it.each([
     ['Merge', () => mergeable(), 'merge', 'merging'],
-    ['Fix conflict', () => fixable(), 'resolve_conflict', 'fixing the conflict'],
+    ['Fix conflict', () => fixable(), 'resolve_conflict', 'fixing conflict'],
     ['Start', () => planning({ allowedActions: ['start'] }), 'start', 'starting'],
   ] as const)('%s: the button is gone, the status says what is happening, and nothing is left bottom left', (_name, make, action, text) => {
     const g = make();
@@ -626,14 +626,14 @@ describe('card in progress: after a click', () => {
 });
 
 describe('the merged globs, in line with the layout rules', () => {
-  it('s15t217: a Fix conflict click shows "fixing the conflict" top right, never a "Fixing conflict…" label in the actions area', () => {
+  it('s15t217: a Fix conflict click shows "fixing conflict" top right, never a "Fixing conflict…" label in the actions area', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <GlobCard {...base()} glob={fixable()} repo='a/b' pending={clickOf('resolve_conflict', 'dev@example.com')} />
       </MemoryRouter>,
     );
     expect(html).not.toContain('Fixing conflict…');
-    expect(dom(html).querySelector('[data-testid="card-corner"]')?.textContent).toContain('fixing the conflict');
+    expect(dom(html).querySelector('[data-testid="card-corner"]')?.textContent).toContain('fixing conflict');
   });
 
   it('s15b158: Merge is a bottom-left button, its confirm label is on the button only, and no pending label follows the click', async () => {
@@ -903,15 +903,15 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
 
   it('a hold by a decision says so with the human icon, and a hold by a glob with the hourglass', () => {
     const decision = corner(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'store not chosen' })] }));
-    expect(decision).toMatchObject({ text: 'waiting · decision s1k1', icon: 'human' });
+    expect(decision).toMatchObject({ text: 'decision s1k1', icon: 'human' });
     expect(decision.html).toContain('store not chosen');
-    expect(corner(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 'waiting · s1t1', icon: 'hourglass' });
+    expect(corner(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 's1t1', icon: 'hourglass' });
   });
 
   it('a merge gate says "merge held" and several holds are the first plus the others', () => {
     const g = view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [hold('s1k1', { gate: 'merge', toIsDecision: true, until: 'decided', state: 'planning' })] });
     expect(corner(g)).toMatchObject({ text: 'merge held · decision s1k1', icon: 'human' });
-    expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('waiting · s1t1 +2');
+    expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('s1t1');
   });
 
   it('the tooltip lists every hold with its reason, and a click opens the Related section', async () => {

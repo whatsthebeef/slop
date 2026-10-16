@@ -25,7 +25,6 @@ import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { ArmSystemLabel } from '../glob-card';
 import { META } from './tag-style';
-import { Dot } from './status';
 import { Notice } from './notice';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
@@ -298,7 +297,8 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
   );
 
 /**
- * Beside the action row (under it on narrow widths): the Arm system label and the branch, one quiet mono line.
+ * Beside the action row (under it on narrow widths): the Arm system label and the open step's title, or the branch when there is no
+ * such step, one quiet mono line.
  * Human work has no branch or deploy.
  */
 const actionLine = ({ glob }: GlobViewContext) => {
@@ -315,12 +315,16 @@ const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable
       {arming !== null && (
         <>
           <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
-          <Dot />
+          <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="arm-step-title">
+            {arming.tip}
+          </span>
         </>
       )}
-      <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
-        {glob.branch}
-      </span>
+      {arming === null && (
+        <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
+          {glob.branch}
+        </span>
+      )}
     </div>
   );
 };
