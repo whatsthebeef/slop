@@ -10,9 +10,14 @@ import { boardLearnings } from '../src/app/learning-reads.js';
 import { DecisionGlobService } from '../src/app/decision-glob-service.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
 import type { LearningAssessmentFacts } from '../src/domain/decision-glob.js';
+import { HotspotDecisions } from '../src/app/hotspot-decisions.js';
 import { SuggestService } from '../src/app/suggest-service.js';
+import { conflictRecords } from '../src/domain/conflict-record.js';
+import { detectHotspots, hotspotSettingsOf } from '../src/domain/hotspots.js';
+import { DEFAULT_CONTEXT_SETTINGS } from '../src/domain/context-settings.js';
 import type { Result } from '../src/domain/errors.js';
 import { suggestEffect } from '../src/domain/events.js';
+import type { DomainEvent } from '../src/domain/events.js';
 import type { KbSignal } from '../src/domain/signals.js';
 import type { Glob } from '../src/domain/types.js';
 import {
@@ -353,6 +358,71 @@ describe('suggest', () => {
       drafter.answer(JSON.stringify({ section: 'Test', content: 'Run vitest run.', rationale: 'r' }));
       expect(await queue.process(made.id)).toBe(true);
       expect(jobs()).toHaveLength(1);
+    });
+  });
+
+  describe('hotspot decisions are judged on cost and benefit, not as learnings', () => {
+    const HOT = 'catalog/agents/agents/investigator.md';
+    const NOW_HOT = '2026-10-16T00:00:00.000Z';
+    const flag = (globId: string, at: string, kind: string, fixedAfterMin: number): DomainEvent[] => [
+      { type: 'ConflictFlagged', globId, at, actor: null, data: { base: 'main', files: [HOT], since: null } },
+      { type: 'ConflictCleared', globId, at: new Date(Date.parse(at) + fixedAfterMin * 60_000).toISOString(), actor: null, data: { base: 'main', files: [HOT], since: null, by: 'run', kind } },
+    ];
+    /** Raises the hotspot decision for HOT from `events`, as the job does. */
+    const raise = async (events: DomainEvent[]) => {
+      now = NOW_HOT;
+      await store.transaction((tx) => tx.appendEvents(events));
+      const hot = detectHotspots(conflictRecords(events), NOW_HOT, hotspotSettingsOf(DEFAULT_CONTEXT_SETTINGS));
+      const [found] = hot;
+      if (found === undefined) throw new Error('not hot');
+      const [id] = await new HotspotDecisions({ store, clock, notifier }).raise(boardId, [found], 7, NOW_HOT);
+      if (id === undefined) throw new Error('no decision raised');
+      return id;
+    };
+
+    /** Work globs the conflict events belong to (the board's events are read by glob). */
+    const made = async (n: number): Promise<string[]> => {
+      const ids: string[] = [];
+      for (let i = 0; i < n; i++) ids.push(unwrap(await globs.create(ADMIN, { boardId, title: `Parallel work ${String(i)}`, type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null })).id);
+      return ids;
+    };
+
+    it('uses the proposal prompt with the conflict facts, cites the globs, and does not use the learning prompt', async () => {
+      const [a = '', b = '', c = ''] = await made(3);
+      const id = await raise([...flag(a, '2026-10-15T08:00:00.000Z', 'additive', 4), ...flag(b, '2026-10-15T09:00:00.000Z', 'additive', 3), ...flag(c, '2026-10-15T10:00:00.000Z', 'additive', 5)]);
+      llm.answer(JSON.stringify({ action: 'reject', reason: `Three additive conflicts in one day (${a}, ${b}, ${c}), each fixed by a run in minutes; a new loader costs more.`, editedDraft: null, mergeInto: null, mergedText: null, checkSignal: null, checkReason: null }));
+      expect(await suggest.run(id)).toBe('done');
+      const [request] = llm.requests;
+      expect(request?.system).toContain('refactor of it is proposed');
+      expect(request?.system).not.toContain('open decision about the project\'s knowledge base');
+      expect(request?.prompt).toContain('3 conflicts: 3 additive, 0 real clashes');
+      expect(request?.prompt).toContain('a burst');
+      for (const g of [a, b, c]) expect(request?.prompt).toContain(`- ${g},`);
+      expect(request?.prompt).toContain('fixed in 4 min');
+      expect(request?.prompt).toContain('## The proposed refactor');
+      expect(unwrap(await suggest.view(ADMIN, id)).suggestion?.suggestion.action).toBe('reject');
+    });
+
+    it('gives the file\'s open work and the board\'s merge rate, and shows repeated real conflicts over weeks without the burst note', async () => {
+      const [a = '', b = ''] = await made(2);
+      const open = unwrap(await globs.create(ADMIN, { boardId, title: `Edit ${HOT}`, type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      const id = await raise([...flag(a, '2026-10-10T08:00:00.000Z', 'real', 90), ...flag(b, '2026-10-12T08:00:00.000Z', 'real', 120), ...flag(open.id, '2026-10-14T08:00:00.000Z', 'real', 60)]);
+      llm.answer(JSON.stringify({ action: 'approve', reason: `Three real clashes over four days, 90, 120 and 60 minutes each (${a}, ${b}).`, editedDraft: null, mergeInto: null, mergedText: null, checkSignal: null, checkReason: null }));
+      expect(await suggest.run(id)).toBe('done');
+      const prompt = llm.requests[0]?.prompt ?? '';
+      expect(prompt).toContain('3 conflicts: 0 additive, 3 real clashes');
+      expect(prompt).not.toContain('a burst');
+      expect(prompt).toContain('fixed in 120 min');
+      expect(prompt).toContain(`- ${open.id}: Edit ${HOT}`);
+      expect(prompt).toMatch(/the board merged \d+ work globs/);
+      expect(unwrap(await suggest.view(ADMIN, id)).suggestion?.suggestion.action).toBe('approve');
+    });
+
+    it('offers only approve or reject: there is no draft to edit or learning to merge into', async () => {
+      const [a = '', b = '', c = ''] = await made(3);
+      const id = await raise([...flag(a, '2026-10-15T08:00:00.000Z', 'additive', 4), ...flag(b, '2026-10-15T09:00:00.000Z', 'additive', 3), ...flag(c, '2026-10-15T10:00:00.000Z', 'additive', 5)]);
+      llm.answer(JSON.stringify({ action: 'approve_with_edit', reason: 'r', editedDraft: 'smaller', mergeInto: null, mergedText: null, checkSignal: null, checkReason: null }));
+      await expect(suggest.run(id)).rejects.toThrow('Unusable suggestion');
     });
   });
 

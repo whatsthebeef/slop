@@ -1,8 +1,10 @@
-import { assessmentOf, decisionOf } from '../domain/decision-glob.js';
+import { CONFLICT_EVENT_TYPES, conflictRecords } from '../domain/conflict-record.js';
+import { assessmentOf, decisionOf, hotspotOf } from '../domain/decision-glob.js';
 import { invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import { suggestEffect } from '../domain/events.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
+import { hotspotFacts, hotspotSettingsOf, hotspotWindowFrom } from '../domain/hotspots.js';
 import { LLM_WAITING_PREFIX } from '../domain/kb.js';
 import { isLearning, learningAssessmentFacts, learningDraft, learningDocument, learningEvidence, learningFacts, learningStatement, learningTarget } from '../domain/learning.js';
 import type { LearningRead } from '../domain/learning.js';
@@ -10,6 +12,7 @@ import { markdownHeadings, sectionText } from '../domain/sections.js';
 import { plainSignal } from '../domain/signals.js';
 import {
   checkSuggestion,
+  hotspotSystem,
   learningPromptFacts,
   overlappingMerges,
   readSuggestion,
@@ -25,9 +28,10 @@ import {
   suggestPrompt,
   suggestSystem,
 } from '../domain/suggestion.js';
-import type { StoredSuggestion, SuggestInputs, SuggestionStamp } from '../domain/suggestion.js';
+import type { StoredSuggestion, SuggestHotspot, SuggestInputs, SuggestionStamp } from '../domain/suggestion.js';
 import type { Glob, Role } from '../domain/types.js';
 import type { Clock, Notifier, Store, Tx } from '../ports.js';
+import type { CodeView } from './code-view.js';
 import { roleOf } from './access.js';
 import { addArtifact } from './artifact-service.js';
 import { DECISION_SYSTEM_ACTOR } from './decision-glob.js';
@@ -47,6 +51,12 @@ const LLM_WAIT_MS = 60_000;
 /** The merged globs read for overlap: the board's most recent (updated) ones. */
 const MERGED_STATUSES = ['reviewing', 'signed_off'] as const;
 const SECTION_FALLBACK_MAX = SUGGEST_SECTION_MAX;
+/** A hotspot's proposal is cut to this much, and its history read this far back. */
+const HOTSPOT_PROPOSAL_MAX = 4_000;
+const HOTSPOT_HISTORY_LIMIT = 100;
+/** The open globs whose plans are searched for the file's path. */
+const OPEN_STATUSES = ['planning', 'implementing', 'in_progress', 'pr_open'] as const;
+const OPEN_GLOBS_MAX = 8;
 
 /** What the decision section shows: the latest suggestion, whether the draft or target moved since, and whether one is queued. */
 export interface SuggestionView {
@@ -66,6 +76,8 @@ export interface SuggestDeps {
   readonly model: string;
   /** Deadline for the model call; defaults to LLM_TIMEOUT_MS. */
   readonly timeoutMs?: number;
+  /** Absent: a hotspot decision's recommendation lacks the file's size and merge count. */
+  readonly codeView?: Pick<CodeView, 'history' | 'read'>;
 }
 
 const cut = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -137,6 +149,11 @@ export class SuggestService {
       return { suggestedOutcome: suggested, flags };
     };
     const base = { glob: { id: glob.id, title: glob.title } };
+    const path = hotspotOf(glob);
+    if (learning === null && path !== null) {
+      const hotspot = await this.hotspotInputs(tx, glob, path);
+      return { inputs: { ...base, learning: null, siblings: [], merges: [], outcomes: [], flags: flagsOf(null), signals: [], hotspot }, stamp: { draftVersion: null, targetVersion: null, promptVersion: SUGGEST_PROMPT_VERSION } };
+    }
     if (learning === null) {
       return { inputs: { ...base, learning: null, siblings: [], merges: [], outcomes: [], flags: flagsOf(null), signals: [] }, stamp: { draftVersion: null, targetVersion: null, promptVersion: SUGGEST_PROMPT_VERSION } };
     }
@@ -180,6 +197,43 @@ export class SuggestService {
     return { inputs, stamp: { draftVersion: learning.artifacts.draft?.version ?? null, targetVersion: state?.version ?? null, promptVersion: SUGGEST_PROMPT_VERSION } };
   }
 
+  /** What a hotspot decision adds: its conflicts, the file's size and churn, the open work on it and the board's merge rate. */
+  private async hotspotInputs(tx: Tx, glob: Glob, path: string): Promise<SuggestHotspot> {
+    const now = this.deps.clock.now();
+    const settings = hotspotSettingsOf(await tx.getContextSettings(glob.boardId));
+    const from = hotspotWindowFrom(now, settings.windowDays);
+    const [events, work, plan] = await Promise.all([
+      tx.listBoardEvents(glob.boardId, from, CONFLICT_EVENT_TYPES),
+      tx.listGlobs(glob.boardId, { include: 'work' }),
+      tx.latestArtifacts([glob.id], ['plan']),
+    ]);
+    const facts = hotspotFacts(path, conflictRecords(events), now, settings.windowDays);
+    const merged = work.filter((g) => MERGED_STATUSES.some((s) => s === g.status) && g.updatedAt >= from);
+    const open = work.filter((g) => OPEN_STATUSES.some((s) => s === g.status));
+    const plans = await tx.latestArtifacts(open.map((g) => g.id), ['plan']);
+    const touching = new Set([...facts.conflicts.map((c) => c.globId), ...plans.filter((p) => p.content.includes(path)).map((p) => p.globId)]);
+    return {
+      facts,
+      proposal: cut(plan[0]?.content ?? glob.title, HOTSPOT_PROPOSAL_MAX),
+      lines: null,
+      merges: null,
+      openGlobs: open.filter((g) => touching.has(g.id)).slice(0, OPEN_GLOBS_MAX).map((g) => ({ id: g.id, title: g.title })),
+      boardMerges: merged.length,
+    };
+  }
+
+  /** The file's size and the merges that changed it, from the code host; read outside any transaction. Null where it can't say. */
+  private async codeFacts(boardId: number, path: string, windowDays: number): Promise<Pick<SuggestHotspot, 'lines' | 'merges'>> {
+    const { codeView } = this.deps;
+    if (codeView === undefined) return { lines: null, merges: null };
+    const from = hotspotWindowFrom(this.deps.clock.now(), windowDays);
+    const [merges, lines] = await Promise.all([
+      codeView.history(boardId, path, HOTSPOT_HISTORY_LIMIT).then((commits) => commits.filter((c) => Date.parse(c.date) >= Date.parse(from)).length, () => null),
+      codeView.read(boardId, null, path).then((file) => (file === null || file.binary ? null : file.totalLines), () => null),
+    ]);
+    return { lines, merges };
+  }
+
   /**
    * The job: asks the model once and stores the checked answer. A model that is down or busy asks to run later without
    * spending an attempt; an answer that can't be used throws, which spends one (three, and the button shows it).
@@ -192,13 +246,15 @@ export class SuggestService {
       return { glob, ...(await this.gather(tx, glob, learning)), learning: learning !== null };
     });
     if (read === null) return 'dropped';
-    const { glob, inputs, stamp } = read;
+    const { glob, stamp } = read;
+    const hot = read.inputs.hotspot;
+    const inputs: SuggestInputs = hot === undefined || hot === null ? read.inputs : { ...read.inputs, hotspot: { ...hot, ...(await this.codeFacts(glob.boardId, hot.facts.path, hot.facts.windowDays)) } };
     let answer: string;
     try {
       answer = await completeWithDeadline(
         this.deps.llm,
         {
-          system: suggestSystem(read.learning),
+          system: inputs.hotspot === undefined || inputs.hotspot === null ? suggestSystem(read.learning) : hotspotSystem(),
           schema: SUGGESTION_SCHEMA,
           prompt: suggestPrompt(inputs),
           maxTokens: ANSWER_MAX_TOKENS,
