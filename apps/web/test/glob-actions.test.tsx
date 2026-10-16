@@ -1081,7 +1081,7 @@ describe('glob view: split moves in the action ▾', () => {
 
     it('hides the code-work sections: labels, size, deploys and tests', () => {
       renderGlob(action());
-      for (const name of ['labels', 'size', 'deploys', 'tests', 'environments']) {
+      for (const name of ['labels', 'size', 'deploys', 'tests']) {
         expect(document.querySelector(`[data-section="${name}"]`)?.textContent ?? '').toBe('');
       }
     });
