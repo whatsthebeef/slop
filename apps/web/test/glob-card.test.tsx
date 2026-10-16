@@ -761,16 +761,23 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(label(view({ status: 'planning', humanSteps: [] }))).toBeNull();
   });
 
-  it('the Arm system label names the stage from arm, stays after sign-off, and its tooltip is the first open step', () => {
+  it('the Arm system label is always plain, stays after sign-off, and its tooltip is the first open step', () => {
     const label = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="arm-system-label"]');
-    const main = view({ status: 'reviewing', humanSteps: [step()], arm: { stage: 'main', title: 'Run the **migration**' } });
-    expect(label(main)?.textContent).toBe('Arm system · main');
-    const prod = view({ status: 'signed_off', humanSteps: [step()], arm: { stage: 'production', title: 'Roll out the host stack' } });
-    expect(label(prod)?.textContent).toBe('Arm system · production');
+    const main = view({ status: 'reviewing', humanSteps: [step()], arm: { title: 'Run the **migration**' } });
+    expect(label(main)?.textContent).toBe('Arm system');
+    const prod = view({ status: 'signed_off', humanSteps: [step()], arm: { title: 'Roll out the host stack' } });
+    expect(label(prod)?.textContent).toBe('Arm system');
     expect(armLabel(prod)?.tip).toBe('Roll out the host stack');
     expect(armLabel(view({ humanSteps: [step()] }))).toMatchObject({ text: 'Arm system' });
-    expect(armLabel(main)).toEqual({ text: 'Arm system · main', tip: 'Run the migration' });
+    expect(armLabel(main)).toEqual({ text: 'Arm system', tip: 'Run the migration' });
     expect(label(view({ status: 'signed_off', humanSteps: [] }))).toBeNull();
+  });
+
+  it('a signed-off glob with only an open downstream step shows plain Arm system, and none once it is ticked', () => {
+    const label = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="arm-system-label"]');
+    const downstream = (state: 'due' | 'done') => step({ id: 'hs_d', due: 'downstream', blocks: [], state });
+    expect(label(view({ status: 'signed_off', humanSteps: [downstream('due')] }))?.textContent).toBe('Arm system');
+    expect(label(view({ status: 'signed_off', humanSteps: [downstream('done')] }))).toBeNull();
   });
 
   it('the Arm system label is a rocket and text in the primary action colour, at the bottom right beside the avatar, with its tooltip', () => {

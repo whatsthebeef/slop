@@ -91,14 +91,9 @@ export const BoardGroup = ({
       <Field label='Repository (owner/name)' hint='The GitHub repository slop opens branches and pull requests in.'>
         {(props) => <Input {...props} value={form.repo} disabled={!admin} onChange={(e) => form.setRepo(e.target.value)} />}
       </Field>
-      <div className='grid gap-3 sm:grid-cols-2'>
-        <Field label='Base branch' hint='The branch globs are started from and merged into.'>
-          {(props) => <Input {...props} value={form.baseBranch} disabled={!admin} onChange={(e) => form.setBaseBranch(e.target.value)} />}
-        </Field>
-        <Field label='Working-hours time zone' hint='Working hours (09:00–17:00 on weekdays) are counted in this zone.'>
-          {(props) => <Input {...props} value={form.timeZone} disabled={!admin} onChange={(e) => form.setTimeZone(e.target.value)} />}
-        </Field>
-      </div>
+      <Field label='Working-hours time zone' hint='Working hours (09:00–17:00 on weekdays) are counted in this zone.'>
+        {(props) => <Input {...props} value={form.timeZone} disabled={!admin} onChange={(e) => form.setTimeZone(e.target.value)} />}
+      </Field>
     </SettingBlock>
     <SaveButton visible={admin} pending={form.save.isPending} invalid={false} onSave={() => form.save.mutate()} />
   </SettingsGroup>

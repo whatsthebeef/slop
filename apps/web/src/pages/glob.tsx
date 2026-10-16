@@ -133,7 +133,6 @@ export const GlobPage = () => {
       {...(viewerEmail === undefined ? {} : { email: viewerEmail })}
       onAddStep={(step) => change(() => api.addHumanStep(open.id, step))}
       onCompleteStep={(stepId) => change(() => api.completeHumanStep(open.id, stepId))}
-      onMarkDeployed={(env) => change(() => api.markEnvironmentDeployed(open.id, env))}
       onDismissStep={(stepId, reason) => change(() => api.dismissHumanStep(open.id, stepId, reason))}
       onFailStep={(stepId, note) => change(() => api.failStep(open.id, stepId, note, open.version))}
       onSuggestion={(suggestionId, action, glob) =>

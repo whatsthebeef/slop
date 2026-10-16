@@ -61,7 +61,6 @@ export interface SectionProps {
     due?: string;
   }) => Promise<boolean>;
   onCompleteStep: (stepId: string) => Promise<boolean>;
-  onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** "It failed" on a due step; without it the button is absent. */
   onFailStep?: (stepId: string, note: string) => Promise<boolean>;
@@ -129,7 +128,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       {...(onFailStep === undefined ? {} : { onFail: onFailStep })}
     />
   ),
-  'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep, onFailStep, onMarkDeployed }) => (
+  'human-steps': ({ ctx, actions, section, onAddStep, onCompleteStep, onDismissStep, onFailStep }) => (
     <HumanSteps
       part='rest'
       glob={ctx.glob}
@@ -138,7 +137,6 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       repo={ctx.board.repo}
       baseBranch={ctx.board.baseBranch}
       environments={ctx.board.environments.map((e) => e.name)}
-      {...(onMarkDeployed === undefined ? {} : { onMarkDeployed })}
       startOpen={section === 'human-steps'}
       collapsed={actions.human}
       openSignal={actions.stepsSignal}
