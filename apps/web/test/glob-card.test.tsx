@@ -75,7 +75,7 @@ describe('card rows', () => {
   it('renders the header, title, group tag and bottom row in that order, with no status row under the title', () => {
     const g = view({ group: 'glob-groups', type: 'sub', status: 'planning', list: 'planning', allowedActions: ['start'] });
     const root = dom(markup(g));
-    const order = ['card-header', 'card-title', 'card-chips', 'card-bottom'].map((id) => {
+    const order = ['card-header', 'card-title', 'card-bottom', 'card-chips'].map((id) => {
       const el = root.querySelector(`[data-testid="${id}"]`);
       expect(el, id).not.toBeNull();
       return el;
@@ -252,15 +252,15 @@ describe('card rows', () => {
     it('sits at the bottom-right for a person-implemented glob', () => {
       const bottom = avatar(prOpen({ implementer: 'john.bower@x.com' }));
       expect(bottom?.lastElementChild?.textContent).toContain('JB');
-      expect(bottom?.className).toContain('justify-between');
+      expect(bottom?.lastElementChild?.className).toContain('ml-auto');
       expect(bottom?.textContent).toContain('Implementer: john.bower@x.com');
     });
-    it('shares the group tag row on the right, with no avatar in the bottom row, for a grouped glob', () => {
+    it('shares the one bottom row with the group tag, avatar last on the right, for a grouped glob', () => {
       const root = dom(markup(prOpen({ group: 'glob-groups', implementer: 'john.bower@x.com' })));
-      const row = root.querySelector('[data-testid="card-group-row"]');
-      expect(row?.querySelector('[data-testid="group-chip"], [data-testid="card-chips"]')).not.toBeNull();
-      expect(row?.lastElementChild?.textContent).toContain('JB');
-      expect(root.querySelector('[data-testid="card-bottom"]')?.textContent ?? '').not.toContain('JB');
+      const bottom = root.querySelector('[data-testid="card-bottom"]');
+      expect(bottom?.querySelector('[data-testid="card-chips"]')).not.toBeNull();
+      expect(bottom?.lastElementChild?.textContent).toContain('JB');
+      expect(root.querySelector('[data-testid="card-group-row"]')).toBeNull();
     });
     it('shows the planner while unassigned', () => {
       const g = view({ implementer: null, planner: 'ann@x.com', runs: [] });
@@ -422,6 +422,46 @@ const mergeable = (patch: Partial<GlobView> = {}) => prOpen({ list: 'doing', all
 const fixable = (patch: Partial<GlobView> = {}) =>
   prOpen({ type: 'sub', implementer: null, list: 'doing', allowedActions: ['resolve_conflict', 'take_over'], conflict: { base: 'main', files, since: 's1t9', at: NOW }, ...patch });
 const bottomLeft = (html: string) => dom(html).querySelector('[data-testid="card-bottom"]')?.firstElementChild ?? null;
+
+describe('card bottom row layout', () => {
+  const step: NonNullable<GlobView['humanSteps']>[number] = {
+    id: 'hs_1',
+    kind: 'rollout',
+    title: 'Run the migration',
+    state: 'pending',
+    who: 'admin',
+    due: 'after_merge',
+    blocks: ['sign_off', 'dependants'],
+  };
+  const armed = (over: Partial<GlobView> = {}) => view({ status: 'planning', humanSteps: [step], ...over });
+  const row = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-bottom"]');
+
+  it('puts button, group tag and the Arm system / avatar group in one wrapping row, in that order', () => {
+    const bottom = row(armed({ group: 'glob-groups', allowedActions: ['start'] }));
+    expect(bottom?.className).toContain('flex-wrap');
+    expect(Array.from(bottom?.children ?? []).map((c) => c.getAttribute('data-testid'))).toEqual(['card-actions', 'card-chips', 'card-trailing']);
+  });
+
+  it('keeps Arm system, the dot and the avatar together in one right-pushed, non-shrinking group', () => {
+    const trailing = row(armed({ group: 'glob-groups' }))?.querySelector('[data-testid="card-trailing"]');
+    expect(trailing?.className).toContain('ml-auto');
+    expect(trailing?.className).toContain('shrink-0');
+    expect(trailing?.querySelector('[data-testid="arm-system-label"]')).not.toBeNull();
+    expect(trailing?.querySelector('[data-testid="card-arm-separator"]')).not.toBeNull();
+    expect(trailing?.lastElementChild?.textContent).toMatch(/[A-Z]{2}|^$/);
+  });
+
+  it.each([
+    ['no primary button', { group: 'glob-groups' }],
+    ['no group tag', { allowedActions: ['start'] as GlobView['allowedActions'] }],
+    ['neither', {}],
+  ])('still right-aligns Arm system and the avatar with %s', (_name, over) => {
+    const bottom = row(armed(over));
+    expect(bottom?.lastElementChild?.getAttribute('data-testid')).toBe('card-trailing');
+    expect(bottom?.lastElementChild?.className).toContain('ml-auto');
+    expect(bottom?.querySelector('[data-testid="arm-system-label"]')).not.toBeNull();
+  });
+});
 
 describe('card actions: one primary button, bottom left', () => {
   it.each([
