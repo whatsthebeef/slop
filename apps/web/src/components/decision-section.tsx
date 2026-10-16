@@ -231,7 +231,7 @@ const AppliesTo = ({
   );
 };
 
-/** Earlier recommendations, newest first, collapsed at the foot of the block; the latest is the block's recommendation. */
+/** Earlier recommendations, newest first, under a plain label at the foot of the block; the latest is the block's recommendation. */
 export const DecisionAssessment = ({ glob, all = false }: { glob: GlobView; all?: boolean }) => {
   const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
   const versions = useQuery({
