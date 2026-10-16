@@ -154,14 +154,20 @@ afterEach(() => {
 });
 
 const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(await screen.findByTestId('more-actions'));
-  return screen.findByTestId('more-menu');
+  await user.click(await screen.findByTestId('more-outcomes'));
+  return screen.findByTestId('outcomes-menu');
 };
 
-/** The action row under the title, where a learning's outcome lives. */
-const actionRow = () => screen.findByTestId('glob-actions');
+/** The outcome controls at the foot of the decision block, where a learning's outcome lives (the action row has none). */
+const actionRow = () => screen.findByTestId('outcomes');
 
-const DECIDING = /^(Approve|Reject|Save|Cancel|Waiting)/;
+/** The outcome block's main button, whatever outcome it is for now. */
+const mainOutcome = async (): Promise<HTMLButtonElement> => {
+  const group = await within(await screen.findByTestId('outcomes')).findByRole('group');
+  const button = group.querySelector('button');
+  if (!(button instanceof HTMLButtonElement)) throw new Error('the outcome block has a main button');
+  return button;
+};
 
 describe('the Decide block', () => {
   it('is a needs-a-person block of the shared family around the proposal, which keeps its own controls', async () => {
@@ -205,17 +211,17 @@ describe('the proposal block of a learning', () => {
     expect(within(why).queryByTestId('evidence-summary')).toBeNull();
   });
 
-  it('makes the recommended outcome the action row’s main button, with the other outcomes in its ▾, and no buttons that decide in the body', async () => {
+  it('makes the recommended outcome the decision block’s main button, with the other outcomes in its ▾, and no primary or ▾ in the action row', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
     vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('approve'));
     renderGlob(decision());
-    const row = await actionRow();
-    expect((await within(row).findByTestId('main-action')).textContent).toBe('Approve change');
+    const outcomes = await actionRow();
+    expect((await mainOutcome()).textContent).toBe('Approve change');
     expect(screen.getAllByRole('button', { name: 'Approve change' })).toHaveLength(1);
-    const body = screen.getByTestId('proposal-block');
-    expect(within(body).queryByRole('button', { name: DECIDING })).toBeNull();
-    expect(screen.queryByTestId('outcomes')).toBeNull();
+    expect(within(screen.getByTestId('proposal-block')).getByTestId('outcomes')).toBe(outcomes);
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
     const menu = await openMenu(user);
     expect(within(menu).getByText('Reject…')).toBeTruthy();
     expect(within(menu).getByText('Approve with edits…')).toBeTruthy();
@@ -253,9 +259,8 @@ describe('the proposal block of a learning', () => {
     vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
     vi.spyOn(api, 'suggestion').mockResolvedValue({ ...suggestionOf('approve'), suggestion: null, pending: true });
     renderGlob(decision());
-    const row = await actionRow();
-    const main = await within(row).findByTestId('main-action');
-    expect((main as HTMLButtonElement).disabled).toBe(false);
+    await actionRow();
+    expect((await mainOutcome()).disabled).toBe(false);
     expect(screen.queryByText(/Getting a recommendation/)).toBeNull();
     expect(screen.queryByTestId('suggest-working')).toBeNull();
     expect(screen.queryByTestId('suggestion')).toBeNull();
@@ -264,10 +269,20 @@ describe('the proposal block of a learning', () => {
   it('offers only Pick up before anyone has picked the learning up', async () => {
     vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ draft: { section: null, content: 'The draft' } }));
     renderGlob({ ...decision(), status: 'planning', list: 'planning', allowedActions: ['pick_up', 'delete'] satisfies Action[] });
-    const row = await actionRow();
+    const row = await screen.findByTestId('glob-actions');
     expect((await within(row).findByTestId('main-action')).textContent).toMatch(/Pick up/);
-    expect(within(row).queryByText('Approve change')).toBeNull();
-    expect(within(row).queryByTestId('outcome-reject')).toBeNull();
+    expect(screen.getByTestId('decision-block')).toBeTruthy();
+    expect(screen.queryByTestId('outcomes')).toBeNull();
+    expect(screen.queryByText('Approve change')).toBeNull();
+    expect(screen.queryByTestId('outcome-reject')).toBeNull();
+  });
+
+  it('shows no outcome buttons for a learning that is already decided, and the action row has no second place to act', async () => {
+    vi.spyOn(api, 'globDiff').mockResolvedValue(diffOf({ learning: { ...openLearning, status: 'approved' } }));
+    renderGlob(decision());
+    await screen.findByTestId('decision-block');
+    await waitFor(() => expect(screen.queryByTestId('outcomes')).toBeNull());
+    expect(screen.queryByTestId('outcome-accept')).toBeNull();
   });
 
   it('does not repeat the title as a heading, show the raw assessment fields or the boilerplate', async () => {
@@ -374,12 +389,12 @@ describe('the proposal block of a learning', () => {
     const row = await actionRow();
     await user.click(await within(row).findByRole('button', { name: 'Approve with edits…' }));
     const form = await screen.findByTestId('outcome-form-accept_with_edits');
-    expect(within(screen.getByTestId('proposal-block')).getByTestId('outcome-forms')).toBeTruthy();
+    expect(within(row).getByTestId('outcome-form-accept_with_edits')).toBe(form);
     expect(within(form).getByRole('textbox')).toHaveProperty('value', 'The recommended wording');
     expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
     expect(within(row).getByRole('button', { name: 'Save' })).toBeTruthy();
-    expect(within(screen.getByTestId('proposal-block')).queryByRole('button', { name: DECIDING })).toBeNull();
+    expect(screen.queryByTestId('glob-actions')).toBeNull();
     expect(screen.queryByTestId('apply-suggestion')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('outcome-form-accept_with_edits')).toBeNull();
@@ -422,7 +437,7 @@ describe('the proposal block of a learning', () => {
     expect(within(menu).getByText('Store it as an approved learning agents are given, without editing a document')).toBeTruthy();
     await user.click(within(menu).getByText('Approve without changing a document'));
     const form = await screen.findByTestId('keep-form');
-    expect(within(screen.getByTestId('outcome-forms')).getByTestId('keep-form')).toBe(form);
+    expect(within(screen.getByTestId('outcomes')).getByTestId('keep-form')).toBe(form);
     expect(within(form).getByRole('textbox')).toHaveProperty('value', 'Tests live next to the code they cover');
   });
 
@@ -559,7 +574,7 @@ describe('the watch signal step', () => {
     const { onDecide } = renderGlob(decision());
     const outcomes = await actionRow();
     await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
-    expect(within(outcomes).getByRole('button', { name: 'Approve change' })).toHaveProperty('disabled', true);
+    expect(await mainOutcome()).toHaveProperty('disabled', true);
     expect(screen.getByTestId('accept-confirm-text').textContent).toBe('Applies the change to its target, then moves this decision to Reviewing.');
     await user.click(screen.getByTestId('accept-confirm'));
     expect(onDecide).toHaveBeenCalledWith({ outcome: 'accept' });
@@ -638,7 +653,7 @@ describe('a pressed outcome stays pending until the glob moves (s15b139)', () =>
     const menu = await openMenu(user);
     await user.click(within(menu).getByTestId('outcome-reject'));
     await user.type(await screen.findByLabelText('Reason (required)'), 'Not a rule');
-    return screen.getByTestId('main-action');
+    return mainOutcome();
   };
 
   it('disables the controls with a working label at once, sends one request however often it is pressed, and stays pending until the version changes', async () => {
@@ -648,15 +663,15 @@ describe('a pressed outcome stays pending until the glob moves (s15b139)', () =>
     const main = await reject(user);
     await user.dblClick(main);
     expect(onDecide).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Rejecting…'));
-    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
-    expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
+    await waitFor(async () => expect((await mainOutcome()).textContent).toContain('Rejecting…'));
+    expect(await mainOutcome()).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', true);
     // The request has returned but the glob has not moved: still pending, and a click sends nothing.
-    await user.click(screen.getByTestId('main-action'));
+    await user.click(await mainOutcome());
     expect(onDecide).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', true);
     moveTo({ ...glob, version: glob.version + 1 });
-    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
+    await waitFor(() => expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', false));
   });
 
   it('re-enables the controls when the request fails', async () => {
@@ -665,8 +680,8 @@ describe('a pressed outcome stays pending until the glob moves (s15b139)', () =>
     const main = await reject(user);
     await user.click(main);
     await waitFor(() => expect(onDecide).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
-    expect(screen.getByTestId('main-action').textContent).not.toContain('Rejecting…');
+    await waitFor(() => expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', false));
+    expect((await mainOutcome()).textContent).not.toContain('Rejecting…');
   });
 
   it('holds a recommended outcome\'s Save the same way', async () => {
@@ -674,13 +689,13 @@ describe('a pressed outcome stays pending until the glob moves (s15b139)', () =>
     vi.spyOn(api, 'suggestion').mockResolvedValue(suggestionOf('approve_with_edit', 'Better wording'));
     const glob = decision();
     const { onDecide } = renderGlob(glob);
-    await user.click(await screen.findByTestId('main-action'));
-    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toMatch(/^Save/));
-    await user.click(screen.getByTestId('main-action'));
-    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Approving…'));
-    await user.click(screen.getByTestId('main-action'));
+    await user.click(await mainOutcome());
+    await waitFor(async () => expect((await mainOutcome()).textContent).toMatch(/^Save/));
+    await user.click(await mainOutcome());
+    await waitFor(async () => expect((await mainOutcome()).textContent).toContain('Approving…'));
+    await user.click(await mainOutcome());
     expect(onDecide).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', true);
   });
 
   it('holds Keep as learning pending while it is sent, and frees the controls when it fails', async () => {
@@ -691,9 +706,9 @@ describe('a pressed outcome stays pending until the glob moves (s15b139)', () =>
     const menu = await openMenu(user);
     await user.click(within(menu).getByText('Approve without changing a document'));
     await user.click(await screen.findByTestId('keep-submit'));
-    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', true));
-    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
+    await waitFor(() => expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', true));
+    expect(await mainOutcome()).toHaveProperty('disabled', true);
     fail(new Error('nope'));
-    await waitFor(() => expect(screen.getByTestId('more-actions')).toHaveProperty('disabled', false));
+    await waitFor(() => expect(screen.getByTestId('more-outcomes')).toHaveProperty('disabled', false));
   });
 });

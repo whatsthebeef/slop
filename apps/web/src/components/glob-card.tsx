@@ -1,5 +1,5 @@
 import { decisionOf, isHumanCategory, modeOf } from '@slop/core';
-import type { Action, DeployIndicator, EnvironmentIndicator, HumanStepViewer } from '@slop/core';
+import type { Action, HumanStepViewer } from '@slop/core';
 import { Bug, ListChecks, Loader2, Rocket, Scale } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { ActorIcon, HumanIcon, MachineIcon, PersonRunning } from '@/components/actor-icons';
@@ -395,57 +395,6 @@ const MoveButton = ({
   );
 };
 
-/** The glob's deploy state on its card: deploying, live, failed, or replaced by another glob. */
-export const DeployChip = ({ deploy, onOpen }: { deploy: DeployIndicator; onOpen?: () => void }) => {
-  const env = deploy.environment;
-  const [text, tip, tone] =
-    deploy.state === 'deploying'
-      ? [
-          deploy.waiting ? `${env}: queued` : `${env}: deploying`,
-          deploy.waiting ? `Waiting for the deploy running in ${env}` : `Deploying to ${env}`,
-          'text-muted-foreground',
-        ]
-      : deploy.state === 'live'
-        ? [`${env}: live`, `Live in ${env} at ${deploy.sha.slice(0, 7)}`, 'text-signal-strong']
-        : deploy.state === 'failed'
-          ? [`${env}: deploy failed`, `Deploy to ${env} failed: ${deploy.error ?? 'no reason given'}`, 'text-red']
-          : [`${env}: replaced`, `${deploy.by} has been deployed to ${env} since`, 'text-muted-foreground'];
-  return (
-    <Tip text={onOpen === undefined ? tip : `${tip}. Opens the deploys`}>
-      <ChipButton onOpen={onOpen} className={cn('inline-flex items-center gap-1 font-mono text-[11px]', tone)} testId='deploy-chip'>
-        {deploy.state === 'deploying' && !deploy.waiting && <Loader2 className='h-3 w-3 animate-spin' />}
-        {text}
-      </ChipButton>
-    </Tip>
-  );
-};
-
-const since = (iso: string | null) => (iso === null ? '' : ` since ${new Date(iso).toLocaleString()}`);
-
-/**
- * The release and integration environments the glob is in (their deployed commit contains its merge), one chip each.
- * Production before sign-off is allowed but flagged.
- */
-export const EnvironmentChips = ({ environments }: { environments: readonly EnvironmentIndicator[] }) => (
-  <>
-    {environments.map((env) => {
-      const warned = env.warning === 'before_sign_off';
-      const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}${since(env.since)}`;
-      return (
-        <Tip key={env.environment} text={tip}>
-          <span
-            className={cn('whitespace-nowrap font-mono text-[11px]', warned ? 'text-required' : 'text-signal-strong')}
-            data-testid='environment-chip'
-            data-warning={env.warning}
-          >
-            {env.environment} ✓
-          </span>
-        </Tip>
-      );
-    })}
-  </>
-);
-
 /** One ATF run in words, for tooltips and the glob view. */
 export const atfLine = (run: AtfRun): string => {
   const where = run.scope === 'branch' ? `Branch${run.environment === null ? '' : ` (${run.environment})`}` : run.environment ?? '';
@@ -580,8 +529,6 @@ export const GlobCard = ({
   lock,
   bump,
   tag,
-  deploy,
-  environments,
   atf,
   viewer,
   waitingOnThis = 0,
@@ -616,9 +563,6 @@ export const GlobCard = ({
   bump?: 'left' | 'right';
   /** Who moved it, briefly, when the move was made elsewhere. */
   tag?: MoveTag;
-  deploy?: DeployIndicator;
-  /** The release and integration environments it is in. */
-  environments?: readonly EnvironmentIndicator[];
   /** Its ATF results (a flag only). */
   atf?: readonly AtfRun[];
   /** Who is looking: Your turn shows the steps that are theirs. */
@@ -717,8 +661,6 @@ export const GlobCard = ({
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
-            {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
-            {environments !== undefined && <EnvironmentChips environments={environments} />}
             {atf !== undefined && <AtfChip runs={atf} />}
             {age !== 'neutral' && glob.pr?.state === 'draft' && (
               <Tip text='Two or more days in Doing and the PR is still a draft'>
