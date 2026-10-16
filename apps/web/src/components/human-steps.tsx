@@ -22,6 +22,7 @@ import {
   readStepsOpen,
   scriptArtifactPath,
   scriptCopyText,
+  runLines,
   scriptRunCommand,
   scriptSourceUrl,
   stateText,
@@ -180,16 +181,18 @@ const ScriptRow = ({
   glob,
   script,
   source,
+  command,
 }: {
   glob: GlobView;
   script: HumanStepScript;
   source: ScriptSource;
+  command?: string;
 }) => {
   if ('path' in script) {
     const sourceUrl = scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch));
     return (
       <CommandBox
-        command={scriptRunCommand(script.path)}
+        command={command ?? scriptRunCommand(script.path)}
         testId="step-script-path"
         copyId="step-copy"
         extra={
@@ -290,10 +293,14 @@ const StepFields = ({
       {(script !== null || commands.length > 0) && (
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1" data-testid="step-run">
           <span className="text-[11px] text-muted-foreground">Run</span>
-          {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
-          {commands.map((command, i) => (
-            <CommandBox key={`${String(i)}:${command}`} command={command} />
-          ))}
+          {script !== null && !('path' in script) && <ScriptRow glob={glob} script={script} source={source} />}
+          {runLines(commands, script !== null && 'path' in script ? script.path : null).map((line, i) =>
+            line.script && script !== null && 'path' in script ? (
+              <ScriptRow key={`${String(i)}:${line.command}`} glob={glob} script={script} source={source} command={line.command} />
+            ) : (
+              <CommandBox key={`${String(i)}:${line.command}`} command={line.command} />
+            ),
+          )}
         </div>
       )}
       {verify !== '' && <Field label="Check it worked" text={verify} testId="step-verify" />}
