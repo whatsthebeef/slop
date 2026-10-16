@@ -1,3 +1,4 @@
+import { actionState } from './action-glob.js';
 import type { Glob } from './types.js';
 
 /**
@@ -9,7 +10,16 @@ import type { Glob } from './types.js';
 export const needsHuman = (glob: Glob): boolean => {
   // A decision waits for a pick-up (Planning) or a sign-off (Reviewing); in Doing someone is already on it.
   // An action waits for a person until it is done or dismissed.
-  if (glob.category === 'action') return glob.status === 'planning';
+  if (glob.category === 'action') {
+    const state = actionState(glob);
+    // A prepared action is a person's turn when it is ready to run, its preparation failed, or its record is stuck after Done.
+    if (state === 'ready' || state === 'preparation_failed') return true;
+    if (state === 'recording') {
+      // Done is recorded but the merge is not coming by itself: failed, conflicted, or open and neither armed nor queued (red checks, disarmed).
+      return glob.status === 'failed' || glob.failure !== null || glob.conflict != null || (glob.status === 'pr_open' && glob.mergeMode !== 'when_green');
+    }
+    return state === 'open' && glob.status === 'planning';
+  }
   if (glob.category === 'decision') return glob.status === 'planning' || glob.status === 'reviewing';
   if (glob.status === 'failed' || glob.failure !== null) return true;
   if (glob.status === 'pr_open' && glob.type !== 'sub' && glob.pr?.state === 'ready') return true;

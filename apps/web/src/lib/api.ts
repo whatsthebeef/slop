@@ -3,6 +3,9 @@ import type {
   ChatFeedbackRating,
   ChatTestCase,
   Action,
+  ActionPreparation,
+  ActionRecordKind,
+  ActionState,
   MachineStep,
   OpenQuestion,
   Move,
@@ -121,6 +124,10 @@ export interface GlobView extends Glob {
   readonly branch: string;
   readonly currentRun: Run | null;
   readonly allowedActions?: readonly Action[];
+  /** An action glob's derived state (open, waiting, preparing, preparation_failed, ready, recording, closed); absent on other globs and on an older API. */
+  readonly actionState?: ActionState;
+  /** An action glob's machine preparation (record kind, rounds), or null for a plain action; absent on an older API. */
+  readonly preparation?: ActionPreparation | null;
   /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
   readonly artifacts?: readonly ArtifactSummaryView[];
   /** Every relation of the glob that still holds something back (any gate), with the title of what it points at; computed on the server for the board list and the glob read (read with `?.`: absent on an older API). */
@@ -496,6 +503,10 @@ export interface NewGlob {
   inferenceReason?: string | null;
   /** Actions only: who is meant to do it. */
   assignee?: string | null;
+  /** Actions only: a routine prepares the script, policy or document the person then runs. */
+  prepare?: boolean;
+  /** Actions only, with `prepare`: where the preparation is kept (default branch). */
+  record?: ActionRecordKind;
   /** Omitted: slop chooses one from the title and plan; null: none. */
   group?: string | null;
   environment: string | null;
@@ -543,6 +554,8 @@ export type IntakeProposalView = Omit<NewGlob, 'group' | 'actor' | 'mode' | 'fix
   categoryReason: string | null;
   /** Why intake chose the type: when a person is needed. Optional: an older API sends none. */
   typeReason?: string | null;
+  /** Intake thinks the request takes effect by someone doing it, not by deploying it: why. Only a suggestion (optional: an older API sends none). */
+  suggestedAction?: { reason: string };
   examples: IntakeExample[];
   needsConfirmation: boolean;
   model: string | null;
@@ -602,6 +615,7 @@ export type ActionPath =
   | 'investigate'
   | 'review-now'
   | 'start-anyway'
+  | 'prepare'
   | 'retrigger'
   | 'retry-autofix'
   | 'resolve-conflict'
@@ -895,6 +909,9 @@ export const api = {
   /** An action glob: a person did it (the note says what they checked, optional). */
   completeAction: (id: string, version: number, note?: string) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/done`, note === undefined || note.trim() === '' ? { version } : { version, note: note.trim() }),
+  /** A prepared action's run failed: the pasted output (secrets masked on the server) starts the next preparation round. */
+  failAction: (id: string, version: number, output: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/actions/fail`, { version, output: output.trim() }),
   /** An action glob that is not needed after all (the reason is required). */
   dismissAction: (id: string, version: number, reason: string) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/dismiss`, { version, reason: reason.trim() }),
@@ -1103,6 +1120,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   investigate: 'investigate',
   review_now: 'review-now',
   start_anyway: 'start-anyway',
+  prepare_action: 'prepare',
   pick_up: 'pick-up',
   take_over: 'take-over',
   retrigger: 'retrigger',
@@ -1123,5 +1141,7 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   // Done takes an optional note and Dismiss a reason: each has its own confirm and call (api.completeAction, api.dismissAction).
   complete_action: null,
   dismiss_action: null,
+  // Failed… takes the pasted output: its own dialog and call (api.failAction).
+  fail_action: null,
   delete: null,
 };

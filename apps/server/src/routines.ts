@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { classifyRoutineFailure } from '@slop/core';
-import type { HealthSink, RoutineDirectory } from '@slop/core';
+import type { ActionPreparation, HealthSink, RoutineDirectory } from '@slop/core';
 import { z } from 'zod';
 import type { SecretStore } from './secrets.js';
 
@@ -225,5 +225,49 @@ export const conflictInstructions = (
     `If both sides changed the same logic differently, run \`git merge --abort\` and call slop's report_failure with the run ID, naming the files and the decision a person has to make; don't guess. Otherwise commit the merge as \`${glob.id}: Merge ${base}\` with the Slop-Run: ${runId} trailer.`,
     `Before pushing, call slop's get_glob with the run ID and stop without pushing if your run is no longer current, a human implementer is recorded or the glob is merged. Push, then follow orchestrator.md's "Auto-fix (watching the PR)" section: subscribe to the PR's activity and fix failed checks of this glob.`,
     "Start by calling slop's get_glob for the glob, passing the run ID. If you cannot finish, call report_failure with the run ID.",
+  ].join('\n');
+};
+
+/**
+ * The text of a preparation run for an action: a person will run what this run prepares (a script, a policy file, a document),
+ * so the run writes and checks it but never runs it. A branch record is written on the action's own branch; an artifact or
+ * attachment record stays off git. Later rounds read the failure the person reported.
+ */
+export const prepareInstructions = (
+  glob: { id: string; title: string },
+  runId: string,
+  repo: string | null,
+  baseBranch: string | null,
+  preparation: ActionPreparation | null,
+): string => {
+  const record = preparation?.record ?? 'branch';
+  const round = preparation?.rounds ?? 1;
+  const base = baseBranch ?? "the repository's base branch";
+  const where =
+    record === 'branch'
+      ? `Work on the action's branch, ${glob.id}, which already exists on origin with a draft PR: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch and never open a new PR. A person runs what you prepare from this branch, and slop merges it afterwards, so commit only what belongs in the repository as the record.`
+      : record === 'artifact'
+        ? `This action has no branch and no PR. Stay on ${base} (run \`git fetch origin${baseBranch === null ? '' : ` ${baseBranch}`}\` first) and do not create or push any branch or commit. Store the script with slop's put_artifact (kind rollout_script, label "action: <slug>", the run ID); the person fetches it with \`slop get-artifact ${glob.id} rollout_script --label "<label>"\`.`
+        : `This action has no branch and no PR. Stay on ${base}; do not create or push any branch or commit. Write the document, form or checklist the person needs and store it with slop's attach (the run ID).`;
+  return [
+    `Slop glob ${glob.id}: ${glob.title}`,
+    `Run ID: ${runId}`,
+    ...(repo === null
+      ? []
+      : [
+          `Repository: ${repo}. Work in that repository's checkout. If this session doesn't have it, or can't push to it, call slop's report_failure with the run ID saying so (the routine's environment needs ${repo} and the Claude GitHub App installed on it); don't work in another repository.`,
+        ]),
+    '',
+    `This is a PREPARE run (round ${String(round)}) for an action glob: something a person does to a live thing, such as an account, a repository's settings or an office. The glob takes effect when the person runs what you prepare, not when it merges. Read .claude/agents/orchestrator.md and follow its "Preparing an action" section for glob ${glob.id} in unattended mode with run ID ${runId}: investigate what is needed (Phases 1–2), write it, check it, review it locally, store it and call mark_ready.`,
+    where,
+    'Write what the person runs so that it can be checked first: a dry run or `--check` mode, no secrets in the file, and the commands in the plan\'s "Do this" block, one per line (login, export, check, run, verify).',
+    "Never run the script yourself, and never run any command that costs money, changes an account, IAM or permissions, or touches a live system. Run the board's fast checks on what you wrote (see \"Routine runs\" in orchestrator.md).",
+    ...(round > 1
+      ? [
+          `This is a later round: the person ran the previous round's work and it failed. Their report is the attachment "Action run failed (round ${String(round - 1)})" in slop's get_context: read it first, treat it as in-scope feedback, fix what failed and don't repeat it.`,
+        ]
+      : []),
+    "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
+    `When what you prepared is stored and checked, call slop's mark_ready for ${glob.id} with the run ID (do not use gh). If you cannot finish, call report_failure with the run ID.`,
   ].join('\n');
 };
