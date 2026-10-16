@@ -113,7 +113,7 @@ const feedbackTip = (glob: GlobView): string =>
 
 /**
  * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
- * sign-off, an escalation in Planning). A decision glob's turn is the status line's.
+ * sign-off, an escalation in Planning) or it has an open question. A decision glob's turn is the status line's.
  */
 export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
   // An action waits for a person until it is done or dismissed; a prepared one while the machine prepares or records is the machine's.
@@ -122,6 +122,8 @@ export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewe
     return glob.status === 'planning' || line?.state === 'ready' || line?.state === 'preparation_failed' || (line?.state === 'recording' && line.icon === 'human');
   }
   if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
+  // An open question is a person's to answer even when a higher-priority status holds the corner.
+  if (openQuestionsOf(glob).length > 0) return true;
   const icon = cornerStatus(glob, now, viewer)?.icon;
   return icon === 'human' || icon === 'needs-human';
 };
