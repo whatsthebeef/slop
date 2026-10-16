@@ -93,6 +93,8 @@ import type {
   WorkstreamsSummary,
   Handoff,
   Arm,
+  ClickOutcome,
+  PendingAction,
 } from '@slop/core';
 import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
@@ -124,6 +126,9 @@ export interface GlobView extends Glob {
   readonly branch: string;
   readonly currentRun: Run | null;
   readonly allowedActions?: readonly Action[];
+  /** A click whose effect is still to show (read it through `pendingInForce`), and how the last click failed; both absent on an older API. */
+  readonly pendingAction?: PendingAction | null;
+  readonly lastOutcome?: ClickOutcome | null;
   /** An action glob's derived state (open, waiting, preparing, preparation_failed, ready, recording, closed); absent on other globs and on an older API. */
   readonly actionState?: ActionState;
   /** An action glob's machine preparation (record kind, rounds), or null for a plain action; absent on an older API. */

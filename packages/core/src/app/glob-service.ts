@@ -3128,6 +3128,19 @@ export class GlobService implements AutomaticRelations {
     );
   }
 
+  /**
+   * Records that a person's click went through (`machine.actionRequested`). `version` is the one the click's own result returned, so
+   * a webhook that moved the glob since wins and nothing is written (a version conflict, which the caller ignores).
+   */
+  recordRequested(email: string, id: string, kind: machine.Action, version: number, runId?: string) {
+    return this.command(email, id, version, (glob, ctx) => machine.actionRequested(glob, { kind, ...(runId === undefined ? {} : { runId }) }, ctx), { applies: 'any' });
+  }
+
+  /** Records a click the machine refused as the glob's last outcome (`machine.actionRefused`), on the glob as it is now. */
+  recordRefusal(email: string, id: string, kind: machine.Action, reason: string) {
+    return this.command(email, id, null, (glob, ctx) => machine.actionRefused(glob, { kind, reason }, ctx), { applies: 'any' });
+  }
+
   /** Cancel merge: disarms "merge when checks pass". */
   cancelMerge(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx), { applies: 'prepared' });

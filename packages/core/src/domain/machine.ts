@@ -21,6 +21,7 @@ import {
   validateAttributes,
   validateScopeEdit,
 } from './attributes.js';
+import { PENDING_TIMEOUT_MS } from './pending-action.js';
 import { actionOf, actionState, hasBranchRecord, preparationOf } from './action-glob.js';
 import type {
   ActionAttributes,
@@ -76,6 +77,7 @@ import type { NewQuestion, OpenQuestion, QuestionRaiser } from './questions.js';
 import { rolloutPending, reviewOpensWhenDone } from './human-steps.js';
 import type { BlockProgress } from './human-steps.js';
 import type {
+  ClickOutcome,
   Actor,
   Board,
   Category,
@@ -300,11 +302,15 @@ class Builder {
   private readonly effects: Effect[] = [];
   private changed = false;
   private edits: readonly RelationEdit[] = [];
+  /** The glob as the transition found it: what `settlePending` compares against. */
+  private readonly began: Glob;
 
   constructor(
     private glob: Glob,
     private readonly ctx: Context,
-  ) {}
+  ) {
+    this.began = glob;
+  }
 
   get current(): Glob {
     return this.glob;
@@ -479,7 +485,50 @@ class Builder {
     return this;
   }
 
+  /**
+   * A click's pending action ends when the glob moves on: its status, provisioning, head, conflict, failure, merge mode or head
+   * checks changed, or its run did (with a `runId`, that run ended or was replaced). A new failure, or the run failing, is stored as
+   * the last outcome; a success leaves none. With nothing new, it ends as `timed_out` once older than the timeout (a read sees it
+   * expire without a write, so this only records it when some other change is written anyway).
+   */
+  private settlePending(): void {
+    const pending = this.began.pendingAction;
+    // Nothing pending, or this very transition set (or replaced) it.
+    if (pending == null || this.glob.pendingAction !== pending || !this.changed) return;
+    const [was, now] = [this.began, this.glob];
+    const [before, run] = [currentRun(was), currentRun(now)];
+    const sig = (v: unknown): string => JSON.stringify(v ?? null);
+    const failedNow = now.failure != null && sig(now.failure) !== sig(was.failure);
+    const runEnded = run !== null && run.state === 'ended' && (pending.runId === undefined ? run.id === before?.id && before.state !== 'ended' : run.id === pending.runId);
+    const runMoved =
+      pending.runId === undefined ? run?.id !== before?.id || run?.state !== before?.state : run?.id !== pending.runId || run.state === 'ended';
+    const moved =
+      now.status !== was.status ||
+      now.provisioning !== was.provisioning ||
+      now.pr?.headSha !== was.pr?.headSha ||
+      now.mergeMode !== was.mergeMode ||
+      sig(now.conflict) !== sig(was.conflict) ||
+      sig(now.headChecks) !== sig(was.headChecks) ||
+      failedNow ||
+      runMoved;
+    const outcome = (result: 'failed' | 'timed_out', reason: string): ClickOutcome => ({
+      kind: pending.kind,
+      at: this.ctx.now,
+      by: pending.by,
+      result,
+      reason,
+    });
+    if (moved) {
+      const failedRun = runEnded && run.outcome === 'failed';
+      const reason = failedNow ? now.failure.reason : failedRun ? (run.failureReason ?? 'The run failed') : null;
+      this.glob = { ...now, pendingAction: null, lastOutcome: reason === null ? null : outcome('failed', reason) };
+    } else if (Date.parse(this.ctx.now) - Date.parse(pending.at) >= PENDING_TIMEOUT_MS) {
+      this.glob = { ...now, pendingAction: null, lastOutcome: outcome('timed_out', `${pending.kind} had no effect after a minute`) };
+    }
+  }
+
   done(): Result<Transition> {
+    this.settlePending();
     const glob = this.changed ? { ...this.glob, updatedAt: this.ctx.now } : this.glob;
     return ok({
       glob,
@@ -499,6 +548,29 @@ const unchanged = (glob: Glob): Result<Transition> =>
  * its version and `updatedAt` move, so live updates and stale-form checks see the change.
  */
 export const relationsChanged = (glob: Glob, ctx: Context): Result<Transition> => new Builder(glob, ctx).set({}).done();
+
+/**
+ * A person's click went through and its effect (a queued run, a merge) is still to show: every view reads the glob as in progress
+ * until it moves on (`Builder.done` settles it). A new click clears the last outcome, which is how a notice goes away.
+ */
+export const actionRequested = (glob: Glob, input: { readonly kind: Action; readonly runId?: string }, ctx: Context): Result<Transition> =>
+  new Builder(glob, ctx)
+    .set({
+      pendingAction: {
+        kind: input.kind,
+        at: ctx.now,
+        by: ctx.actor?.email ?? '',
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
+      },
+      lastOutcome: null,
+    })
+    .done();
+
+/** A click the machine refused is kept as the glob's last outcome (with the reason), so the refusal shows after the toast is gone. */
+export const actionRefused = (glob: Glob, input: { readonly kind: Action; readonly reason: string }, ctx: Context): Result<Transition> =>
+  new Builder(glob, ctx)
+    .set({ lastOutcome: { kind: input.kind, at: ctx.now, by: ctx.actor?.email ?? '', result: 'failed', reason: input.reason } })
+    .done();
 
 const invalidTransition = (glob: Glob, actor: Actor | null, message: string): Result<never> =>
   err({
