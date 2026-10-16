@@ -220,6 +220,7 @@ check "uninstall removes only our hooks" jq -e --arg c "$hook" '([.hooks.Session
 check "uninstall keeps the ~/.aws block" jq -e '.sandbox.filesystem.denyRead | index("~/.aws")' "$settings"
 check "uninstall leaves project allowWrite removed" jq -e '.sandbox.filesystem.allowWrite == ["~/.awsome", "/tmp/x"]' "$HOME/dev/app/.claude/settings.local.json"
 inst --yes >/dev/null
+sleep 1 # backups are named by the second: the uninstall's must not overwrite the install's
 inst --uninstall --restore-allow-write --yes >/dev/null
 check "--restore-allow-write puts the entries back" jq -e '.sandbox.filesystem.allowWrite | (index("~/.aws") != null) and (index("~/.awsome") != null) and (index("/tmp/x") != null)' "$HOME/dev/app/.claude/settings.local.json"
 
