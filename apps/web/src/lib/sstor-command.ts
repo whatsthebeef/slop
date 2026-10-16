@@ -52,6 +52,6 @@ export const takeOverConfirmation = (glob: {
   happens: `${runClause(glob.currentRun?.state)}its commits so far stay on the branch ${glob.branch}; the glob becomes yours (you are the implementer).`,
   command: `sstor --glob ${glob.id}`,
   how: canContinueLocally(glob.currentRun, email)
-    ? "This carries on the routine run's conversation in your terminal (claude --teleport), on the branch; the cloud run stops."
-    : "This opens the glob's Claude session on your machine, on the branch, with the plan and the machine's notes.",
+    ? "This command is copied to your clipboard when you confirm. Run it in a terminal to carry on the routine run's conversation (claude --teleport), on the branch; the cloud run stops."
+    : "This command is copied to your clipboard when you confirm. Run it in a terminal to open the glob's Claude session on your machine, on the branch, with the plan and the machine's notes.",
 });
