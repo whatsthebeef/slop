@@ -1,4 +1,4 @@
-import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
+import type { AttachmentService, BoardService, BuildFailed, DecisionGlobService, DeployService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
 import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -34,6 +34,8 @@ export interface AppDeps {
   readonly attachments?: Pick<AttachmentService, 'refreshGlob'>;
   /** The board's LLM spend line; absent: its route isn't mounted. */
   readonly spend?: SpendService;
+  /** Failed branch builds nobody has acted on, for the glob's status, notice and Retry; absent: none are shown. */
+  readonly deploys?: Pick<DeployService, 'buildFailedOf'>;
   /** Refuses Ready for review for a branch that conflicts with its base. */
   readonly readyGate?: ReadyGate;
   /** Refuses Merge on an agent-set PR whose diff is empty. */
@@ -257,6 +259,9 @@ const updateGlobSchema = z.object({
 /** A glob that came from a split says where: `split: { source, part, parts }`. */
 const splitField = (split: SplitInfo | undefined) => (split === undefined ? {} : { split });
 
+/** A glob whose latest build failed says so: `buildFailed` feeds its status, notice and activity. */
+const buildFailedField = (buildFailed: BuildFailed | undefined) => (buildFailed === undefined ? {} : { buildFailed });
+
 /** A fanned-out glob carries its workstreams' compact state, for the card's corner. */
 const workstreamsField = (workstreams: WorkstreamsSummary | undefined) => (workstreams === undefined ? {} : { workstreams });
 
@@ -291,6 +296,7 @@ const parse = async <S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z
 
 export const createApp = (deps: AppDeps) => {
   const { auth, boards, globs, hub } = deps;
+  const failedBuilds = (boardId: number, globIds: readonly string[]) => deps.deploys?.buildFailedOf(boardId, globIds) ?? Promise.resolve(new Map<string, BuildFailed>());
   const app = new Hono<Env>();
   // First, so it times (and bounds) every route registered after it, the MCP endpoint's included.
   app.use('*', requestTiming());
@@ -576,9 +582,11 @@ export const createApp = (deps: AppDeps) => {
     const thresholds = stallThresholds(membership.value.board);
     // A picked-up learning's recommendation job reads as a machine step ("getting a recommendation").
     const recommending = result.ok ? await globs.recommendationEffectsOf(result.value.map((r) => r.glob)) : new Map<string, PendingEffect[]>();
+    // Failed builds nobody has acted on: the status, notice and Retry read them.
+    const buildFailed = result.ok ? await failedBuilds(boardId, result.value.map((r) => r.glob.id)) : new Map<string, BuildFailed>();
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, relations, holding, holdsBack, suggestions }) => {
-        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id), scripts.get(glob.id));
+        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id), scripts.get(glob.id), buildFailed.has(glob.id));
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
         const facts = machineSteps(glob, { effects: recommending.get(glob.id) ?? [] });
@@ -596,6 +604,7 @@ export const createApp = (deps: AppDeps) => {
           dismissedKeys: dismissed.get(glob.id) ?? [],
           gateCheck,
           machineSteps: facts,
+          ...buildFailedField(buildFailed.get(glob.id)),
           ...splitField(splits.get(glob.id)),
           ...workstreamsField(workstreams.get(glob.id)),
           ...(oversized.has(glob.id) ? { oversized: true } : {}),
@@ -687,7 +696,8 @@ export const createApp = (deps: AppDeps) => {
     const gateCheck = await globs.gateCheckOf(view.value.glob.boardId);
     const handoffs = await globs.handoffsOf(view.value.glob.boardId, view.value.glob.id);
     const effects = (await globs.recommendationEffectsOf([view.value.glob])).get(view.value.glob.id) ?? [];
-    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob, { effects }), handoffs, ...splitField(split), ...workstreamsField(workstreams) }));
+    const buildFailed = (await failedBuilds(view.value.glob.boardId, [view.value.glob.id])).get(view.value.glob.id);
+    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob, { effects }), handoffs, ...buildFailedField(buildFailed), ...splitField(split), ...workstreamsField(workstreams) }));
   });
 
   app.patch('/api/globs/:id', async (c) => {
@@ -1057,7 +1067,8 @@ export const createApp = (deps: AppDeps) => {
     const view = await globs.get(c.get('email'), result.value.id);
     if (!view.ok) return send(c, view);
     const effects = (await globs.recommendationEffectsOf([view.value.glob])).get(view.value.glob.id) ?? [];
-    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob, { effects }) }));
+    const buildFailed = (await failedBuilds(view.value.glob.boardId, [view.value.glob.id])).get(view.value.glob.id);
+    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob, { effects }), ...buildFailedField(buildFailed) }));
   };
 
   // ---------------------------------------------------------------------------

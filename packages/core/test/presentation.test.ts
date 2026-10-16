@@ -124,6 +124,36 @@ describe('conflict, with and without failed checks', () => {
     expect(p.blocks).toEqual([]);
   });
 
+  describe('a failed branch build', () => {
+    const buildFailed = {
+      deployId: 'dep-1',
+      environment: 'dev1',
+      sha: 'abc1234def',
+      error: 'CodeBuild failed in BUILD: COMMAND_EXECUTION_ERROR: exit 1',
+      at: ago(2 * MINUTE),
+      logUrl: 'https://console.aws.example/build/1',
+      label: 'Build log (dev1, failed, abc1234)',
+    };
+
+    it('says it in a red notice with the log link, a build failed status with the alert icon, a Retry primary and a red activity entry', () => {
+      const p = holdsRules(prOpen({ buildFailed, allowedActions: ['retry_autofix'] }));
+      expect(p.notice).toMatchObject({ kind: 'build-failed', url: buildFailed.logUrl });
+      expect(p.notice?.text).toBe('Build failed on dev1: CodeBuild failed in BUILD: COMMAND_EXECUTION_ERROR: exit 1');
+      expect(p.status).toMatchObject({ text: 'build failed', icon: 'alert', tone: 'text-red' });
+      expect(p.primary).toBe('retry_autofix');
+      // The card offers nothing extra: its actions stay Pick up, Start, Merge and Fix conflict.
+      expect(p.cardPrimary).toBeNull();
+      expect(p.activity.find((e) => e.id === 'build:dep-1')).toMatchObject({ actor: 'warn', link: buildFailed.logUrl, linkLabel: 'build log', at: buildFailed.at });
+    });
+
+    it('says nothing once the glob has no failed build to show (someone acted, or a later deploy succeeded)', () => {
+      const p = holdsRules(prOpen({ buildFailed: null }));
+      expect(p.notice).toBeNull();
+      expect(p.status?.text).not.toBe('build failed');
+      expect(p.activity.some((e) => e.id.startsWith('build:'))).toBe(false);
+    });
+  });
+
   it('keeps the conflict of a failed merge, with its files, as the one notice', () => {
     const p = holdsRules(
       view({

@@ -13,6 +13,7 @@ import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, defaultSt
 import { maskSecrets, maskedNote } from '../domain/mask-secrets.js';
 import { armView, rolloutWhen } from '../domain/rollout-stages.js';
 import type { Arm } from '../domain/rollout-stages.js';
+import { buildFailedFor } from './build-failed.js';
 import { dueSinceFor, markStepsDue } from './step-due.js';
 import { isCapabilityName } from '../domain/capabilities.js';
 import type { Capabilities } from '../domain/capabilities.js';
@@ -612,6 +613,8 @@ interface CommandOptions {
   readonly relationPlan?: (tx: Tx, glob: Glob, board: readonly Relation[], now: string) => Promise<Result<RelationWrite>>;
   /** Read the work steps holding back sign-off into `facts.rollout`, and how many real rollout steps are open into `facts.rolloutSteps`. */
   readonly rollout?: boolean;
+  /** Read whether the glob's latest build failed and nobody has acted since into `facts.buildFailed`. */
+  readonly buildFailed?: boolean;
   /** Runs before the step: checks input against the store. */
   readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<null>>;
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
@@ -661,7 +664,7 @@ export class GlobService implements AutomaticRelations {
       const sizeCheck = await tx.getSizeCheck(glob.id);
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       const rolloutSteps = openRolloutSteps(stored);
-      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, rolloutSteps, rollout: storedBlockProgress(stored, 'sign_off'), ...scriptFacts(check) };
+      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, rolloutSteps, rollout: storedBlockProgress(stored, 'sign_off'), buildFailed: (await buildFailedFor(tx, glob.boardId, [glob.id])).has(glob.id), ...scriptFacts(check) };
       const board = await tx.getBoard(glob.boardId);
       const known = (board?.environments ?? []).map((e) => e.name);
       // A step that waits for an environment the board doesn't define can never fall due: flag it so the view offers to dismiss it.
@@ -3151,7 +3154,7 @@ export class GlobService implements AutomaticRelations {
   }
 
   retryAutofix(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx), { applies: 'prepared' });
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retryAutofix(glob, ctx, facts), { applies: 'prepared', buildFailed: true });
   }
 
   /** Refused while prerequisites are unmerged, unless `anyway` (a person's choice). */
@@ -4249,7 +4252,8 @@ export class GlobService implements AutomaticRelations {
         options.rollout === true
           ? { rollout: storedBlockProgress(storedSteps, 'sign_off'), rolloutSteps: openRolloutSteps(storedSteps) }
           : {};
-      const facts: ActionFacts = { ...record, ...relations, ...rollout };
+      const failedBuild = options.buildFailed === true ? { buildFailed: (await buildFailedFor(tx, glob.boardId, [glob.id])).has(glob.id) } : {};
+      const facts: ActionFacts = { ...record, ...relations, ...rollout, ...failedBuild };
       const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);
       const stepped = step(glob, ctx, board, facts);
       if (!stepped.ok) return stepped;

@@ -58,7 +58,7 @@ export const Notice = ({
         {notice.url !== null && (
           <>
             {' ('}
-            <Link href={notice.url}>check run</Link>
+            <Link href={notice.url}>{notice.kind === 'build-failed' ? 'build log' : 'check run'}</Link>
             {')'}
           </>
         )}

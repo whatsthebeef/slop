@@ -68,7 +68,7 @@ const deployOf = (globId: string, boardId: number, id: string, environment: stri
   runningSince: '2026-10-05T12:00:00.000Z',
   startedAt: '2026-10-05T12:00:00.000Z',
   finishedAt: '2026-10-05T12:05:00.000Z',
-  providerRef: null,
+  providerRef: null, logGroup: null, logStream: null, logUrl: null,
   url: null,
   error: null,
 });

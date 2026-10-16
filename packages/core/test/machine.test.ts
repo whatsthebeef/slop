@@ -2018,6 +2018,20 @@ describe('Retry auto-fix', () => {
     expect(t.effects.map((e) => e.kind)).toEqual(['fire_routine']);
   });
 
+  it('offers Retry for a failed build nobody has acted on, and only then', () => {
+    const idle = glob({ status: 'pr_open', type: 'sub', pr: { number: 7, state: 'ready', headSha: '47f4a3d9c0' }, runs: [] });
+    expect(m.allowedActions(idle, dev)).not.toContain('retry_autofix');
+    expect(m.allowedActions(idle, dev, { buildFailed: false })).not.toContain('retry_autofix');
+    expect(m.allowedActions(idle, dev, { buildFailed: true })).toContain('retry_autofix');
+    expect(m.retryAutofix(idle, ctx(dev)).ok).toBe(false);
+    const t = value(m.retryAutofix(idle, ctx(dev), { buildFailed: true }));
+    expect(m.currentRun(t.glob)).toMatchObject({ state: 'queued' });
+    // A live run is already on it, and a conflict is the conflict's problem.
+    expect(m.allowedActions(t.glob, dev, { buildFailed: true })).not.toContain('retry_autofix');
+    const conflicted = { ...idle, conflict: { base: 'main', files: ['a.ts'], since: null, at: NOW } };
+    expect(m.allowedActions(conflicted, dev, { buildFailed: true })).not.toContain('retry_autofix');
+  });
+
   it('starts the retried run watching, since there is no PR to mark ready', () => {
     const queued = value(m.retryAutofix(stuck(), ctx(dev))).glob;
     expect(m.currentRun(value(m.runProgress(queued, m.currentRun(queued)?.id ?? '', ctx(null))).glob)?.state).toBe('watching');

@@ -4,6 +4,8 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { PgStore } from '../src/db/store.js';
+import { LogAccessDenied, LogNotReady } from '../src/build-logs.js';
+import type { BuildLogReader } from '../src/build-logs.js';
 import { deployCallbackUrl, deployExecutors } from '../src/deploy-executors.js';
 import type { Deployer, DeployJob } from '../src/deployer.js';
 import type { Env } from '../src/http/app.js';
@@ -145,7 +147,7 @@ describe('deploy results and executors', () => {
         version: inserted.version + 1,
       };
       await tx.updateBoard(withDeploy, inserted.version);
-      for (const id of ['s9f1', 's9f2']) await tx.insertGlob(glob(id, inserted.id), null);
+      for (const id of ['s9f1', 's9f2', 's9f3']) await tx.insertGlob(glob(id, inserted.id), null);
       await tx.upsertMember({ boardId: inserted.id, email: DEV, role: 'dev' });
       return withDeploy;
     });
@@ -241,6 +243,116 @@ describe('deploy results and executors', () => {
     expect((await deploys.get(id))?.error).toBe(
       'CodeBuild failed in DOWNLOAD_SOURCE: CLIENT_ERROR: Connection slop-sandbox is not available',
     );
+  });
+
+  describe('build logs', () => {
+    const LOGS = { 'group-name': '/aws/codebuild/sandbox-deploy', 'stream-name': 'abc123', 'deep-link': 'https://console.aws.example/build/abc123' };
+
+    /** A finished CodeBuild event for the latest deploy, carrying its log location. */
+    const finishWithLogs = async (id: string, status: string, error = false) =>
+      app.request('/webhooks/aws', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-slop-key': KEY },
+        body: JSON.stringify({
+          source: 'aws.codebuild',
+          'detail-type': 'CodeBuild Build State Change',
+          detail: {
+            'build-status': status,
+            'build-id': `arn:aws:codebuild:build/${id}`,
+            'additional-information': {
+              logs: LOGS,
+              ...(error ? { phases: [{ 'phase-type': 'BUILD', 'phase-status': 'FAILED', 'phase-context': ['COMMAND_EXECUTION_ERROR: exit 1'] }] } : {}),
+            },
+          },
+        }),
+      });
+
+    const reader = (tail: () => Promise<string>): BuildLogReader & { calls: string[] } => {
+      const calls: string[] = [];
+      return { calls, tail: (region, group, stream) => (calls.push(`${region} ${group} ${stream}`), tail()) };
+    };
+
+    const run = async (logs: BuildLogReader | null, id: string, attempt?: { final: boolean }) => {
+      const executors = deployExecutors(deploys, deployer, (b) => store.transaction((tx) => tx.getBoard(b)), () => '', (_t, m) => logged.push(m), logs);
+      const d = await deploys.get(id);
+      const g = d === null ? null : await store.transaction((tx) => tx.getGlob(d.globId));
+      return executors.attach_build_log?.({ kind: 'attach_build_log', deployId: id, globId: 's9f3' }, g, { globs }, attempt);
+    };
+
+    const attachment = async (label: string) => {
+      const found = (await store.transaction((tx) => tx.listArtifacts('s9f3', 'attachment'))).filter((a) => a.label === label);
+      return found.sort((a, b) => b.version - a.version)[0];
+    };
+
+    const request = async (sha: string) => {
+      await deploys.requestFromPush('s9f3', sha);
+      await drain();
+      return `dep-${String(n)}`;
+    };
+
+    it('stores the build log location and attaches only the link for a succeeded deploy', async () => {
+      const id = await request('c1c1c1c1');
+      expect((await finishWithLogs(id, 'SUCCEEDED')).status).toBe(202);
+      expect(await deploys.get(id)).toMatchObject({ logGroup: LOGS['group-name'], logStream: LOGS['stream-name'], logUrl: LOGS['deep-link'] });
+      const link = await attachment('Build log (dev1, c1c1c1c)');
+      expect(link?.content).toContain(LOGS['deep-link']);
+      expect(link?.link).toBe(LOGS['deep-link']);
+      expect(link?.content).not.toContain('Last lines');
+      // Nothing to read for a succeeded build.
+      const logs = reader(() => Promise.resolve('never'));
+      expect(await run(logs, id)).toBe('dropped');
+      expect(logs.calls).toEqual([]);
+      expect((await deploys.buildFailedOf(board.id, ['s9f3'])).size).toBe(0);
+    });
+
+    it('adds the masked last lines of a failed build, and shows it failed until someone acts', async () => {
+      const id = await request('d2d2d2d2');
+      expect((await finishWithLogs(id, 'FAILED', true)).status).toBe(202);
+      const link = await attachment('Build log (dev1, failed, d2d2d2d)');
+      expect(link?.content).toContain('CodeBuild failed in BUILD');
+      const logs = reader(() => Promise.resolve('step 1\nAWS_SECRET_ACCESS_KEY=abcdefghijklmnopqrstuvwxyz0123456789ABCD\nexit 1'));
+      expect(await run(logs, id)).toBe('done');
+      expect(logs.calls).toEqual([`us-east-1 ${LOGS['group-name']} ${LOGS['stream-name']}`]);
+      const full = await attachment('Build log (dev1, failed, d2d2d2d)');
+      expect(full?.version).toBeGreaterThan(link?.version ?? 0);
+      expect(full?.content).toContain('step 1');
+      expect(full?.content).toContain('exit 1');
+      expect(full?.content).toContain(LOGS['deep-link']);
+      expect(full?.content).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789ABCD');
+      const failed = (await deploys.buildFailedOf(board.id, ['s9f3'])).get('s9f3');
+      expect(failed).toMatchObject({ deployId: id, environment: 'dev1', logUrl: LOGS['deep-link'], label: 'Build log (dev1, failed, d2d2d2d)' });
+      expect(failed?.error).toContain('BUILD');
+      // Someone picks the glob up: the build-failed state clears.
+      await store.transaction((tx) => tx.appendEvents([{ type: 'PickedUp', globId: 's9f3', actor: DEV, at: new Date(clock + 60_000).toISOString(), data: {} }]));
+      expect((await deploys.buildFailedOf(board.id, ['s9f3'])).size).toBe(0);
+    });
+
+    it('keeps the link and says why when the log cannot be read', async () => {
+      const id = await request('e3e3e3e3');
+      expect((await finishWithLogs(id, 'FAILED', true)).status).toBe(202);
+      expect(await run(reader(() => Promise.reject(new LogAccessDenied('slop role may not read the group'))), id)).toBe('done');
+      const denied = await attachment('Build log (dev1, failed, e3e3e3e)');
+      expect(denied?.content).toContain(LOGS['deep-link']);
+      expect(denied?.content).toContain('Last lines not attached: slop role may not read the group');
+    });
+
+    it('retries while the stream is not readable, and says so on the last attempt', async () => {
+      const id = await request('f4f4f4f4');
+      expect((await finishWithLogs(id, 'TIMED_OUT')).status).toBe(202);
+      const notReady = reader(() => Promise.reject(new LogNotReady('no lines yet')));
+      await expect(run(notReady, id, { final: false })).rejects.toThrow('no lines yet');
+      expect(await run(notReady, id, { final: true })).toBe('done');
+      expect((await attachment('Build log (dev1, failed, f4f4f4f)'))?.content).toContain('Last lines not attached: no lines yet');
+    });
+
+    it('records the log location when the CodeBuild event arrives after the signed callback', async () => {
+      const id = await request('a5a5a5a5');
+      expect((await callback(id, { status: 'failed', message: 'script failed' })).status).toBe(202);
+      expect((await deploys.get(id))?.logUrl).toBeNull();
+      expect((await finishWithLogs(id, 'FAILED')).status).toBe(202);
+      expect((await deploys.get(id))?.logUrl).toBe(LOGS['deep-link']);
+      expect((await attachment('Build log (dev1, failed, a5a5a5a)'))?.content).toContain(LOGS['deep-link']);
+    });
   });
 
   it('shows deploy state and history to board members only', async () => {

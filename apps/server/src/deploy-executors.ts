@@ -1,5 +1,7 @@
-import { deploys as deployRules } from '@slop/core';
+import { deploys as deployRules, maskSecrets } from '@slop/core';
 import type { Board, Deploy, DeployService, EffectKind } from '@slop/core';
+import { LogAccessDenied } from './build-logs.js';
+import type { BuildLogReader } from './build-logs.js';
 import type { Deployer, StartedDeploy } from './deployer.js';
 import { callbackPath } from './http/deploys.js';
 import type { Executor } from './jobs/outbox.js';
@@ -32,6 +34,8 @@ export const deployExecutors = (
   boardOf: (id: number) => Promise<Board | null>,
   callbackUrl: (deploy: Deploy) => string,
   log: (task: string, message: string) => void,
+  /** Reads a failed build's log from CloudWatch Logs; without one a deploy's attachment keeps just the link. */
+  logs: BuildLogReader | null = null,
 ): Partial<Record<EffectKind, Executor>> => ({
   request_deploy: async (effect, glob) => {
     if (effect.kind !== 'request_deploy' || glob === null) return 'dropped';
@@ -65,6 +69,33 @@ export const deployExecutors = (
     // The job is running now: if recording that fails, throw so the outbox retries (the start is
     // idempotent per deploy), rather than marking a running job failed.
     const result = await deploys.started(deploy.id, started);
+    if (!result.ok) throw new Error(result.error.message);
+    return 'done';
+  },
+
+  // A finished build's log: the link is attached when the deploy finishes; a failed build also gets the end of its log.
+  attach_build_log: async (effect, _glob, _deps, attempt) => {
+    if (effect.kind !== 'attach_build_log' || logs === null) return 'dropped';
+    const deploy = await deploys.get(effect.deployId);
+    if (deploy?.state !== 'failed' || deploy.logGroup === null || deploy.logStream === null) return 'dropped';
+    const board = await boardOf(deploy.boardId);
+    if (board?.deploy?.provider !== 'codebuild') return 'dropped';
+    const keepLink = async (reason: string) => {
+      log('deploy', `${deploy.id} (${deploy.globId}): build log not attached: ${reason}`);
+      await deploys.attachBuildLog(deploy.id, { reason });
+      return 'done' as const;
+    };
+    let lines: string;
+    try {
+      lines = await logs.tail(board.deploy.region, deploy.logGroup, deploy.logStream);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (error instanceof LogAccessDenied) return keepLink(reason);
+      // CodeBuild writes the stream a moment after the build ends: retry, and say why on the last attempt.
+      if (attempt?.final === true) return keepLink(reason);
+      throw error;
+    }
+    const result = await deploys.attachBuildLog(deploy.id, { lines: maskSecrets(lines) });
     if (!result.ok) throw new Error(result.error.message);
     return 'done';
   },

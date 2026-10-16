@@ -24,7 +24,7 @@ const deploy = (globId: string, environment: string, requestedAt: string): Deplo
   runningSince: null,
   startedAt: null,
   finishedAt: null,
-  providerRef: null,
+  providerRef: null, logGroup: null, logStream: null, logUrl: null,
   url: null,
   error: null,
 });

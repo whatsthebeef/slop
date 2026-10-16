@@ -59,6 +59,7 @@ export interface CardPrimary {
 export type NoticeKind =
   | 'outcome'
   | 'conflict'
+  | 'build-failed'
   | 'checks'
   | 'failure'
   | 'investigation-failed'
@@ -204,6 +205,7 @@ const conflictNotice = (glob: PresentableGlob): Notice | null => {
 
 /** The order problems are said in: a conflict, failed checks, a failed run, a stall, a branch that was not created. */
 const NOTICE_ORDER = [
+  'build-failed',
   'checks',
   'failure',
   'investigation-failed',

@@ -44,8 +44,8 @@ export const DeploysSection = ({ glob }: { glob: GlobView }) => {
               <span className='text-muted-foreground'>
                 {d.trigger === 'push' ? 'push' : `Deploy now by ${d.requestedBy ?? 'someone'}`} · {when(d.finishedAt ?? d.startedAt ?? d.requestedAt)}
               </span>
-              {d.url !== null && (
-                <a className='underline' href={d.url} target='_blank' rel='noreferrer'>
+              {(d.logUrl ?? d.url) !== null && (
+                <a className='underline' href={d.logUrl ?? d.url ?? undefined} target='_blank' rel='noreferrer'>
                   log
                 </a>
               )}

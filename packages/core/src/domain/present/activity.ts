@@ -201,6 +201,15 @@ export const activityOf = (
     );
   }
 
+  // A failed branch build raises a problem that stays until someone acts on the glob: a red entry with the build log's link.
+  const build = glob.buildFailed;
+  if (build != null) {
+    const said = `Build failed on ${build.environment}: ${build.error}`;
+    out.push(
+      entry(`build:${build.deployId}`, 'warn', `Build failed on ${build.environment}: ${oneLine(build.error)}`, build.at, build.logUrl, 'build log', said),
+    );
+  }
+
   // A failed merge or a failed branch setup raises a problem block that goes once someone acts, so the feed keeps it. A run's
   // own failure is already the run's entry above.
   const failure = glob.failure;

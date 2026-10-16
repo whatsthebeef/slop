@@ -3,6 +3,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { DeployService } from '../src/app/deploy-service.js';
 import * as deploys from '../src/domain/deploys.js';
 import type { Deploy } from '../src/domain/deploys.js';
+import { isInlineLabel } from '../src/app/context/artifact-listing.js';
 import type { Result } from '../src/domain/errors.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import * as m from '../src/domain/machine.js';
@@ -27,10 +28,47 @@ const deploy = (patch: Partial<Deploy> = {}): Deploy => ({
   runningSince: null,
   startedAt: null,
   finishedAt: null,
-  providerRef: null,
+  providerRef: null, logGroup: null, logStream: null, logUrl: null,
   url: null,
   error: null,
   ...patch,
+});
+
+describe('build logs', () => {
+  const log = { group: '/aws/codebuild/p', stream: 's1', url: 'https://console.example/b1' };
+  const built = (patch: Partial<Deploy> = {}) => deploy({ id: 'd1', state: 'running', providerRef: 'arn:build/1', ...patch });
+
+  it('keeps the log location and asks for the log to be attached when a build finishes', () => {
+    const change = deploys.finished([built()], built(), { succeeded: false, error: 'CodeBuild failed in BUILD', log }, NOW);
+    expect(change.writes[0]).toMatchObject({ state: 'failed', logGroup: log.group, logStream: log.stream, logUrl: log.url });
+    expect(change.effects).toEqual([{ kind: 'attach_build_log', deployId: 'd1', globId: 's1t1' }]);
+    const ok = deploys.finished([built()], built(), { succeeded: true, error: null, log }, NOW);
+    expect(ok.effects.map((e) => e.kind)).toEqual(['attach_build_log']);
+  });
+
+  it('has no log to attach for a deploy that never started a build', () => {
+    const change = deploys.finished([deploy({ state: 'running' })], deploy({ state: 'running' }), { succeeded: false, error: 'never started' }, NOW);
+    expect(change.effects).toEqual([]);
+  });
+
+  it('labels the attachment by environment and short commit, marking a failed one', () => {
+    expect(deploys.buildLogLabel({ environment: 'dev1', sha: 'abc1234def', state: 'succeeded' })).toBe('Build log (dev1, abc1234)');
+    expect(deploys.buildLogLabel({ environment: 'dev1', sha: 'abc1234def', state: 'failed' })).toBe('Build log (dev1, failed, abc1234)');
+  });
+
+  it('reads only a failed deploy\'s log inline in a run\'s context', () => {
+    expect(isInlineLabel('Build log (dev1, failed, abc1234)')).toBe(true);
+    expect(isInlineLabel('Build log (dev1, abc1234)')).toBe(false);
+  });
+
+  it('shows a failed build until someone acts, and never for a deploy that did not start a build', () => {
+    const failed = built({ state: 'failed', error: 'CodeBuild failed in BUILD', finishedAt: NOW, logUrl: log.url });
+    expect(deploys.buildFailedOf(failed, false)).toMatchObject({ deployId: 'd1', environment: 'dev', error: 'CodeBuild failed in BUILD', logUrl: log.url, label: 'Build log (dev, failed, aaa)' });
+    expect(deploys.buildFailedOf(failed, true)).toBeNull();
+    expect(deploys.buildFailedOf(built({ state: 'succeeded' }), false)).toBeNull();
+    expect(deploys.buildFailedOf(deploy({ state: 'failed', providerRef: null }), false)).toBeNull();
+    expect(deploys.buildFailedOf(null, false)).toBeNull();
+  });
 });
 
 describe('deploy rules', () => {

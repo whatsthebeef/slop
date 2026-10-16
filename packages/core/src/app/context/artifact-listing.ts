@@ -17,9 +17,12 @@ export const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
 /** Label prefixes that also come inline: a failed rollout step's note, or a failed action run's output, is the next round's feedback. */
 const INLINE_LABEL_PREFIXES = ['rollout step failed', 'action run failed'];
 
+/** A failed deploy's build log (`Build log (<env>, failed, <sha>)`) is feedback too: a fix run reads why the build failed. */
+const FAILED_BUILD_LOG = /^build log \(.*, failed, /;
+
 export const isInlineLabel = (label: string): boolean => {
   const lower = label.toLowerCase();
-  return INLINE_LABELS.has(lower) || INLINE_LABEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  return INLINE_LABELS.has(lower) || INLINE_LABEL_PREFIXES.some((prefix) => lower.startsWith(prefix)) || FAILED_BUILD_LOG.test(lower);
 };
 
 /** `include` entries: a kind (`local_review`, `local_review`, ...), `attachment:<label>`, or `all`. */

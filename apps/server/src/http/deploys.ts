@@ -36,6 +36,14 @@ const codeBuildEventSchema = z.object({
     // The build's phases; a failed one carries CodeBuild's reason in its context.
     'additional-information': z
       .object({
+        // Where the build's log is: its CloudWatch group and stream, and the console's deep link.
+        logs: z
+          .object({
+            'group-name': z.string().optional(),
+            'stream-name': z.string().optional(),
+            'deep-link': z.string().optional(),
+          })
+          .optional(),
         phases: z
           .array(
             z.object({
@@ -216,9 +224,11 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     const status = event.data.detail['build-status'];
     const succeeded = CODEBUILD_FINAL[status];
     if (succeeded === undefined) return c.json({ ok: true, ignored: true }, 202);
+    const logs = event.data.detail['additional-information']?.logs;
     const result = await deploys.finishedByProviderRef(event.data.detail['build-id'], {
       succeeded,
       error: succeeded ? null : failureReason(event.data.detail, status),
+      log: logs === undefined ? null : { group: logs['group-name'] ?? null, stream: logs['stream-name'] ?? null, url: logs['deep-link'] ?? null },
     });
     if (!result.ok) {
       deps.log('webhook aws', result.error.message);

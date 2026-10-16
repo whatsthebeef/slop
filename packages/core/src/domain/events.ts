@@ -210,6 +210,8 @@ export type Effect =
   | { readonly kind: 'request_deploy'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Start a deploy with the board's deploy integration; the deploy record says what and where. */
   | { readonly kind: 'start_deploy'; readonly deployId: string; readonly globId: string }
+  /** A finished build's log: attach its link, and for a failed build its last lines from CloudWatch Logs. */
+  | { readonly kind: 'attach_build_log'; readonly deployId: string; readonly globId: string }
   /** A glob merged to the base branch: recheck the board's other open PRs for conflicts with it. */
   | { readonly kind: 'flag_conflicts'; readonly globId: string; readonly generation: number }
   /** Read whether the glob's open PR conflicts with the base branch (`since`: the glob whose merge prompted it). */

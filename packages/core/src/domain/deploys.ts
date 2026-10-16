@@ -37,6 +37,17 @@ export interface Deploy {
   /** A link to the provider's run, for the glob view. */
   readonly url: string | null;
   readonly error: string | null;
+  /** The build's CloudWatch log group and stream, and its console deep link, from the provider's finished event (null when it sent none). */
+  readonly logGroup: string | null;
+  readonly logStream: string | null;
+  readonly logUrl: string | null;
+}
+
+/** Where a finished build's log lives, as the provider's event reports it. */
+export interface DeployLog {
+  readonly group: string | null;
+  readonly stream: string | null;
+  readonly url: string | null;
 }
 
 export const isActive = (deploy: Deploy): boolean => deploy.state === 'waiting' || deploy.state === 'running';
@@ -47,6 +58,16 @@ export interface DeployChange {
   readonly events: readonly DomainEvent[];
   readonly effects: readonly Effect[];
 }
+
+/** A finished build's log goes on the glob: the link always, a failed build's last lines too (the outbox job reads them). */
+const logEffect = (deploy: Deploy): Effect => ({
+  kind: 'attach_build_log',
+  deployId: deploy.id,
+  globId: deploy.globId,
+});
+
+/** The effects a finished deploy asks for: its build log, when the provider ran a build. */
+export const logEffects = (deploy: Deploy): Effect[] => (deploy.providerRef === null ? [] : [logEffect(deploy)]);
 
 const startEffect = (deploy: Deploy): Effect => ({
   kind: 'start_deploy',
@@ -98,7 +119,7 @@ export const started = (deploy: Deploy, ref: { providerRef: string; url: string 
 export const finished = (
   active: readonly Deploy[],
   deploy: Deploy,
-  outcome: { succeeded: boolean; error: string | null },
+  outcome: { succeeded: boolean; error: string | null; log?: DeployLog | null },
   now: string,
 ): DeployChange => {
   if (deploy.state !== 'running') return { writes: [], events: [], effects: [] };
@@ -107,6 +128,9 @@ export const finished = (
     state: outcome.succeeded ? 'succeeded' : 'failed',
     finishedAt: now,
     error: outcome.succeeded ? null : (outcome.error ?? 'The deploy failed'),
+    logGroup: outcome.log?.group ?? deploy.logGroup,
+    logStream: outcome.log?.stream ?? deploy.logStream,
+    logUrl: outcome.log?.url ?? deploy.logUrl,
   };
   const waiting = active.find((d) => d.state === 'waiting' && d.id !== deploy.id);
   const next: Deploy | null = waiting === undefined ? null : { ...waiting, state: 'running', runningSince: now };
@@ -117,7 +141,60 @@ export const finished = (
         ? event('Deployed', done, now, {})
         : event('DeployFailed', done, now, { error: done.error }),
     ],
-    effects: next === null ? [] : [startEffect(next)],
+    effects: [...logEffects(done), ...(next === null ? [] : [startEffect(next)])],
+  };
+};
+
+/** The label of a deploy's build-log attachment: one per deploy, the failed ones marked. */
+export const buildLogLabel = (deploy: Pick<Deploy, 'environment' | 'sha' | 'state'>): string =>
+  `Build log (${deploy.environment}, ${deploy.state === 'failed' ? 'failed, ' : ''}${deploy.sha.slice(0, 7)})`;
+
+/** The text of a deploy's build-log attachment: the link, the result and, once read, the log's last lines or why they couldn't be. */
+export const buildLogContent = (
+  deploy: Pick<Deploy, 'environment' | 'sha' | 'state' | 'error' | 'finishedAt' | 'logUrl'>,
+  tail: { readonly lines?: string; readonly reason?: string } = {},
+): string => {
+  const status = deploy.state === 'succeeded' ? 'succeeded' : `failed${deploy.error === null ? '' : `: ${deploy.error}`}`;
+  const parts = [
+    `# Build log: ${deploy.environment} at ${deploy.sha.slice(0, 7)}`,
+    [`Build ${status}`, ...(deploy.finishedAt === null ? [] : [`Finished: ${deploy.finishedAt}`]), ...(deploy.logUrl === null ? [] : [`Log: ${deploy.logUrl}`])].join('\n'),
+  ];
+  if (tail.lines !== undefined) parts.push(`## Last lines of the log\n\n\`\`\`text\n${tail.lines}\n\`\`\``);
+  if (tail.reason !== undefined) parts.push(`Last lines not attached: ${tail.reason}`);
+  return parts.join('\n\n');
+};
+
+/** What a glob's problem line says about a failed build: the latest deploy, while nobody has acted on the glob since. */
+export interface BuildFailed {
+  readonly deployId: string;
+  readonly environment: string;
+  readonly sha: string;
+  readonly error: string;
+  readonly at: string;
+  /** CodeBuild's console link; null when the event carried none. */
+  readonly logUrl: string | null;
+  /** The glob's attachment holding the log link and last lines. */
+  readonly label: string;
+}
+
+/** The domain events that are someone acting on a glob after its build failed (a push, Retry, Pick up, Take over, a new deploy). */
+export const ACTED_EVENTS = ['CommitPushed', 'RunTriggered', 'PickedUp', 'HandedToMachine', 'DeployRequested'] as const;
+
+/**
+ * The failed build to show for a glob, or null: its latest deploy failed in a build the provider ran (not one that never
+ * started), and no one has acted on the glob since it finished. A newer deploy replaces the latest, so a later success
+ * clears it for good.
+ */
+export const buildFailedOf = (latest: Deploy | null, actedSince: boolean): BuildFailed | null => {
+  if (latest === null || latest.state !== 'failed' || latest.providerRef === null || actedSince) return null;
+  return {
+    deployId: latest.id,
+    environment: latest.environment,
+    sha: latest.sha,
+    error: latest.error ?? 'The build failed',
+    at: latest.finishedAt ?? latest.requestedAt,
+    logUrl: latest.logUrl,
+    label: buildLogLabel(latest),
   };
 };
 

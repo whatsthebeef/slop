@@ -289,7 +289,7 @@ const branchDeploy = (boardId: number, id: string, sha: string, at: string, stat
   runningSince: at,
   startedAt: at,
   finishedAt: state === 'succeeded' ? at : null,
-  providerRef: null,
+  providerRef: null, logGroup: null, logStream: null, logUrl: null,
   url: null,
   error: null,
 });
