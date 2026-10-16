@@ -9,10 +9,8 @@ import type { CardMove } from '../src/components/glob-card';
 import { actionPresentation } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import type { WorkstreamsSummary, WorkstreamState } from '@slop/core';
-import { handoverKey, statusKey } from '../src/lib/dismissals';
 import { CONFIRM_MS } from '../src/lib/chip-actions';
 import { cardMoves } from '../src/lib/card-moves';
-import { statusLine } from '../src/lib/status-line';
 import { armLabel } from '../src/lib/rollout-stages';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
@@ -305,23 +303,10 @@ describe('card rows', () => {
       ['a conflict', conflicting],
       ['a handover', () => prOpen({ handover: { why: ['Checks failed'], next: 'Fix them', detail: [] } as unknown as GlobView['handover'] })],
     ];
-    /** Every key the glob view would store for this glob's messages, built the way the glob view builds them. */
-    const keysOf = (g: GlobView): string[] => {
-      const line = statusLine(g, NOW);
-      return [...(line === null ? [] : [statusKey(g, line)]), ...(g.handover == null ? [] : [handoverKey(g.handover)])];
-    };
-
     it.each(states)('renders no dismiss control on the card for %s', (_name, make) => {
       const html = markup(make());
       expect(html).not.toMatch(/dismiss|got it/i);
       expect(withoutTips(html)).not.toMatch(/[×✕]/);
-    });
-
-    it.each(states)('shows the same short label for %s whether or not it was dismissed in the glob view', (_name, make) => {
-      const g = make();
-      const keys = keysOf(g);
-      expect(keys.length).toBeGreaterThan(0);
-      expect(markup({ ...g, dismissedKeys: keys })).toBe(markup(g));
     });
   });
 

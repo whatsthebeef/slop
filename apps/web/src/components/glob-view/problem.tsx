@@ -1,15 +1,12 @@
 import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { handoverOneLine } from '@/lib/handover';
 import { stripMarkdown } from '@/lib/markdown-text';
 import { InlineMarkdown } from '../markdown-view';
-import { handoverKey, shortLabel } from '@/lib/dismissals';
+import { shortLabel } from '@/lib/dismissals';
 import { cn } from '@/lib/utils';
 import type { StatusLine } from '@/lib/status-line';
-import type { GlobActionsState } from './actions';
 import { Block, blockActor } from './block';
 import type { GlobViewContext } from './context';
-import { GotIt, Link, LinkButton, capitalised, shownElsewhere } from './status';
+import { Link, capitalised, shownElsewhere } from './status';
 import type { NowState } from './status';
 
 const CLAMP_AT = 200;
@@ -50,16 +47,14 @@ const Clamped = ({ text }: { text: string }) => {
 export const ProblemSection = ({
   ctx: { glob },
   state,
-  actions,
 }: {
   ctx: GlobViewContext;
   state: NowState;
-  actions: GlobActionsState;
 }) => {
-  const { problem, seen, brief } = state;
+  const { problem, brief } = state;
   const conflict = glob.failure?.conflict ?? glob.conflict ?? null;
   const line =
-    problem !== null && seen !== null && problem.conflict !== true ? { problem, seen } : null;
+    problem !== null && problem.conflict !== true ? problem : null;
   const omit = shownElsewhere(glob, problem);
   const causes = (brief?.why ?? []).filter(
     (c) =>
@@ -73,7 +68,6 @@ export const ProblemSection = ({
       ? brief
       : null;
   if (line === null && shownBrief === null) return null;
-  const read = actions.briefRead && !actions.briefOpen;
   const lead = line !== null;
   const hasList = causes.length > 0 || detail.length > 0;
   return (
@@ -81,92 +75,34 @@ export const ProblemSection = ({
       tone="problem"
       actor={blockActor(glob)}
       testId="problem-block"
-      title={line === null ? "Why you're needed" : capitalised(shortLabel(line.problem))}
+      title={line === null ? "Why you're needed" : capitalised(shortLabel(line))}
       why={
-        line === null ? undefined : line.seen.dismissed ? (
-          <p
-            className="text-muted-foreground"
-            data-testid="status-line"
-            data-kind={line.problem.kind}
-            data-dismissed="true"
-          >
-            <LinkButton
-              testId="show-again"
-              disabled={actions.busy}
-              onClick={() => void actions.dismiss(line.seen.key, false)}
-            >
-              Show again
-            </LinkButton>
-          </p>
-        ) : (
-          <p
-            className={cn(line.problem.tone)}
-            data-testid="status-line"
-            data-kind={line.problem.kind}
-          >
-            {bodyOf(line.problem)}
-            {line.problem.doing !== null && (
+        line === null ? undefined : (
+          <p className={cn(line.tone)} data-testid="status-line" data-kind={line.kind}>
+            {bodyOf(line)}
+            {line.doing !== null && (
               <span className="font-normal">
                 {' — '}
-                {line.problem.sessionUrl === null ? (
-                  line.problem.doing
-                ) : (
-                  <Link href={line.problem.sessionUrl}>{line.problem.doing}</Link>
-                )}
+                {line.sessionUrl === null ? line.doing : <Link href={line.sessionUrl}>{line.doing}</Link>}
               </span>
             )}
-            {line.problem.url !== null && (
+            {line.url !== null && (
               <>
                 {' ('}
-                <Link href={line.problem.url}>check run</Link>
+                <Link href={line.url}>check run</Link>
                 {glob.pr?.headSha != null &&
-                  !line.problem.full.includes(glob.pr.headSha.slice(0, 7)) &&
+                  !line.full.includes(glob.pr.headSha.slice(0, 7)) &&
                   `, ${glob.pr.headSha.slice(0, 7)}`}
                 )
               </>
             )}
-            <GotIt disabled={actions.busy} onClick={() => void actions.dismiss(line.seen.key, true)} />
           </p>
         )
       }
-      {...(shownBrief !== null && !read ? { fix: { text: `How to fix: ${shownBrief.next}` } } : {})}
-      {...(shownBrief !== null && !read
-        ? {
-            actions: (
-              <Button
-                size="sm"
-                variant="ghost"
-                data-testid="handover-acknowledge"
-                onClick={() => {
-                  void actions.dismiss(handoverKey(shownBrief), true);
-                  actions.setBriefOpen(false);
-                }}
-              >
-                Got it
-              </Button>
-            ),
-          }
-        : {})}
+      {...(shownBrief !== null ? { fix: { text: `How to fix: ${shownBrief.next}` } } : {})}
     >
-      {shownBrief !== null && (read || hasList || lead) && (
+      {shownBrief !== null && (hasList || lead) && (
         <div className="grid gap-1" data-testid="handover-box">
-          {read ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="flex-1">
-                {lead && <strong>Why you're needed: </strong>}
-                {handoverOneLine(shownBrief)}
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                data-testid="handover-expand"
-                onClick={() => actions.setBriefOpen(true)}
-              >
-                Show
-              </Button>
-            </div>
-          ) : (
-            <>
               {lead && <strong>Why you're needed</strong>}
               {causes.length > 0 && (
                 <ul className="list-disc pl-5">
@@ -186,8 +122,6 @@ export const ProblemSection = ({
                   ))}
                 </ul>
               )}
-            </>
-          )}
         </div>
       )}
     </Block>
