@@ -1550,8 +1550,12 @@ describe('checks and merging (slice 2)', () => {
     expect(noFiles.glob.conflict?.files).toEqual([]);
     const checks = value(m.checksCompleted(merging, { sha: 'bbb', passed: false }, ctx(null))).glob;
     expect(checks.status).toBe('failed');
-    expect(checks.failure?.reason).toBe('Checks failed after updating the branch');
+    expect(checks.failure?.reason).toBe("Checks failed on the run's push");
     expect(checks.failure?.conflict).toBeUndefined();
+    const byPerson = value(m.checksCompleted({ ...merging, implementer: 'ann@x.io' }, { sha: 'bbb', passed: false }, ctx(null))).glob;
+    expect(byPerson.failure?.reason).toBe("Checks failed on ann@x.io's push");
+    const updated = value(m.checksCompleted({ ...merging, mergeUpdates: 1 }, { sha: 'bbb', passed: false }, ctx(null))).glob;
+    expect(updated.failure?.reason).toBe('Checks failed after updating the branch');
   });
 
   it('resolve conflict: a failed merge conflict returns to review and queues a conflict-fixing routine run', () => {
