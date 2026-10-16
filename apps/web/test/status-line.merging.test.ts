@@ -13,7 +13,7 @@ describe('merging status line', () => {
       const g = merging({ failure: staleRunFailure, headChecks });
       expect(statusLine(g, NOW)).toMatchObject({
         kind: 'merging',
-        full: 'merging when checks pass',
+        full: 'running checks',
       });
       expect(top(g)).toMatchObject({ kind: 'merging' });
       expect(JSON.stringify(top(g))).not.toContain('run failed');

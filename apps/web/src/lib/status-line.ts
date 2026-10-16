@@ -189,7 +189,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   if (merging) {
     const sha = glob.pr?.headSha ?? null;
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
-    // Checks in flight read the shared merging wording ("merging when checks pass", or "merging from <base>" while catching up).
+    // Checks in flight read the shared merging wording ("running checks", or "merging from <base>" while catching up).
     // In the host's merge queue it reads the queue wording instead.
     const queued = mergeQueueStatus(glob);
     const full = queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
