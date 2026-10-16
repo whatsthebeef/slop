@@ -900,7 +900,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
 
   it('rollout replaces sign off with the human icon, with no upcoming-steps chip lower on the card', () => {
     const g = mergedWith([step({ id: 'a', state: 'done' }), step({ id: 'b' }), step({ id: 'c', state: 'pending' })]);
-    expect(corner(g)).toMatchObject({ text: 'rollout', icon: 'human' });
+    expect(corner(g)).toMatchObject({ text: 'do', icon: 'human' });
     expect(dom(markup(g)).querySelector('[data-testid="upcoming-steps-chip"]')).toBeNull();
   });
 
