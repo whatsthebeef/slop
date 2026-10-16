@@ -496,7 +496,7 @@ describe('board settings: how an environment\'s deploys are known (s15t239)', ()
     const store = new MemoryStore();
     const boards = new BoardService({ store, notifier: new RecordingNotifier() });
     await store.transaction((tx) => tx.upsertUser({ email: admin, name: admin, active: true }));
-    const created = await boards.create(admin, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create(admin, { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error('create failed');
     const without = await boards.updateSettings(admin, created.value.id, created.value.version, {
       environments: [{ name: 'prod', allowBranchDeploy: false, deployKnown: 'manual' }],

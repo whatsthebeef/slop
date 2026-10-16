@@ -62,7 +62,7 @@ describe('supersedes: one glob makes another obsolete', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -170,7 +170,7 @@ describe('supersedes: one glob makes another obsolete', () => {
   it('a superseder on a board the actor cannot see answers like a missing glob; an uneditable superseded glob is refused', async () => {
     const OUTSIDER = 'outsider@example.com';
     await store.transaction((tx) => tx.upsertUser({ email: OUTSIDER, name: OUTSIDER, active: true }));
-    const other = unwrap(await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const other = unwrap(await boards.create(OUTSIDER, { name: 'other', repo: null, timeZone: 'UTC', environments: [] }));
     const foreign = unwrap(await globs.create(OUTSIDER, input({ boardId: other.id })));
     const mine = await make();
     // The glob that would be marked superseded must be editable by the actor (membership), as for every write.
@@ -198,7 +198,7 @@ describe('supersedes: one glob makes another obsolete', () => {
   });
 
   it('a supersession across boards is stored on the superseded glob, redacted from a non-member', async () => {
-    const other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, timeZone: 'UTC', environments: [] }));
     const old = unwrap(await globs.create(ADMIN, input({ boardId: other.id, title: 'Old on board two' })));
     const a = await make({ title: 'New on board one' });
     unwrap(await globs.addSupersession(ADMIN, a.id, old.id, { reason: 'r' }, 'agent'));

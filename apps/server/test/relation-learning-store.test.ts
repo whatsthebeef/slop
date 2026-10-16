@@ -64,7 +64,7 @@ describe('relation learning in Postgres', () => {
     globs = new GlobService({ store, notifier, clock, ids, routines: { hasRoutine: () => Promise.resolve(true) }, relationLearning: learning });
     const boards = new BoardService({ store, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
-    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   afterAll(async () => {

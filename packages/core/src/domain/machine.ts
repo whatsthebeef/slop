@@ -624,12 +624,8 @@ export const create = (
   if (input.category === 'action') return createAction(input, ctx, actor);
   const type = input.type;
   if (type === null) return invalidCombination(`A ${input.category} needs a type`);
-  // A sub created without an environment gets the board's default for subs, if it has one.
-  const environment =
-    input.environment ??
-    (type === 'sub'
-      ? (board.environments.find((e) => e.subDefault === true)?.name ?? null)
-      : null);
+  // No board default: GlobService.create picks one with pickEnvironment before this runs, and none stays unset.
+  const environment = input.environment ?? null;
   const envCheck = checkEnvironment(board, environment);
   if (!envCheck.ok) return envCheck;
 

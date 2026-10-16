@@ -43,7 +43,7 @@ describe('GET /api/boards/:b/events', () => {
       pingMs: 20,
     });
     await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
-    const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create('member@example.com', { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
     boardId = created.value.id;
   });

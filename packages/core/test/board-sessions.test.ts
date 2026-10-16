@@ -43,7 +43,6 @@ describe('BoardService sessions', () => {
       await boards.create(DEV, {
         name,
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

@@ -259,7 +259,7 @@ describe('board deploy settings', () => {
     const admin = 'admin@example.com';
     await store.transaction((tx) => tx.upsertUser({ email: admin, name: admin, active: true }));
     const created = unwrap(
-      await boards.create(admin, { name: 'sandbox', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(admin, { name: 'sandbox', repo: null, timeZone: 'UTC', environments: [] }),
     );
     expect(created.deploy).toBeNull();
     const incomplete = await boards.updateSettings(admin, created.id, created.version, {

@@ -22,7 +22,7 @@ describe('Escalation records in Postgres', () => {
     drop = created.drop;
     store = new PgStore(created.database.db);
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier: { publish: () => undefined } }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier: { publish: () => undefined } }).create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   afterAll(async () => {

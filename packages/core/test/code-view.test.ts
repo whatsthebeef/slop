@@ -134,8 +134,8 @@ describe('CodeViewService', () => {
     await store.transaction(async (tx) => {
       for (const email of [MEMBER, STRANGER]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(MEMBER, { name: 'demo', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    noRepoBoard = unwrap(await boards.create(MEMBER, { name: 'bare', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(MEMBER, { name: 'demo', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
+    noRepoBoard = unwrap(await boards.create(MEMBER, { name: 'bare', repo: null, timeZone: 'UTC', environments: [] })).id;
     view = new FakeView();
     usage = [];
     const recorder: CodeViewUsage = {

@@ -42,7 +42,7 @@ describe('the agent set commit job in Postgres', () => {
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     service = new AgentSetCommitService({ store, clock, notifier, knowledge, repo: { committedVersion: () => Promise.resolve(committed) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: 'Admin', active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId));
   });
 

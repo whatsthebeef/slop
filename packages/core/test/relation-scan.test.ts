@@ -85,7 +85,7 @@ describe('relation scan', () => {
       await tx.upsertUser({ email: STRANGER, name: STRANGER, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(DEV, { name: 'Board one', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(DEV, { name: 'Board one', repo: null, timeZone: 'UTC', environments: [] })).id;
     let n = 0;
     globs = new GlobService({ store, notifier, clock: { now: () => NOW }, ids: { runId: () => `r${String(++n)}` }, routines: { hasRoutine: () => Promise.resolve(true) } });
     requests = [];
@@ -236,7 +236,7 @@ describe('relation scan', () => {
 
     it("a guess about another board's glob is skipped (and remembered), a confident prerequisite is still added", async () => {
       const boards = new BoardService({ store, notifier: new RecordingNotifier() });
-      const other = unwrap(await boards.create(DEV, { name: 'Board two', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+      const other = unwrap(await boards.create(DEV, { name: 'Board two', repo: null, timeZone: 'UTC', environments: [] }));
       const me = await create('Mine');
       const guess = unwrap(await globs.create(DEV, { boardId: other.id, title: 'Guess', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       const sure = unwrap(await globs.create(DEV, { boardId: other.id, title: 'Sure', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
@@ -458,7 +458,7 @@ describe('relation scan', () => {
 
     it('a glob on a board the creator cannot read, and one that does not exist, read as history', async () => {
       const me = await create('Mine');
-      const other = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(STRANGER, { name: 'Secret board', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+      const other = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(STRANGER, { name: 'Secret board', repo: null, timeZone: 'UTC', environments: [] }));
       const hidden = unwrap(await new GlobService({ store, notifier: new RecordingNotifier(), clock: { now: () => NOW }, ids: { runId: () => 'x' }, routines: { hasRoutine: () => Promise.resolve(true) } }).create(STRANGER, { boardId: other.id, title: 'Hidden title', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       await plan(me.id, `Only after ${hidden.id} is in place. And after s9t99 too.`);
       await scan.run(me.id);
@@ -690,7 +690,7 @@ describe('relation scan', () => {
       const merged = await create('Merged, rolling out');
       setStatus(merged.id, 'reviewing');
       const boards = new BoardService({ store, notifier: new RecordingNotifier() });
-      const otherBoard = unwrap(await boards.create(DEV, { name: 'Board two', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+      const otherBoard = unwrap(await boards.create(DEV, { name: 'Board two', repo: null, timeZone: 'UTC', environments: [] })).id;
       const abroad = unwrap(await globs.create(DEV, { boardId: otherBoard, title: 'Abroad', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
       // Rollout steps still open keep the merged glob holding.
       await store.transaction((tx) => tx.saveHumanSteps([{ id: 'step-1', globId: merged.id, boardId, kind: 'rollout', title: 'Roll out', why: null, detail: null, blocks: ['dependants'], state: 'open' } as never]));

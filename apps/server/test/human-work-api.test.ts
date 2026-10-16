@@ -104,7 +104,7 @@ describe('action globs over REST and MCP (Postgres)', () => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       await tx.upsertUser({ email: ADMIN, name: 'Admin', active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     const outbox = new OutboxRunner(database.db, { globs }, {}, () => undefined);
     app = createApp({

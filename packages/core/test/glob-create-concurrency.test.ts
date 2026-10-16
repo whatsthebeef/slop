@@ -73,7 +73,7 @@ describe('GlobService.create model-bound reads', () => {
       inference,
     });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
 
     let finished = false;
     const created = globs

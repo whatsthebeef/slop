@@ -80,7 +80,7 @@ describe('the anyway actions (REST)', () => {
       onBoardCreated: () => Promise.resolve(),
     });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
-    const created = await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     boardId = unwrap(created).id;
   });
 

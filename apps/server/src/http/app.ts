@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_DEPLOY_KNOWN, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -60,27 +60,12 @@ const printable = (value: string): string => value.replace(/[^\x20-\x7e]/g, '?')
 const environmentSchema = z.object({
   name: z.string().min(1),
   allowBranchDeploy: z.boolean(),
-  // false is accepted and treated as absent.
-  subDefault: z
-    .boolean()
-    .optional()
-    .transform((v) => (v === true ? (true as const) : undefined)),
-  role: z.enum(ENVIRONMENT_ROLES).optional(),
-  // 'pipeline' is the default and is stored as absent.
-  deployKnown: z
-    .enum(ENVIRONMENT_DEPLOY_KNOWN)
-    .optional()
-    .transform((v) => (v === 'manual' ? ('manual' as const) : undefined)),
-  production: z
-    .boolean()
-    .optional()
-    .transform((v) => (v === true ? (true as const) : undefined)),
+  // Keys of the removed role, production, deployKnown and subDefault settings are dropped, not stored.
 });
 
 const createBoardSchema = z.object({
   name: z.string().min(1),
   repo: z.string().nullable().default(null),
-  baseBranch: z.string().min(1).default('main'),
   timeZone: z.string().default('UTC'),
   environments: z.array(environmentSchema).default([]),
 });
@@ -102,7 +87,6 @@ const settingsSchema = z.object({
   version: z.number().int(),
   name: z.string().min(1).optional(),
   repo: z.string().nullable().optional(),
-  baseBranch: z.string().min(1).optional(),
   timeZone: z.string().optional(),
   defaultRoutineOwner: z.string().nullable().optional(),
   environments: z.array(environmentSchema).optional(),

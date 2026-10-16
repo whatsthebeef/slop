@@ -110,20 +110,11 @@ describe('create (rows 1–4)', () => {
     expect(errorCode(m.create(createInput({ environment: 'nope' }), board, ctx()))).toBe('invalid_input');
   });
 
-  it("gives a new sub without an environment the board's default for subs, and nothing else", () => {
-    const withDefault = {
-      ...board,
-      environments: [
-        { name: 'dev', allowBranchDeploy: true },
-        { name: 'qa', allowBranchDeploy: true, subDefault: true as const },
-      ],
-    };
+  it('leaves a new glob without an environment unset: the board has no default for subs', () => {
+    const twoDev = { ...board, environments: [{ name: 'dev', allowBranchDeploy: true }, { name: 'qa', allowBranchDeploy: true }] };
     const sub = createInput({ type: 'sub' });
-    expect(value(m.create(sub, withDefault, ctx())).glob.environment).toBe('qa');
-    expect(value(m.create({ ...sub, environment: 'dev' }, withDefault, ctx())).glob.environment).toBe('dev');
-    expect(value(m.create(createInput(), withDefault, ctx())).glob.environment).toBeNull();
-    expect(value(m.create(createInput({ type: 'super', category: 'feature' }), withDefault, ctx())).glob.environment).toBeNull();
-    expect(value(m.create(sub, board, ctx())).glob.environment).toBeNull();
+    expect(value(m.create(sub, twoDev, ctx())).glob.environment).toBeNull();
+    expect(value(m.create({ ...sub, environment: 'dev' }, twoDev, ctx())).glob.environment).toBe('dev');
   });
 });
 

@@ -126,7 +126,7 @@ describe('dependency learning', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     await store.transaction((tx) =>
       tx.saveKnowledge({
@@ -204,7 +204,7 @@ describe('dependency learning', () => {
   it('a learned need that would close a cycle through a cross-board relation is not written (R1-3)', async () => {
     const g1 = await create({ type: 'same' });
     const g2 = await create({ type: 'same' });
-    const other = unwrap(await boards.create(ADMIN, { name: 'Other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const other = unwrap(await boards.create(ADMIN, { name: 'Other', repo: null, timeZone: 'UTC', environments: [] })).id;
     const x = unwrap(await globs.create(ADMIN, input({ boardId: other, type: 'same' })));
     // g2 -> x (stored on board 1) and x -> g1 (stored on board 2): learning g1 -> g2 would close g1 -> g2 -> x -> g1.
     for (const row of [relation(g2.id, x.id, { boardId }), relation(x.id, g1.id, { boardId: other })]) store.state.relations.set(row.id, row);

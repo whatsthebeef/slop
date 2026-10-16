@@ -51,7 +51,7 @@ describe('human step routes', () => {
     });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: 'outsider@example.com', name: 'Out', active: true }));
-    const created = await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'production', allowBranchDeploy: false }] });
+    const created = await boards.create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [{ name: 'production', allowBranchDeploy: false }] });
     if (!created.ok) throw new Error(created.error.message);
     id = `s${String(created.value.id)}f1`;
     const glob: Glob = {

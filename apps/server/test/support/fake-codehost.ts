@@ -41,6 +41,7 @@ export class FakeCodeHost implements CodeHost {
   reportCheck: CodeHost['reportCheck'] = () => Promise.resolve('created');
   diffSummary: CodeHost['diffSummary'] = () => Promise.resolve({ changedLines: 0, files: [] });
   commitDiffSummary: CodeHost['commitDiffSummary'] = () => Promise.resolve({ changedLines: 0, files: [] });
+  defaultBranch: CodeHost['defaultBranch'] = () => Promise.resolve('main');
   headOf: CodeHost['headOf'] = () => Promise.resolve(null);
   commitChecks: CodeHost['commitChecks'] = () => Promise.resolve({ state: 'passed', failure: null });
   cancelledChecks: CodeHost['cancelledChecks'] = () => Promise.resolve([]);

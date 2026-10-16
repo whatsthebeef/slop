@@ -54,7 +54,7 @@ describe('RolloutService', () => {
     let runs = 0;
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => `run-${++runs}` }, routines: { hasRoutine: () => Promise.resolve(true) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: 'Admin', active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     llm = new FakeLlm();
     diff = { changedLines: 10, files: ['apps/server/src/config.ts', 'apps/web/src/a.ts'], patches: { 'apps/server/src/config.ts': '+  SLOP_X: z.string().default("a"),' } };
     service = new RolloutService({
