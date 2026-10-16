@@ -1240,6 +1240,9 @@ export class PgStore implements Store {
       lockBoardSessions: async (email) => {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_sessions:${email}`}))`);
       },
+      lockMergeLine: async (boardId) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`merge_line:${String(boardId)}`}))`);
+      },
       listBoardSessions: async (email) =>
         (
           await t

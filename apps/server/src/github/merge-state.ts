@@ -19,12 +19,6 @@ export const isUnfinished = (run: { status: string; conclusion: string | null })
 export const noSuccessfulRun = (runs: readonly { status: string; conclusion: string | null }[]): boolean =>
   !runs.some((r) => r.status === 'completed' && r.conclusion === 'success');
 
-/** Whether every required check (or, with none named, at least one run) has a completed success. */
-const requiredPassed = (runs: readonly { name?: string; status: string; conclusion: string | null }[], required: readonly string[]): boolean =>
-  required.length === 0
-    ? !noSuccessfulRun(runs)
-    : required.every((name) => runs.some((r) => r.name === name && r.status === 'completed' && r.conclusion === 'success'));
-
 /**
  * Maps GitHub's `mergeable_state` to a merge state. `unstable` (a non-required check failed or is running) and
  * `blocked` (a required check is missing or failed) don't say which, so the head's check runs decide: any failed
@@ -34,8 +28,6 @@ const requiredPassed = (runs: readonly { name?: string; status: string; conclusi
 export const classifyMergeState = (
   mergeableState: string,
   runs: readonly { name?: string; status: string; conclusion: string | null }[],
-  /** Set when the base branch has a merge queue: its rule makes even a green PR `blocked`, so the required checks decide. */
-  queue?: { readonly required: readonly string[] },
 ): MergeState => {
   switch (mergeableState) {
     case 'clean':
@@ -49,7 +41,6 @@ export const classifyMergeState = (
       }
       if (runs.some(isUnfinished)) return 'pending';
       if (mergeableState === 'unstable') return 'failed';
-      if (mergeableState === 'blocked' && queue !== undefined && requiredPassed(runs, queue.required)) return 'passed';
       // A behind head is judged by its own runs, like a clean one: a run that is still going, or none yet, is not a pass.
       return mergeableState === 'behind' && !noSuccessfulRun(runs) ? 'passed' : 'pending';
     }

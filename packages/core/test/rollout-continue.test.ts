@@ -69,7 +69,7 @@ describe('requestMerge with rollout steps', () => {
     const t = unwrap(machine.requestMerge(ready(), ctx(dev), { continue: true, facts: { rolloutSteps: 1 } }));
     expect(t.glob.status).toBe('merging');
     expect(t.glob.mergeMode).toBeNull();
-    expect(effectKinds(t)).toEqual(['squash_merge']);
+    expect(effectKinds(t)).toEqual(['advance_merge_line']);
     expect(machine.squashTitle(t.glob)).toBe('s1t1: Fix login timeout');
   });
 
@@ -85,7 +85,7 @@ describe('requestMerge with rollout steps', () => {
     const t = unwrap(machine.requestMerge(ready(), ctx(dev), { continue: false, facts: { rolloutSteps: 1 } }));
     expect(t.glob.status).toBe('merging');
     expect(t.glob.mergeMode).toBeNull();
-    expect(effectKinds(t)).toEqual(['squash_merge']);
+    expect(effectKinds(t)).toEqual(['advance_merge_line']);
     const pending = machine.requestMerge(ready({ headChecks: { sha: 'abc1234', state: 'pending' } }), ctx(dev), { continue: false, facts: { rolloutSteps: 1 } });
     expect(pending.ok).toBe(false);
   });
@@ -484,6 +484,9 @@ describe('through the service', () => {
     unwrap(await globs.addHumanStep(DEV, withSteps.id, null, { title: 'Roll out' }));
     const merging = unwrap(await globs.merge(DEV, withSteps.id, (await peek(withSteps.id)).version));
     expect(merging).toMatchObject({ status: 'merging', mergeMode: null });
+    // It joins the board's line; its turn queues the merge.
+    expect(store.state.outbox.filter((e) => e.kind === 'advance_merge_line')).toHaveLength(1);
+    expect((await globs.advanceMergeLine(withSteps.boardId))?.id).toBe(withSteps.id);
     expect(store.state.outbox.filter((e) => e.kind === 'squash_merge' && e.globId === withSteps.id)).toHaveLength(1);
     const without = await readyGlob();
     expect(unwrap(await globs.merge(DEV, without.id, without.version)).status).toBe('merging');

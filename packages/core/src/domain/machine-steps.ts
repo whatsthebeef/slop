@@ -1,7 +1,7 @@
 import type { Deploy } from './deploys.js';
 import { isMergeHeld } from './relations.js';
-import { mergeQueueText } from './whose-move.js';
-import type { Board, Glob, Run } from './types.js';
+import { mergeLineText } from './whose-move.js';
+import type { Board, Glob, MergeLinePlace, Run } from './types.js';
 
 /**
  * Machine steps: what slop is doing for a glob, as one list, the machine's counterpart of human steps. Derived on every
@@ -75,6 +75,8 @@ export interface MachineFacts {
   readonly pendingUploads?: readonly { readonly key: string; readonly fileName: string; readonly since: string }[];
   /** A decision glob's learning pipeline, while it processes. */
   readonly pipeline?: { readonly state: 'queued' | 'running' | 'failed'; readonly since: string } | null;
+  /** The glob's place in its board's merge line (`mergeLinePlaces`); absent where the line is not known. */
+  readonly mergeLinePlace?: MergeLinePlace;
   /** Intake's size check hasn't answered yet. */
   readonly sizeCheck?: { readonly since: string } | null;
 }
@@ -198,8 +200,10 @@ export const machineSteps = (glob: Glob, facts: MachineFacts = {}): MachineStep[
     // Held for a `merge` relation, the merge waits for another glob, not for slop.
     steps.push(step('merge', 'queued', { id: 'machine:merge:armed', detail: 'merge when checks pass', holdsBall: checksPassed && !mergeHeld }));
   } else if (glob.mergeMode === 'continue' || glob.status === 'merging') {
-    // In the host's merge queue: GitHub holds it and its own events (or the reconcile sweep) report back, so no `startedAt`.
-    steps.push(step('merge', 'running', { id: 'machine:merge:running', ...(glob.mergeQueue != null && { detail: mergeQueueText(glob.mergeQueue.position, glob.mergeQueue.state) }) }));
+    // Merging is the machine's (a glob waiting in the merge line is slop's to merge in turn, so it is never "nobody on it"); it has
+    // no `startedAt`, so it never goes quiet. A waiting glob says its place in the line; the head just merges.
+    const waiting = glob.mergeLine != null && glob.mergeLine.head == null;
+    steps.push(step('merge', 'running', { id: 'machine:merge:running', ...(waiting && { detail: mergeLineText(facts.mergeLinePlace?.position ?? null) }) }));
   }
 
   // A merge held for a `merge` relation (armed, or a sub whose gate passed) is waiting, not stuck: the release resumes it.

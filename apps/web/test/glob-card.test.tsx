@@ -535,6 +535,48 @@ describe('card actions: one primary button, bottom left', () => {
   });
 });
 
+describe('card in the merge line', () => {
+  const fresh = new Date().toISOString();
+  const r = run({ state: 'watching', queuedAt: fresh, startedAt: fresh, lastProgressAt: fresh });
+  const inLine = (patch: Partial<GlobView> = {}) =>
+    prOpen({
+      status: 'merging',
+      list: 'doing',
+      allowedActions: ['cancel_merge', 'take_over'],
+      mergeLine: { joinedAt: fresh },
+      runs: [r],
+      currentRun: r,
+      ...patch,
+    });
+  const corner = (html: string) => dom(html).querySelector('[data-testid="card-status"]');
+  const text = (html: string) => corner(html)?.querySelector('.truncate')?.textContent;
+  const nothingBottomLeft = (html: string) => {
+    expect(html).not.toContain('data-testid="move-');
+    expect(html).not.toContain('card-actions');
+    expect(html).not.toContain('Cancel merge');
+    expect(bottomLeft(html)?.textContent ?? '').not.toMatch(/merging|merge line|next to merge|queued/i);
+  };
+
+  it('shows "N ahead in the merge line" top right, with the hourglass, and nothing bottom left', () => {
+    const html = markup(inLine({ mergeLinePlace: { position: 4, ahead: ['s1t1', 's1t2', 's1t3'] } }));
+    expect(text(html)).toBe('3 ahead in the merge line');
+    expect(corner(html)?.querySelector('.sr-only')?.textContent).toContain('s1t2');
+    nothingBottomLeft(html);
+  });
+
+  it('shows "next to merge" for the second glob', () => {
+    const html = markup(inLine({ mergeLinePlace: { position: 2, ahead: ['s1t1'] } }));
+    expect(text(html)).toBe('next to merge');
+    nothingBottomLeft(html);
+  });
+
+  it('shows "merging" for the head, with nothing bottom left', () => {
+    const html = markup(inLine({ mergeLine: { joinedAt: fresh, head: { since: fresh } }, mergeLinePlace: { position: 1, ahead: [] } }));
+    expect(text(html)).toBe('merging');
+    nothingBottomLeft(html);
+  });
+});
+
 describe('card in progress: after a click', () => {
   const statusText = (root: HTMLElement) => root.querySelector('[data-testid="card-status"] .truncate')?.textContent;
 

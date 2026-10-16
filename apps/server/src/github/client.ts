@@ -3,8 +3,8 @@ import { z } from 'zod';
 import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { actorOf, classifyGitHubFailure, fixOf, machine, modeOf } from '@slop/core';
 import type { HealthSink } from '@slop/core';
-import { QueueDetectionError, REVIEW_CHECK } from '../codehost.js';
-import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, MergeQueueEntry, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import { REVIEW_CHECK } from '../codehost.js';
+import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -19,8 +19,6 @@ const commitStats = z.object({
 
 /** How long the App's own settings are reused: readiness is read on every settings view. */
 const APP_SETTINGS_TTL_MS = 5 * 60_000;
-/** How long a board's "has a merge queue" answer is reused: turning the queue on is picked up within this. */
-const QUEUE_RULES_TTL_MS = 5 * 60_000;
 /** How much of a glob's plan.md a PR body carries. */
 const PR_BODY_PLAN_CHARS = 4000;
 
@@ -37,22 +35,6 @@ const isStatus = (error: unknown, ...codes: number[]) => {
   return code !== null && codes.includes(code);
 };
 
-/** The `type`s of a GraphQL failure's errors (Octokit's `GraphqlResponseError.errors`); empty for any other error. */
-const graphqlErrorTypes = (error: unknown): string[] => {
-  const parsed = z.object({ errors: z.array(z.object({ type: z.string().optional() })) }).safeParse(error);
-  return parsed.success ? parsed.data.errors.flatMap((e) => (e.type === undefined ? [] : [e.type])) : [];
-};
-
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-/** What a merge queue entry looks like in GraphQL (`MergeQueueEntryState`: LOCKED is the group being merged). */
-const queueEntry = z.object({ id: z.string().optional(), position: z.number().int().nullable().optional(), state: z.string().optional() });
-
-const toEntry = (entry: z.infer<typeof queueEntry>): MergeQueueEntry => ({
-  position: entry.position ?? null,
-  state: entry.state === 'LOCKED' ? 'merging' : 'queued',
-});
-
 /**
  * slop's GitHub operations, acting as the GitHub App (`slop[bot]`) with installation tokens.
  * Every glob's branch is its ID, created by slop with an empty first commit so a draft PR can
@@ -63,7 +45,6 @@ export class GitHub implements CodeHost {
   private app: App | null = null;
   private appId: number | null = null;
   private appSettingsCache: { at: number; value: AppSettings } | null = null;
-  private readonly queueRulesCache = new Map<string, { at: number; value: { enabled: boolean; required: readonly string[] } }>();
 
   constructor(
     private readonly credentials: AppCredentialsStore,
@@ -157,36 +138,10 @@ export class GitHub implements CodeHost {
           integrationBypasses = sets.every((set) => set?.bypass_actors?.some((a) => a.actor_type === 'Integration' && a.actor_id === appId) ?? false);
         }
       }
-      return { requiredChecks, integrationBypasses, mergeQueue: data.some((rule) => rule.type === 'merge_queue') };
+      return { requiredChecks, integrationBypasses };
     } catch (error) {
       if (isStatus(error, 403, 404)) return null;
       throw error;
-    }
-  }
-
-  /**
-   * Whether the repo's base branch has a merge queue rule, and the checks its rules require, from
-   * `GET /rules/branches/{branch}`, reused for a few minutes. Throws when the rules can't be read: with the App on the
-   * ruleset's bypass list a direct merge would skip the queue, so "unknown" must never read as "no queue".
-   */
-  private async queueRules(repo: Repo): Promise<{ enabled: boolean; required: readonly string[] }> {
-    const key = `${repo.owner}/${repo.name}@${repo.base}`;
-    const cached = this.queueRulesCache.get(key);
-    if (cached !== undefined && Date.now() - cached.at < QUEUE_RULES_TTL_MS) return cached.value;
-    const gh = await this.octokit(repo);
-    try {
-      const { data } = await gh.request('GET /repos/{owner}/{repo}/rules/branches/{branch}', { owner: repo.owner, repo: repo.name, branch: repo.base });
-      const value = {
-        enabled: data.some((rule) => rule.type === 'merge_queue'),
-        required: data.flatMap((rule) => (rule.type === 'required_status_checks' ? (rule.parameters?.required_status_checks.map((c) => c.context) ?? []) : [])),
-      };
-      this.queueRulesCache.set(key, { at: Date.now(), value });
-      return value;
-    } catch (error) {
-      const code = status(error);
-      throw new QueueDetectionError(
-        `Could not read the merge rules of ${repo.base} to tell whether it has a merge queue${code === null ? '' : ` (HTTP ${String(code)})`}: ${errorText(error)}`,
-      );
     }
   }
 
@@ -361,10 +316,7 @@ export class GitHub implements CodeHost {
       });
       runs = checks.data.check_runs.filter((run) => run.name !== REVIEW_CHECK);
     }
-    // A queue rule makes a green PR `blocked` (it can only merge through the queue), so classify it by its required checks.
-    // Best effort here: `squashMerge` is the gate and reads the rules strictly.
-    const queue = await this.queueRules(repo).then((rules) => (rules.enabled ? { required: rules.required } : undefined), () => undefined);
-    let state = classifyMergeState(data.mergeable_state, runs, queue);
+    let state = classifyMergeState(data.mergeable_state, runs);
     // A head with no check runs is pending: the runs of a fresh push appear a minute later and their webhooks follow. A repo
     // that runs no checks at all (the base branch's head has none either) would wait forever, so that one passes.
     if (state === 'pending' && runs.length === 0 && ['clean', 'has_hooks'].includes(data.mergeable_state)) {
@@ -495,11 +447,6 @@ export class GitHub implements CodeHost {
     if (state === 'unknown') return { outcome: 'undecided' };
     // The checks were read for another head than the one slop was asked to merge: take the real head first.
     if (head !== sha) return { outcome: 'refused', reason: 'Head branch was modified' };
-    // A merge queue tests the PR on top of the base and the PRs ahead of it: enqueue (never merge or update the branch here).
-    if ((await this.queueRules(repo)).enabled) {
-      if (state !== 'passed') return { outcome: 'checks_not_green', state };
-      return this.enqueue(repo, prNumber, sha);
-    }
     if (behind) {
       try {
         await gh.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', { ...r, expected_head_sha: sha });
@@ -526,67 +473,6 @@ export class GitHub implements CodeHost {
       if (isStatus(error, 405, 409)) {
         return { outcome: 'refused', reason: error instanceof Error ? error.message : 'GitHub refused the merge' };
       }
-      throw error;
-    }
-  }
-
-  /** Enqueues the PR (GraphQL `enqueuePullRequest`) at exactly `sha`; an entry already there reads as queued. */
-  private async enqueue(repo: Repo, prNumber: number, sha: string): Promise<MergeResult> {
-    const gh = await this.octokit(repo);
-    const { data } = await gh.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { owner: repo.owner, repo: repo.name, pull_number: prNumber });
-    try {
-      const result = z
-        .object({ enqueuePullRequest: z.object({ mergeQueueEntry: queueEntry.nullable() }).nullable() })
-        .parse(
-          await gh.graphql<unknown>(
-            'mutation($id: ID!, $oid: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $oid }) { mergeQueueEntry { position state } } }',
-            { id: data.node_id, oid: sha },
-          ),
-        );
-      const entry = result.enqueuePullRequest?.mergeQueueEntry;
-      return { outcome: 'queued', ...(entry == null ? { position: null, state: 'queued' as const } : toEntry(entry)) };
-    } catch (error) {
-      const message = errorText(error);
-      if (/already.*(in|added to).*queue|already.*queued/i.test(message)) {
-        const entry = await this.mergeQueueEntry(repo, prNumber);
-        return { outcome: 'queued', ...(entry ?? { position: null, state: 'queued' as const }) };
-      }
-      if (/head.*(sha|oid)|expected.*(head|oid)/i.test(message)) return { outcome: 'refused', reason: 'Head branch was modified' };
-      if (graphqlErrorTypes(error).includes('FORBIDDEN') || /resource not accessible by integration/i.test(message)) {
-        return { outcome: 'refused', reason: "slop's GitHub App is not allowed to use the merge queue: grant it the Merge queues repository permission (read and write)" };
-      }
-      throw error;
-    }
-  }
-
-  async mergeQueueEntry(repo: Repo, prNumber: number): Promise<MergeQueueEntry | null> {
-    const entry = await this.readQueueEntry(repo, prNumber);
-    return entry === null ? null : toEntry(entry);
-  }
-
-  private async readQueueEntry(repo: Repo, prNumber: number): Promise<z.infer<typeof queueEntry> | null> {
-    const gh = await this.octokit(repo);
-    const result = z
-      .object({ repository: z.object({ pullRequest: z.object({ mergeQueueEntry: queueEntry.nullable() }).nullable() }).nullable() })
-      .parse(
-        await gh.graphql<unknown>(
-          'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { mergeQueueEntry { id position state } } } }',
-          { owner: repo.owner, name: repo.name, number: prNumber },
-        ),
-      );
-    return result.repository?.pullRequest?.mergeQueueEntry ?? null;
-  }
-
-  async dequeue(repo: Repo, prNumber: number): Promise<'dequeued' | 'not_queued'> {
-    const entry = await this.readQueueEntry(repo, prNumber);
-    if (entry?.id === undefined) return 'not_queued';
-    const gh = await this.octokit(repo);
-    try {
-      await gh.graphql<unknown>('mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }', { id: entry.id });
-      return 'dequeued';
-    } catch (error) {
-      // Left the queue between the read and the mutation (merged, or removed by someone else).
-      if (/not.*(in|added to).*queue|no.*queue entry/i.test(errorText(error))) return 'not_queued';
       throw error;
     }
   }

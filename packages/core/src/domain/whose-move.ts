@@ -124,13 +124,18 @@ export const CHECKS_RUNNING_TEXT = 'running checks';
 export const mergingFromBaseText = (base: string): string => `merging from ${base}`;
 
 /**
- * The one wording for a PR in the code host's merge queue: "in merge queue · N ahead" (N is the PRs ahead of it), plain
- * "in merge queue" when the position is unknown, and "merging" once its group is being merged.
+ * The one wording for a glob in its board's merge line, by place (1 is the head): "merging" for the head (the status line says
+ * "running checks" instead while its checks run), "next to merge" for the second and "N ahead in the merge line" from the third
+ * (N is the globs ahead of it, the head included, minus the one that is next). The place is the line's, derived on the server;
+ * without it (an older API, a card that has no line) a waiting glob reads plain "in the merge line".
  */
-export const MERGE_QUEUE_TEXT = 'in merge queue';
-export const MERGE_QUEUE_TIP = 'GitHub tests it with the PRs ahead of it and merges it in order.';
-export const mergeQueueText = (position: number | null, state: 'queued' | 'merging'): string =>
-  state === 'merging' ? 'merging' : position === null ? MERGE_QUEUE_TEXT : `${MERGE_QUEUE_TEXT} · ${String(Math.max(0, position - 1))} ahead`;
+export const MERGE_LINE_TEXT = 'in the merge line';
+export const NEXT_TO_MERGE_TEXT = 'next to merge';
+export const mergeLineText = (position: number | null): string =>
+  position === null ? MERGE_LINE_TEXT : position <= 1 ? 'merging' : position === 2 ? NEXT_TO_MERGE_TEXT : `${String(position - 1)} ahead in the merge line`;
+/** The tooltip's explanation, with the IDs ahead when they are known. */
+export const mergeLineTip = (ahead: readonly string[]): string =>
+  `Slop merges one glob at a time, in the order they were ready, and only the one at the head updates from main and runs checks.${ahead.length === 0 ? '' : ` Ahead of it: ${ahead.join(', ')}.`}`;
 
 /** The `human` move's reasons when a person holds a glob: picked up (no machine run), or pairing on a super. */
 export const PICKED_UP_REASON = 'Picked up';

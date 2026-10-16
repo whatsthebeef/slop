@@ -1,16 +1,13 @@
 # Slop checks for slop's own repo (from catalog/scripts/checks.yml): lint, type check and tests on
 # the head of every ready PR (sub, same or super), including the head after slop updates the
-# branch from main, and on every merge queue entry (`merge_group`). A PR runs only the workspaces it affects, in
-# parallel jobs; pushes to main and merge queue entries run everything. The final `checks` job is the required check:
+# branch from main (the head of the merge line). A PR runs only the workspaces it affects, in
+# parallel jobs; pushes to main run everything. The final `checks` job is the required check:
 # make it required on main so nothing merges without it.
 name: checks
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # Merge queue entries: tested on the base plus the PRs ahead of it. The queue needs a `checks` result on each.
-  merge_group:
-    types: [checks_requested]
   # After every merge: a sub merges as soon as it's ready, so its checks run here, and a red result reverts it.
   push:
     branches: [main]
@@ -19,15 +16,15 @@ permissions:
   contents: read
   packages: read
 
-# One run per PR: a newer push cancels the one in progress. A merge_group run has no pull_request object, so the
-# `if:` below passes (it only skips draft PRs) and the group falls back to github.sha, one run per queue entry.
+# One run per PR: a newer push cancels the one in progress. A push to main has no pull_request object, so it
+# falls back to github.sha, one run per commit.
 concurrency:
   group: checks-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   # Decides what to run. A PR runs only the workspaces it changes plus their dependents (`pnpm --filter "...[origin/<base>]"`);
-  # a push to the base branch, a merge_group entry, or a change to a root file (package.json, the lockfile, base configs, this
+  # a push to the base branch, or a change to a root file (package.json, the lockfile, base configs, this
   # workflow) runs everything. A change outside the workspaces runs the tests that read
   # repo files (core, server, cli, infra; only core for .claude/, catalog/agents/, docs/ and *.md), plus the catalog shell tests when it is under catalog/.
   changes:

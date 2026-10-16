@@ -520,6 +520,8 @@ export const GlobActions = ({
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || lead !== null;
   const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
+  // A glob waiting in the merge line has no main button (its card shows only the status), but Cancel merge must stay reachable: a lone ▾.
+  const lineMenu = !hasMain && blocking === null && glob.status === 'merging' && moreActions.includes('cancel_merge');
   const menuItems = (
     <>
       {moves.menu.map((move) => (
@@ -564,16 +566,18 @@ export const GlobActions = ({
       ))}
     </>
   );
-  const menu = hasMenu ? (
+  const menu = hasMenu || lineMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          variant={state.variant}
+          variant={lineMenu ? 'outline' : state.variant}
           className={
-            state.variant === 'outline'
-              ? 'rounded-l-none -ml-px px-1.5'
-              : 'rounded-l-none border-l-primary-foreground/40 px-1.5'
+            lineMenu
+              ? 'px-1.5'
+              : state.variant === 'outline'
+                ? 'rounded-l-none -ml-px px-1.5'
+                : 'rounded-l-none border-l-primary-foreground/40 px-1.5'
           }
           disabled={busy}
           aria-label="More actions"
@@ -592,7 +596,7 @@ export const GlobActions = ({
   const notice = state.presentation.notice;
   return (
     <>
-      {(hasMain || escapes.length > 0 || info !== null || notice !== null) && (
+      {(hasMain || lineMenu || escapes.length > 0 || info !== null || notice !== null) && (
         <div className="grid gap-1">
           <Notice ctx={ctx} notice={notice} />
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
@@ -667,6 +671,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
+            {lineMenu && menu}
             {info}
           </div>
           <FinishAction ctx={ctx} state={state} />

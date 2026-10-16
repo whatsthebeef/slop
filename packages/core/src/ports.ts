@@ -185,6 +185,11 @@ export interface Tx {
 
   /** Serialises a person's board-session writes until the transaction ends (a no-op where transactions don't overlap). */
   lockBoardSessions(email: string): Promise<void>;
+  /**
+   * Serialises a board's merge line until the transaction ends (Postgres: an advisory lock; a no-op where transactions don't
+   * overlap). `advanceMergeLine` takes it before reading the line, so two advancers never promote two heads.
+   */
+  lockMergeLine(boardId: number): Promise<void>;
   /** A person's sessions on the boards they belong to (a board they never opened or added has none). */
   listBoardSessions(email: string): Promise<BoardSession[]>;
   /** Records when the person last opened the board; leaves its place in the bar alone. Ignored for a non-member. */

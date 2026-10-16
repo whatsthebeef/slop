@@ -429,7 +429,9 @@ export const cornerStatus = (
         : status.kind === 'rollout'
           ? 'human'
           : status.kind === 'merging'
-            ? 'machine'
+            ? status.waiting === true
+              ? 'hourglass'
+              : 'machine'
             : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [
       status.tip,

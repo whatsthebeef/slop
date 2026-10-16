@@ -6,7 +6,7 @@ import { codeHostExecutors } from '../src/codehost-executors.js';
 import * as schema from '../src/db/schema.js';
 import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
-import type { MergeQueueEntry, PrSnapshot } from '../src/codehost.js';
+import type { PrSnapshot } from '../src/codehost.js';
 import { ReconcileWatch } from '../src/jobs/reconcile.js';
 import { FileRoutines } from '../src/routines.js';
 import { createTestDatabase } from './support/database.js';
@@ -22,8 +22,6 @@ const unwrap = <T>(result: Result<T>): T => {
 class FakeHost extends FakeCodeHost {
   pr: PrSnapshot = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
   mergeStateNow: 'passed' | 'pending' | 'failed' | 'conflict' = 'passed';
-  entry: MergeQueueEntry | null = null;
-  override mergeQueueEntry = () => Promise.resolve(this.entry);
   override prState = () => Promise.resolve(this.pr);
   override mergeState = () => Promise.resolve({ sha: this.pr.headSha, state: this.mergeStateNow });
   override conflictFiles = () => Promise.resolve(['a.ts']);
@@ -185,48 +183,12 @@ describe('reconcile: catching up on webhooks slop missed', () => {
     expect(await current(readied)).toMatchObject({ status: 'pr_open', pr: { state: 'ready' } });
   });
 
-  describe('a queued merge', () => {
-    const queuedGlob = async (title: string, sinceMinutesAgo: number) => {
-      const id = await newOpenGlob(title, { state: 'ready', headSha: 'h1' }, 'merging');
-      await store.transaction(async (tx) => {
-        const g = await tx.getGlob(id);
-        if (g === null) throw new Error('missing');
-        const since = new Date(nowMs - sinceMinutesAgo * 60_000).toISOString();
-        await tx.updateGlob({ ...g, headChecks: { sha: 'h1', state: 'passed' }, mergeQueue: { since, sha: 'h1', position: 4, state: 'queued' }, version: g.version + 1 }, g.version);
-      });
-      return id;
-    };
-    const readQueue = (id: string) => run(id, 'read_merge_queue');
-
-    it('is due once quiet for over 5 minutes, and the sweep re-reads its queue entry for a refreshed position', async () => {
-      host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
-      host.entry = { position: 2, state: 'queued' };
-      const id = await queuedGlob('Queued, quiet', 6);
-      nowMs += 6 * 60_000;
-      const watch = new ReconcileWatch(store, globs, () => undefined, () => nowMs);
-      expect(await watch.sweep(false)).toContain(id);
-      await run(id, 'reconcile_pr');
-      expect(await pending(id, 'read_merge_queue')).toHaveLength(1);
-      await readQueue(id);
-      expect((await current(id)).mergeQueue).toMatchObject({ position: 2, state: 'queued' });
-    });
-
-    it('a missed dequeue (the entry is gone, the PR open) fails the glob after the grace window', async () => {
-      host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
-      host.entry = null;
-      const id = await queuedGlob('Queued, dequeue missed', 10);
-      await reconcile(id);
-      await readQueue(id);
-      expect(await current(id)).toMatchObject({ status: 'failed', mergeQueue: null, failure: { kind: 'merge', reason: 'Left the merge queue without merging' } });
-    });
-
-    it('a missed merge by the queue is applied as the webhook would', async () => {
-      host.pr = { state: 'merged', draft: false, headSha: 'h1', mergeSha: 'm5' };
-      const id = await queuedGlob('Queued, merge missed', 10);
-      await reconcile(id);
-      expect((await current(id)).status).toBe('reviewing');
-      host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
-    });
+  it('a missed merge of a glob in the merge line is applied as the webhook would', async () => {
+    host.pr = { state: 'merged', draft: false, headSha: 'h1', mergeSha: 'm5' };
+    const id = await newOpenGlob('Merging, merge missed', { state: 'ready', headSha: 'h1' }, 'merging');
+    await reconcile(id);
+    expect((await current(id)).status).toBe('reviewing');
+    host.pr = { state: 'open', draft: false, headSha: 'h1', mergeSha: null };
   });
 
   it('the periodic sweep only touches stale globs, and start touches every open one', async () => {
