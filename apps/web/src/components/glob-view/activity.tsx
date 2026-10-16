@@ -73,11 +73,11 @@ export const ActivityLog = ({
   actions: GlobActionsState;
 }) => {
   const { board, glob } = ctx;
-  const { move, turn, steps, seen, turnDismissed } = state;
+  const { move, turn, steps, problem, turnDismissed } = state;
   const [all, setAll] = useState(false);
   useEffect(() => {
     setAll(false);
-  }, [glob.id, seen?.key]);
+  }, [glob.id, problem?.kind]);
   const feed = activityOf(glob, board.repo, steps, actions.viewer?.email);
   const shown = all ? feed : feed.slice(0, ACTIVITY_SHOWN);
   const now = Date.now();
