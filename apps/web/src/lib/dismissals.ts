@@ -1,7 +1,7 @@
 import type { Handover } from '@slop/core';
 import type { GlobView } from './api';
 import { handoverSignature } from './handover';
-import type { StatusLine } from './status-line';
+import { isProblemLine, type StatusLine } from './status-line';
 
 /** A short, stable fingerprint of a message's text, for the kinds whose situation has no field of its own to key on. */
 export const fingerprint = (text: string): string => {
@@ -65,10 +65,10 @@ const SHORT: Partial<Record<StatusLine['kind'], string>> = {
 export const shortLabel = (line: StatusLine): string => (line.conflict === true ? 'merge conflict' : (SHORT[line.kind] ?? line.text));
 
 /**
- * Whether a status line can be dismissed. Your turn is the main action's chip and a rollout is open work, so neither
- * collapses: dismissing hides the explanation, never what to do.
+ * Whether a status line can be dismissed: only a real problem can. Your turn is the main action's chip, and the normal
+ * states (merging, rollout steps due, ...) have no block to dismiss.
  */
-export const dismissible = (line: StatusLine): boolean => line.kind !== 'ready' && line.kind !== 'rollout';
+export const dismissible = (line: StatusLine): boolean => isProblemLine(line);
 
 /** The status line as the viewer should see it: dismissed, it keeps the short label, muted, and drops the long text. */
 export const collapsed = (glob: GlobView, line: StatusLine): { readonly key: string; readonly dismissed: boolean; readonly label: string } => {

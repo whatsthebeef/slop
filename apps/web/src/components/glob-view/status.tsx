@@ -5,7 +5,7 @@ import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
 import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
 import { cornerStatus, waitingOnOwn } from '@/lib/card-rows';
-import { viewStatusLine } from '@/lib/status-line';
+import { isProblemLine, viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
 import type { GlobActionsState } from './actions';
@@ -77,9 +77,13 @@ export const useNowState = (glob: GlobView, decision: boolean, disabled: readonl
   const turn = move?.holder === 'you' ? move : null;
   const yours = turn !== null;
   // The handover brief is for whoever holds the ball: the viewer's turn, or a stall handed to them.
-  const brief = actions.brief !== null && (yours || move?.holder === 'stalled') ? actions.brief : null;
-  // A status line that only says "Your turn" repeats the headline.
-  const problem = status !== null && status.kind !== 'ready' ? status : null;
+  // Not when its only cause is rollout steps due, which the due steps block already shows.
+  const brief =
+    actions.brief !== null && (yours || move?.holder === 'stalled') && status?.kind !== 'rollout'
+      ? actions.brief
+      : null;
+  // Only a real problem gets the red block: a normal state (merging, rollout steps due, base red) stays in the corner status.
+  const problem = status !== null && isProblemLine(status) ? status : null;
   // Dismissed (per person), the long text collapses to the short label; the main action is untouched.
   const seen = problem === null ? null : collapsed(glob, problem);
   const turnDismissed = turn !== null && turn.reason !== '' && isDismissed(glob, turnKey(turn));
