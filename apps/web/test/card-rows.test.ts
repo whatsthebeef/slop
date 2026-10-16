@@ -138,11 +138,11 @@ describe('cornerStatus', () => {
     expect(both?.tip).toContain('touches billing');
   });
 
-  it('is the person icon and just the action for your turn, running Merge from the corner (with its confirm)', () => {
+  it('is the person icon and just the action for your turn, never an action chip: the click opens the glob view', () => {
     const status = at(prOpen({ allowedActions: ['merge'] }));
     expect(status).toMatchObject({ kind: 'ready', icon: 'human' });
     expect(status?.text).not.toMatch(/your turn/i);
-    expect(status?.click).toEqual({ kind: 'act', action: 'merge', confirm: true });
+    expect(status?.click?.kind).toBe('section');
   });
 
   it('opens the glob view for a ready step that needs input, or when something blocks', () => {

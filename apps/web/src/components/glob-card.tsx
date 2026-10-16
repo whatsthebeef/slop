@@ -17,7 +17,7 @@ import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
 import { mainAction } from '@/lib/main-action';
 import { workingLabel } from '@/lib/card-pending';
-import { clickTip, prUrl, tipLines, turnStep } from '@/lib/chip-actions';
+import { prUrl } from '@/lib/chip-actions';
 import type { ChipClick } from '@/lib/chip-actions';
 import { useConfirmClick } from '@/lib/use-confirm-click';
 import { cardTargets } from '@/lib/card-targets';
@@ -177,54 +177,14 @@ export const GroupChip = ({
  */
 const CornerStatusView = ({
   status,
-  pending,
   onAct,
   onOpenSection,
 }: {
   status: CornerStatus;
-  pending?: Action;
   onAct?: (action: Action) => void;
   onOpenSection: (target: GlobTarget) => void;
 }) => {
   const click = status.click;
-  const confirm = useConfirmClick();
-  const confirming = confirm.confirming;
-  // Merge and Done are run from here: a chip button, with Merge asking for a second click (Esc, blur or the timeout reverts it).
-  if (status.kind === 'ready' && click?.kind === 'act') {
-    const busy = pending !== undefined;
-    const label = busy ? workingLabel(pending) : confirming ? 'confirm merge' : status.text;
-    const tip = tipLines([...status.tip.split('\n').filter((line) => line !== clickTip(click)), clickTip(click, confirming)]);
-    return (
-      <span className='inline-flex min-w-0 shrink justify-end' data-testid='card-status' data-kind={status.kind} data-icon={status.icon}>
-        <Tip text={tip}>
-          <button
-            type='button'
-            className={cn(
-              'inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-current px-1.5 text-right font-mono text-[11px] hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60',
-              confirming ? 'text-required' : status.tone,
-            )}
-            disabled={busy}
-            data-testid='position'
-            data-kind={status.kind}
-            data-confirming={confirming ? 'true' : undefined}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (busy) return;
-              if (!confirm.click(turnStep(click, confirming) === 'confirm')) return;
-              (onAct ?? (() => undefined))(click.action);
-            }}
-            onKeyDown={confirm.onKeyDown}
-            onBlur={confirm.cancel}
-          >
-            <span className='truncate' data-testid='status-text'>
-              {label}
-            </span>
-            {busy ? <Loader2 className='h-3 w-3 shrink-0 animate-spin' aria-hidden /> : <StatusIconView icon={status.icon} />}
-          </button>
-        </Tip>
-      </span>
-    );
-  }
   const open = click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
   const needsHuman = status.kind === 'needs-human';
   return (
@@ -642,7 +602,7 @@ export const GlobCard = ({
           )}
           {tag === undefined && status !== null && (
             <>
-              <CornerStatusView status={status} pending={pending} onAct={onAct} onOpenSection={onOpenSection} />
+              <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />
               <DotSeparator testId='card-corner-separator' />
             </>
           )}

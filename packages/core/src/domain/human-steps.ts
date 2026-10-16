@@ -230,8 +230,8 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
     const rollout = glob.type === 'same' && (facts.rolloutSteps ?? 0) > 0;
     steps.push(
       rollout
-        ? derived('merge', 'Merge and continue', 'anyone', {
-            detail: 'Has rollout steps: Merge and continue merges it, keeps it open and puts the steps up as a checklist to run from master.',
+        ? derived('merge', 'Merge', 'anyone', {
+            detail: 'Has rollout steps: Merge merges it, keeps it open and puts the steps up as a checklist to run from master.',
             blocks: ['reviewing'],
           })
         : derived('merge', 'Merge', 'anyone', {

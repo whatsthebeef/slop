@@ -31,19 +31,16 @@ describe('tooltip sentences', () => {
 });
 
 describe('Your turn click', () => {
-  it('asks for a confirming click before Merge runs, then runs it once', () => {
-    const click = yourTurnClick(turn('merge'), { allowedActions: ['merge'] });
-    expect(click).toEqual({ kind: 'act', action: 'merge', confirm: true });
-    // A same with rollout steps is offered Merge and continue instead of Merge.
-    expect(yourTurnClick(turn('merge'), { allowedActions: ['merge_continue'] })).toEqual({ kind: 'act', action: 'merge_continue', confirm: true });
-    expect(turnStep(click, false)).toBe('confirm');
-    expect(turnStep(click, true)).toBe('run');
+  it('never runs Merge or Done from the corner: it opens the glob view, where the buttons are', () => {
+    const section = { kind: 'section', target: { section: 'actions' } };
+    expect(yourTurnClick(turn('merge'), { allowedActions: ['merge'] })).toEqual(section);
+    expect(yourTurnClick(turn('done'), { allowedActions: ['mark_ready'] })).toEqual(section);
   });
 
-  it('runs Done at once', () => {
-    const click = yourTurnClick(turn('done'), { allowedActions: ['mark_ready'] });
-    expect(click).toEqual({ kind: 'act', action: 'mark_ready', confirm: false });
-    expect(turnStep(click, false)).toBe('run');
+  it('still asks a confirming click of an act click that says so', () => {
+    const click = { kind: 'act', action: 'merge', confirm: true } as const;
+    expect(turnStep(click, false)).toBe('confirm');
+    expect(turnStep(click, true)).toBe('run');
   });
 
   it('opens the section for steps that need input, without an action', () => {

@@ -754,11 +754,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'merge',
     {
       description:
-        "Merge a same or super whose PR is ready, as the glob's Merge button does. With the required checks passed on the head it merges now; with them still pending it arms \"merge when checks pass\" (slop merges when they pass, and disarms if they fail or the PR conflicts). Merging: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. For a same with open rollout steps, plain merge is refused and `continue: true` is Merge and continue: it merges, keeps the glob open (reviewing) and the steps fall due; the steps are the checklist a person runs from master. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
+        "Merge a same or super whose PR is ready, as the glob's Merge button does. With the required checks passed on the head it merges now; with them still pending it arms \"merge when checks pass\" (slop merges when they pass, and disarms if they fail or the PR conflicts). Merging: slop updates the branch, waits for checks on the new head and squash-merges through its GitHub App. The glob moves to merging, then to reviewing when the merge is observed. A same with open rollout steps is merged the same way: slop keeps it open (reviewing) and its steps fall due as the checklist a person runs from master. With continue (supers, latest implementation record at the head), it is Merge and continue: the glob returns to in_progress on the same branch, and its next push opens a fresh draft PR. Also Retry merge: on a failed glob whose merge failed without a conflict (e.g. \"GitHub hasn't decided whether the PR can merge\"), it asks slop to merge again. Pass the version you read.",
       inputSchema: {
         id: z.string(),
         version: z.number().int(),
-        continue: z.boolean().optional().describe('Supers: Merge and continue (a checkpoint merge; the glob stays in Doing). A same with rollout steps: Merge and continue (the glob stays open for the steps)'),
+        continue: z.boolean().optional().describe('Supers: Merge and continue (a checkpoint merge; the glob stays in Doing). A same with rollout steps needs no flag: Merge keeps it open for them'),
       },
     },
     async ({ id, version, continue: continueAfter }) => {

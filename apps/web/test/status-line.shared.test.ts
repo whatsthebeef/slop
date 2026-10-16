@@ -67,9 +67,9 @@ describe('shared status line', () => {
     expect(top(g)).toEqual(statusLine(g, NOW));
   });
 
-  it('shows a same with open rollout steps as ready for Merge and continue, from the server count', () => {
-    const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge_continue'], rolloutSteps: 1 });
-    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge and continue' });
+  it('shows a same with open rollout steps as ready for Merge, the same as without', () => {
+    const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'], rolloutSteps: 1 });
+    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge' });
     expect(top(g)?.tip).not.toContain('--merge');
   });
 
@@ -126,18 +126,18 @@ describe('shared status line', () => {
     );
   });
 
-  it('says Merge and continue waits for the checks on a same with open rollout steps', () => {
+  it('says Merge waits for the checks on a same with open rollout steps', () => {
     const g = prOpen({
       headChecks: { sha: head, state: 'pending' },
       allowedActions: [],
       rolloutSteps: 1,
     });
     expect(waitingFor(g, [], 'dev')).toMatchObject([
-      { action: 'merge_continue', label: 'Merge and continue', running: true },
+      { action: 'merge', label: 'Merge', running: true },
     ]);
     // Without steps it is still plain Merge.
     expect(waitingFor({ ...g, rolloutSteps: 0 }, [], 'dev')).toMatchObject([{ action: 'merge', label: 'Merge' }]);
-    // The web reads the server's count, not the step list: a placeholder or non-blocking step does not turn Merge into Merge and continue.
+    // The web reads the server's count, not the step list: a placeholder or non-blocking step does not change Merge.
     const placeholder = { ...g, rolloutSteps: 0, humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', who: 'admin', due: 'after_merge', blocks: ['sign_off'], state: 'pending' }] } as never;
     expect(waitingFor(placeholder, [], 'dev')).toMatchObject([{ action: 'merge', label: 'Merge' }]);
   });
