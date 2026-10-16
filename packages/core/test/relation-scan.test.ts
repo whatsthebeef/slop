@@ -107,7 +107,7 @@ describe('relation scan', () => {
           applied.push({ globId, planHash, adds, actor });
           if (writeRows)
             await store.transaction(async (tx) => {
-              for (const a of adds) await tx.insertRelation(relation({ id: `auto-${a.to}`, from: globId, to: a.to, gate: a.gate, source: 'auto', reason: a.reason }));
+              for (const a of adds) await tx.insertRelation(relation({ id: `auto-${a.to}`, from: globId, to: a.to, gate: a.gate, source: 'mention', reason: a.reason }));
             });
           return applyResult(adds);
         },
@@ -130,7 +130,7 @@ describe('relation scan', () => {
       expect(await scan.run(me.id)).toBe('done');
 
       expect(requests).toHaveLength(1);
-      expect(applied).toEqual([{ globId: me.id, planHash: hash(await planOf(me.id)), adds: [{ to: target.id, gate: 'sign_off', until: 'merged', reason: sentence, sentence }], actor: DEV }]);
+      expect(applied).toEqual([{ globId: me.id, planHash: hash(await planOf(me.id)), adds: [{ to: target.id, gate: 'sign_off', until: 'merged', reason: sentence, sentence, from: 'step' }], actor: DEV }]);
       expect(await rows(me.id)).toEqual([expect.objectContaining({ mentionedId: target.id, decision: 'added', state: 'done', gate: 'sign_off', reason: sentence, model: 'haiku' })]);
     });
 
@@ -143,7 +143,7 @@ describe('relation scan', () => {
 
       await scan.run(me.id);
 
-      expect(applied[0]?.adds).toEqual([{ to: target.id, gate: 'sign_off', until: 'merged', reason: sentence, sentence }]);
+      expect(applied[0]?.adds).toEqual([{ to: target.id, gate: 'sign_off', until: 'merged', reason: sentence, sentence, from: 'plan' }]);
       expect(applied[0]?.planHash).toBe(hash(`## Plan\n${sentence}\n`));
     });
 
@@ -178,31 +178,104 @@ describe('relation scan', () => {
       expect(requests).toHaveLength(1);
     });
 
-    it('unsure leaves a suggestion row (open) and no relation', async () => {
+    it('unsure adds a relation too: a start gate while the glob is in Planning, and no open row', async () => {
       const me = await create('Mine');
       const target = await create('Maybe');
-      await plan(me.id, `We might want ${target.id} first.`);
+      const sentence = `We might want ${target.id} first.`;
+      await plan(me.id, sentence);
+      reply = answering(() => ({ verdict: 'unsure', gate: 'merge' }));
+
+      await scan.run(me.id);
+
+      expect(applied[0]?.adds).toEqual([{ to: target.id, gate: 'start', until: 'merged', reason: sentence, sentence, from: 'plan' }]);
+      expect(await rows(me.id)).toEqual([expect.objectContaining({ mentionedId: target.id, decision: 'added', state: 'done' })]);
+      expect(await store.transaction((tx) => tx.listOpenSuggestions([me.id]))).toEqual([]);
+    });
+
+    it('a glob that has begun gets a merge gate, for an unsure verdict and for a start verdict alike', async () => {
+      const me = await create('Mine');
+      const a = await create('Early');
+      const b = await create('Maybe');
+      setStatus(me.id, 'implementing');
+      await plan(me.id, `Needs ${a.id} before it can begin.\nWe might want ${b.id} first.`);
+      reply = answering((_s, id) => (id === a.id ? { verdict: 'prerequisite', gate: 'start' } : { verdict: 'unsure', gate: 'start' }));
+
+      await scan.run(me.id);
+
+      expect(applied[0]?.adds.map((x) => [x.to, x.gate])).toEqual([[a.id, 'merge'], [b.id, 'merge']]);
+      expect(await store.transaction((tx) => tx.listOpenSuggestions([me.id]))).toEqual([]);
+    });
+
+    it('three mentions of one glob give one relation: the first sentence is the reason and a sure gate wins over a vague one', async () => {
+      const me = await create('Mine');
+      const target = await create('Shared');
+      const first = `Maybe wait for **${target.id}** ([link](http://x.test)).`;
+      await plan(me.id, `${first}\nIt must be merged before we merge: ${target.id}.\nAlso see ${target.id}.`);
+      reply = answering((sentence) => (sentence.startsWith('It must') ? { verdict: 'prerequisite', gate: 'merge' } : sentence.startsWith('Also') ? { verdict: 'context', gate: 'sign_off' } : { verdict: 'unsure', gate: 'start' }));
+
+      await scan.run(me.id);
+
+      expect(applied).toHaveLength(1);
+      expect(applied[0]?.adds).toEqual([{ to: target.id, gate: 'merge', until: 'merged', reason: `Maybe wait for ${target.id} (link).`, sentence: first, from: 'plan' }]);
+      expect(await store.transaction((tx) => tx.listOpenSuggestions([me.id]))).toEqual([]);
+    });
+
+    it('a decision target is held until it is decided', async () => {
+      const me = await create('Mine');
+      const decision = await create('Which store');
+      const entry = store.state.globs.get(decision.id);
+      if (entry === undefined) throw new Error('no glob');
+      store.state.globs.set(decision.id, { ...entry, glob: { ...entry.glob, category: 'decision' } });
+      await plan(me.id, `Maybe ${decision.id} first.`);
       reply = answering(() => ({ verdict: 'unsure', gate: 'start' }));
 
       await scan.run(me.id);
 
-      expect(applied).toEqual([]);
-      expect(store.state.relations.size).toBe(0);
-      expect(await rows(me.id)).toEqual([expect.objectContaining({ mentionedId: target.id, decision: 'unsure', state: 'open', gate: 'start', decidedAt: null })]);
-      expect(await store.transaction((tx) => tx.listOpenSuggestions([me.id]))).toHaveLength(1);
+      expect(applied[0]?.adds).toEqual([expect.objectContaining({ to: decision.id, gate: 'start', until: 'decided' })]);
     });
 
-    it('a start gate for work that has begun is odd: a suggestion, not a relation', async () => {
+    it("a guess about another board's glob is skipped (and remembered), a confident prerequisite is still added", async () => {
+      const boards = new BoardService({ store, notifier: new RecordingNotifier() });
+      const other = unwrap(await boards.create(DEV, { name: 'Board two', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
       const me = await create('Mine');
-      const target = await create('Early');
-      setStatus(me.id, 'implementing');
-      await plan(me.id, `Needs ${target.id} before it can begin.`);
-      reply = answering(() => ({ verdict: 'prerequisite', gate: 'start' }));
+      const guess = unwrap(await globs.create(DEV, { boardId: other.id, title: 'Guess', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      const sure = unwrap(await globs.create(DEV, { boardId: other.id, title: 'Sure', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
+      await plan(me.id, `Maybe ${guess.id}.\nOnly after ${sure.id} is in place.`);
+      reply = answering((_s, id) => (id === sure.id ? { verdict: 'prerequisite', gate: 'merge' } : { verdict: 'unsure', gate: 'start' }));
 
       await scan.run(me.id);
 
-      expect(applied).toEqual([]);
-      expect(await rows(me.id)).toEqual([expect.objectContaining({ decision: 'unsure', state: 'open', gate: 'start' })]);
+      expect(applied[0]?.adds.map((a) => a.to)).toEqual([sure.id]);
+      expect((await rows(me.id)).find((r) => r.mentionedId === guess.id)).toMatchObject({ decision: 'context', state: 'done' });
+    });
+
+    it('a merged, deleted, already related (either way) or cyclic target is skipped and recorded, never asked about', async () => {
+      const me = await create('Mine');
+      const merged = await create('Merged');
+      const gone = await create('Gone');
+      const out = await create('Related out');
+      const back = await create('Related back');
+      const cyc = await create('Cycle');
+      setStatus(merged.id, 'signed_off');
+      store.state.globs.delete(gone.id);
+      await store.transaction(async (tx) => {
+        await tx.insertRelation(relation({ id: 'r-out', from: me.id, to: out.id, gate: 'start' }));
+        await tx.insertRelation(relation({ id: 'r-back', from: back.id, to: me.id, gate: 'start' }));
+      });
+      await plan(me.id, [merged, gone, out, back, cyc].map((g) => `Only after ${g.id} is in place.`).join('\n'));
+      reply = answering(() => ({ verdict: 'prerequisite', gate: 'merge' }));
+      // The cycle is the writer's call: it refuses that one.
+      applyResult = (adds) => ({ added: adds.filter((a) => a.to !== cyc.id).map((a) => a.to), skipped: [{ to: cyc.id, why: 'would make a cycle' }], stale: false });
+
+      await scan.run(me.id);
+
+      expect(applied[0]?.adds.map((a) => a.to)).toEqual([cyc.id]);
+      const stored = await rows(me.id);
+      expect(stored.find((r) => r.mentionedId === cyc.id)).toMatchObject({ decision: 'context', state: 'done', reason: 'would make a cycle' });
+      expect(stored.find((r) => r.mentionedId === merged.id)).toMatchObject({ decision: 'history', state: 'done' });
+      expect(stored.filter((r) => r.state === 'open')).toEqual([]);
+      await scan.run(me.id);
+      expect(requests).toHaveLength(1);
     });
 
     it('a decision about an ID that is not in the sentence it names is ignored, and a skipped mention is left undecided (R1-6)', async () => {
@@ -353,7 +426,7 @@ describe('relation scan', () => {
       const a = await create('A');
       const b = await create('B');
       await store.transaction(async (tx) => {
-        await tx.insertRelation(relation({ id: 'rel-a', from: me.id, to: a.id, source: 'auto', dismissedAt: NOW }));
+        await tx.insertRelation(relation({ id: 'rel-a', from: me.id, to: a.id, source: 'mention', dismissedAt: NOW }));
         await tx.insertRelation(relation({ id: 'rel-b', from: b.id, to: me.id }));
       });
       await plan(me.id, `Only after ${a.id} is in place. Also ${b.id} is related.`);
@@ -412,7 +485,7 @@ describe('relation scan', () => {
       await scan.run(me.id);
 
       expect(requests).toEqual([]);
-      expect(applied[0]?.adds).toEqual([{ to: broken.id, gate: 'sign_off', until: 'merged', reason: sentence, sentence, direction: 'holds_back' }]);
+      expect(applied[0]?.adds).toEqual([{ to: broken.id, gate: 'sign_off', until: 'merged', reason: sentence, sentence, from: 'plan', direction: 'holds_back' }]);
       expect(await rows(me.id)).toEqual([expect.objectContaining({ mentionedId: broken.id, decision: 'added', gate: 'sign_off' })]);
     });
 
@@ -438,7 +511,7 @@ describe('relation scan', () => {
       expect(await rows(me.id)).toEqual([expect.objectContaining({ decision: 'history' })]);
     });
 
-    it('"replaces s14t11" is a suggestion only: an open row with no gate, no relation, no call', async () => {
+    it('"replaces s14t11" adds nothing and asks nothing: it is remembered as context, with no call', async () => {
       const me = await create('The new one');
       const old = await create('The old one');
       await plan(me.id, `This replaces ${old.id}.`);
@@ -447,7 +520,8 @@ describe('relation scan', () => {
 
       expect(requests).toEqual([]);
       expect(applied).toEqual([]);
-      expect(await rows(me.id)).toEqual([expect.objectContaining({ mentionedId: old.id, decision: 'suggested', state: 'open', gate: null })]);
+      expect(await rows(me.id)).toEqual([expect.objectContaining({ mentionedId: old.id, decision: 'context', state: 'done', gate: null })]);
+      expect(await store.transaction((tx) => tx.listOpenSuggestions([me.id]))).toEqual([]);
     });
 
     it('another ID in the same sentence as a cue still goes to the model', async () => {
@@ -654,6 +728,7 @@ describe('relation scan', () => {
     await scan.run(me.id);
     expect(requests[0]?.prompt).not.toContain('end.');
     expect((await rows(me.id))[0]?.sentence).toBe(long);
-    expect(quoteReason(long).length).toBeLessThanOrEqual(240);
+    expect(quoteReason(long).length).toBeLessThanOrEqual(300);
+    expect(quoteReason(long).length).toBeGreaterThan(240);
   });
 });

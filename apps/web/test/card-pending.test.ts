@@ -26,6 +26,8 @@ describe('card pending', () => {
     expect(workingLabel('start_again')).toBe('Discarding…');
     expect(workingLabel('mark_ready')).toBe('Marking done…');
     expect(workingLabel('review_now')).toBe('Reviewing…');
+    expect(workingLabel('merge_anyway')).toBe('Merging…');
+    expect(workingLabel('sign_off_anyway')).toBe('Signing off…');
   });
 
   it('shows pending before the request answers and clears it on success', async () => {
@@ -79,6 +81,8 @@ describe('card pending', () => {
 describe('mergeOutcomeText', () => {
   it('says which happened: merged, armed, merging, cancelled or why it failed', () => {
     expect(mergeOutcomeText('merge', { status: 'reviewing' })).toBe('Merged');
+    expect(mergeOutcomeText('merge_anyway', { status: 'reviewing' })).toBe('Merged');
+    expect(mergeOutcomeText('sign_off_anyway', { status: 'signed_off' })).toBeNull();
     expect(mergeOutcomeText('merge', { status: 'pr_open', mergeMode: 'when_green' })).toBe('Will merge when checks pass');
     expect(mergeOutcomeText('merge', { status: 'merging' })).toBe('Merging…');
     expect(mergeOutcomeText('merge', { status: 'failed', failure: { reason: 'conflict in a.ts' } })).toBe("Can't merge: conflict in a.ts");

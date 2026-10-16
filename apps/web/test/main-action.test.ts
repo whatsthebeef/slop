@@ -67,8 +67,9 @@ describe('mainAction', () => {
     expect(pick(['sign_off', 'reopen'], glob({ status: 'reviewing' }), true)).toBe('sign_off');
   });
 
-  it('never picks Start now, Discard or Delete', () => {
+  it('never picks Start now, Merge anyway, Sign off anyway, Discard or Delete', () => {
     expect(pick(['start_anyway', 'start_again', 'delete'])).toBeNull();
+    expect(pick(['merge_anyway', 'sign_off_anyway'])).toBeNull();
   });
 
   it('has no main button when nothing qualifies', () => {
@@ -167,6 +168,12 @@ describe('promotedAction', () => {
 
   it('falls back to the first remaining item', () => {
     expect(promotedAction(['investigate', 'merge_continue'], g)).toBe('investigate');
+  });
+
+  it('promotes Merge anyway or Sign off anyway only when nothing else is left, so the way to force it through stays reachable', () => {
+    expect(promotedAction(['merge_anyway', 'pick_up', 'delete'], g)).toBe('pick_up');
+    expect(promotedAction(['sign_off_anyway', 'delete'], g)).toBe('sign_off_anyway');
+    expect(promotedAction(['merge_anyway', 'start_again', 'delete'], g)).toBe('merge_anyway');
   });
 
   it('never promotes a Reset action, and is null when nothing is left', () => {

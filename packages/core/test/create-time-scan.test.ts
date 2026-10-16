@@ -87,7 +87,7 @@ describe('create-time relation scan', () => {
     const sub = await create({ plan: `Hand the profile to sessions. ${sentence}` });
     expect(classifyCalls).toHaveLength(1);
     expect(classifyCalls[0]).toMatchObject({ boardId, actorEmail: ADMIN, explicitIds: [] });
-    expect(relationsOf(sub.id)).toEqual([expect.objectContaining({ to: first.id, gate: 'start', until: 'merged', source: 'auto', reason: sentence })]);
+    expect(relationsOf(sub.id)).toEqual([expect.objectContaining({ to: first.id, gate: 'start', until: 'merged', source: 'mention', reason: sentence })]);
     expect(sub.status).toBe('planning');
     expect(sub.waiting).not.toBeNull();
     expect(sub.provisioning).toBe('none');
@@ -100,7 +100,7 @@ describe('create-time relation scan', () => {
     const sentence = `Only after ${first.id} has merged do we hand the profile over.`;
     answer = { prerequisites: [prerequisite(first.id, sentence)], decided: [] };
     const sub = await create({ plan: sentence });
-    expect(relationsOf(sub.id).filter((r) => r.source === 'auto')).toEqual([]);
+    expect(relationsOf(sub.id).filter((r) => r.source === 'mention')).toEqual([]);
   });
 
   it('skips a prerequisite on a glob that does not exist or that is the new glob itself', async () => {
@@ -173,7 +173,7 @@ describe('create-time relation scan', () => {
         intake: { request, source: 'web', categoryConfidence: 'high', reason: null, model: 'haiku', promptVersion: 2, examples: [], prerequisites: [{ id: first.id, gate: 'start', sentence: `Only after ${first.id} is in place.` }] },
       });
       expect(modelCalls).toBe(0);
-      expect(relationsOf(sub.id)).toEqual([expect.objectContaining({ to: first.id, gate: 'start', source: 'auto', reason: `Only after ${first.id} is in place.` })]);
+      expect(relationsOf(sub.id)).toEqual([expect.objectContaining({ to: first.id, gate: 'start', source: 'mention', reason: `Only after ${first.id} is in place.` })]);
     });
 
     it('makes no call at all for an intake answer of no prerequisites', async () => {
