@@ -68,6 +68,17 @@ const PROBLEM_KINDS: ReadonlySet<StatusLine['kind']> = new Set(['provisioning', 
 /** True when the status line is a real problem rather than a normal state. */
 export const isProblemLine = (line: Pick<StatusLine, 'kind'>): boolean => PROBLEM_KINDS.has(line.kind);
 
+/**
+ * True when someone is already on the problem: a fix run queued or running, or the glob picked up or taken over by a person.
+ * A problem block shows only while nobody is (and goes by itself once checks pass, the conflict clears or the step is done);
+ * the corner status says what is being done. A failed fix run ends, so the block comes back with its new failure.
+ */
+export const problemHandled = (glob: Pick<GlobView, 'currentRun' | 'implementer'>): boolean => {
+  if (glob.implementer != null) return true;
+  const run = glob.currentRun;
+  return run != null && run.state !== 'ended' && !isInvestigateRun(run);
+};
+
 /** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
 const TURN_LABEL_MAX = 24;
 
