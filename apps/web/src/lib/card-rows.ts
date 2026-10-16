@@ -118,8 +118,8 @@ const feedbackTip = (glob: GlobView): string =>
 export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
   // An action waits for a person until it is done or dismissed; a prepared one while the machine prepares or records is the machine's.
   if (glob.category === 'action') {
-    const state = actionLine(glob)?.state;
-    return glob.status === 'planning' || state === 'ready' || state === 'preparation_failed';
+    const line = actionLine(glob);
+    return glob.status === 'planning' || line?.state === 'ready' || line?.state === 'preparation_failed' || (line?.state === 'recording' && line.icon === 'human');
   }
   if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
   const icon = cornerStatus(glob, now, viewer)?.icon;

@@ -171,6 +171,10 @@ describe('actionState: the states a card shows', () => {
     expect(needsHuman(prepared('failed'))).toBe(true);
     expect(needsHuman(prepared('preparing'))).toBe(false);
     expect(needsHuman(prepared('recording', 'branch', { mergeMode: 'when_green' }))).toBe(false);
+    // Open after Done and not armed (red checks, disarmed): nothing will merge it, so a person must.
+    expect(needsHuman(prepared('recording'))).toBe(true);
+    expect(needsHuman(prepared('recording', 'branch', { headChecks: { sha: 'aaa', state: 'failed' } }))).toBe(true);
+    expect(needsHuman(prepared('recording', 'branch', { status: 'merging' }))).toBe(false);
     expect(needsHuman(prepared('recording', 'branch', { conflict: { base: 'main', files: [], since: null, at: NOW } }))).toBe(true);
     expect(needsHuman(glob({ category: 'action', type: null, attributes: attributes(null, 0), status: 'planning' }))).toBe(true);
   });
@@ -608,6 +612,10 @@ describe('prepared actions through the service', () => {
     expect(note).not.toContain('abcdefghijklmnop1234567890');
     expect(note).toContain('bash scripts/iam/apply.sh');
     expect(note).not.toContain('abcd1234abcd1234abcd1234');
+    // get_context carries the masked failure output inline, not just a listing line.
+    const context = unwrap(await artifacts.context(DEV, made.id));
+    expect(context.attachments.find((a) => a.label === `${ACTION_FAILURE_LABEL} (round 1)`)?.content).toContain('AccessDenied: apigateway:GET is not allowed');
+    expect(context.available.map((a) => a.label)).not.toContain(`${ACTION_FAILURE_LABEL} (round 1)`);
     // Nothing merged: no generation bump, no reopened or closed PR.
     expect(store.state.outbox.filter((e) => e.kind === 'reopen_pr' || e.kind === 'close_pr' || e.kind === 'delete_branch')).toEqual([]);
   });

@@ -115,6 +115,16 @@ export interface ActionLine {
 }
 
 /**
+ * A recorded (Done) prepared action whose record will not merge by itself: its run failed or conflicted, or its PR is open and
+ * neither armed nor queued (red checks, disarmed). A person must fix it and merge; nothing else moves it.
+ */
+export const recordingStuck = (glob: GlobView): boolean =>
+  glob.status === 'failed' ||
+  glob.failure != null ||
+  glob.conflict != null ||
+  (glob.status === 'pr_open' && glob.mergeMode !== 'when_green');
+
+/**
  * Where a prepared action stands (a routine prepares the script or document, the person runs it, then slop records it): preparing,
  * ready to run, recording, or a failed preparation. Null for a plain action, for any other glob, and while it waits to start
  * (the hold line says what it waits for).
@@ -146,6 +156,14 @@ export const actionLine = (glob: GlobView): ActionLine | null => {
         tone: 'text-signal-strong',
       };
     case 'recording':
+      if (recordingStuck(glob))
+        return {
+          state,
+          icon: 'human',
+          text: 'record stuck',
+          tip: 'Done is recorded but the prepared branch is not merging: fix what blocks it (failed checks or a conflict), then merge it',
+          tone: 'text-red',
+        };
       return {
         state,
         icon: 'machine-spinning',

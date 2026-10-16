@@ -14,7 +14,10 @@ export const needsHuman = (glob: Glob): boolean => {
     const state = actionState(glob);
     // A prepared action is a person's turn when it is ready to run, its preparation failed, or its record is stuck after Done.
     if (state === 'ready' || state === 'preparation_failed') return true;
-    if (state === 'recording') return glob.status === 'failed' || glob.failure !== null || glob.conflict != null;
+    if (state === 'recording') {
+      // Done is recorded but the merge is not coming by itself: failed, conflicted, or open and neither armed nor queued (red checks, disarmed).
+      return glob.status === 'failed' || glob.failure !== null || glob.conflict != null || (glob.status === 'pr_open' && glob.mergeMode !== 'when_green');
+    }
     return state === 'open' && glob.status === 'planning';
   }
   if (glob.category === 'decision') return glob.status === 'planning' || glob.status === 'reviewing';

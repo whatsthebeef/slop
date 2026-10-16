@@ -50,6 +50,21 @@ describe('a prepared action', () => {
     expect(needsPerson(recording(), NOW)).toBe(false);
   });
 
+  it('says a recorded action is stuck, and calls a person, when nothing will merge it', () => {
+    const stuck = prepared(
+      { status: 'pr_open', actionState: 'recording', mergeMode: null, pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' } },
+      1,
+      { kind: 'done', by: 'a@b.c', at: NOW },
+    );
+    expect(actionLine(stuck)).toMatchObject({ state: 'recording', icon: 'human', text: 'record stuck' });
+    expect(actionLine(stuck)?.tip).not.toContain('main');
+    expect(needsPerson(stuck, NOW)).toBe(true);
+    expect(needsPerson({ ...stuck, mergeMode: 'when_green' }, NOW)).toBe(false);
+    const red = { ...stuck, headChecks: { sha: head, state: 'failed' as const, failure: { name: 'Type check', step: null, lines: ['TS2322'], url: null } } };
+    expect(needsPerson(red, NOW)).toBe(true);
+    expect(statusLine(red, NOW)?.kind).toBe('checks');
+  });
+
   it('shows a failed preparation as a problem with Retry offered', () => {
     expect(actionLine(failedPreparation())).toMatchObject({ state: 'preparation_failed', icon: 'alert', text: 'preparation failed' });
     expect(statusLine(failedPreparation(), NOW)).toMatchObject({ kind: 'failure' });
