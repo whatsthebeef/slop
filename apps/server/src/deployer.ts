@@ -37,7 +37,7 @@ export const deployVariables = (job: DeployJob): Record<string, string> => ({
 type CodeBuildIntegration = Extract<DeployIntegration, { provider: 'codebuild' }>;
 
 /**
- * CodeBuild: `StartBuild` on the environment's project (or the board default) with the commit as
+ * CodeBuild: `StartBuild` on the environment's own project with the commit as
  * the source version. Results arrive through EventBridge (`/webhooks/aws`), matched by build ARN.
  * Credentials come from slop's IAM role (or the developer's AWS profile locally).
  */
@@ -79,8 +79,11 @@ export class CodeBuildDeployer implements Deployer {
   }
 }
 
-export const projectFor = (integration: CodeBuildIntegration, environment: string): string =>
-  integration.projects[environment] ?? integration.defaultProject;
+export const projectFor = (integration: CodeBuildIntegration, environment: string): string => {
+  const project = integration.projects[environment];
+  if (project === undefined || project.trim() === '') throw new Error(`No CodeBuild project for environment ${environment}`);
+  return project;
+};
 
 /** Picks the adapter for the board's integration. */
 export class Deployers implements Deployer {

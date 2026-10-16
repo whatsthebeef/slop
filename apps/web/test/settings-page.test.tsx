@@ -158,6 +158,23 @@ describe('Settings page', () => {
     expect(screen.queryByLabelText('Base branch')).toBeNull();
   });
 
+  it('asks for a CodeBuild project per environment and has no default project', async () => {
+    api.board.mockResolvedValue({
+      ...board('admin'),
+      environments: [
+        { name: 'dev', allowBranchDeploy: true },
+        { name: 'demo', allowBranchDeploy: true },
+      ],
+      deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev: 'dev-builder' } },
+    });
+    renderPage();
+    await screen.findByTestId('deploy-settings');
+    expect((screen.getByLabelText<HTMLInputElement>('Project for dev')).value).toBe('dev-builder');
+    expect((screen.getByLabelText<HTMLInputElement>('Project for demo')).value).toBe('');
+    expect(screen.queryByLabelText('Default project')).toBeNull();
+    expect(screen.getByTestId('deploy-settings').textContent).not.toMatch(/default project/i);
+  });
+
   it('remembers which groups are open, for this viewer', async () => {
     const user = userEvent.setup();
     const first = renderPage();

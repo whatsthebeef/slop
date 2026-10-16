@@ -91,8 +91,8 @@ describe('dev environments only (migration 0085)', () => {
       { name: 'danzig', allowBranchDeploy: true },
       { name: 'demo', allowBranchDeploy: true },
     ]);
-    expect((rows[0]?.deploy as { projects: unknown }).projects).toEqual({ dev: 'pd' });
-    expect(rows[0]?.deploy).toMatchObject({ defaultProject: 'p', region: 'r' });
+    // Migration 0086 then drops the default project: environments without their own get it as theirs.
+    expect(rows[0]?.deploy).toEqual({ provider: 'codebuild', region: 'r', projects: { dev: 'pd', danzig: 'p', demo: 'p' } });
   });
 
   it('leaves board 15 and the base branch alone', async () => {

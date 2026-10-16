@@ -16,7 +16,7 @@ export const board: Board = {
     { name: 'prod', allowBranchDeploy: false },
   ],
   sensitivePaths: [],
-  deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: 'deploy', projects: {} },
+  deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev: 'deploy' } },
   atf: null,
   readinessTicks: {},
   agentSetVersion: 1,

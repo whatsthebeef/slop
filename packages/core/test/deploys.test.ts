@@ -312,20 +312,39 @@ describe('DeployService', () => {
 });
 
 describe('board deploy settings', () => {
-  it('stores a deploy integration and refuses incomplete ones', async () => {
+  it('stores a deploy integration where every branch-deploy environment names its own project', async () => {
     const store = new MemoryStore();
     const boards = new BoardService({ store, notifier: new RecordingNotifier() });
     const admin = 'admin@example.com';
     await store.transaction((tx) => tx.upsertUser({ email: admin, name: admin, active: true }));
     const created = unwrap(
-      await boards.create(admin, { name: 'sandbox', repo: null, timeZone: 'UTC', environments: [] }),
+      await boards.create(admin, {
+        name: 'sandbox',
+        repo: null,
+        timeZone: 'UTC',
+        environments: [{ name: 'dev', allowBranchDeploy: true }],
+      }),
     );
     expect(created.deploy).toBeNull();
-    const incomplete = await boards.updateSettings(admin, created.id, created.version, {
-      deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: ' ', projects: {} },
+    const noRegion = await boards.updateSettings(admin, created.id, created.version, {
+      deploy: { provider: 'codebuild', region: ' ', projects: { dev: 'dev-deploy' } },
     });
-    expect(incomplete.ok).toBe(false);
-    const deploy = { provider: 'codebuild', region: 'us-east-1', defaultProject: 'sandbox-deploy', projects: {} } as const;
-    expect(unwrap(await boards.updateSettings(admin, created.id, created.version, { deploy })).deploy).toEqual(deploy);
+    expect(noRegion.ok).toBe(false);
+    const missing = await boards.updateSettings(admin, created.id, created.version, {
+      deploy: { provider: 'codebuild', region: 'us-east-1', projects: {} },
+    });
+    expect(missing.ok).toBe(false);
+    const blank = await boards.updateSettings(admin, created.id, created.version, {
+      deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev: ' ' } },
+    });
+    expect(blank.ok).toBe(false);
+    const deploy = { provider: 'codebuild', region: 'us-east-1', projects: { dev: 'dev-deploy' } } as const;
+    const saved = unwrap(await boards.updateSettings(admin, created.id, created.version, { deploy }));
+    expect(saved.deploy).toEqual(deploy);
+    // A new environment that takes branch deploys needs its own project as well.
+    const added = await boards.updateSettings(admin, created.id, saved.version, {
+      environments: [...saved.environments, { name: 'demo', allowBranchDeploy: true }],
+    });
+    expect(added.ok).toBe(false);
   });
 });
