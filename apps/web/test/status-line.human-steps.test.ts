@@ -80,11 +80,11 @@ describe('your turn from human steps', () => {
     });
     expect(statusLine(rollout, NOW, { email: glob().planner, role: 'dev' })).toMatchObject({
       kind: 'ready',
-      text: 'do',
+      text: 'Tell the team',
     });
     expect(statusLine(rollout, NOW, { email: 'admin@example.com', role: 'admin' })).toMatchObject({
       kind: 'ready',
-      text: 'do',
+      text: 'Deploy the host stack',
     });
   });
 
