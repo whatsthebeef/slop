@@ -108,6 +108,48 @@ describe('due steps block', () => {
     expect(write).toHaveBeenCalledWith('aws codebuild list-report-groups');
   });
 
+  describe('run order (s15b164)', () => {
+    const order = (commands: string[] | undefined, path = 'scripts/rollout/s14t14.sh') => {
+      show([step({ id: 'a', state: 'due', script: { path }, commands })]);
+      const run = screen.getByTestId('step-run');
+      return [...run.querySelectorAll('[data-testid="step-command"], [data-testid="step-script-path"]')].map((c) => c.textContent);
+    };
+
+    it('shows commands that already run the script as written, with no extra script row', () => {
+      const cmds = ['git checkout master', 'git pull', 'bash scripts/rollout/s14t14.sh --dry-run', 'bash scripts/rollout/s14t14.sh', 'unset AWS_PROFILE'];
+      expect(order(cmds)).toEqual(cmds);
+      expect(screen.getAllByTestId('step-script-path')).toHaveLength(2);
+    });
+
+    it('inserts the script run between the setup and the cleanup', () => {
+      expect(order(['git checkout master', 'git pull', 'aws sso login --profile p', 'export AWS_PROFILE=p', 'unset AWS_PROFILE'])).toEqual([
+        'git checkout master',
+        'git pull',
+        'aws sso login --profile p',
+        'export AWS_PROFILE=p',
+        'bash scripts/rollout/s14t14.sh',
+        'unset AWS_PROFILE',
+      ]);
+    });
+
+    it('shows just the run command for a script-only step', () => {
+      expect(order(undefined)).toEqual(['bash scripts/rollout/s14t14.sh']);
+    });
+
+    it("puts the script after the setup in s14b3's step", () => {
+      expect(
+        order(['git checkout master', 'git pull', 'aws sso login --sso-session pl', 'export AWS_PROFILE=x', 'unset AWS_PROFILE'], 'scripts/rollout/s14t14-nonprod-permission-set.sh'),
+      ).toEqual([
+        'git checkout master',
+        'git pull',
+        'aws sso login --sso-session pl',
+        'export AWS_PROFILE=x',
+        'bash scripts/rollout/s14t14-nonprod-permission-set.sh',
+        'unset AWS_PROFILE',
+      ]);
+    });
+  });
+
   it('leaves empty fields out, so an old free-text step still renders as its detail alone', () => {
     show([step({ id: 'a', state: 'due', detail: 'Just do it', commands: [] })]);
     const card = screen.getByTestId('due-step');
