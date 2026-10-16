@@ -120,22 +120,36 @@ describe('human step routes', () => {
     expect((await post(`/human-steps/${once?.id ?? ''}/dismiss`, { reason: 'Test cleanup' })).status).toBe(200);
   });
 
-  it('marks an environment deployed: the glob\'s steps for it fall due, and the view carries the arm stage', async () => {
+  it('marks an environment deployed: the glob\'s steps for it fall due, and the view carries plain Arm system', async () => {
     const added = (await (await post('/human-steps', { title: 'Set the flag in production', due: 'after_deploy:production' })).json()) as {
-      arm?: { stage: string; title: string };
+      arm?: { title: string };
       humanSteps: { title: string; state: string; blocks: string[] }[];
     };
     expect(added.humanSteps.find((s) => s.title === 'Set the flag in production')).toMatchObject({ state: 'pending', blocks: [] });
-    expect(added.arm).toEqual({ stage: 'production', title: 'Set the flag in production' });
+    expect(added.arm).toEqual({ title: 'Set the flag in production' });
     const marked = await post('/environments/production/deployed', {});
     expect(marked.status).toBe(200);
     const view = (await marked.json()) as typeof added;
     expect(view.humanSteps.find((s) => s.title === 'Set the flag in production')?.state).toBe('due');
-    expect(view.arm).toEqual({ stage: 'production', title: 'Set the flag in production' });
+    expect(view.arm).toEqual({ title: 'Set the flag in production' });
     // Again changes nothing; an environment the board doesn't list, and a non-member, are refused.
     expect((await post('/environments/production/deployed', {})).status).toBe(200);
     expect((await post('/environments/nowhere/deployed', {})).status).toBe(422);
     expect((await post('/environments/production/deployed', {}, 'outsider@example.com')).status).toBeGreaterThanOrEqual(403);
+  });
+
+  it('adds a downstream step: due once merged, holds nothing back, arms the system; after_deploy takes only the board\'s environments', async () => {
+    const added = (await (await post('/human-steps', { title: 'Run on prod as each is released: Flip it', due: 'downstream' })).json()) as {
+      arm?: { title: string };
+      humanSteps: { id: string; title: string; due: string; state: string; blocks: string[] }[];
+    };
+    const step = added.humanSteps.find((s) => s.title.startsWith('Run on prod'));
+    expect(step).toMatchObject({ due: 'downstream', state: 'due', blocks: [] });
+    // The earlier test's open production step arms first; the downstream one arms on its own (see signed-off-cap).
+    expect(added.arm).toBeDefined();
+    expect((await post('/human-steps', { title: 'On prod', due: 'after_deploy:prod' })).status).toBe(422);
+    // Leave the shared glob as it was for the next test.
+    expect((await post(`/human-steps/${step?.id ?? ''}/dismiss`, { reason: 'Test cleanup' })).status).toBe(200);
   });
 
   it('refuses a missing title or reason, a stale version, and a non-member', async () => {

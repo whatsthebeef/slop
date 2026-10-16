@@ -13,7 +13,7 @@ import { HUMAN_STEP_GROUP, HUMAN_STEP_KINDS, isHousekeepingStep, PREDICTED_ROLLO
 import { armOf, armView, armsStored, rolloutStages } from '../src/domain/rollout-stages.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
-import { NOW, board, glob, run } from './fixtures.js';
+import { NOW, glob, run } from './fixtures.js';
 
 const head = 'a2a88c8aaaa';
 const ready = (patch = {}) =>
@@ -376,44 +376,41 @@ describe('after-deploy steps and the arm stage (s15f176)', () => {
     expect(rolloutStages({ environments: [] })).toEqual(['after_merge']);
   });
 
-  const order = ['after_merge', 'staging', 'production'];
-  const arm = (rows: StoredHumanStep[], g = merged({ status: 'signed_off' })) => armOf(humanSteps(g, {}, rows), order);
+  const arm = (rows: StoredHumanStep[], g = merged({ status: 'signed_off' })) => armOf(humanSteps(g, {}, rows));
 
-  it('arms the first stage with an open step: after the merge, then each environment, even after sign-off', () => {
+  it('arms with the first open step in promotion order: after the merge, then each environment, even after sign-off', () => {
     const rows = [prod(), stage(), main()];
-    expect(arm(rows)).toEqual({ stage: 'after_merge', title: 'Main' });
-    expect(arm([prod(), stage(), main({ state: 'done' })])).toEqual({ stage: 'staging', title: 'Stage' });
-    expect(arm([prod(), stage({ state: 'dismissed' }), main({ state: 'done' })])).toEqual({ stage: 'production', title: 'Prod' });
+    expect(arm(rows)).toEqual({ title: 'Main' });
+    expect(arm([prod(), stage(), main({ state: 'done' })])).toEqual({ title: 'Prod' });
+    expect(arm([prod(), stage({ state: 'dismissed' }), main({ state: 'done' })])).toEqual({ title: 'Prod' });
     expect(arm([prod({ state: 'done' }), stage({ state: 'done' }), main({ state: 'done' })])).toBeNull();
     expect(arm([])).toBeNull();
   });
 
   it('arms on a pending step too, not only a due one', () => {
-    expect(arm([prod()], merged({ status: 'merging' }))).toEqual({ stage: 'production', title: 'Prod' });
+    expect(arm([prod()], merged({ status: 'merging' }))).toEqual({ title: 'Prod' });
   });
 
   it('skips the predicted placeholder and machine steps', () => {
     const placeholder = stored({ id: 'ph', title: PREDICTED_ROLLOUT_TITLE, origin: 'investigation', blocks: ['sign_off'] });
     expect(arm([placeholder])).toBeNull();
-    expect(armOf(derivedSteps(ready()), order)).toBeNull();
+    expect(armOf(derivedSteps(ready()))).toBeNull();
     expect(armsStored(placeholder)).toBe(false);
     expect(armsStored(prod())).toBe(true);
     expect(armsStored(prod({ state: 'done' }))).toBe(false);
   });
 
-  it('puts an environment the board does not list after the listed ones, and a step due now with the after-merge stage', () => {
+  it('arms for a step due now, and for one naming an environment the board does not list', () => {
     const odd = stored({ id: 'o', title: 'Odd', due: 'after_deploy:eu', blocks: [] });
-    expect(arm([odd, prod()])).toEqual({ stage: 'production', title: 'Prod' });
-    expect(arm([odd])).toEqual({ stage: 'eu', title: 'Odd' });
-    expect(arm([stored({ id: 'n', title: 'Now', due: 'now' }), stage()])).toEqual({ stage: 'after_merge', title: 'Now' });
+    expect(arm([odd, prod()])).toEqual({ title: 'Odd' });
+    expect(arm([stored({ id: 'n', title: 'Now', due: 'now' }), stage()])).toEqual({ title: 'Now' });
   });
 
-  it('names the after-merge stage after the base branch, and keeps environment names', () => {
-    const b = { ...board, baseBranch: 'trunk', environments: [{ name: 'production', allowBranchDeploy: false }] };
+  it('armView carries only the title of the open step, with no stage and no board', () => {
     const steps = (rows: StoredHumanStep[]) => humanSteps(merged(), {}, rows);
-    expect(armView(steps([main(), prod()]), b)).toEqual({ stage: 'trunk', title: 'Main' });
-    expect(armView(steps([main({ state: 'done' }), prod()]), b)).toEqual({ stage: 'production', title: 'Prod' });
-    expect(armView(steps([]), b)).toBeNull();
+    expect(armView(steps([main(), prod()]))).toEqual({ title: 'Main' });
+    expect(armView(steps([main({ state: 'done' }), prod()]))).toEqual({ title: 'Prod' });
+    expect(armView(steps([]))).toBeNull();
   });
 
   it('keeps the compact due of an after-deploy step', () => {

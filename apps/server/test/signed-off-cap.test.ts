@@ -106,13 +106,28 @@ describe('the board keeps the latest signed-off globs', () => {
     expect(page.globs[0]?.id).toBe(`s${boardId}t30`);
   });
 
-  it('keeps an older signed-off glob that still has an open rollout step, with its arm stage (s15f176)', async () => {
+  it('keeps an older signed-off glob that still has an open rollout step, with plain Arm system (s15f176)', async () => {
     const added = await globs.addHumanStep('member@example.com', `s${boardId}t1`, null, { title: 'Roll out production', due: 'after_deploy:production' });
     expect(added.ok).toBe(true);
-    const list = (await (await app.request(`/api/boards/${boardId}/globs`, { headers: auth })).json()) as { id: string; status: string; arm?: { stage: string; title: string } }[];
+    const list = (await (await app.request(`/api/boards/${boardId}/globs`, { headers: auth })).json()) as { id: string; status: string; arm?: { title: string } }[];
     const signedOff = list.filter((g) => g.status === 'signed_off');
     expect(signedOff).toHaveLength(26);
-    expect(signedOff.find((g) => g.id === `s${boardId}t1`)?.arm).toEqual({ stage: 'production', title: 'Roll out production' });
+    expect(signedOff.find((g) => g.id === `s${boardId}t1`)?.arm).toEqual({ title: 'Roll out production' });
     expect(signedOff.find((g) => g.id === `s${boardId}t30`)?.arm).toBeUndefined();
+  });
+
+  it('keeps a signed-off glob with an open downstream step beyond the cap, and drops it once a person ticks the step', async () => {
+    const added = await globs.addHumanStep('member@example.com', `s${boardId}t2`, null, { title: 'Run on prod as each is released: Flip it', downstream: true });
+    expect(added.ok).toBe(true);
+    type Row = { id: string; status: string; arm?: { title: string } };
+    const listed = async () => ((await (await app.request(`/api/boards/${boardId}/globs`, { headers: auth })).json()) as Row[]).filter((g) => g.status === 'signed_off');
+    const before = await listed();
+    expect(before).toHaveLength(27);
+    expect(before.find((g) => g.id === `s${boardId}t2`)?.arm).toEqual({ title: 'Run on prod as each is released: Flip it' });
+    if (!added.ok) return;
+    expect((await globs.completeHumanStep('member@example.com', `s${boardId}t2`, added.value.id, null)).ok).toBe(true);
+    const after = await listed();
+    expect(after.map((g) => g.id)).not.toContain(`s${boardId}t2`);
+    expect(after).toHaveLength(26);
   });
 });
