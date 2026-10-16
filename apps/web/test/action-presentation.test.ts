@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { actionPresentation, haltedBy, presentedActions } from '@slop/core';
 import type { Action } from '@slop/core';
 import { createElement } from 'react';
 import { ActorIcon } from '../src/components/actor-icons';
-import { actionPresentation, haltedBy, presentedActions } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import { glob } from '../../../packages/core/test/fixtures';
 

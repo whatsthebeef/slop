@@ -3,17 +3,11 @@ import type {
   ChatFeedbackRating,
   ChatTestCase,
   Action,
-  ActionPreparation,
   ActionRecordKind,
-  ActionState,
-  MachineStep,
-  OpenQuestion,
-  Move,
   AttachmentFile,
   AgentSetEntry,
   AgentSetFileView,
   ArtifactKind,
-  ArtifactSummary,
   Board,
   BoardNotification,
   BoardSession,
@@ -25,7 +19,6 @@ import type {
   CatalogUpdate,
   Category,
   InferenceSource,
-  Mode,
   WorkActor,
   WorkKind,
   ChatCitation,
@@ -62,13 +55,9 @@ import type {
   LocalRunView,
   MergePolicyView,
   LabelName,
-  List,
   Member,
   Role,
-  Run,
   SearchHit,
-  SizeCheck,
-  Handover,
   SizeThresholdView,
   SizeCalibrationView,
   SlopType,
@@ -78,99 +67,21 @@ import type {
   TypeLearningView,
   SubLimitChange,
   SubLimitView,
-  CompactHumanStep,
-  HumanStep,
   DependencyRulesView,
-  Holding,
-  HeldBack,
   RelationGate,
-  RelationSuggestion,
   RelationUntil,
-  RelationsView,
   RelationLearningView,
   PinInput,
   TargetChange,
-  WorkstreamsSummary,
-  Handoff,
-  Arm,
+  PresentableGlob,
 } from '@slop/core';
 import type { PageContext } from './page-context';
 import { takeSseEvents } from './sse';
 
-/** A step on the board list is compact; a single-glob read adds the rest (read each with `?.`). */
-export type ListedHumanStep = CompactHumanStep &
-  Partial<
-    Pick<
-      HumanStep,
-      | 'detail'
-      | 'script'
-      | 'check'
-      | 'why'
-      | 'permissions'
-      | 'commands'
-      | 'verify'
-      | 'source'
-      | 'doneBy'
-      | 'doneAt'
-      | 'dismissedReason'
-    >
-  >;
+export type { ArtifactSummaryView, ListedHumanStep } from '@slop/core';
 
-export interface GlobView extends Glob {
-  /** Who works on the glob and how (derived on the server; read through `actorOf` and `modeOf` where a fixture may lack them). */
-  readonly actor?: WorkActor;
-  readonly mode?: Mode;
-  readonly list: List;
-  readonly branch: string;
-  readonly currentRun: Run | null;
-  readonly allowedActions?: readonly Action[];
-  /** An action glob's derived state (open, waiting, preparing, preparation_failed, ready, recording, closed); absent on other globs and on an older API. */
-  readonly actionState?: ActionState;
-  /** An action glob's machine preparation (record kind, rounds), or null for a plain action; absent on an older API. */
-  readonly preparation?: ActionPreparation | null;
-  /** The latest version of each artifact (board list and glob reads; absent from some write responses). */
-  readonly artifacts?: readonly ArtifactSummaryView[];
-  /** Every relation of the glob that still holds something back (any gate), with the title of what it points at; computed on the server for the board list and the glob read (read with `?.`: absent on an older API). */
-  readonly holding?: readonly Holding[];
-  /** The glob's relations in groups: holding it back, held back by it, and no longer holding (single-glob reads only). */
-  readonly relations?: RelationsView;
-  /** Other globs' relations that wait for this one (board list rows; redacted for boards the viewer is not on); absent when none or on an older API. */
-  readonly holdsBack?: readonly HeldBack[];
-  /** Open card suggestions from the automatic relation pass; absent when none or on an older API. */
-  readonly suggestions?: readonly RelationSuggestion[];
-  /** Open and answered questions (the "the AI is unsure" marker); absent on an older API or when the glob has none (read with `?.`). */
-  readonly questions?: readonly OpenQuestion[];
-  /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
-  readonly split?: { readonly source: string; readonly part: number; readonly parts: readonly string[] };
-  /** A fanned-out glob's workstreams in compact form, for the card's workstream states; absent for a small glob or an older API. */
-  readonly workstreams?: WorkstreamsSummary;
-  /** True while the size check flagged the glob oversized and it hasn't started (advice only; the card's chip). */
-  readonly oversized?: boolean;
-  /** The size check: why it was flagged, its evidence and the forecast's workstreams, advice only (single-glob reads only). */
-  readonly sizeCheck?: SizeCheck;
-  /** Why a person is needed and what to do first; null when nothing is wrong, absent on an older API (single-glob reads only). */
-  readonly handover?: Handover | null;
-  /** An open action's script (a `script:` line in its plan) and whether the base branch has it (null: could not check); null when it names none; absent on an older API and for other globs on the list. */
-  readonly script?: { readonly path: string; readonly onBase: boolean | null } | null;
-  /** The status messages the viewer dismissed on this glob (see `lib/dismissals.ts`); absent on an older API. */
-  readonly dismissedKeys?: readonly string[];
-  /** The check a sub on the board waits for (the merge policy's `subGateCheck`); absent on an older API, read as `checks`. */
-  readonly gateCheck?: string;
-  /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
-  readonly humanSteps?: readonly ListedHumanStep[];
-  /** Open rollout steps holding back sign-off, counted by the server (a same with any is merged with Merge and continue); absent on an older API, read with `?.`. */
-  readonly rolloutSteps?: number;
-  /** The "Arm system" label: the title of the first open rollout step (a downstream step counts, signed off or not); absent when none is open or on an older API. */
-  readonly arm?: Arm;
-  /** Whose move it is, derived on every read (board list only; absent on an older API). */
-  readonly move?: Move;
-  /** What slop is doing for the glob (board list and glob read; absent on an older API). */
-  readonly machineSteps?: readonly MachineStep[];
-  /** Who picked the glob up, took it over or handed it to the machine, oldest first (single-glob reads only; absent on an older API). */
-  readonly handoffs?: readonly Handoff[];
-}
-
-export type ArtifactSummaryView = Omit<ArtifactSummary, 'globId'>;
+/** The glob as the server sends it: the stored glob and the facts derived on every read (see `PresentableGlob`). */
+export type GlobView = PresentableGlob;
 
 export interface BoardView extends Board {
   readonly role: Role;
@@ -1092,9 +1003,6 @@ export const api = {
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
   reviewLabel: (id: string, label: LabelName, command: LabelCommand, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/labels/${label}`, { command, version }),
-  /** "Got it" / ×: the viewer has read the status message `key` (dismiss) or wants it back (Show again). Answers the glob. */
-  setDismissed: (id: string, key: string, dismiss: boolean) =>
-    request<GlobView>(dismiss ? 'POST' : 'DELETE', `/api/globs/${id}/dismiss`, { key }),
   /** The ✕ on a relation: it is not a dependency. */
   dismissRelation: (id: string, relationId: string, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/relations/${relationId}/dismiss`, { version }),

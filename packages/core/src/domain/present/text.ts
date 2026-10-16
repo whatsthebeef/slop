@@ -18,4 +18,11 @@ export const stripMarkdown = (text: string): string =>
     .trim();
 
 /** The same for multi-line text (a tooltip): each line is stripped on its own and the line breaks stay. */
-export const stripMarkdownLines = (text: string): string => text.split('\n').map(stripMarkdown).join('\n');
+export const stripMarkdownLines = (text: string): string =>
+  text.split('\n').map(stripMarkdown).join('\n');
+
+/** A person's first name from their email: `john.bower@x.com` is "John". Slop keeps no display names, so the address is all there is. */
+export const firstNameOf = (email: string): string => {
+  const first = (email.split('@')[0] ?? '').split(/[._+-]/)[0] ?? '';
+  return first === '' ? email : first.charAt(0).toUpperCase() + first.slice(1);
+};

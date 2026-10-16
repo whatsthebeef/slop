@@ -1,8 +1,7 @@
+import { blocksReadOnly, closedQuestionsOf, openQuestionsOf } from '@slop/core';
 import type { OpenQuestion } from '@slop/core';
 import { useState } from 'react';
 import type { AnswerQuestionInput } from '@/lib/api';
-import { blocksReadOnly } from '@/lib/blocking-item';
-import { closedQuestionsOf, openQuestionsOf } from '@/lib/questions';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { CommandBox } from '../human-steps';

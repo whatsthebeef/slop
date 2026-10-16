@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACTIVITY_SHOWN, activityOf } from '../src/lib/activity';
+import { ACTIVITY_SHOWN, activityOf } from '@slop/core';
 import type { GlobView } from '../src/lib/api';
 import { glob as coreGlob } from '../../../packages/core/test/fixtures';
 
@@ -58,11 +58,13 @@ describe('activityOf', () => {
       'o/r',
     );
     const texts = entries.map((e) => e.text);
-    expect(texts[0]).toBe('PR #7 ready for review · s1t1');
+    // The PR line says what is true of the PR: a conflict and failed checks mean it is not ready for review.
+    expect(texts).toContain('PR #7 conflicts with main · s1t1');
+    expect(texts.some((text) => text.includes('ready for review'))).toBe(false);
     expect(texts).toContain('Conflict with main after s1t9');
     expect(texts).toContain('Checks failed on abcdef1');
     expect(texts).toContain('Run failed: boom');
-    expect(entries.find((e) => e.id === 'pr:7:ready')?.link).toBe('https://github.com/o/r/pull/7');
+    expect(entries.find((e) => e.id.startsWith('pr:7:'))?.link).toBe('https://github.com/o/r/pull/7');
     const checks = entries.find((e) => e.text === 'Checks failed on abcdef1');
     expect(checks).toMatchObject({ link: 'https://ci/1', linkLabel: 'CI run' });
     expect(checks?.title).toContain('Lint · eslint');
@@ -82,10 +84,10 @@ describe('activityOf', () => {
   it('collapses consecutive identical events', () => {
     const entries = activityOf(view({ runs: [run('r1'), run('r2', { queuedAt: T(5), startedAt: T(6), endedAt: T(8) })] }), null);
     const started = entries.filter((e) => e.text === 'Run started');
-    expect(started).toHaveLength(2);
-    const same = activityOf(view({ runs: [run('a', { state: 'watching', outcome: null, endedAt: null, startedAt: T(1) }), run('b', { state: 'watching', outcome: null, endedAt: null, startedAt: T(2) })] }), null);
+    expect(started.reduce((n, e) => n + e.count, 0)).toBe(2);
+    const same = activityOf(view({ pr: null, runs: [run('a', { state: 'watching', outcome: null, endedAt: null, startedAt: T(1) }), run('b', { state: 'watching', outcome: null, endedAt: null, startedAt: T(2) })] }), null);
     expect(same.filter((e) => e.text === 'Run on standby')).toHaveLength(2);
-    const collapsedStart = activityOf(view({ runs: [run('a', { state: 'queued', outcome: null, endedAt: null, startedAt: T(1) }), run('b', { state: 'queued', outcome: null, endedAt: null, startedAt: T(2) })] }), null);
+    const collapsedStart = activityOf(view({ pr: null, runs: [run('a', { state: 'queued', outcome: null, endedAt: null, startedAt: T(1) }), run('b', { state: 'queued', outcome: null, endedAt: null, startedAt: T(2) })] }), null);
     expect(collapsedStart.find((e) => e.text === 'Run started')?.count).toBe(2);
   });
 

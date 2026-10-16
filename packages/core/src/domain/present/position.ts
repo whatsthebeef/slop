@@ -1,7 +1,22 @@
-import { CHECKS_RUNNING_TEXT, DEFAULT_STALL_MINUTES, agentSetVersionOfTitle, isAgentSetGlob, isInFlight, isStale, humanSteps as deriveHumanSteps, machineSteps as deriveMachineSteps, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '@slop/core';
-import type { HumanStepViewer, MachineStep, MachineStepKind, Move } from '@slop/core';
-import type { GlobView } from './api';
-import { checksInFlightWhileMerging, checksRunningTip, mergeQueueStatus, mergingChecksText } from './check-wording';
+import { CHECKS_RUNNING_TEXT, whoseMove, PAIRING_REASON, PICKED_UP_REASON } from '../whose-move.js';
+import {
+  DEFAULT_STALL_MINUTES,
+  isInFlight,
+  isStale,
+  machineSteps as deriveMachineSteps,
+} from '../machine-steps.js';
+import { agentSetVersionOfTitle, isAgentSetGlob } from '../agent-set.js';
+import { humanSteps as deriveHumanSteps } from '../human-steps.js';
+import type { HumanStepViewer } from '../human-steps.js';
+import type { MachineStep, MachineStepKind } from '../machine-steps.js';
+import type { Move } from '../whose-move.js';
+import type { PresentableGlob } from './facts.js';
+import {
+  checksInFlightWhileMerging,
+  checksRunningTip,
+  mergeQueueStatus,
+  mergingChecksText,
+} from './check-wording.js';
 
 /**
  * Where a glob is, in one indicator: who has the ball and what they are doing. The card's chip and the glob view's "Now" row
@@ -53,34 +68,54 @@ const DOING: Readonly<Record<MachineStepKind, string>> = {
 const minutesSince = (at: string | null, now: string): number | null =>
   at === null ? null : Math.max(0, Math.floor((Date.parse(now) - Date.parse(at)) / 60_000));
 
-const runDetail = (glob: GlobView): string[] => {
+const runDetail = (glob: PresentableGlob): string[] => {
   const run = glob.currentRun ?? null;
   if (run === null || run.state === 'ended') return [];
-  return [`Owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`, ...(run.sessionUrl === null ? [] : [`Session: ${run.sessionUrl}`])];
+  return [
+    `Owned by ${run.routineOwner}, triggered by ${run.triggeredBy}`,
+    ...(run.sessionUrl === null ? [] : [`Session: ${run.sessionUrl}`]),
+  ];
 };
 
-const liveSession = (glob: GlobView): string | null => {
+const liveSession = (glob: PresentableGlob): string | null => {
   const run = glob.currentRun ?? null;
   return run === null || run.state === 'ended' ? null : run.sessionUrl;
 };
 
 /** The move for a glob: the server's, else derived here from the glob alone. */
-export const moveOf = (glob: GlobView, now: string, viewer?: HumanStepViewer): Move =>
+export const moveOf = (glob: PresentableGlob, now: string, viewer?: HumanStepViewer): Move =>
   glob.move ??
-  whoseMove(glob, deriveHumanSteps(glob, {}, []), glob.machineSteps ?? deriveMachineSteps(glob), glob.holding ?? [], now, {
-    ...(viewer === undefined ? {} : { viewer }),
-  });
+  whoseMove(
+    glob,
+    deriveHumanSteps(glob, {}, []),
+    glob.machineSteps ?? deriveMachineSteps(glob),
+    glob.holding ?? [],
+    now,
+    {
+      ...(viewer === undefined ? {} : { viewer }),
+    },
+  );
 
 /** The machine steps for a glob: the server's, else derived here. */
-export const stepsOf = (glob: GlobView): readonly MachineStep[] => glob.machineSteps ?? deriveMachineSteps(glob);
+export const stepsOf = (glob: PresentableGlob): readonly MachineStep[] =>
+  glob.machineSteps ?? deriveMachineSteps(glob);
 
 /** The step the machine is on: the first one holding the ball that is alive. */
 const leadStep = (steps: readonly MachineStep[], now: string): MachineStep | undefined =>
   steps.find((s) => s.holdsBall && isInFlight(s) && !isStale(s, now, DEFAULT_STALL_MINUTES));
 
-const machineText = (glob: GlobView, step: MachineStep, now: string, base?: string): string => {
+const machineText = (
+  glob: PresentableGlob,
+  step: MachineStep,
+  now: string,
+  base?: string,
+): string => {
   // An armed merge is queued until the checks pass, but what the machine is doing is merging (the shared wording while they run).
-  if (step.kind === 'merge') return mergeQueueStatus(glob) ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : DOING.merge);
+  if (step.kind === 'merge')
+    return (
+      mergeQueueStatus(glob) ??
+      (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : DOING.merge)
+    );
   if (step.state === 'queued') {
     const n = minutesSince(step.startedAt, now);
     return n === null || n < 1 ? 'starting' : `queued ${String(n)} min`;
@@ -108,7 +143,10 @@ const heldByPerson = (move: Move, now: string, viewer?: HumanStepViewer): Positi
   const quiet = minutes !== null && minutes >= QUIET_AFTER_MINUTES ? quietWords(minutes) : null;
   const pairing = move.reason === PAIRING_REASON;
   const text = pairing ? 'pairing' : `Picked up${quiet === null ? '' : `, ${quiet}`}`;
-  const ago = minutes === null ? '' : ` ${minutes < 60 ? `${String(minutes)} min` : minutes < QUIET_AFTER_MINUTES ? `${String(Math.round(minutes / 60))} h` : `${String(Math.round(minutes / 1440))} d`} ago`;
+  const ago =
+    minutes === null
+      ? ''
+      : ` ${minutes < 60 ? `${String(minutes)} min` : minutes < QUIET_AFTER_MINUTES ? `${String(Math.round(minutes / 60))} h` : `${String(Math.round(minutes / 1440))} d`} ago`;
   return {
     holder: 'human',
     text,
@@ -129,12 +167,21 @@ const heldByPerson = (move: Move, now: string, viewer?: HumanStepViewer): Positi
  * The glob's position, or null when the indicator shows nothing: it is the viewer's turn (the Your turn chip says it), the
  * glob is idle in Planning, or it is signed off.
  */
-export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer, base?: string): Position | null => {
+export const positionOf = (
+  glob: PresentableGlob,
+  now: string,
+  viewer?: HumanStepViewer,
+  base?: string,
+): Position | null => {
   const steps = stepsOf(glob);
   const move = moveOf(glob, now, viewer);
   const session = liveSession(glob);
   // Slop's own agent-set glob has no run, session or implementer: slop commits the set itself.
-  if (isAgentSetGlob(glob) && session === null && (glob.status === 'in_progress' || glob.status === 'implementing')) {
+  if (
+    isAgentSetGlob(glob) &&
+    session === null &&
+    (glob.status === 'in_progress' || glob.status === 'implementing')
+  ) {
     return {
       holder: 'machine',
       text: `committing agent set v${String(agentSetVersionOfTitle(glob.title))}`,
@@ -154,10 +201,15 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       const text = lead === undefined ? move.reason : machineText(glob, lead, now, base);
       const tip =
         lead?.kind === 'recommendation'
-          ? ['Slop is getting its recommendation, as it does when the learning is picked up and when the draft changes']
+          ? [
+              'Slop is getting its recommendation, as it does when the learning is picked up and when the draft changes',
+            ]
           : lead?.state === 'queued'
-          ? [`Machine run queued: ${session === null ? 'no session yet' : 'open the session'}`, ...runDetail(glob)]
-          : ['The machine is working on it', ...runDetail(glob)];
+            ? [
+                `Machine run queued: ${session === null ? 'no session yet' : 'open the session'}`,
+                ...runDetail(glob),
+              ]
+            : ['The machine is working on it', ...runDetail(glob)];
       return {
         holder: 'machine',
         text,
@@ -180,11 +232,12 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
         holder: 'waiting',
         text,
         label: text,
-        tip: armed && checks
-          ? `Slop merges the PR as soon as the checks on its head${sha === null ? '' : ` (${sha.slice(0, 7)})`} pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.`
-          : checks
-            ? `${move.reason === CHECKS_RUNNING_TEXT ? '' : `Waiting: ${move.reason}\n`}${checksRunningTip(glob)}`
-            : `Waiting: ${move.reason}`,
+        tip:
+          armed && checks
+            ? `Slop merges the PR as soon as the checks on its head${sha === null ? '' : ` (${sha.slice(0, 7)})`} pass. If they fail or the PR conflicts, it stops and says why. Cancel merge stops it.`
+            : checks
+              ? `${move.reason === CHECKS_RUNNING_TEXT ? '' : `Waiting: ${move.reason}\n`}${checksRunningTip(glob)}`
+              : `Waiting: ${move.reason}`,
         spinning: steps.some((s) => s.kind === 'checks' && s.state === 'running'),
         queued: false,
         tone: 'text-muted-foreground',
@@ -208,7 +261,8 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
       };
     case 'human':
       // Without a server move or a viewer a due step could be anyone's, so say nothing; the Your turn chip covers the viewer.
-      if (move.reason === PICKED_UP_REASON || move.reason === PAIRING_REASON) return heldByPerson(move, now, viewer);
+      if (move.reason === PICKED_UP_REASON || move.reason === PAIRING_REASON)
+        return heldByPerson(move, now, viewer);
       if (glob.move === undefined && viewer === undefined) return null;
       // Someone else's turn.
       return {
@@ -229,7 +283,8 @@ export const positionOf = (glob: GlobView, now: string, viewer?: HumanStepViewer
 };
 
 /** Whether the machine is on standby for the glob (fixes new CI failures and review comments until it merges). */
-export const onStandby = (glob: GlobView): MachineStep | null => stepsOf(glob).find((s) => s.state === 'standby') ?? null;
+export const onStandby = (glob: PresentableGlob): MachineStep | null =>
+  stepsOf(glob).find((s) => s.state === 'standby') ?? null;
 
 /** A step's state in words, for the glob view's list. */
 export const stepWords = (step: MachineStep, now: string): string => {

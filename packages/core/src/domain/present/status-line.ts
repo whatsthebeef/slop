@@ -1,26 +1,35 @@
+import { OTHER_BOARD_GLOB } from '../relations.js';
+import * as machine from '../machine.js';
+import { actionState, preparationOf } from '../action-glob.js';
 import {
-  actionState,
   appliedHolding,
+  MERGE_CONFLICT_STALL_LABEL,
+  MERGE_QUEUE_TIP,
+} from '../whose-move.js';
+import {
   behindAdvice,
   behindWarning,
   currentBehind,
   checksExplanation,
-  machine,
-  preparationOf,
   readyStatus,
-  MERGE_CONFLICT_STALL_LABEL,
-  MERGE_QUEUE_TIP,
   stuckHint,
-  UNTIL_WORDS,
-  yourTurn,
-} from '@slop/core';
-import { stripMarkdown } from './markdown-text';
-import type { Action, Holding, HumanStepKind, HumanStepViewer, RelationSource, Role, StepAction } from '@slop/core';
-import { rolloutLine } from './human-steps';
-import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
-import type { GlobView } from './api';
-import { checksInFlightWhileMerging, mergeQueueStatus, mergingChecksText } from './check-wording';
-import { actionPresentation, type ActionIcon } from './action-presentation';
+} from '../readiness.js';
+import { UNTIL_WORDS } from '../relations.js';
+import { yourTurn } from '../human-steps.js';
+import type { Action } from '../machine.js';
+import type { Holding } from '../relations.js';
+import type { HumanStepKind, HumanStepViewer, StepAction } from '../human-steps.js';
+import type { RelationSource, Role } from '../types.js';
+import { stripMarkdown } from './text.js';
+import { rolloutLine } from './human-steps.js';
+import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-view.js';
+import type { PresentableGlob } from './facts.js';
+import {
+  checksInFlightWhileMerging,
+  mergeQueueStatus,
+  mergingChecksText,
+} from './check-wording.js';
+import { actionPresentation, type ActionIcon } from './action-presentation.js';
 
 /** One problem on a glob, in plain words: what the card shows in a line and the glob view shows in full. */
 export interface StatusLine {
@@ -35,7 +44,6 @@ export interface StatusLine {
     | 'behind'
     | 'ready'
     | 'rollout'
-    | 'merge-waits'
     | 'merging'
     | 'action';
   /** One line, cut short: the card's text. */
@@ -66,21 +74,17 @@ export interface StatusLine {
  * rest are normal states (merging, checks running, base red, queued, rollout steps due) that the corner status and its
  * tooltip already say, so they never get a block.
  */
-const PROBLEM_KINDS: ReadonlySet<StatusLine['kind']> = new Set(['provisioning', 'checks', 'failure', 'investigation-failed', 'stuck']);
+const PROBLEM_KINDS: ReadonlySet<StatusLine['kind']> = new Set([
+  'provisioning',
+  'checks',
+  'failure',
+  'investigation-failed',
+  'stuck',
+]);
 
 /** True when the status line is a real problem rather than a normal state. */
-export const isProblemLine = (line: Pick<StatusLine, 'kind'>): boolean => PROBLEM_KINDS.has(line.kind);
-
-/**
- * True when someone is already on the problem: a fix run queued or running, or the glob picked up or taken over by a person.
- * A problem block shows only while nobody is (and goes by itself once checks pass, the conflict clears or the step is done);
- * the corner status says what is being done. A failed fix run ends, so the block comes back with its new failure.
- */
-export const problemHandled = (glob: Pick<GlobView, 'currentRun' | 'implementer'>): boolean => {
-  if (glob.implementer != null) return true;
-  const run = glob.currentRun;
-  return run != null && run.state !== 'ended' && !isInvestigateRun(run);
-};
+export const isProblemLine = (line: Pick<StatusLine, 'kind'>): boolean =>
+  PROBLEM_KINDS.has(line.kind);
 
 /** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
 const TURN_LABEL_MAX = 24;
@@ -99,22 +103,6 @@ export const oneLine = (text: string, max = 90): string => {
 export const hintSentence = (hint: string): string =>
   (hint.split(/\.\s|\s+Fix:/)[0] ?? hint).replace(/\.$/, '');
 
-const ALSO = {
-  provisioning: "the branch couldn't be created",
-  'base-red': 'the base branch is red',
-  checks: 'checks failed',
-  failure: 'the routine run failed',
-  'investigation-failed': 'the investigation failed',
-  'start-queued': '',
-  stuck: 'looks stuck',
-  behind: 'the branch is behind the base',
-  ready: '',
-  rollout: '',
-  'merge-waits': '',
-  merging: '',
-  action: '',
-} as const;
-
 /** A prepared action's state in words: who has the ball (the icon) and what it is doing. */
 export interface ActionLine {
   readonly state: 'preparing' | 'preparation_failed' | 'ready' | 'recording';
@@ -129,7 +117,7 @@ export interface ActionLine {
  * A recorded (Done) prepared action whose record will not merge by itself: its run failed or conflicted, or its PR is open and
  * neither armed nor queued (red checks, disarmed). A person must fix it and merge; nothing else moves it.
  */
-export const recordingStuck = (glob: GlobView): boolean =>
+export const recordingStuck = (glob: PresentableGlob): boolean =>
   glob.status === 'failed' ||
   glob.failure != null ||
   glob.conflict != null ||
@@ -140,7 +128,7 @@ export const recordingStuck = (glob: GlobView): boolean =>
  * ready to run, recording, or a failed preparation. Null for a plain action, for any other glob, and while it waits to start
  * (the hold line says what it waits for).
  */
-export const actionLine = (glob: GlobView): ActionLine | null => {
+export const actionLine = (glob: PresentableGlob): ActionLine | null => {
   const preparation = glob.preparation ?? preparationOf(glob);
   if (glob.category !== 'action' || preparation == null) return null;
   const state = glob.actionState ?? actionState(glob);
@@ -156,7 +144,13 @@ export const actionLine = (glob: GlobView): ActionLine | null => {
       };
     case 'preparation_failed': {
       const why = glob.failure?.reason ?? 'The preparation run failed';
-      return { state, icon: 'alert', text: 'preparation failed', tip: `${why}\nRetry prepares it again on the same branch`, tone: 'text-red' };
+      return {
+        state,
+        icon: 'alert',
+        text: 'preparation failed',
+        tip: `${why}\nRetry prepares it again on the same branch`,
+        tone: 'text-red',
+      };
     }
     case 'ready':
       return {
@@ -187,8 +181,26 @@ export const actionLine = (glob: GlobView): ActionLine | null => {
   }
 };
 
-/** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
-export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer, base?: string): StatusLine | null => {
+const make = (
+  line: Omit<StatusLine, 'text' | 'url' | 'doing' | 'sessionUrl'> &
+    Partial<Pick<StatusLine, 'url' | 'doing' | 'sessionUrl'>>,
+): StatusLine => ({
+  text: oneLine(line.full),
+  url: null,
+  doing: null,
+  sessionUrl: null,
+  ...line,
+});
+
+/**
+ * Every problem and normal state the glob is in, as lines in the order they are pushed (not ranked): the failures, the merge,
+ * a queued start, a stall and the base moving on. `statusLine` takes the first for the status; the notice ranks them its own way.
+ */
+export const statusCandidates = (
+  glob: PresentableGlob,
+  now: string,
+  base?: string,
+): { readonly lines: StatusLine[]; readonly acting: ActionLine | null } => {
   const hint = stuckHint(glob, now, glob.gateCheck);
   const checks = checksExplanation(glob);
   const merging = glob.status === 'merging';
@@ -209,21 +221,13 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
   const acting = actionLine(glob);
   const candidates: StatusLine[] = [];
-  const make = (
-    line: Omit<StatusLine, 'text' | 'url' | 'doing' | 'sessionUrl'> &
-      Partial<Pick<StatusLine, 'url' | 'doing' | 'sessionUrl'>>,
-  ): StatusLine => ({
-    text: oneLine(line.full),
-    url: null,
-    doing: null,
-    sessionUrl: null,
-    ...line,
-  });
   // A glob with no branch can't do anything else, so this comes before every other problem.
   if (provisioningFailed) {
     candidates.push(make({ kind: 'provisioning', full: reason, tone: 'text-red', tip: reason }));
   }
-  if (checks !== null) {
+  // A conflict stops the checks from re-running, so a failure beside it is the conflict's, not a second problem.
+  const conflicted = (glob.conflict ?? failure?.conflict ?? null) !== null;
+  if (checks !== null && !(conflicted && !checks.inherited)) {
     const details = [checks.text, ...checks.lines.slice(1, 4), checks.url ?? ''].filter(
       (l) => l !== '',
     );
@@ -269,7 +273,8 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     // Checks in flight read the shared merging wording ("running checks", or "merging from <base>" while catching up).
     // In the host's merge queue it reads the queue wording instead.
     const queued = mergeQueueStatus(glob);
-    const merge = queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
+    const merge =
+      queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
     // A prepared action's merge is its record being written after Done.
     const full = acting?.state === 'recording' ? `recording · ${merge}` : merge;
     const rollout = hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : '';
@@ -353,6 +358,17 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       }),
     );
   }
+  return { lines: candidates, acting };
+};
+
+/** The one problem a glob shows, in plain words, most important first. */
+export const statusLine = (
+  glob: PresentableGlob,
+  now: string,
+  viewer?: HumanStepViewer,
+  base?: string,
+): StatusLine | null => {
+  const { lines: candidates, acting } = statusCandidates(glob, now, base);
   // A prepared action with nothing wrong says where it stands (the person's turn, the machine's, or recording).
   if (candidates.length === 0 && acting !== null && acting.state !== 'preparation_failed')
     return make({ kind: 'action', full: acting.text, tone: acting.tone, tip: acting.tip });
@@ -360,7 +376,10 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha, { rolloutSteps: glob.rolloutSteps ?? 0 });
     // Merged with its rollout still open: how far it is, and whose turn.
-    const rollout = glob.humanSteps === undefined ? null : rolloutLine(glob, glob.humanSteps, viewer, glob.machineSteps);
+    const rollout =
+      glob.humanSteps === undefined
+        ? null
+        : rolloutLine(glob, glob.humanSteps, viewer, glob.machineSteps);
     if (rollout !== null)
       return make({
         kind: rollout.turn === null ? 'rollout' : 'ready',
@@ -379,7 +398,10 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     // Waiting for checks is activity, not a problem or a next step: the activity label carries it.
     if (turn !== null) {
       const stalled = turn.kind === 'unstick' && glob.move?.holder === 'stalled' ? glob.move : null;
-      const cause = stalled === null ? null : `${stalled.reason.charAt(0).toUpperCase()}${stalled.reason.slice(1)}${stalled.since === null ? '' : ` since ${new Date(stalled.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}`;
+      const cause =
+        stalled === null
+          ? null
+          : `${stalled.reason.charAt(0).toUpperCase()}${stalled.reason.slice(1)}${stalled.since === null ? '' : ` since ${new Date(stalled.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}`;
       const turnAction = 'action' in turn ? turn.action : undefined;
       // The chip names one action; the cause (and that other options are in the glob view) is the tooltip's.
       const tip =
@@ -398,10 +420,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       });
     }
   }
-  const [top, ...rest] = candidates;
-  if (top === undefined) return null;
-  const also = rest.length === 0 ? '' : `\nAlso: ${rest.map((c) => ALSO[c.kind]).join(', ')}`;
-  return { ...top, tip: `${top.tip}${also}` };
+  return candidates[0] ?? null;
 };
 
 /** An action the glob is heading for but can't take yet: a short tooltip for its disabled button and the sentence's tail. */
@@ -418,7 +437,7 @@ export interface Waiting {
   readonly running?: true;
 }
 
-const failedWhy = (glob: GlobView, head: string): string => {
+const failedWhy = (glob: PresentableGlob, head: string): string => {
   const short = head.slice(0, 7);
   const inherited = glob.headChecks?.inheritedFrom;
   if (inherited !== undefined)
@@ -431,15 +450,25 @@ const failedWhy = (glob: GlobView, head: string): string => {
 };
 
 /** What an action's Done waits for: the glob that builds its script, or the script itself not being on the base branch yet. */
-const actionWaiting = (glob: GlobView, actions: readonly Action[]): Waiting[] => {
+const actionWaiting = (glob: PresentableGlob, actions: readonly Action[]): Waiting[] => {
   // A prepared action waits to be prepared; a plain one waits to be done.
-  const step: Action = (glob.preparation ?? preparationOf(glob)) == null ? 'complete_action' : 'prepare_action';
+  const step: Action =
+    (glob.preparation ?? preparationOf(glob)) == null ? 'complete_action' : 'prepare_action';
   if (glob.status !== 'planning' || actions.includes(step)) return [];
   const { label, icon } = actionPresentation(step, glob);
   const first = appliedHolding(glob, glob.holding ?? [])[0];
   if (first !== undefined) {
-    const tip = scriptHoldTip(glob, first) ?? `Waits for ${named(first)} to be ${UNTIL_WORDS[first.until]}`;
-    return [{ action: step, label, icon, tip, why: `for ${named(first)} to be ${UNTIL_WORDS[first.until]}` }];
+    const tip =
+      scriptHoldTip(glob, first) ?? `Waits for ${named(first)} to be ${UNTIL_WORDS[first.until]}`;
+    return [
+      {
+        action: step,
+        label,
+        icon,
+        tip,
+        why: `for ${named(first)} to be ${UNTIL_WORDS[first.until]}`,
+      },
+    ];
   }
   if (glob.script?.onBase !== false) return [];
   const why = `: script not on main yet: ${glob.script.path}`;
@@ -450,7 +479,11 @@ const actionWaiting = (glob: GlobView, actions: readonly Action[]): Waiting[] =>
  * Actions the glob is heading for but can't take yet: merging waits for the checks on the PR head, and a super's
  * Merge & keep working and Done wait for the latest implementation record at the head.
  */
-export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Role): Waiting[] => {
+export const waitingFor = (
+  glob: PresentableGlob,
+  actions: readonly Action[],
+  role: Role,
+): Waiting[] => {
   // Any member may do an action, so its reason is shown whatever the role.
   if (glob.category === 'action') return actionWaiting(glob, actions);
   // QA and PO can't take these actions at all, so a reason would mislead them.
@@ -478,24 +511,24 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
               tip: `Conflicts with ${glob.conflict.base}: merge it into the branch and push`,
               why: `: conflicts with ${glob.conflict.base}`,
             }
-        : checks?.sha === head && checks.state === 'failed'
-          ? {
-              tip:
-                checks.inheritedFrom === undefined
-                  ? `Checks failed on ${head.slice(0, 7)}`
-                  : `${checks.inheritedFrom.base} is red`,
-              why: failedWhy(glob, head),
-            }
-          : checks?.sha === head && checks.state === 'passed' && mergeHolds.length > 0
+          : checks?.sha === head && checks.state === 'failed'
             ? {
-                tip: `Held for ${mergeHolds.map(waitsForWords).join(', ')}: Merge anyway merges it now`,
-                why: `for ${mergeHolds.map(waitsForWords).join(', ')} (Merge anyway skips it)`,
+                tip:
+                  checks.inheritedFrom === undefined
+                    ? `Checks failed on ${head.slice(0, 7)}`
+                    : `${checks.inheritedFrom.base} is red`,
+                why: failedWhy(glob, head),
               }
-          : {
-              tip: `Waiting for the checks on ${head.slice(0, 7)} to pass`,
-              why: `for the checks on ${head.slice(0, 7)}`,
-              running: true,
-            };
+            : checks?.sha === head && checks.state === 'passed' && mergeHolds.length > 0
+              ? {
+                  tip: `Held for ${mergeHolds.map(waitsForWords).join(', ')}: Merge anyway merges it now`,
+                  why: `for ${mergeHolds.map(waitsForWords).join(', ')} (Merge anyway skips it)`,
+                }
+              : {
+                  tip: `Waiting for the checks on ${head.slice(0, 7)} to pass`,
+                  why: `for the checks on ${head.slice(0, 7)}`,
+                  running: true,
+                };
     waiting.push({ ...named('merge'), ...wait });
     if (glob.type === 'super') waiting.push({ ...named('merge_continue'), ...wait });
   }
@@ -516,48 +549,6 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
   return waiting;
 };
 
-/** "Merge waits for the checks on d16d563", one sentence per distinct reason. */
-export const waitingSentences = (waiting: readonly Waiting[]): string[] =>
-  [...new Set(waiting.map((w) => w.why))].map((why) => {
-    const labels = waiting.filter((w) => w.why === why).map((w) => w.label);
-    const subject = labels.length > 1 ? `${labels.join(' and ')} wait` : `${labels[0] ?? ''} waits`;
-    return `${subject}${why.startsWith(':') ? '' : ' '}${why}`;
-  });
-
-/**
- * What the glob view shows at its top: the card's line, and for a same or super that can't merge (or continue) yet,
- * why. The card's kind, tone, link and what is being done about it carry over.
- */
-export const viewStatusLine = (
-  glob: GlobView,
-  now: string,
-  waiting: readonly Waiting[],
-  baseBranch?: string,
-): StatusLine | null => {
-  const base = statusLine(glob, now, undefined, baseBranch);
-  // Checks still running are shown by the activity label.
-  const stopped = waiting.filter((w) => w.running !== true);
-  if (stopped.length === 0) return base;
-  const full = waitingSentences(stopped).join('. ');
-  const blocking =
-    base === null || base.kind === 'ready' || base.kind === 'checks' || base.kind === 'base-red';
-  // A failure, a stuck hint or a conflict outranks the wait; the buttons still carry their short reason.
-  if (!blocking) return base;
-  return {
-    kind:
-      base !== null && (base.kind === 'checks' || base.kind === 'base-red')
-        ? base.kind
-        : 'merge-waits',
-    text: oneLine(full),
-    full,
-    tone: base === null || base.kind === 'ready' ? 'text-muted-foreground' : base.tone,
-    tip: base?.tip ?? full,
-    url: base?.url ?? null,
-    doing: base?.kind === 'ready' ? null : (base?.doing ?? null),
-    sessionUrl: base?.sessionUrl ?? null,
-  };
-};
-
 /** How many blocking IDs the card and dialog name before folding the rest into "+N". */
 const SHOWN_AHEAD = 2;
 
@@ -565,27 +556,44 @@ const SHOWN_AHEAD = 2;
  * What keeps a glob from starting: its unmet start relations (the server computes them, with the board's old globs read).
  * Only a glob in Planning is held, or a failed one that Retrigger would refuse; once started a start relation holds nothing.
  */
-const startHolds = (glob: GlobView): readonly Holding[] =>
-  glob.status === 'planning' || glob.status === 'failed' ? (glob.holding ?? []).filter((h) => h.gate === 'start') : [];
+const startHolds = (glob: PresentableGlob): readonly Holding[] =>
+  glob.status === 'planning' || glob.status === 'failed'
+    ? (glob.holding ?? []).filter((h) => h.gate === 'start')
+    : [];
 
 /** What a holding names: the glob ID, or "decision s15k190" / "action s15a3" for human work. */
 const named = (h: Pick<Holding, 'to' | 'toIsDecision' | 'toIsAction' | 'external'>): string =>
-  h.external?.hidden === true ? OTHER_BOARD_GLOB : h.toIsDecision ? `decision ${h.to}` : h.toIsAction === true ? `action ${h.to}` : h.to;
-
-/** What the viewer sees of a glob on a board they are not on: no id, no title. */
-export const OTHER_BOARD_GLOB = 'a glob on another board';
+  h.external?.hidden === true
+    ? OTHER_BOARD_GLOB
+    : h.toIsDecision
+      ? `decision ${h.to}`
+      : h.toIsAction === true
+        ? `action ${h.to}`
+        : h.to;
 
 /** Whether a relation is one a person or an agent added without saying why (inferred, learned, split and automatic ones carry their own). */
-export const lacksReason = (r: { readonly reason: string | null; readonly source: RelationSource }): boolean =>
-  (r.source === 'person' || r.source === 'agent') && (r.reason ?? '').trim() === '';
+export const lacksReason = (r: {
+  readonly reason: string | null;
+  readonly source: RelationSource;
+}): boolean => (r.source === 'person' || r.source === 'agent') && (r.reason ?? '').trim() === '';
 
 /** The tail of a relation's line in a tip: ": <reason>", or " (no reason given)" for a person's or agent's relation without one. */
-const reasonTail = (r: { readonly reason: string | null; readonly source: RelationSource }): string =>
-  (r.reason ?? '').trim() !== '' ? `: ${r.reason ?? ''}` : lacksReason(r) ? ' (no reason given)' : '';
+const reasonTail = (r: {
+  readonly reason: string | null;
+  readonly source: RelationSource;
+}): string =>
+  (r.reason ?? '').trim() !== ''
+    ? `: ${r.reason ?? ''}`
+    : lacksReason(r)
+      ? ' (no reason given)'
+      : '';
 
 /** What a hold waits for, for a tip: "s15t220 (board Ops) to be merged and rolled out" (the until is spelled out only for `merged`). */
 const waitsForWords = (h: Holding): string => {
-  const board = h.external !== undefined && !h.external.hidden && h.external.boardName !== null ? ` (board ${h.external.boardName})` : '';
+  const board =
+    h.external !== undefined && !h.external.hidden && h.external.boardName !== null
+      ? ` (board ${h.external.boardName})`
+      : '';
   return `${named(h)}${board}${h.until === 'merged' ? ` to be ${UNTIL_WORDS.merged}` : ''}`;
 };
 
@@ -597,7 +605,7 @@ export interface BlockedParts {
 }
 
 /** What a held glob's line names: "s15f82, decision s15k190 +2". Null when nothing holds its start. */
-export const blockedParts = (glob: GlobView): BlockedParts | null => {
+export const blockedParts = (glob: PresentableGlob): BlockedParts | null => {
   const ahead = startHolds(glob).map(named);
   if (ahead.length === 0) return null;
   // Three or more fold to two names and a count.
@@ -628,9 +636,12 @@ const holdState = (state: Holding['state']): string => {
 };
 
 /** What the tip says glob waits for, each with its state and why: "s15f41 (Planning): uses humanSteps()". */
-export const chainTip = (glob: GlobView): string =>
+export const chainTip = (glob: PresentableGlob): string =>
   startHolds(glob)
-    .map((h) => `${named(h)}${h.external?.hidden === true ? '' : ` (${holdState(h.state)})`}${h.reason === null ? '' : `: ${h.reason}`}`)
+    .map(
+      (h) =>
+        `${named(h)}${h.external?.hidden === true ? '' : ` (${holdState(h.state)})`}${h.reason === null ? '' : `: ${h.reason}`}`,
+    )
     .join(', ');
 
 export interface HoldLine {
@@ -652,8 +663,9 @@ const GATE_WORDS = {
  * An action held by the glob that builds its script says so: "Its script scripts/x.sh is written by s1t1, which hasn't merged to
  * main yet." Null for any other hold.
  */
-const scriptHoldTip = (glob: GlobView, h: Holding): string | null => {
-  if (glob.category !== 'action' || h.gate !== 'start' || h.toIsDecision || h.toIsAction === true) return null;
+const scriptHoldTip = (glob: PresentableGlob, h: Holding): string | null => {
+  if (glob.category !== 'action' || h.gate !== 'start' || h.toIsDecision || h.toIsAction === true)
+    return null;
   const script = glob.script?.path;
   if (script === undefined && h.reason !== 'builds its script') return null;
   return `Its script${script === undefined ? '' : ` ${script}`} is written by ${h.to}, which hasn't merged to main yet.`;
@@ -663,7 +675,7 @@ const scriptHoldTip = (glob: GlobView, h: Holding): string | null => {
  * What holds the glob where it stands (a relation to another glob or a decision, at any gate): the corner's words and the
  * tooltip. Which holds apply is core's `appliedHolding`, the rule `whoseMove` uses. Null when nothing holds it.
  */
-export const holdLine = (glob: GlobView): HoldLine | null => {
+export const holdLine = (glob: PresentableGlob): HoldLine | null => {
   const held = appliedHolding(glob, glob.holding ?? []);
   const [first, ...rest] = held;
   if (first === undefined) return null;
@@ -677,7 +689,10 @@ export const holdLine = (glob: GlobView): HoldLine | null => {
       )
       .join('\n'),
     // A person will do an action once it is free, so it reads as theirs even while it waits.
-    icon: first.toIsDecision || first.toIsAction === true || glob.category === 'action' ? 'human' : 'hourglass',
+    icon:
+      first.toIsDecision || first.toIsAction === true || glob.category === 'action'
+        ? 'human'
+        : 'hourglass',
   };
 };
 
@@ -685,16 +700,20 @@ export const holdLine = (glob: GlobView): HoldLine | null => {
  * The tip lines the relation features add to a card: what supersedes it, what waits for it and why ("s1t8 waits: needs the schema"),
  * how many globs on other boards wait, and open suggestions. Each is absent when its field is (an older API sends none).
  */
-export const relationTips = (glob: GlobView): string[] => {
+export const relationTips = (glob: PresentableGlob): string[] => {
   const lines: string[] = [];
   const by = glob.relations?.supersededBy;
-  if (by != null) lines.push(`Superseded by ${by.hidden === true ? OTHER_BOARD_GLOB : by.id}${reasonTail(by)}`);
+  if (by != null)
+    lines.push(`Superseded by ${by.hidden === true ? OTHER_BOARD_GLOB : by.id}${reasonTail(by)}`);
   for (const h of glob.holdsBack ?? glob.relations?.holdsBack ?? []) {
     const from = h.external?.hidden === true ? OTHER_BOARD_GLOB : h.from;
     lines.push(`${from} waits${reasonTail(h)}`);
   }
   const others = glob.relations?.waitedOnByOtherBoards ?? 0;
-  if (others > 0) lines.push(`${String(others)} ${others === 1 ? 'glob' : 'globs'} on other boards ${others === 1 ? 'waits' : 'wait'} for this`);
+  if (others > 0)
+    lines.push(
+      `${String(others)} ${others === 1 ? 'glob' : 'globs'} on other boards ${others === 1 ? 'waits' : 'wait'} for this`,
+    );
   for (const s of glob.suggestions ?? []) lines.push(`Suggestion: ${s.text}`);
   return lines;
 };
@@ -709,25 +728,48 @@ export interface WorkstreamLine {
 }
 
 /** Joins names for the corner: the first, plus "+N" for the rest. */
-const firstPlus = (names: readonly string[]): string => `${names[0] ?? ''}${names.length > 1 ? ` +${String(names.length - 1)}` : ''}`;
+const firstPlus = (names: readonly string[]): string =>
+  `${names[0] ?? ''}${names.length > 1 ? ` +${String(names.length - 1)}` : ''}`;
 
 /**
  * The run state of a fanned-out glob's workstreams, while it is being built (not once it is merged). Most pressing first: a
  * failed workstream, one waiting for a decision, an integration conflict, then plain progress. Null for a small glob or when
  * every workstream is done or skipped.
  */
-export const workstreamLine = (glob: GlobView): WorkstreamLine | null => {
-  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open') return null;
+export const workstreamLine = (glob: PresentableGlob): WorkstreamLine | null => {
+  if (glob.status !== 'implementing' && glob.status !== 'in_progress' && glob.status !== 'pr_open')
+    return null;
   const items = (glob.workstreams?.items ?? []).filter((w) => w.state !== 'skipped');
   if (items.length === 0) return null;
-  const inState = (state: string): string[] => items.filter((w) => w.state === state).map((w) => w.name);
-  const tip = items.map((w) => `${w.name}: ${w.state.replace(/_/g, ' ')}${w.conflicts.length === 0 ? '' : ` (conflicts: ${w.conflicts.join(', ')})`}`).join('\n');
+  const inState = (state: string): string[] =>
+    items.filter((w) => w.state === state).map((w) => w.name);
+  const tip = items
+    .map(
+      (w) =>
+        `${w.name}: ${w.state.replace(/_/g, ' ')}${w.conflicts.length === 0 ? '' : ` (conflicts: ${w.conflicts.join(', ')})`}`,
+    )
+    .join('\n');
   const failed = inState('failed');
-  if (failed.length > 0) return { text: `failed · ${firstPlus(failed)}`, tip, icon: 'human', tone: 'text-red' };
+  if (failed.length > 0)
+    return { text: `failed · ${firstPlus(failed)}`, tip, icon: 'human', tone: 'text-red' };
   const deciding = inState('waiting_decision');
-  if (deciding.length > 0) return { text: `waiting · decision for ${firstPlus(deciding)}`, tip, icon: 'human', tone: 'text-required' };
-  const conflicting = items.filter((w) => w.state === 'running' && w.conflicts.length > 0).map((w) => w.name);
-  if (conflicting.length > 0) return { text: `integration conflict · ${conflicting.join('+')}`, tip, icon: 'machine-spinning', tone: 'text-muted-foreground' };
+  if (deciding.length > 0)
+    return {
+      text: `waiting · decision for ${firstPlus(deciding)}`,
+      tip,
+      icon: 'human',
+      tone: 'text-required',
+    };
+  const conflicting = items
+    .filter((w) => w.state === 'running' && w.conflicts.length > 0)
+    .map((w) => w.name);
+  if (conflicting.length > 0)
+    return {
+      text: `integration conflict · ${conflicting.join('+')}`,
+      tip,
+      icon: 'machine-spinning',
+      tone: 'text-muted-foreground',
+    };
   const running = items.some((w) => w.state === 'running');
   if (!running && !items.some((w) => w.state === 'not_started')) return null;
   return {
@@ -743,7 +785,7 @@ export const workstreamLine = (glob: GlobView): WorkstreamLine | null => {
  * so slop will merge it into the branch first and stop if it conflicts. Null when nothing is known to be ahead.
  */
 export const mergeWarning = (
-  glob: Pick<GlobView, 'status' | 'behind' | 'conflict' | 'pr'>,
+  glob: Pick<PresentableGlob, 'status' | 'behind' | 'conflict' | 'pr'>,
 ): string | null => {
   const behind = currentBehind(glob);
   if (glob.status !== 'pr_open' || glob.conflict != null || behind == null || behind.behindBy <= 0)

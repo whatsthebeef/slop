@@ -45,7 +45,7 @@ describe('ChipButton inside a Tip', () => {
 
 describe('ArmSystemLabel inside a Tip', () => {
   const armed = (props: { onFilter?: () => void; to?: string }) =>
-    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ArmSystemLabel, { label: { text: 'Arm system · main', tip: 'Run the migration' }, ...props })));
+    renderToStaticMarkup(createElement(MemoryRouter, null, createElement(ArmSystemLabel, { label: { text: 'Arm system', tip: 'Run the migration' }, ...props })));
 
   it.each([
     ['a filter button', { onFilter: () => undefined }],

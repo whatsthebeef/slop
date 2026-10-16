@@ -123,7 +123,6 @@ export const SignedOffPage = () => {
                   setFilters({ ...filters, group: name });
                   setFilterOpen(true);
                 }}
-                moves={[]}
                 previewing={null}
                 onPreview={noop}
                 onMove={noop}

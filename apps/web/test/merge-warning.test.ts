@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeWarning } from '../src/lib/status-line';
+import { mergeWarning } from '@slop/core';
 import { NOW } from '../../../packages/core/test/fixtures';
 import { prOpen, view } from './helpers/glob-views';
 

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { humanSteps, machine, machineSteps, whoseMove } from '@slop/core';
+import { humanSteps, machine, machineSteps, whoseMove, mainAction, actionPresentation, presentedActions } from '@slop/core';
 import type { Actor, Glob, Run, Status } from '@slop/core';
-import { mainAction } from '../src/lib/main-action';
-import { actionPresentation, presentedActions } from '../src/lib/action-presentation';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 /**

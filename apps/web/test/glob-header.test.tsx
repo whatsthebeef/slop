@@ -6,6 +6,7 @@ import { GlobHeader, HEADER_HEIGHT_VAR } from '../src/components/glob-view/heade
 import type { GlobViewContext } from '../src/components/glob-view/context';
 import type { GlobActionsState } from '../src/components/glob-view/actions';
 import { ACTIVITY_ID, useNowState } from '../src/components/glob-view/status';
+import { presentOf } from '../src/lib/present';
 import type { GlobView } from '../src/lib/api';
 import { GlobCard } from '../src/components/glob-card';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
@@ -20,7 +21,7 @@ describe('GlobHeader', () => {
     setup?.();
     const ctx = { glob: g, onUpdate: () => Promise.resolve(null) } as unknown as GlobViewContext;
     const Bar = () => {
-      const state = useNowState(g, false, [], { viewer, base } as unknown as GlobActionsState);
+      const state = useNowState(g, false, { viewer, base, presentation: presentOf(g, { viewer, base }) } as unknown as GlobActionsState);
       return <GlobHeader ctx={ctx} onClose={() => undefined} state={state} />;
     };
     return render(
@@ -76,19 +77,10 @@ describe('GlobHeader', () => {
         move: { holder: 'machine', reason: 'implementing', since: NOW },
       });
 
-    it("opens the run's session from the status, with the tooltip saying so", () => {
+    it('is a status only: a click scrolls to the Activity log, which has the run and its session, and opens no link', () => {
       const open = vi.fn();
       vi.stubGlobal('open', open);
       const { getByTestId } = renderBar(live('https://claude.ai/code/s'));
-      expect(getByTestId('header-status').getAttribute('title')).toBe("Open the machine's session");
-      getByTestId('header-status').click();
-      expect(open).toHaveBeenCalledWith('https://claude.ai/code/s', '_blank', 'noreferrer');
-    });
-
-    it('scrolls to the Activity log when the run has no session yet', () => {
-      const open = vi.fn();
-      vi.stubGlobal('open', open);
-      const { getByTestId } = renderBar(live(null));
       expect(getByTestId('header-status').getAttribute('title')).not.toBe("Open the machine's session");
       getByTestId('header-status').click();
       expect(open).not.toHaveBeenCalled();
@@ -201,7 +193,7 @@ describe('GlobHeader', () => {
         cleanup();
         const { container } = render(
           <MemoryRouter>
-            <GlobCard glob={g} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
+            <GlobCard glob={g} onOpen={() => undefined} onOpenSection={() => undefined} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
           </MemoryRouter>,
         );
         const status = container.querySelector('[data-testid="card-status"]');
@@ -230,8 +222,6 @@ describe('GlobHeader', () => {
             glob={g}
             onOpen={() => undefined}
             onOpenSection={() => undefined}
-            onReviewLabel={() => Promise.resolve(true)}
-            moves={[]}
             previewing={null}
             onPreview={() => undefined}
             onMove={() => undefined}
@@ -255,8 +245,6 @@ describe('GlobHeader', () => {
             glob={g}
             onOpen={() => undefined}
             onOpenSection={() => undefined}
-            onReviewLabel={() => Promise.resolve(true)}
-            moves={[]}
             previewing={null}
             onPreview={() => undefined}
             onMove={() => undefined}
@@ -278,7 +266,7 @@ describe('GlobHeader', () => {
       cleanup();
       const { container } = render(
         <MemoryRouter>
-          <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} onReviewLabel={() => Promise.resolve(true)} moves={[]} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
+          <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
       expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');

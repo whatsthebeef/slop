@@ -125,7 +125,6 @@ describe('card group label', () => {
           glob={{ ...glob(), group: 'board-chat' } as GlobView}
           onOpen={vi.fn()}
           onOpenSection={vi.fn()}
-          moves={[]}
           previewing={null}
           onPreview={vi.fn()}
           onMove={vi.fn()}

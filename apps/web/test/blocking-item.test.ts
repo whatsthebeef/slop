@@ -1,7 +1,7 @@
+import { blockingItem, blocksReadOnly } from '@slop/core';
 import type { Action, OpenQuestion } from '@slop/core';
 import { describe, expect, it } from 'vitest';
 import type { GlobView, ListedHumanStep } from '../src/lib/api';
-import { blockingItem, blocksReadOnly } from '../src/lib/blocking-item';
 import { glob as coreGlob } from '../../../packages/core/test/fixtures';
 
 const view = (patch: Partial<GlobView> = {}): GlobView => ({

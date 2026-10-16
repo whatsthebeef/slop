@@ -1,5 +1,6 @@
-import type { ArtifactKind, LabelName } from '@slop/core';
-import type { GlobTarget } from './glob-section';
+import type { ArtifactKind } from '../knowledge.js';
+import type { LabelName } from '../types.js';
+import type { GlobTarget } from './glob-sections.js';
 
 /** Where each card chip or icon opens the glob view (`?section=…`); the card passes these to `onOpenSection`. */
 export const cardTargets = {
@@ -13,12 +14,11 @@ export const cardTargets = {
   escalation: (): GlobTarget => ({ section: 'escalation' }),
   /** The "question" corner status. */
   questions: (): GlobTarget => ({ section: 'questions' }),
-  /** The merge-conflict status. */
-  conflict: (): GlobTarget => ({ section: 'conflict' }),
   /** The oversized chip. */
   size: (): GlobTarget => ({ section: 'size' }),
   /** A label's "open review", or the sign-off section as a whole without a label. */
-  label: (name?: LabelName): GlobTarget => (name === undefined ? { section: 'labels' } : { section: 'labels', label: name }),
+  label: (name?: LabelName): GlobTarget =>
+    name === undefined ? { section: 'labels' } : { section: 'labels', label: name },
   /** A decision glob's scope, outcome and conflict chips. */
   decision: (): GlobTarget => ({ section: 'decision' }),
   /** The status chips and Your turn steps that need input: the glob view's actions. */

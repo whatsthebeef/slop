@@ -1,6 +1,6 @@
-import { machine } from '@slop/core';
-import type { Action } from '@slop/core';
-import type { GlobView } from './api';
+import * as machine from '../machine.js';
+import type { Action } from '../machine.js';
+import type { PresentableGlob } from './facts.js';
 
 /** Who does the work: the machine (slop or its agents) or a human in their own session. No icon for bookkeeping or destructive actions. */
 export type ActionIcon = 'machine' | 'human';
@@ -16,8 +16,13 @@ export interface ActionPresentation {
   readonly placement: ActionPlacement;
 }
 
-type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
-  Partial<Pick<GlobView, 'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState'>>;
+type Subject = Pick<PresentableGlob, 'type' | 'status' | 'implementer' | 'pr'> &
+  Partial<
+    Pick<
+      PresentableGlob,
+      'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState'
+    >
+  >;
 
 /**
  * Whether Review code, when offered, retries slop's automatic review: a merged glob with no after-merge review, or a ready
@@ -25,7 +30,8 @@ type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
  */
 export const isReviewRetry = (glob: Subject): boolean => {
   const pr = glob.pr;
-  if (pr === null || (pr.state !== 'merged' && !(pr.state === 'ready' && glob.type !== 'sub'))) return false;
+  if (pr === null || (pr.state !== 'merged' && !(pr.state === 'ready' && glob.type !== 'sub')))
+    return false;
   return !(glob.artifacts ?? []).some(
     (a) =>
       a.review !== undefined &&
@@ -47,9 +53,11 @@ const discardTip = (glob: Subject, then: string): string =>
  * (start_anyway), three kinds of Pick up, and three kinds of Discard.
  */
 /** The line a Merge tooltip or confirmation adds when the glob has rollout steps: it is merged, then stays open for them. */
-export const rolloutLine = (glob: { readonly rolloutSteps?: number }): string => {
+const mergeRolloutNote = (glob: { readonly rolloutSteps?: number }): string => {
   const n = glob.rolloutSteps ?? 0;
-  return n > 0 ? `. Then run its ${String(n)} rollout step${n === 1 ? '' : 's'} (it stays open until they're done)` : '';
+  return n > 0
+    ? `. Then run its ${String(n)} rollout step${n === 1 ? '' : 's'} (it stays open until they're done)`
+    : '';
 };
 
 export const actionPresentation = (
@@ -172,12 +180,13 @@ export const actionPresentation = (
     case 'merge': {
       // Checks not passed on the head (pending or not reported): Merge arms "merge when checks pass" and lands nothing yet.
       const head = glob.pr?.headSha ?? null;
-      const passed = head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'passed';
+      const passed =
+        head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'passed';
       return passed
         ? {
             label: 'Merge',
             icon: 'machine',
-            tip: `Squash-merges ${prRef(glob)}${rolloutLine(glob)}`,
+            tip: `Squash-merges ${prRef(glob)}${mergeRolloutNote(glob)}`,
             placement: 'main',
           }
         : {
@@ -335,7 +344,10 @@ export const actionLabel = (action: Action, glob: Subject): string =>
   actionPresentation(action, glob).label;
 
 /** What an action would stop, so the board can ask first; empty when nothing is halted. */
-export const haltedBy = (glob: Pick<GlobView, 'currentRun' | 'pr' | 'branch' | 'implementer'>, action: Action): string[] => {
+export const haltedBy = (
+  glob: Pick<PresentableGlob, 'currentRun' | 'pr' | 'branch' | 'implementer'>,
+  action: Action,
+): string[] => {
   const runLive = glob.currentRun !== null && glob.currentRun.state !== 'ended';
   // A queued or standby run holds nothing unpushed, so only an active one is worth asking about.
   if (action === 'take_over')

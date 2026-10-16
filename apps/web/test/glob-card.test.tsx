@@ -5,24 +5,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GlobCard } from '../src/components/glob-card';
-import type { CardMove } from '../src/components/glob-card';
-import { actionPresentation } from '../src/lib/action-presentation';
 import type { GlobView } from '../src/lib/api';
 import type { WorkstreamsSummary, WorkstreamState } from '@slop/core';
-import { CONFIRM_MS } from '../src/lib/chip-actions';
-import { cardMoves } from '../src/lib/card-moves';
-import { armLabel } from '../src/lib/rollout-stages';
+import { armLabel, listOf } from '@slop/core';
+import { CONFIRM_MS } from '../src/lib/use-confirm-click';
+import { clickOf } from '../src/lib/present';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
-
-vi.mock('../src/lib/card-rows', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/lib/card-rows')>();
-  return { ...actual, cornerStatus: vi.fn(actual.cornerStatus) };
-});
 
 afterEach(cleanup);
 
 const head = 'd16d563aaaa';
-const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), ...patch }) as GlobView;
+const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), list: listOf(patch.status ?? 'planning'), ...patch }) as GlobView;
 const prOpen = (patch: Partial<GlobView> = {}) =>
   view({ type: 'same', status: 'pr_open', pr: { number: 289, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' }, ...patch });
 const files = ['apps/web/src/components/glob-dialog.tsx', 'apps/web/src/pages/board.tsx'];
@@ -48,26 +41,19 @@ const waitingOn = () =>
       source: 'person' as const,
     })),
   });
-const move = (action: 'start' | 'pick_up', g: GlobView): CardMove => {
-  const { label, tip, icon } = actionPresentation(action, g);
-  return { action, direction: 'right', confirm: false, label: `${label} ▸`, description: `${label} ${g.id}: ${tip}`, icon };
-};
-
 const base = () => ({
   onOpen: vi.fn(),
   onOpenSection: vi.fn(),
-  onReviewLabel: vi.fn(),
-  moves: [] as readonly CardMove[],
   previewing: null,
   onPreview: vi.fn(),
   onMove: vi.fn(),
   onArrow: vi.fn(),
 });
 
-const markup = (g: GlobView, moves: readonly CardMove[] = []) =>
+const markup = (g: GlobView) =>
   renderToStaticMarkup(
     <MemoryRouter>
-      <GlobCard {...base()} moves={moves} glob={g} repo='a/b' />
+      <GlobCard {...base()} glob={g} repo='a/b' />
     </MemoryRouter>,
   );
 const dom = (html: string) => {
@@ -86,10 +72,10 @@ describe('card rows', () => {
     expect(withoutTips(markup(view({ oversized: true })))).not.toContain('Oversized');
   });
 
-  it('renders the header, title, chips and actions in that order, with no status row under the title', () => {
-    const g = prOpen({ allowedActions: ['merge'] });
-    const root = dom(markup(g, [move('start', g)]));
-    const order = ['card-header', 'card-title', 'card-chips', 'card-actions'].map((id) => {
+  it('renders the header, title, group tag and bottom row in that order, with no status row under the title', () => {
+    const g = view({ group: 'glob-groups', type: 'sub', status: 'planning', list: 'planning', allowedActions: ['start'] });
+    const root = dom(markup(g));
+    const order = ['card-header', 'card-title', 'card-chips', 'card-bottom'].map((id) => {
       const el = root.querySelector(`[data-testid="${id}"]`);
       expect(el, id).not.toBeNull();
       return el;
@@ -98,7 +84,7 @@ describe('card rows', () => {
       const [before, el] = [order[i - 1], order[i]];
       expect(before !== null && before !== undefined && el !== null && el !== undefined && (before.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0, String(i)).toBe(true);
     }
-    for (const gone of ['status-line', 'status-line-open', 'waiting-on', 'waiting-on-open']) expect(root.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
+    for (const gone of ['status-line', 'status-line-open', 'waiting-on', 'waiting-on-open', 'card-pending']) expect(root.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
   });
 
   it('shows "N waiting on this" as the status, with no separate text lower on the card', () => {
@@ -388,7 +374,7 @@ describe('environment and deploy labels on the card', () => {
     };
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <GlobCard {...base()} {...(deployed as object)} moves={[]} glob={view({ status: 'pr_open', branch: 's1t1' })} repo='a/b' />
+        <GlobCard {...base()} {...(deployed as object)} glob={view({ status: 'pr_open', branch: 's1t1' })} repo='a/b' />
       </MemoryRouter>,
     );
     const root = dom(html);
@@ -424,28 +410,90 @@ describe('independent review on the card', () => {
   });
 });
 
-describe('card actions', () => {
-  it('shows Start and Pick up for an unblocked same in Planning', () => {
-    const g = view({ type: 'same', status: 'planning' });
-    const html = markup(g, [move('start', g), move('pick_up', g)]);
-    expect(html).toContain('data-testid="move-start"');
-    expect(html).toContain('data-testid="move-pick_up"');
+const planning = (patch: Partial<GlobView> = {}) => view({ type: 'sub', status: 'planning', list: 'planning', ...patch });
+const mergeable = (patch: Partial<GlobView> = {}) => prOpen({ list: 'doing', allowedActions: ['merge'], ...patch });
+const fixable = (patch: Partial<GlobView> = {}) =>
+  prOpen({ type: 'sub', implementer: null, list: 'doing', allowedActions: ['resolve_conflict', 'take_over'], conflict: { base: 'main', files, since: 's1t9', at: NOW }, ...patch });
+const bottomLeft = (html: string) => dom(html).querySelector('[data-testid="card-bottom"]')?.firstElementChild ?? null;
+
+describe('card actions: one primary button, bottom left', () => {
+  it.each([
+    ['Start', () => planning({ allowedActions: ['start'] }), 'move-start'],
+    ['Pick up', () => planning({ type: 'super', allowedActions: ['pick_up'] }), 'move-pick_up'],
+    ['Merge', () => mergeable(), 'move-merge'],
+    ['Fix conflict', () => fixable(), 'move-resolve_conflict'],
+  ] as const)('shows %s as the only button, in the bottom-left of the card', (label, make, testId) => {
+    const root = dom(markup(make()));
+    const buttons = root.querySelectorAll('[data-glob-id] button[data-testid^="move-"]');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.getAttribute('data-testid')).toBe(testId);
+    expect(buttons[0]?.textContent).toContain(label);
+    const bottom = root.querySelector('[data-testid="card-bottom"]');
+    expect(bottom?.firstElementChild?.getAttribute('data-testid')).toBe('card-actions');
+    expect(bottom?.firstElementChild?.contains(buttons[0] ?? null)).toBe(true);
+    // Nothing action-like sits top right, and the bottom right is only the Arm system label, a dot and the avatar.
+    const corner = root.querySelector('[data-testid="card-corner"]');
+    expect(corner?.querySelectorAll('button:not([data-testid="position"]):not([data-testid="escalation-chip"])')).toHaveLength(0);
+    expect(corner?.querySelector('[data-testid^="move-"]')).toBeNull();
+    expect(bottom?.lastElementChild?.querySelector('button[data-testid^="move-"]')).toBeNull();
   });
 
-  it('shows no buttons with any blocker, and no empty actions row', () => {
-    const planning = (patch: Partial<GlobView>) => view({ type: 'same', status: 'planning', ...patch });
+  it('shows one button for a same that can both Start and be picked up: Start', () => {
+    const html = markup(planning({ type: 'same', allowedActions: ['start', 'pick_up'] }));
+    expect(html).toContain('data-testid="move-start"');
+    expect(html).not.toContain('data-testid="move-pick_up"');
+  });
+
+  it('shows no button, and no empty actions row, with a blocker', () => {
     const blockers: Record<string, GlobView> = {
-      'unmerged needs': waitingOn(),
-      escalation: planning({ escalation: { reason: 'billing', at: NOW } as GlobView['escalation'] }),
-      stall: planning({ provisioning: 'failed' }),
+      'unmerged needs': { ...waitingOn(), allowedActions: ['start', 'pick_up'] },
+      escalation: planning({ escalation: { reason: 'billing', at: NOW } as GlobView['escalation'], allowedActions: ['start', 'pick_up'] }),
+      stall: planning({ provisioning: 'failed', allowedActions: ['start', 'pick_up'] }),
+      question: planning({ questions: [{ id: 'q1', text: 'Which table?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'start', raisedAt: NOW }], allowedActions: ['start'] }),
     };
     for (const [name, g] of Object.entries(blockers)) {
-      const html = markup(g, [move('start', g), move('pick_up', g)]);
+      const html = markup(g);
       expect(html, name).not.toContain('data-testid="move-');
       expect(html, name).not.toContain('card-actions');
     }
-    const merge = markup(conflicting());
-    expect(merge).not.toContain('your-turn-chip');
+    expect(markup(conflicting())).not.toContain('your-turn-chip');
+  });
+
+  it('has no button while the glob is still being given its branch', () => {
+    expect(markup(planning({ provisioning: 'pending', allowedActions: ['start'] }))).not.toContain('card-actions');
+  });
+
+  it('never shows Retry, Resume, Take over, Cancel merge, Merge anyway, Deploy, Done or Failed… on the card', () => {
+    const everything = ['retrigger', 'retry_autofix', 'retry_merge', 'cancel_merge', 'merge_anyway', 'start_anyway', 'mark_ready', 'complete_action', 'fail_action', 'dismiss_action', 'start_again', 'review_now', 'investigate', 'reopen', 'sign_off', 'prepare_action'] as const;
+    const globs: readonly GlobView[] = [
+      planning({ allowedActions: [...everything] }),
+      planning({ type: 'same', allowedActions: [...everything] }),
+      mergeable({ allowedActions: [...everything] }),
+      prOpen({ list: 'doing', allowedActions: [...everything] }),
+      view({ category: 'action', type: null, status: 'planning', list: 'planning', pr: null, allowedActions: ['complete_action', 'fail_action', 'dismiss_action', 'prepare_action'] }),
+    ];
+    for (const g of globs) {
+      const html = markup(g);
+      expect(html).not.toMatch(/data-testid="move-/);
+      expect(withoutTips(html)).not.toMatch(/\b(Retry|Resume|Take over|Cancel merge|Merge anyway|Deploy|Failed…|Done)\b/);
+    }
+  });
+
+  it('never offers Pick up for a failed automatic fix, only a status', () => {
+    const failedRun = (id: string) => run({ id, state: 'ended', outcome: 'failed', failureReason: 'boom', endedAt: new Date().toISOString() });
+    const g = view({
+      type: 'sub',
+      status: 'failed',
+      list: 'doing',
+      runs: [failedRun('a'), failedRun('b')],
+      currentRun: failedRun('b'),
+      failure: { reason: 'The run failed: boom', at: NOW },
+      allowedActions: ['pick_up', 'retrigger', 'start_again'],
+    });
+    const html = markup(g);
+    expect(html).not.toContain('move-pick_up');
+    expect(html).not.toContain('card-actions');
+    expect(dom(html).querySelector('[data-testid="card-status"]')).not.toBeNull();
   });
 
   it('shows signed off and provisioning failed only in the corner status', () => {
@@ -457,32 +505,162 @@ describe('card actions', () => {
     expect(failed).toContain('provisioning failed');
   });
 
-  it('offers Merge once, in the corner, when nothing blocks it', () => {
-    const html = markup(prOpen({ allowedActions: ['merge'] }));
-    expect(html).not.toContain('your-turn-chip');
-    expect(html).not.toContain('card-actions');
-    const root = dom(html);
-    const mentions = [...root.querySelectorAll('*')].filter((el) => el.children.length === 0 && /merge/i.test(el.textContent) && !el.classList.contains('sr-only'));
-    expect(mentions).toHaveLength(1);
+  it('says Your turn once, as status: the corner reads Merge and the button is below, not both in the corner', () => {
+    const root = dom(markup(mergeable()));
     expect(root.querySelector('[data-testid="card-corner"] [data-testid="position"]')?.textContent).toMatch(/merge/i);
+    expect(root.querySelector('[data-testid="card-corner"] [data-testid="move-merge"]')).toBeNull();
+    expect(root.querySelector('[data-testid="card-bottom"] [data-testid="move-merge"]')).not.toBeNull();
   });
 
-  it('still shows the actions row for a card with move buttons', () => {
-    const g = view({ type: 'same', status: 'planning' });
-    expect(markup(g, [move('start', g)])).toContain('data-testid="card-actions"');
+  it('shows no actions row for a card with nothing to click', () => {
+    expect(markup(view({ type: 'same', status: 'planning', allowedActions: [] }))).not.toContain('card-actions');
+  });
+
+  it('puts no card-pending label, no loader and no link or action chip anywhere on the card, whatever the state', () => {
+    const states = [mergeable(), fixable(), conflicting(), stalledByConflict(), waitingOn(), planning({ allowedActions: ['start'] }), prOpen({ allowedActions: [], headChecks: { sha: head, state: 'failed' } })];
+    for (const g of states) {
+      const html = markup(g);
+      expect(html).not.toContain('card-pending');
+      expect(html).not.toContain('animate-spin" aria-hidden');
+      expect(dom(html).querySelector('a[href^="http"]')).toBeNull();
+      expect(dom(html).querySelector('[data-testid="draft-chip"], [data-testid="atf-chip"], [data-testid="action-chip"], [data-testid="label-popover"]')).toBeNull();
+    }
+  });
+});
+
+describe('card in progress: after a click', () => {
+  const statusText = (root: HTMLElement) => root.querySelector('[data-testid="card-status"] .truncate')?.textContent;
+
+  it.each([
+    ['Merge', () => mergeable(), 'merge', 'merging'],
+    ['Fix conflict', () => fixable(), 'resolve_conflict', 'fixing the conflict'],
+    ['Start', () => planning({ allowedActions: ['start'] }), 'start', 'starting'],
+  ] as const)('%s: the button is gone, the status says what is happening, and nothing is left bottom left', (_name, make, action, text) => {
+    const g = make();
+    const root = dom(
+      renderToStaticMarkup(
+        <MemoryRouter>
+          <GlobCard {...base()} glob={g} repo='a/b' pending={clickOf(action, 'dev@example.com')} />
+        </MemoryRouter>,
+      ),
+    );
+    expect(root.querySelector('[data-testid^="move-"]')).toBeNull();
+    expect(root.querySelector('[data-testid="card-actions"]')).toBeNull();
+    expect(root.querySelector('[data-testid="card-pending"]')).toBeNull();
+    const status = root.querySelector('[data-testid="card-status"]');
+    expect(statusText(root)).toBe(text);
+    expect(status?.getAttribute('data-icon')).toBe('machine-spinning');
+    expect(root.querySelector('[data-testid="card-corner"] svg.animate-spin')).not.toBeNull();
+    // The bottom row holds only the Arm system label, a dot and the avatar: no text, loader or label for the click.
+    const bottom = root.querySelector('[data-testid="card-bottom"]');
+    expect(bottom?.textContent).not.toMatch(/Merging|Fixing|Starting|…/);
+    expect(bottom?.querySelector('svg.animate-spin')).toBeNull();
+  });
+
+  it('shows the stored pending click the same way, after a refresh', () => {
+    const g = mergeable({ pendingAction: { kind: 'merge', at: new Date().toISOString(), by: 'dev@example.com' } });
+    const root = dom(markup(g));
+    expect(root.querySelector('[data-testid="move-merge"]')).toBeNull();
+    expect(statusText(root)).toBe('merging');
+  });
+
+  it('gives the button back once the click has timed out with nothing to show for it', () => {
+    const g = mergeable({ pendingAction: { kind: 'merge', at: new Date(Date.now() - 120_000).toISOString(), by: 'dev@example.com' } });
+    expect(dom(markup(g)).querySelector('[data-testid="move-merge"]')).not.toBeNull();
+  });
+
+  it('marks the card busy only while a click is pending', () => {
+    expect(dom(markup(mergeable())).querySelector('[data-glob-id]')?.getAttribute('aria-busy')).toBe('false');
+    const pending = mergeable({ pendingAction: { kind: 'merge', at: new Date().toISOString(), by: 'dev@example.com' } });
+    expect(dom(markup(pending)).querySelector('[data-glob-id]')?.getAttribute('aria-busy')).toBe('true');
+  });
+});
+
+describe('the merged globs, in line with the layout rules', () => {
+  it('s15t217: a Fix conflict click shows "fixing the conflict" top right, never a "Fixing conflict…" label in the actions area', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={fixable()} repo='a/b' pending={clickOf('resolve_conflict', 'dev@example.com')} />
+      </MemoryRouter>,
+    );
+    expect(html).not.toContain('Fixing conflict…');
+    expect(dom(html).querySelector('[data-testid="card-corner"]')?.textContent).toContain('fixing the conflict');
+  });
+
+  it('s15b158: Merge is a bottom-left button, its confirm label is on the button only, and no pending label follows the click', async () => {
+    const user = userEvent.setup();
+    const onMove = vi.fn();
+    render(
+      <MemoryRouter>
+        <GlobCard {...base()} onMove={onMove} glob={mergeable()} repo='a/b' />
+      </MemoryRouter>,
+    );
+    const button = screen.getByTestId('move-merge');
+    expect(screen.getByTestId('card-bottom').firstElementChild?.contains(button)).toBe(true);
+    await user.click(button);
+    expect(button.textContent).toBe('Confirm merge');
+    expect(screen.getAllByText(/confirm/i)).toHaveLength(1);
+    expect(screen.queryByTestId('card-pending')).toBeNull();
+    await user.click(button);
+    expect(onMove).toHaveBeenCalledWith(expect.objectContaining({ action: 'merge' }));
+    expect(screen.queryByTestId('card-pending')).toBeNull();
+  });
+
+  it('s15b158: the confirming tooltip says what the second click does: Merge lands the PR, Fix conflict starts a run', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={mergeable()} repo='a/b' />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByTestId('move-merge'));
+    expect(screen.getByTestId('move-merge').getAttribute('aria-label')).toContain('Click again to merge');
+    expect(screen.getByTestId('move-merge').getAttribute('aria-label')).not.toContain('conflict-fix');
+    cleanup();
+    render(
+      <MemoryRouter>
+        <GlobCard {...base()} glob={fixable()} repo='a/b' />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByTestId('move-resolve_conflict'));
+    expect(screen.getByTestId('move-resolve_conflict').getAttribute('aria-label')).toContain('Click again to start a conflict-fix run');
+  });
+
+  it("s15t238: preparing, ready to run and recording are the status top right; Done and Failed… are not card buttons", () => {
+    const prepared = (actionState: GlobView['actionState'], patch: Partial<GlobView> = {}) =>
+      view({ category: 'action', type: null, pr: null, status: 'planning', list: 'planning', actionState, preparation: { record: 'branch', rounds: 1 }, allowedActions: ['complete_action', 'fail_action', 'dismiss_action'], ...patch });
+    const html = markup(prepared('ready'));
+    const ready = dom(html);
+    expect(ready.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('ready to run');
+    expect(ready.querySelector('[data-testid^="move-"]')).toBeNull();
+    expect(withoutTips(html)).not.toMatch(/Done|Failed…/);
+  });
+
+  it('s15t219: a super in Planning has Pick up bottom left, and the sstor copy notice is never on the card', () => {
+    const html = markup(planning({ type: 'super', allowedActions: ['pick_up'] }));
+    expect(bottomLeft(html)?.querySelector('[data-testid="move-pick_up"]')).not.toBeNull();
+    expect(withoutTips(html)).not.toMatch(/sstor|copied/i);
+  });
+
+  it('s15t240: an open question is the "question" status with the human icon, and nowhere else on the card', () => {
+    const asked = { id: 'q1', text: 'Is prod in scope?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'start', raisedAt: NOW } as const;
+    const root = dom(markup(planning({ questions: [asked], allowedActions: ['start'] })));
+    expect(root.querySelector('[data-testid="card-status"]')?.getAttribute('data-icon')).toBe('human');
+    expect(root.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('question');
+    expect(withoutTips(markup(planning({ questions: [asked] })))).not.toMatch(/Is prod in scope/);
+    expect(root.querySelector('[data-testid^="move-"]')).toBeNull();
   });
 });
 
 describe('card interaction', () => {
   const renderCard = (g: GlobView, extra: Partial<Parameters<typeof GlobCard>[0]> = {}) => {
     const props = base();
-    const onAct = vi.fn();
     render(
       <MemoryRouter>
-        <GlobCard {...props} glob={g} onAct={onAct} repo='a/b' {...extra} />
+        <GlobCard {...props} glob={g} repo='a/b' {...extra} />
       </MemoryRouter>,
     );
-    return { ...props, onAct };
+    return props;
   };
 
   it('filters to the group when its tag is clicked, without opening the card', async () => {
@@ -515,22 +693,20 @@ describe('card interaction', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('the corner is status only: its click opens the glob view and never runs Merge', async () => {
+  it('the corner is status only: its click opens the glob view at a section and never runs Merge', async () => {
     const user = userEvent.setup();
-    const { onAct, onOpen, onOpenSection } = renderCard(prOpen({ allowedActions: ['merge'] }));
+    const { onMove, onOpen, onOpenSection } = renderCard(mergeable());
     expect(screen.getByTestId('position').textContent).toBe('Merge');
     await user.click(screen.getByTestId('position'));
-    expect(onAct).not.toHaveBeenCalled();
+    expect(onMove).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
     expect(onOpenSection).toHaveBeenCalledTimes(1);
   });
 
   describe('Merge button', () => {
-    const mergeable = (patch: Partial<GlobView> = {}) => prOpen({ list: 'doing', allowedActions: ['merge'], ...patch });
     const withMerge = (g = mergeable()) => {
-      const onMove = vi.fn();
-      const out = renderCard(g, { moves: cardMoves(g).map((m) => m.move), onMove });
-      return { ...out, onMove, button: () => screen.getByTestId('move-merge') };
+      const out = renderCard(g);
+      return { ...out, button: () => screen.getByTestId('move-merge') };
     };
 
     it('reads Merge, with or without rollout steps, and says what follows in its tip', () => {
@@ -555,12 +731,9 @@ describe('card interaction', () => {
   });
 
   describe('Fix conflict button', () => {
-    const fixable = () => prOpen({ type: 'sub', implementer: null, list: 'doing', allowedActions: ['resolve_conflict', 'take_over'], conflict: { base: 'main', files, since: 's1t9', at: NOW } });
     const withFix = (extra: Partial<Parameters<typeof GlobCard>[0]> = {}) => {
-      const g = fixable();
-      const onMove = vi.fn();
-      const out = renderCard(g, { moves: cardMoves(g).map((m) => m.move), onMove, ...extra });
-      return { ...out, onMove, button: () => screen.getByTestId('move-resolve_conflict') };
+      const out = renderCard(fixable(), extra);
+      return { ...out, button: () => screen.getByTestId('move-resolve_conflict') };
     };
 
     it('shows a primary Fix conflict on a conflicting glob in Doing, with no arrow', () => {
@@ -607,31 +780,25 @@ describe('card interaction', () => {
         vi.useRealTimers();
       }
     });
-
-    it('shows the pending label while the fix runs', () => {
-      withFix({ pending: 'resolve_conflict' });
-      expect(screen.getByTestId('card-pending').textContent).toBe('Fixing conflict…');
-      expect(screen.getByTestId<HTMLButtonElement>('move-resolve_conflict').disabled).toBe(true);
-    });
   });
 
   it('opens the glob view from a ready status that needs input, without running anything', async () => {
     const user = userEvent.setup();
     const g = prOpen({ allowedActions: [] });
-    const { onOpenSection, onOpen, onAct } = renderCard(g);
+    const { onOpenSection, onOpen, onMove } = renderCard(g);
     await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledWith({ section: 'actions' });
-    expect(onAct).not.toHaveBeenCalled();
+    expect(onMove).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
   });
 
   it('opens the glob view at the section from the status without running anything', async () => {
     const user = userEvent.setup();
-    const { onOpenSection, onOpen, onAct } = renderCard(conflicting());
+    const { onOpenSection, onOpen, onMove } = renderCard(conflicting());
     await user.click(screen.getByTestId('position'));
     expect(onOpenSection).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
-    expect(onAct).not.toHaveBeenCalled();
+    expect(onMove).not.toHaveBeenCalled();
   });
 
   it('shows a move tag in the status slot in place of the status, with no separate line', () => {
@@ -790,13 +957,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(root.querySelector('[data-testid="card-bottom"]')?.lastElementChild?.contains(el ?? null)).toBe(true);
     expect(html).toContain('A person has a step at release: Run the migration');
     // The primary action's button uses the same token.
-    const g = view({ status: 'planning' });
-    const start = renderToStaticMarkup(
-      <MemoryRouter>
-        <GlobCard {...base()} moves={[move('start', g)]} glob={g} />
-      </MemoryRouter>,
-    );
-    expect(start).toContain('bg-primary');
+    expect(markup(planning({ allowedActions: ['start'] }))).toContain('bg-primary');
   });
 
   it('the Arm system label has a dot after it, before the avatar, in normal weight, and only with the label', () => {
@@ -828,23 +989,16 @@ describe('an action glob card', () => {
   const action = (patch: Partial<GlobView> = {}): GlobView =>
     view({ id: 's1a1', category: 'action', type: null, pr: null, attributes: { assignee: null, outcome: null }, ...patch });
 
-  it('shows the running person, the category word instead of a type, and who is meant to do it', () => {
+  it('shows the running person and the category word instead of a type', () => {
     const root = dom(markup(action({ attributes: { assignee: 'sam@example.com', outcome: null } })));
     expect(root.querySelector('[data-testid="card-type"]')?.textContent).toBe('action');
     const icon = root.querySelector('[data-testid="card-corner"] [role="img"]');
     expect(icon?.getAttribute('data-icon')).toBe('person-running');
     expect(icon?.getAttribute('aria-label')).toBe('action');
     expect(root.querySelector('[data-testid="card-corner"] svg.lucide-user-round')).toBeNull();
-    expect(root.querySelector('[data-testid="action-chip"]')?.textContent).toBe('sam@example.com');
+    // Who is meant to do it is the glob view's chip, not the card's.
+    expect(root.querySelector('[data-testid="action-chip"]')).toBeNull();
     expect(root.querySelector('[data-testid="card-corner-separator"]')).toBeNull();
-  });
-
-  it('says anyone for an unassigned action and how a finished one ended', () => {
-    expect(dom(markup(action())).querySelector('[data-testid="action-chip"]')?.textContent).toBe('anyone');
-    const done = action({ status: 'signed_off', attributes: { assignee: null, outcome: { kind: 'done', by: 'a@b.c', at: NOW } } });
-    expect(dom(markup(done)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('done');
-    const dismissed = action({ status: 'signed_off', attributes: { assignee: null, outcome: { kind: 'dismissed', by: 'a@b.c', at: NOW, reason: 'moved' } } });
-    expect(dom(markup(dismissed)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('dismissed');
   });
 
   describe('prepared', () => {
@@ -879,11 +1033,6 @@ describe('an action glob card', () => {
     it('shows a failed preparation in red text', () => {
       const g = prepared({ status: 'failed', actionState: 'preparation_failed', failure: { reason: 'timed out', at: NOW } });
       expect(statusText(g)).toContain('Preparation failed');
-    });
-
-    it('keeps the assignee chip', () => {
-      const g = prepared({ status: 'implementing', actionState: 'preparing', attributes: { assignee: 'sam@example.com', outcome: null, preparation: { record: 'branch', rounds: 1 } } });
-      expect(dom(markup(g)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('sam@example.com');
     });
   });
 

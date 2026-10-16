@@ -3,13 +3,11 @@ import type { GlobSection } from '@/lib/glob-section';
 /**
  * The sections of the glob view in the order they are rendered, by their `data-section` id
  * (the ids `?section=` deep links use). A new section is a new file plus one entry here. Above the actions the blocks come
- * in one order: problems (conflict, problem), then what needs a person (decision, labels, the due Human steps), then
- * information (escalation, size).
+ * in one order: what needs a person (questions, decision, labels, the due Human steps), then information (escalation, size).
+ * Conflicts, failed checks and failures are not blocks: they are the notice in the actions section.
  */
 export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
   'questions',
-  'conflict',
-  'problem',
   'decision',
   'labels',
   'escalation',
@@ -28,12 +26,10 @@ export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
 ];
 
 /**
- * A decision glob's order: the same blocks as a work glob (problems, then the Decide block and labels, then information), Holds
+ * A decision glob's order: the same blocks as a work glob (the Decide block and labels, then information), Holds
  * back just above the actions, and the Human steps after the assessments.
  */
 export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
-  'conflict',
-  'problem',
   'decision',
   'labels',
   'escalation',
@@ -51,14 +47,12 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
 ];
 
 /**
- * A learning's order: the same blocks above the actions as every other glob (conflict, problem, the decision block, labels,
+ * A learning's order: the same blocks above the actions as every other glob (the decision block, labels,
  * escalation), then the action row (its outcome is the main button), then the information blocks. The work-glob sections
  * (Plan, Artifacts, Deploys, Tests, Findings, Size) have nothing to show for a learning. The Activity log and
  * edit fields that follow the actions come last (see `GlobDetail`).
  */
 export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [
-  'conflict',
-  'problem',
   'decision',
   'labels',
   'escalation',

@@ -1,12 +1,7 @@
-import { X } from 'lucide-react';
+import { isHumanCategory, moveOf } from '@slop/core';
 import { KindMarker } from '@/components/glob-card';
 import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
-import { moveOf, positionOf, stepsOf } from '@/lib/position';
-import { isDismissed, turnKey } from '@/lib/dismissals';
-import { cornerStatus, waitingOnOwn } from '@/lib/card-rows';
-import { isProblemLine, problemHandled, viewStatusLine } from '@/lib/status-line';
-import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
 import type { GlobActionsState } from './actions';
 
@@ -15,40 +10,6 @@ export const Dot = () => (
   <span aria-hidden className="-mx-1 shrink-0 text-muted-foreground" data-testid="header-dot">
     ·
   </span>
-);
-
-/** The escalation's own words ("Needs a human: <reason>") are the header chip's job, never the headline's. */
-export const headlineReason = (reason: string): string =>
-  /^Needs a human\b/.test(reason) ? 'Needs a person' : reason;
-
-/**
- * The brief's lines the panel already shows through the status line: the failure's reason when that line is the reason
- * itself, and the decision (the status line says it as "Needs a person: <decision>").
- */
-export const shownElsewhere = (glob: GlobView, problem: { readonly kind: string } | null): string[] => {
-  const failure = glob.failure;
-  if (failure == null || problem?.kind !== 'failure') return [];
-  const decision = failure.kind === 'needs_pairing' ? failure.decision?.trim() : undefined;
-  return [
-    ...(decision === undefined || decision === '' ? [`Failed: ${failure.reason}`] : [`Decision needed: ${decision}`]),
-  ];
-};
-
-export const capitalised = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
-
-/** The small × ("Got it") beside the Your turn headline's reason: the viewer has read it, so it collapses. Problem blocks have none. */
-export const GotIt = ({ onClick, disabled }: { onClick: () => void; disabled: boolean }) => (
-  <button
-    type="button"
-    className="ml-1 inline-flex cursor-pointer items-center rounded-sm align-middle text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
-    aria-label="Got it: collapse this message"
-    title="Got it"
-    data-testid="dismiss-message"
-    disabled={disabled}
-    onClick={onClick}
-  >
-    <X className="size-3" aria-hidden />
-  </button>
 );
 
 export const LinkButton = ({ onClick, disabled, testId, children }: { onClick: () => void; disabled: boolean; testId: string; children: string }) => (
@@ -66,43 +27,24 @@ export const Link = ({ href, children }: { href: string; children: string }) => 
 /** The id of the Activity log, which the header's status scrolls to. */
 export const ACTIVITY_ID = 'glob-activity';
 
-/** Everything the header status and the Activity log's pinned entries are worked out from, once. */
-export const useNowState = (glob: GlobView, decision: boolean, disabled: readonly Waiting[], actions: GlobActionsState) => {
+/** What the header status and the Activity log read: the presentation (one per page, made by `useGlobActions`) and whose move it is. */
+export const useNowState = (glob: GlobView, decision: boolean, actions: GlobActionsState) => {
   const now = new Date().toISOString();
-  const { base } = actions;
-  const position = decision ? null : positionOf(glob, now, undefined, base);
   const move = decision ? null : moveOf(glob, now);
-  const status = viewStatusLine(glob, now, disabled, base);
-  const steps = decision ? [] : stepsOf(glob).filter((s) => s.state !== 'done');
-  const turn = move?.holder === 'you' ? move : null;
-  const yours = turn !== null;
-  const handled = problemHandled(glob);
-  // The handover brief is for whoever holds the ball: the viewer's turn, or a stall handed to them.
-  // Not when its only cause is rollout steps due, which the due steps block already shows.
-  const brief =
-    !handled &&
-    actions.brief !== null && (yours || move?.holder === 'stalled') && status?.kind !== 'rollout'
-      ? actions.brief
-      : null;
-  // Only a real problem gets the red block: a normal state (merging, rollout steps due, base red) stays in the corner status.
-  // Problem blocks have no dismiss: one shows only while nobody is on the problem, and goes by itself once someone acts or it is fixed.
-  const problem = status !== null && isProblemLine(status) && !handled ? status : null;
-  const turnDismissed = turn !== null && turn.reason !== '' && isDismissed(glob, turnKey(turn));
-  return { now, viewer: actions.viewer, base, position, move, turn, steps, yours, brief, problem, turnDismissed };
+  return { now, viewer: actions.viewer, base: actions.base, presentation: actions.presentation, move };
 };
 
 export type NowState = ReturnType<typeof useNowState>;
 
 /**
- * The header's top right, as on the card: the status, a dot, then the fix marker (or a human glob's person icon; nothing for other machine work). The status is exactly the card's corner
- * (`cornerStatus`: text, icon, tooltip) and is left out, with its dot, when the card has none; the list is never shown here
- * (it sits by the ID). Clicking the status opens a live run's session, else scrolls to the Activity log.
+ * The header's top right, as on the card: the status, a dot, then the fix marker. The status is exactly the card's (`presentGlob`'s
+ * `status`: text, icon, tooltip, in-progress after a click included) and is left out, with its dot, when the card has none; the list is
+ * never shown here (it sits by the ID). It is text and an icon: clicking it scrolls to the Activity log, and it never runs an action.
  */
-export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decision: boolean; state: NowState }) => {
-  const { position, now, viewer, base } = state;
-  const corner = decision ? null : cornerStatus(glob, now, viewer, undefined, waitingOnOwn(glob), base);
-  // A live run's status opens that run's session; the activity log has no session link of its own beyond its run entries.
-  const live = position?.holder === 'machine' ? position.sessionUrl : null;
+export const HeaderStatus = ({ glob, state }: { glob: GlobView; state: NowState }) => {
+  // A decision or an action glob shows no status of its own up here (its blocks say it), except a click in progress.
+  const status = state.presentation.status;
+  const corner = status !== null && isHumanCategory(glob.category) && status.kind !== 'pending' ? null : status;
   return (
     <span className="ml-auto inline-flex min-w-0 items-center gap-2" data-testid="header-corner">
       {corner !== null && (
@@ -111,14 +53,12 @@ export const HeaderStatus = ({ glob, decision, state }: { glob: GlobView; decisi
             type="button"
             className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', corner.tone)}
             aria-label={corner.kind === 'needs-human' ? corner.label : undefined}
-            title={live !== null ? "Open the machine's session" : corner.tip}
+            title={corner.tip}
             data-testid="header-status"
             data-kind={corner.kind}
             data-icon={corner.icon}
             data-holder={state.move?.holder ?? 'none'}
-            onClick={() =>
-              live !== null ? window.open(live, '_blank', 'noreferrer') : document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })
-            }
+            onClick={() => document.getElementById(ACTIVITY_ID)?.scrollIntoView({ block: 'start' })}
           >
             {/* The text gives way (ellipsis) only when the row is full; the ID before it never shrinks. */}
             <span className="truncate" data-testid="header-status-text">

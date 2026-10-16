@@ -33,7 +33,6 @@ const callbacks = () => ({
   onAddRelation: vi.fn(() => Promise.resolve(true)),
   onAnswerQuestion: vi.fn(() => Promise.resolve(true)),
   onDismissQuestion: vi.fn(() => Promise.resolve(true)),
-  onDismiss: vi.fn(() => Promise.resolve(true)),
   onDecide: vi.fn(() => Promise.resolve(true)),
   onDelete: vi.fn(() => Promise.resolve()),
   onAddStep: vi.fn(() => Promise.resolve(true)),
@@ -74,6 +73,15 @@ const run = (patch: Partial<NonNullable<GlobView['currentRun']>> = {}): NonNulla
 });
 
 const mainButton = () => screen.queryByTestId('main-action');
+
+/** A promise the test settles by hand, to hold an action in flight. */
+const deferred = () => {
+  let resolve: (ok: boolean) => void = () => undefined;
+  const promise = new Promise<boolean>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
 
 /** The main button shows the machine icon (lucide Bot) and not the human one. */
 const expectMachineIcon = (button: HTMLElement | null) => {
@@ -810,30 +818,138 @@ describe('glob view: a block that holds the glob replaces the primary and ▾ (s
   });
 });
 
-describe('glob view: the conflict section', () => {
-  const section = () => document.querySelector('[data-section="conflict"]') as HTMLElement;
+describe('glob view: the notice beside the primary action', () => {
+  const notice = () => screen.queryByTestId('notice');
+  const files = ['apps/web/src/a.ts', 'apps/web/src/b.ts'];
+  const head = 'abc1234';
+  const conflicted = (patch: Partial<GlobView> = {}) =>
+    view({
+      status: 'pr_open',
+      list: 'doing',
+      type: 'same',
+      pr: { number: 7, state: 'ready', headSha: head },
+      conflict: { base: 'main', files, since: 's1t9', at: '2026-01-01T00:00:00Z' },
+      allowedActions: ['resolve_conflict'],
+      ...patch,
+    });
 
-  it('lists the files and the cause of a conflict with the base, which the card leaves out', () => {
-    const files = ['apps/web/src/a.ts', 'apps/web/src/b.ts'];
-    renderGlob(
-      view({
-        status: 'pr_open',
-        list: 'doing',
-        pr: { number: 7, state: 'ready', headSha: 'abc1234' },
-        conflict: { base: 'main', files, since: 's1t9', at: '2026-01-01T00:00:00Z' },
-      }),
+  it('says a conflict once, with its cause and every file, and leads with Fix conflict', () => {
+    renderGlob(conflicted());
+    expect(screen.getAllByTestId('notice')).toHaveLength(1);
+    expect(screen.getByTestId('notice-text').textContent).toBe(
+      'Conflicts with main. Since s1t9 merged, both sides changed 2 files. Checks will re-run once it is fixed.',
     );
-    const facts = within(section()).getByTestId('conflict-facts');
-    expect(within(section()).getByTestId('block-head').textContent).toBe('Conflicts with main');
-    expect(facts.textContent).toBe('Since s1t9 merged, both sides changed 2 files.');
-    expect(within(section()).getByTestId('conflict-files').textContent).toBe(`Files changed on both sides (2)${files.join('')}`);
+    expect(screen.getByTestId('notice-files').textContent).toBe(`Files changed on both sides (2)${files.join('')}`);
+    expect(mainButton()?.textContent).toBe('Fix conflict');
+    // No block of its own, no second line for the checks it explains, no "looks stuck".
+    expect(document.querySelector('[data-section="conflict"]')).toBeNull();
+    expect(document.querySelector('[data-section="problem"]')).toBeNull();
+    expect(screen.queryByTestId('conflict-block')).toBeNull();
+    expect(screen.queryByTestId('problem-block')).toBeNull();
+    expect(document.body.textContent).not.toContain('looks stuck');
+    expect(document.body.textContent).not.toContain('Also:');
   });
 
-  it("shows a clash with another glob and the files both change, even with no implementer", () => {
+  it('does not repeat failed checks the conflict explains', () => {
+    renderGlob(
+      conflicted({
+        headChecks: { sha: head, state: 'failed', failure: { name: 'Type check', step: null, lines: ['TS2322'], url: 'https://ci/1' } },
+      }),
+    );
+    expect(notice()?.getAttribute('data-kind')).toBe('conflict');
+    expect(notice()?.textContent).not.toMatch(/Type check|Checks failed/);
+  });
+
+  it('says failed checks when no conflict explains them, with the check run', () => {
+    renderGlob(
+      conflicted({
+        conflict: null,
+        allowedActions: ['retry_autofix'],
+        headChecks: { sha: head, state: 'failed', failure: { name: 'Type check', step: null, lines: ['TS2322'], url: 'https://ci/1' } },
+      }),
+    );
+    expect(notice()?.getAttribute('data-kind')).toBe('checks');
+    expect(within(notice() as HTMLElement).getByRole('link', { name: 'check run' }).getAttribute('href')).toBe('https://ci/1');
+    expect(mainButton()?.textContent).toBe('Fix checks');
+  });
+
+  it('shows a clash with another glob and the files both change, even with no implementer', () => {
     renderGlob(view({ status: 'planning', clash: { with: 's1t2', paths: ['apps/web/src/c.ts'] } }));
-    const clash = within(section()).getByTestId('conflict-clash');
-    expect(clash.textContent).toContain('s1t2 also changes some of the same files');
-    expect(clash.textContent).toContain('apps/web/src/c.ts');
+    expect(notice()?.getAttribute('data-kind')).toBe('clash');
+    expect(notice()?.textContent).toContain('s1t2 also changes some of the same files');
+    expect(notice()?.textContent).toContain('apps/web/src/c.ts');
+  });
+
+  it('says why the last click failed, and has no dismiss control', () => {
+    renderGlob(
+      conflicted({
+        conflict: null,
+        headChecks: { sha: head, state: 'passed' },
+        allowedActions: ['merge'],
+        lastOutcome: { kind: 'merge', at: '2026-10-16T00:00:00Z', by: 'a@b.c', result: 'failed', reason: 'Required checks have not passed on the current head' },
+      }),
+    );
+    expect(notice()?.getAttribute('data-kind')).toBe('outcome');
+    expect(screen.getByTestId('notice-text').textContent).toBe('Merge failed: Required checks have not passed on the current head');
+    expect(mainButton()?.textContent).toBe('Merge');
+    expect(within(notice() as HTMLElement).queryByRole('button')).toBeNull();
+    expect(screen.queryByTestId('dismiss-message')).toBeNull();
+  });
+
+  it('goes away on the next click, which shows in progress in the header and leaves no loader text in the row', async () => {
+    const user = userEvent.setup();
+    const sent = deferred();
+    const cb = callbacks();
+    cb.onAction.mockReturnValue(sent.promise);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <GlobDetail
+            board={board}
+            glob={conflicted({
+              conflict: null,
+              headChecks: { sha: head, state: 'passed' },
+              allowedActions: ['merge'],
+              lastOutcome: { kind: 'merge', at: '2026-10-16T00:00:00Z', by: 'a@b.c', result: 'failed', reason: 'Required checks have not passed' },
+            })}
+            initialArtifact={null}
+            {...cb}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(notice()).not.toBeNull();
+    await user.click(mainButton() as HTMLElement);
+    expect(cb.onAction).toHaveBeenCalledWith('merge');
+    // The notice is gone, the status says what is happening, and the row holds no button, text or spinner for it.
+    await waitFor(() => expect(notice()).toBeNull());
+    expect(screen.getByTestId('header-status-text').textContent).toBe('merging');
+    expect(screen.getByTestId('header-status').getAttribute('data-icon')).toBe('machine-spinning');
+    expect(mainButton()).toBeNull();
+    const row = screen.queryByTestId('glob-actions');
+    expect(row?.textContent ?? '').not.toMatch(/Merging|Working|…/);
+    expect(row?.querySelector('.animate-spin') ?? null).toBeNull();
+    sent.resolve(true);
+  });
+
+  it('a click that is pending hides the primary button and the menu, not just disables them', async () => {
+    const user = userEvent.setup();
+    const sent = deferred();
+    const cb = callbacks();
+    cb.onAction.mockReturnValue(sent.promise);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <GlobDetail board={board} glob={conflicted()} initialArtifact={null} {...cb} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await user.click(mainButton() as HTMLElement);
+    await waitFor(() => expect(mainButton()).toBeNull());
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+    expect(screen.getByTestId('header-status-text').textContent).toBe('fixing the conflict');
+    sent.resolve(true);
   });
 });
 

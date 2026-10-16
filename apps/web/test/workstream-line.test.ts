@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { workstreamLine } from '../src/lib/status-line';
+import { workstreamLine } from '@slop/core';
 import { view } from './helpers/glob-views';
 
 describe('workstreamLine', () => {

@@ -31,7 +31,6 @@ const callbacks = () => ({
   onAddRelation: vi.fn(() => Promise.resolve(true)),
   onAnswerQuestion: vi.fn(() => Promise.resolve(true)),
   onDismissQuestion: vi.fn(() => Promise.resolve(true)),
-  onDismiss: vi.fn(() => Promise.resolve(true)),
   onDecide: vi.fn(() => Promise.resolve(true)),
   onAddStep: vi.fn(() => Promise.resolve(true)),
   onCompleteStep: vi.fn(() => Promise.resolve(true)),
@@ -212,23 +211,22 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(log.textContent).not.toContain('Error: boom');
   });
 
-  it("the viewer's turn: the headline and the handover brief inside the details", () => {
+  it("the viewer's turn: no handover box; what is wrong is the one notice beside the actions", () => {
     renderGlob(
       view({
         status: 'pr_open',
         pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+        headChecks: failedChecks,
         implementer: null,
         allowedActions: ['pick_up'],
         move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
         handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] },
       }),
     );
-    // The header's top right mirrors the card, which has no status for this glob; the turn is the Activity log's.
-    expect(screen.queryByTestId('header-status')).toBeNull();
-    const details = screen.getByTestId('problem-block');
-    expect(details.textContent).toContain("Why you're needed");
-    expect(details.textContent).toContain('Reproduce and fix');
-    expect(screen.getAllByText(/Why you're needed/)).toHaveLength(1);
+    expect(screen.queryByText(/Why you're needed/)).toBeNull();
+    expect(screen.queryByTestId('turn-reason')).toBeNull();
+    expect(screen.getAllByTestId('notice')).toHaveLength(1);
+    expect(screen.getByTestId('notice').getAttribute('data-kind')).toBe('checks');
   });
 
   it('never repeats the escalation reason in the headline', () => {
@@ -415,7 +413,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
   });
 });
 
-describe('glob view: dismissable status messages', () => {
+describe('glob view: the failure notice', () => {
   const AT = '2026-10-08T10:00:00.000Z';
   const failed = (patch: Partial<GlobView> = {}) =>
     view({
@@ -426,35 +424,47 @@ describe('glob view: dismissable status messages', () => {
       ...patch,
     });
 
-  it('shows the long failure with no dismiss control', () => {
+  it('shows the failure with no dismiss control', () => {
     renderGlob(failed({ implementer: null }));
-    expect(screen.getByTestId('status-line').textContent).toContain('whole paragraph');
-    expect(within(screen.getByTestId('problem-block')).queryByTestId('dismiss-message')).toBeNull();
+    expect(screen.getByTestId('notice-text').textContent).toContain('whole paragraph');
+    expect(within(screen.getByTestId('notice')).queryByTestId('dismiss-message')).toBeNull();
     expect(screen.queryByTestId('show-again')).toBeNull();
   });
 
   it('ignores an old stored dismissal: the failure shows in full', () => {
     renderGlob(failed({ implementer: null, dismissedKeys: [`failure:${AT}`] }));
-    expect(screen.getByTestId('status-line').textContent).toContain('whole paragraph');
-    expect(screen.getByTestId('status-line').getAttribute('data-dismissed')).toBeNull();
+    expect(screen.getByTestId('notice-text').textContent).toContain('whole paragraph');
   });
 
   it('shows a new failure with its new reason', () => {
     renderGlob(failed({ implementer: null, failure: { reason: 'A newer failure', at: '2026-10-09T09:00:00.000Z' } }));
-    expect(screen.getByTestId('status-line').textContent).toContain('A newer failure');
+    expect(screen.getByTestId('notice-text').textContent).toContain('A newer failure');
   });
 
-  it('hides the problem block while a person has picked the glob up', () => {
+  it('keeps the notice for a glob a person has picked up: the failure is still the thing to say', () => {
     renderGlob(failed({ implementer: 'dev@example.com' }));
-    expect(screen.queryByTestId('problem-block')).toBeNull();
+    expect(screen.getByTestId('notice-text').textContent).toContain('whole paragraph');
   });
 
-  it('hides the problem block while a fix run is queued or running, and brings it back when the run has failed', () => {
-    const fixing = (state: 'queued' | 'active' | 'watching') =>
-      failed({ implementer: null, currentRun: { id: 'r2', state, outcome: null } as unknown as GlobView['currentRun'] });
+  it('hides the notice while a fix run is queued or running, and brings it back when the run has failed', () => {
+    const now = new Date().toISOString();
+    const open = view({
+      status: 'pr_open',
+      list: 'doing',
+      pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+      headChecks: { sha: 'abcdef1234567', state: 'failed', at: now, failure: { name: 'Lint', step: null, lines: ['x'], url: null } },
+      allowedActions: ['retry_autofix'],
+    });
+    const fixing = (state: 'queued' | 'active' | 'watching'): GlobView => {
+      const r = { id: 'r2', state, outcome: null, generation: 1, triggeredBy: 'a', routineOwner: 'a', queuedAt: now, startedAt: now, lastProgressAt: now, endedAt: null, failureReason: null, sessionId: null, sessionUrl: null } as const;
+      return { ...open, runs: [r], currentRun: r };
+    };
+    renderGlob(open);
+    expect(screen.getByTestId('notice').getAttribute('data-kind')).toBe('checks');
+    cleanup();
     for (const state of ['queued', 'active', 'watching'] as const) {
       renderGlob(fixing(state));
-      expect(screen.queryByTestId('problem-block')).toBeNull();
+      expect(screen.queryByTestId('notice')).toBeNull();
       cleanup();
     }
     renderGlob(
@@ -464,28 +474,18 @@ describe('glob view: dismissable status messages', () => {
         currentRun: { id: 'r2', state: 'ended', outcome: 'failed' } as unknown as GlobView['currentRun'],
       }),
     );
-    expect(screen.getByTestId('status-line').textContent).toContain('The fix run failed too');
+    expect(screen.getByTestId('notice-text').textContent).toContain('The fix run failed too');
   });
 
-  it('shows the handover brief with no Got it, and no read state', () => {
-    const brief = { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] };
-    renderGlob(
-      view({
-        status: 'pr_open',
-        pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
-        implementer: null,
-        allowedActions: ['pick_up'],
-        move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
-        handover: brief,
-      }),
-    );
-    const block = screen.getByTestId('problem-block');
-    expect(within(block).queryByTestId('handover-acknowledge')).toBeNull();
-    expect(within(block).queryByTestId('handover-expand')).toBeNull();
+  it('cuts a long reason to a line with the whole of it in the tooltip', () => {
+    const long = `Reason ${'x'.repeat(400)}`;
+    renderGlob(failed({ implementer: null, failure: { reason: long, at: AT } }));
+    expect(screen.getByTestId('notice-text').textContent.length).toBeLessThan(300);
+    expect(screen.getByTestId('notice').getAttribute('title')).toBe(long);
   });
 });
 
-describe('glob view: Now panel for a stalled failure', () => {
+describe('glob view: a stalled failure', () => {
   const AT = '2026-10-13T21:00:00.000Z';
   const REASON = `Needs a decision before it can go on. MARKER ${'The plan names infrastructure that does not exist. '.repeat(6)}`;
   const DECISION = 'Should the export be a CSV download or a stored report?';
@@ -499,10 +499,10 @@ describe('glob view: Now panel for a stalled failure', () => {
       handover: brief,
     });
 
-  /** The problem block and the Activity log together: where the failure may show. */
-  const panelText = () => `${screen.getByTestId('problem-block').textContent}${screen.getByTestId('activity').textContent}`;
+  /** The notice and the Activity log together: where the failure may show. */
+  const panelText = () => `${screen.getByTestId('notice').textContent}${screen.getByTestId('activity').textContent}`;
 
-  it('headlines a needs_pairing failure with the short label and shows the decision and the reason once', () => {
+  it('headlines a needs_pairing failure with the short label and says the decision once', () => {
     renderGlob(
       stalledView(
         { reason: REASON, at: AT, kind: 'needs_pairing', decision: DECISION },
@@ -521,11 +521,9 @@ describe('glob view: Now panel for a stalled failure', () => {
     const panel = panelText();
     expect(panel.split(DECISION).length - 1).toBe(1);
     expect(panel).not.toContain('Decision needed:');
-    expect(panel.split('MARKER').length - 1).toBe(1);
-    expect(screen.getByTestId('clamp-toggle').textContent).toBe('show more');
   });
 
-  it('shows a plain run failure once, not in the status line and the brief both', () => {
+  it('shows a plain run failure once, not in the notice and the brief both', () => {
     renderGlob(
       stalledView(
         { reason: 'Could not reproduce the bug', at: AT },

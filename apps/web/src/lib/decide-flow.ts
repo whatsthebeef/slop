@@ -1,14 +1,7 @@
 import { isAgentSetKind } from '@slop/core';
 import type { DecisionAttributes, DecisionLearning, DecisionOutcomeKind, KbTarget, KnowledgeKind } from '@slop/core';
 
-export const OUTCOME_TEXT: Record<DecisionOutcomeKind, string> = {
-  accept: 'Accepted',
-  accept_with_edits: 'Accepted with edits',
-  retarget: 'Retargeted',
-  needs_work: 'Needs work',
-  reject: 'Rejected',
-  closed: 'Closed by the pipeline',
-};
+export { OUTCOME_TEXT } from '@slop/core';
 
 export type Choice = Exclude<DecisionOutcomeKind, 'closed'>;
 

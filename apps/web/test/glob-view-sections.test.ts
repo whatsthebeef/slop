@@ -13,11 +13,11 @@ describe('glob view section registry', () => {
     expect([...GLOB_VIEW_SECTIONS].sort()).toEqual(GLOB_SECTIONS.filter((s) => s !== 'due-steps').sort());
   });
 
-  it('lists the blocks above the actions in one order: problems, then what needs a person, then information', () => {
+  it('lists the blocks above the actions in one order: what needs a person, then information, with no block for a conflict or a problem', () => {
     for (const order of [GLOB_VIEW_SECTIONS, DECISION_VIEW_SECTIONS]) {
       const at = (name: GlobSection) => order.indexOf(name);
-      expect(at('conflict')).toBeLessThan(at('problem'));
-      expect(at('problem')).toBeLessThan(at('decision'));
+      expect(order).not.toContain('conflict');
+      expect(order).not.toContain('problem');
       expect(at('decision')).toBeLessThan(at('labels'));
       expect(at('labels')).toBeLessThan(at('escalation'));
       expect(at('escalation')).toBeLessThan(at('size'));
@@ -37,7 +37,7 @@ describe('glob view section registry', () => {
   });
 
   it('puts every block that needs a person above the actions, in every view kind, with and without a due step', () => {
-    const needsPerson: GlobSection[] = ['conflict', 'problem', 'decision', 'labels', 'due-steps'];
+    const needsPerson: GlobSection[] = ['decision', 'labels', 'due-steps'];
     for (const order of [
       viewSections(false, false),
       viewSections(false, true),

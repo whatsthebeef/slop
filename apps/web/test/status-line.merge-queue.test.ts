@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { statusLine } from '../src/lib/status-line';
-import { actionPresentation } from '../src/lib/action-presentation';
+import { statusLine, actionPresentation } from '@slop/core';
 import { NOW } from '../../../packages/core/test/fixtures';
 import { head, view } from './helpers/glob-views';
 

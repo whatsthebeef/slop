@@ -10,9 +10,10 @@ describe('parseGlobTarget', () => {
   it('keeps an artifact without a section (older links)', () => {
     expect(parse('artifact=independent_review')).toEqual({ section: null, artifact: 'independent_review', label: null, tab: null });
   });
-  it('opens the problem block: ?section=problem', () => {
-    expect(parse('section=problem').section).toBe('problem');
-    expect(globPath(15, 's15f172', { section: 'problem' })).toBe('/boards/15/globs/s15f172?section=problem');
+  it('opens the actions for the old conflict and problem links: they are one notice there now', () => {
+    expect(parse('section=problem').section).toBe('actions');
+    expect(parse('section=conflict').section).toBe('actions');
+    expect(globPath(15, 's15f172', { section: 'actions' })).toBe('/boards/15/globs/s15f172?section=actions');
   });
   it('ignores an unknown or empty section', () => {
     expect(parse('section=nope').section).toBeNull();

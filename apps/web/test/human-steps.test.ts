@@ -22,8 +22,7 @@ import {
   EMPTY_DRAFT,
 } from '../src/lib/human-steps';
 import { copyOrSelect } from '../src/lib/plan-text';
-import { cornerStatus } from '../src/lib/card-rows';
-import { statusLine } from '../src/lib/status-line';
+import { cornerStatus, statusLine } from '@slop/core';
 import { NOW, glob } from '../../../packages/core/test/fixtures';
 
 const admin = { email: 'admin@example.com', role: 'admin' } as const;

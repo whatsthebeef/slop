@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { CONFIRM_MS } from './chip-actions';
+/** How long a button that asks for a second click stays armed before it reverts. */
+export const CONFIRM_MS = 4000;
 
 /**
  * A button that asks for a second click: the first only arms it, a second within `CONFIRM_MS` runs it, and the timeout,
