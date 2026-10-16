@@ -109,6 +109,17 @@ describe('human step routes', () => {
     expect(dismissed.humanSteps.find((s) => s.id === wrong?.id)?.state).toBe('dismissed');
   });
 
+  it('refuses a step for an environment the board does not list, and takes a once step', async () => {
+    const refused = await post('/human-steps', { title: 'Set the flag in the EU', due: 'after_deploy:eu' });
+    expect(refused.status).toBe(422);
+    expect(JSON.stringify(await refused.json())).toContain("this board's environments are production");
+    const added = (await (await post('/human-steps', { title: 'Grant the Lambda access', due: 'once' })).json()) as { humanSteps: { title: string; due: string; state: string; blocks: string[] }[] };
+    expect(added.humanSteps.find((s) => s.title === 'Grant the Lambda access')).toMatchObject({ due: 'once', state: 'due', blocks: ['sign_off', 'dependants'] });
+    // Leave the shared glob as it was for the next test.
+    const once = added.humanSteps.find((s) => s.title === 'Grant the Lambda access') as { id?: string } | undefined;
+    expect((await post(`/human-steps/${once?.id ?? ''}/dismiss`, { reason: 'Test cleanup' })).status).toBe(200);
+  });
+
   it('marks an environment deployed: the glob\'s steps for it fall due, and the view carries the arm stage', async () => {
     const added = (await (await post('/human-steps', { title: 'Set the flag in production', due: 'after_deploy:production' })).json()) as {
       arm?: { stage: string; title: string };

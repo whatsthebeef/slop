@@ -941,6 +941,7 @@ export const createApp = (deps: AppDeps) => {
         verify: z.string().optional(),
         who: z.string().optional(),
         due: z.string().optional(),
+        once: z.boolean().optional(),
       }),
     );
     if (body instanceof Response) return body;
