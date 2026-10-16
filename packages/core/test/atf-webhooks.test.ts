@@ -515,7 +515,7 @@ describe('a branch deploy does not queue ATF deliveries', () => {
     if (board !== undefined) {
       store.state.boards.set(boardId, {
         ...board,
-        deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: 'deploy', projects: {} },
+        deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev: 'deploy' } },
       });
     }
   });

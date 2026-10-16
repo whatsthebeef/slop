@@ -115,7 +115,6 @@ const settingsSchema = z.object({
       z.object({
         provider: z.literal('codebuild'),
         region: z.string(),
-        defaultProject: z.string(),
         projects: z.record(z.string(), z.string()).default({}),
       }),
       z.object({ provider: z.literal('github_actions'), workflow: z.string() }),

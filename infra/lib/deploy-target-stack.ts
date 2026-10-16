@@ -14,7 +14,7 @@ export interface NewDeployProject {
   readonly repo: string;
   /** An AWS CodeConnections connection to GitHub that can read the repository. */
   readonly connectionArn: string;
-  /** The project's name (the board's default project in slop's settings). */
+  /** The project's name (the one the environment names in slop's settings). */
   readonly projectName: string;
 }
 

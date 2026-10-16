@@ -4,11 +4,11 @@ import { Input, Select } from '@/components/ui/input';
 import { Field, SaveButton, SettingBlock, SettingsGroup } from './group';
 import type { SettingsForm } from './form';
 
-const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', defaultProject: '', projects: {} };
+const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', projects: {} };
 const GITHUB_DEFAULT: DeployIntegration = { provider: 'github_actions', workflow: 'slop-deploy.yml' };
 
 /**
- * How branch deploys run: none, CodeBuild (a project per environment, with a default) or GitHub
+ * How branch deploys run: none, CodeBuild (a project per environment) or GitHub
  * Actions (a workflow file). Either runs the repo's `.sstor/deploy.sh <env>`.
  */
 const DeploySettings = ({
@@ -41,18 +41,11 @@ const DeploySettings = ({
     </Field>
     {deploy?.provider === 'codebuild' && (
       <>
-        <div className='grid gap-3 sm:grid-cols-2'>
-          <Field label='Region' hint='The AWS region the CodeBuild projects are in.'>
-            {(props) => <Input {...props} value={deploy.region} disabled={disabled} onChange={(e) => onChange({ ...deploy, region: e.target.value })} />}
-          </Field>
-          <Field label='Default project' hint='The project used by every environment that has none of its own.'>
-            {(props) => (
-              <Input {...props} value={deploy.defaultProject} disabled={disabled} onChange={(e) => onChange({ ...deploy, defaultProject: e.target.value })} />
-            )}
-          </Field>
-        </div>
+        <Field label='Region' hint='The AWS region the CodeBuild projects are in.'>
+          {(props) => <Input {...props} value={deploy.region} disabled={disabled} onChange={(e) => onChange({ ...deploy, region: e.target.value })} />}
+        </Field>
         {environments.map((env) => (
-          <Field key={env} label={`Project for ${env}`} hint='Leave blank to use the default project.'>
+          <Field key={env} label={`Project for ${env}`} hint='The CodeBuild project that deploys this environment.'>
             {(props) => (
               <Input
                 {...props}
