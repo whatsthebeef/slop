@@ -53,6 +53,7 @@ You review code changes to make sure they meet the glob's requirements, follow t
 - **Error handling**: appropriate at system boundaries, not excessive internally.
 
 - **Spec and guide drift**: always check whether the diff changes behaviour that the project's spec or guide describes (find the relevant sections by searching the docs for the changed concepts), and the same for the repo's catalog README when catalog behaviour changes. A missing or stale spec, guide or README update is an `IN-SCOPE` finding that names the section.
+- **Question, step or decision**: flag as `IN-SCOPE` any question raised on the glob (`get_glob`'s `questions`) that is really a human step (it tells a person to run a command or paste a result, with no real options) or a decision (its answer matters beyond this glob: a policy or convention other globs follow), and say which record it should be.
 - **Hotspots**: if a changed file is listed in `hotspots` (from `get_context`, or named in the investigation) and the diff grows it substantially, raise a `SUGGESTION` (e.g. "hotspot glob-dialog.tsx grew by 120 lines; could this live in its own component?"). It is never in-scope on size alone.
 
 ### 4. Dependency checks
@@ -62,6 +63,8 @@ When the branch changes dependency manifests or lockfiles, run every dependency 
 ### 5. Build, test and lint (standalone mode, or when asked)
 
 Run the build, test and lint commands from the board's build doc and record pass/fail (per package or module, where the project has several) with errors and warnings.
+
+Refuse "done": a change whose implementation record has no recorded pass of lint, typecheck and the relevant tests (commands and counts), however small the change and catalog-only changes included, is an `IN-SCOPE` finding. If the record has none, run the fast checks yourself and report the result.
 
 In standard mode, don't re-run what the implementer and tester already ran: take their recorded commands and results into the review document, and re-run a single targeted check only when a result looks wrong or a finding depends on it. Spend the effort on reading the change.
 
@@ -135,6 +138,7 @@ Also check how each step is written; each of these is an `IN-SCOPE` finding:
 
 - a title that isn't a short imperative action (over about 120 characters, or carrying conditions or commands), or no `Why:` and `Check:` lines under it, or commands written in backticks, a sentence or a fenced block instead of one `Run:` line each (logins, `export`/`unset`, checkout and the dry run included), or a script path repeated in a `Run:` line or in prose;
 - steps not written per environment: one step covering several environments, environment steps out of the board's `environments` order or ahead of the after-merge steps, an environment the change does not need, a step without its own script, commands or `Check:` for that environment's values, a missing or misspelt `(env: <name>)` suffix, or `blocks: sign_off` where the glob could be signed off before that environment is armed (or missing where it must not be);
+- steps filed at the wrong time (each is `IN-SCOPE`): an environment-independent, one-shot command (an IAM grant, an account or GitHub setting) not marked `(once)`, or a once step given an `env`; an `(env: <name>)` that is not one of the board's environments (`get_board`); one step that mixes commands for different environments or mixes a once command with deploy ones; a step marked after the merge that does not need main to have the change; commands for a branch-deploy environment held back until after the merge; a command inside a sentence instead of its own `Run:` line;
 - a note with no action posing as a step;
 - a review, an approval or anything else due before the merge filed as a step;
 - a step that fails the revert test (if this glob were reverted, would the work still be needed? No: it is a rollout step; yes, or another repo or board, or optional: it belongs in an action glob): standalone, cross-board or optional human work filed as a blocking step;
