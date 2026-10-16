@@ -6,7 +6,7 @@ import type { CodeHost } from '../src/codehost.js';
 import type { RoutineSource } from '../src/routines.js';
 
 const executors = (objects: FakeObjectStore | null) =>
-  codeHostExecutors({} as CodeHost, () => Promise.resolve(null), {} as RoutineSource, {} as Pick<BoardService, 'recordBaseChecks'>, undefined, null, null, undefined, undefined, objects);
+  codeHostExecutors({} as CodeHost, () => Promise.resolve(null), {} as RoutineSource, {} as Pick<BoardService, 'recordBaseChecks' | 'recordBaseBranch'>, undefined, null, null, undefined, undefined, objects);
 
 describe('delete_object executor', () => {
   it('deletes the key, and does it again without harm', async () => {
@@ -33,7 +33,7 @@ describe('fire_routine executor and pending files', () => {
       {} as CodeHost,
       () => Promise.resolve(null),
       { secretFor } as unknown as RoutineSource,
-      {} as Pick<BoardService, 'recordBaseChecks'>,
+      {} as Pick<BoardService, 'recordBaseChecks' | 'recordBaseBranch'>,
       undefined,
       null,
       null,

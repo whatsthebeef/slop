@@ -60,7 +60,7 @@ const printable = (value: string): string => value.replace(/[^\x20-\x7e]/g, '?')
 const environmentSchema = z.object({
   name: z.string().min(1),
   allowBranchDeploy: z.boolean(),
-  // Keys of the removed role, production, deployKnown and subDefault settings are dropped, not stored.
+  // Keys of settings that no longer exist are dropped, not stored.
 });
 
 const createBoardSchema = z.object({
