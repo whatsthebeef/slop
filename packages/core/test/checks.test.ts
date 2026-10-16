@@ -247,7 +247,7 @@ describe('failed checks on a glob', () => {
   });
 
   it('after a failed update the merge failure names what failed', () => {
-    const merging = open({ status: 'merging' });
+    const merging = open({ status: 'merging', mergeUpdates: 1 });
     const t = value(m.checksCompleted(merging, { sha: HEAD, passed: false, failure: lint }, ctx(null)));
     expect(t.glob.failure?.reason).toBe(`Checks failed after updating the branch: ${failureSummary(lint)}`);
   });
