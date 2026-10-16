@@ -17,6 +17,7 @@ import {
 } from '../readiness.js';
 import { UNTIL_WORDS } from '../relations.js';
 import { yourTurn } from '../human-steps.js';
+import { stepGroup } from './human-steps.js';
 import type { Action } from '../machine.js';
 import type { Holding } from '../relations.js';
 import type { HumanStepKind, HumanStepViewer, StepAction } from '../human-steps.js';
@@ -89,6 +90,13 @@ export const isProblemLine = (line: Pick<StatusLine, 'kind'>): boolean =>
 
 /** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
 const TURN_LABEL_MAX = 24;
+
+/** The one word a person's step shows in the corner, by group: never the step's title. Housekeeping has none. */
+const PERSON_WORD: Readonly<Partial<Record<ReturnType<typeof stepGroup>, string>>> = {
+  answer: 'question',
+  do: 'do',
+  decide: 'decide',
+};
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
 export const isInvestigateRun = (run: { readonly purpose?: string }): boolean =>
@@ -411,6 +419,14 @@ export const statusLine = (
         stalled === null
           ? null
           : `${stalled.reason.charAt(0).toUpperCase()}${stalled.reason.slice(1)}${stalled.since === null ? '' : ` since ${new Date(stalled.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}`;
+      // A person's step (Answer, Do, Decide) reads as one word; its title and the count of the rest are the tooltip's.
+      const personWord = 'id' in turn ? PERSON_WORD[stepGroup(turn)] : undefined;
+      const moreSteps =
+        personWord === undefined || glob.humanSteps === undefined
+          ? 0
+          : glob.humanSteps.filter(
+              (s) => s !== turn && s.state === 'due' && PERSON_WORD[stepGroup(s)] !== undefined,
+            ).length;
       const turnAction = 'action' in turn ? turn.action : undefined;
       // The chip names one action; the cause (and that other options are in the glob view) is the tooltip's.
       const tip =
@@ -418,10 +434,12 @@ export const statusLine = (
           ? ready.tip
           : cause !== null
             ? `${cause}\nOther options are in the glob view`
-            : turn.title;
+            : personWord === undefined
+              ? turn.title
+              : `${oneLine(turn.title)}${moreSteps > 0 ? ` (+${String(moreSteps)} more)` : ''}`;
       return make({
         kind: 'ready',
-        full: oneLine(turn.title, TURN_LABEL_MAX),
+        full: personWord ?? oneLine(turn.title, TURN_LABEL_MAX),
         turn: turn.kind,
         ...(turnAction === undefined ? {} : { action: turnAction }),
         tone: 'text-signal-strong',
@@ -630,7 +648,7 @@ const holdState = (state: Holding['state']): string => {
     case 'open':
       return 'Doing';
     case 'rollout':
-      return 'rollout open';
+      return 'to do';
     case 'decided':
       return 'decided';
     case 'done':
