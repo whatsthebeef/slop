@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, ContextTuningService, ContextReportService, DependencyLearningService, RelationLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -119,17 +119,20 @@ const routines =
 const hub = new HintHub();
 const auth = new Auth(db, config);
 const atfPolicy = { projects: config.ATF_PUSH_ALLOWED_PROJECTS, roleAccounts: config.ATF_PUSH_ALLOWED_ROLE_ACCOUNTS };
-const boards = new BoardService({ store, notifier: hub, atfPolicy, serverAdmins: config.SLOP_SERVER_ADMINS });
+// How readily slop creates gating relations per source, learned from overrides, dismissals and collisions (weak links below a precision threshold).
+const relationLearning = new RelationLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, log: logError });
+const boards = new BoardService({ store, notifier: hub, atfPolicy, serverAdmins: config.SLOP_SERVER_ADMINS, onBaseRed: (boardId) => relationLearning.onBaseRed(boardId) });
 // The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
 const branchFiles = new HostBranchFiles(() => github, logError);
 const catalog = new FsCatalog(config.CATALOG_DIR);
 // Which dependency edges are real on each board: predicts shared files (internal) from learned weights, learns relations from failed runs.
-const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, catalog });
+const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, catalog, relationLearning, log: logError });
 // File attachments live in a private bucket; without one configured the feature (routes and job) is off.
 const attachmentObjects = config.ATTACHMENTS_BUCKET === undefined ? null : new S3ObjectStore(new S3Client({ region: config.ATTACHMENTS_REGION }), config.ATTACHMENTS_BUCKET);
 const globs = new GlobService({
   store,
   dependencyLearning,
+  relationLearning,
   log: (task, message) => logError(task, message),
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
@@ -377,6 +380,8 @@ const dependencyInference = new DependencyInferenceService({
   llm: intakeLlm,
   apply: (globId, edges, planHash): Promise<void> => globs.applyInferred(globId, edges, planHash),
   release: (globId): Promise<unknown> => globs.release(globId),
+  // Bolder where inference has missed dependencies: it also proposes globs that touch the same modules.
+  bold: async (boardId): Promise<boolean> => (await relationLearning.posture(boardId, 'inferred')).bold,
   log: logError,
 });
 // The automatic relation pass: one batched intake-model call per debounced job, written through GlobService.applyAutomatic; the call's `spend` tag is its only ledger row.

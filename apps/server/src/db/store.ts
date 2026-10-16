@@ -1,4 +1,4 @@
-import type { AtfBatch, AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, RelationScanPatch, RelationScanRow, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { AtfBatch, AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, RelationScanPatch, RelationScanRow, RelationSignal, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { AGENT_SET_COMMIT_DELAY_MS, RELATION_SCAN_DEBOUNCE_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, ATF_RUNNER_METHODS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -306,6 +306,23 @@ const toRelation = (row: typeof schema.relations.$inferSelect): Relation => ({
   dismissedPlanHash: row.dismissedPlanHash,
   overriddenAt: row.overriddenAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
+  ...(row.verdict === null ? {} : { verdict: row.verdict }),
+  ...(row.verdictReason === null ? {} : { verdictReason: row.verdictReason }),
+  ...(row.verdictBy === null ? {} : { verdictBy: row.verdictBy }),
+  ...(row.verdictAt === null ? {} : { verdictAt: row.verdictAt.toISOString() }),
+});
+
+const toRelationSignal = (row: typeof schema.relationSignals.$inferSelect): RelationSignal => ({
+  id: row.id,
+  boardId: row.boardId,
+  from: row.fromGlob,
+  to: row.toGlob,
+  relationId: row.relationId,
+  source: row.source,
+  signal: row.signal,
+  at: row.at.toISOString(),
+  evidence: row.evidence,
+  key: row.key,
 });
 
 const toRelationScan = (row: typeof schema.relationScans.$inferSelect): RelationScanRow => ({
@@ -341,6 +358,10 @@ const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
   dismissedPlanHash: r.dismissedPlanHash,
   overriddenAt: r.overriddenAt === null ? null : new Date(r.overriddenAt),
   createdAt: new Date(r.createdAt),
+  verdict: r.verdict ?? null,
+  verdictReason: r.verdictReason ?? null,
+  verdictBy: r.verdictBy ?? null,
+  verdictAt: r.verdictAt === undefined ? null : new Date(r.verdictAt),
 });
 
 const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
@@ -1524,6 +1545,63 @@ export class PgStore implements Store {
           .orderBy(r.createdAt, r.id);
         return rows.map(toRelation);
       },
+      listWeakRelations: async (boardId) =>
+        (
+          await t
+            .select()
+            .from(schema.relations)
+            .where(and(eq(schema.relations.boardId, boardId), eq(schema.relations.kind, 'may_relate')))
+            .orderBy(schema.relations.createdAt, schema.relations.id)
+        ).map(toRelation),
+      listWeakRelationsFrom: async (globIds) => {
+        if (globIds.length === 0) return [];
+        const r = schema.relations;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(sql`${r.fromGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb)) and ${r.kind} = 'may_relate'`)
+          .orderBy(r.createdAt, r.id);
+        return rows.map(toRelation);
+      },
+      getRelation: async (id) => {
+        const [row] = await t.select().from(schema.relations).where(eq(schema.relations.id, id));
+        return row === undefined ? null : toRelation(row);
+      },
+      insertRelationSignal: async (signal) => {
+        const rows = await t
+          .insert(schema.relationSignals)
+          .values({
+            id: signal.id,
+            boardId: signal.boardId,
+            fromGlob: signal.from,
+            toGlob: signal.to,
+            relationId: signal.relationId,
+            source: signal.source,
+            signal: signal.signal,
+            at: new Date(signal.at),
+            evidence: signal.evidence,
+            key: signal.key,
+          })
+          .onConflictDoNothing()
+          .returning({ id: schema.relationSignals.id });
+        return rows.length === 1;
+      },
+      listRelationSignals: async (boardId, since) => {
+        const r = schema.relationSignals;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(since === undefined ? eq(r.boardId, boardId) : and(eq(r.boardId, boardId), gte(r.at, new Date(since))))
+          .orderBy(r.at, r.id);
+        return rows.map(toRelationSignal);
+      },
+      getRelationLearning: async (boardId) => {
+        const [row] = await t.select().from(schema.relationLearning).where(eq(schema.relationLearning.boardId, boardId));
+        return row?.settings ?? {};
+      },
+      setRelationLearning: async (boardId, settings) => {
+        await t.insert(schema.relationLearning).values({ boardId, settings }).onConflictDoUpdate({ target: schema.relationLearning.boardId, set: { settings } });
+      },
       insertRelation: async (relation) => {
         const rows = await t.insert(schema.relations).values(relationRow(relation)).onConflictDoNothing().returning({ id: schema.relations.id });
         return rows.length === 1;
@@ -1537,6 +1615,11 @@ export class PgStore implements Store {
         if (patch.dismissedPlanHash !== undefined) set.dismissedPlanHash = patch.dismissedPlanHash;
         if (patch.group !== undefined) set.group = patch.group;
         if (patch.overriddenAt !== undefined) set.overriddenAt = patch.overriddenAt === null ? null : new Date(patch.overriddenAt);
+        if (patch.kind !== undefined) set.kind = patch.kind;
+        if (patch.verdict !== undefined) set.verdict = patch.verdict;
+        if (patch.verdictReason !== undefined) set.verdictReason = patch.verdictReason;
+        if (patch.verdictBy !== undefined) set.verdictBy = patch.verdictBy;
+        if (patch.verdictAt !== undefined) set.verdictAt = new Date(patch.verdictAt);
         if (Object.keys(set).length > 0) await t.update(schema.relations).set(set).where(eq(schema.relations.id, id));
       },
       deleteRelation: async (id) => {

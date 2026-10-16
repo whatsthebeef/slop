@@ -59,6 +59,8 @@ import { AttachConflict, linkInboxItem } from './inbox-service.js';
 import { findHolds } from './hold-service.js';
 import { recordTypeCorrection } from './type-learning-service.js';
 import type { DependencyLearningService } from './dependency-learning-service.js';
+import type { RelationLearningService } from './relation-learning-service.js';
+import { isWeak } from '../domain/relation-learning.js';
 import type { ClassifyAtCreateInput, CreateDecision, CreatePrerequisite } from './relation-scan-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { inferenceReasonOf } from './intake-service.js';
@@ -83,6 +85,8 @@ export interface GlobServiceDeps {
   readonly sizeCheck?: SizeAssessor;
   /** Which dependency edges are real on this board: predicts overlaps from its learned weights and learns needs from failures. */
   readonly dependencyLearning?: DependencyLearningService;
+  /** How readily slop creates gating relations on this board, learned from overrides, dismissals and collisions; absent: every source gates. */
+  readonly relationLearning?: RelationLearningService;
   /** Infers a new glob's needs and overlaps from its plan and the open globs; without it a glob has only the edges it was given. */
   readonly inference?: Pick<DependencyInferenceService, 'infer'>;
   /** Reads a file on the board's base branch, for the script an action runs; without it no script is checked. */
@@ -404,6 +408,7 @@ const relationAdded = (r: Relation, actor: string | null, at: string, external: 
       until: r.until,
       source: r.source,
       reason: r.reason,
+      ...(r.kind === 'may_relate' ? { weak: true } : {}),
       // A mention's row says where the sentence was read: "added relation to s15t246 from a mention in the plan".
       ...(origin === undefined || !isFromMention(r.source) ? {} : { from: origin, note: `added relation to ${to} from a mention in the ${origin}` }),
     },
@@ -1263,7 +1268,7 @@ export class GlobService implements AutomaticRelations {
         }
         const holder = reverse ? other : glob;
         const target = reverse ? glob : other;
-        if ((await tx.listRelationsFrom([holder.id])).some((r) => r.to === target.id)) {
+        if ([...(await tx.listRelationsFrom([holder.id])), ...(await tx.listWeakRelationsFrom([holder.id]))].some((r) => r.to === target.id)) {
           skipped.push({ to, why: 'already related' });
           continue;
         }
@@ -2164,7 +2169,14 @@ export class GlobService implements AutomaticRelations {
       if (perGate('start') > MAX_RELATIONS || perGate('merge') > MAX_RELATIONS || perGate('sign_off') > MAX_RELATIONS) {
         return invalidInput(`A glob can have at most ${MAX_RELATIONS} relations for one gate`);
       }
-      const created = applyWrite([], { add: needs, update: [], remove: [] }, { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() });
+      // A source this board has found too often wrong (mention, inferred) makes only weak links: stored, shown, holding nothing.
+      const postures = await this.deps.relationLearning?.posturesIn(tx, board.id);
+      const weakened = (r: NewRelation): boolean => r.kind === undefined && ((isFromMention(r.source) && isWeak(postures?.mention)) || (r.source === 'inferred' && isWeak(postures?.inferred)));
+      const gating = needs.filter((r) => !weakened(r));
+      const weakLinks = needs.filter(weakened).map((r): NewRelation => ({ ...r, kind: 'may_relate' }));
+      const made = { boardId: board.id, from: id, now: this.deps.clock.now(), newId: () => this.relationId() };
+      const created = applyWrite([], { add: gating, update: [], remove: [] }, made);
+      const weakCreated = applyWrite([], { add: weakLinks, update: [], remove: [] }, made);
       const external = await this.externalIds(tx, board.id, created.relations.map((r) => r.to));
       const relations: RelationFacts = { relations: created.relations, states, ...(external.size === 0 ? {} : { external }) };
       // Predicted overlaps stay on the glob as internal data (the merge policy's holds); they are not shown and not an input.
@@ -2183,7 +2195,7 @@ export class GlobService implements AutomaticRelations {
         throw new Error(`Glob ID collision for ${glob.id}`);
       }
       await tx.appendEvents(transition.value.events);
-      await this.writeNew(tx, glob, created.inserted, ctx.actor?.email ?? null, ctx.now);
+      await this.writeNew(tx, glob, [...created.inserted, ...weakCreated.inserted], ctx.actor?.email ?? null, ctx.now);
       await tx.enqueueEffects(transition.value.effects);
       // The frozen record of what intake saw and decided (spec, Intake): written with the glob, never edited.
       if (isCodeGlob(glob)) await tx.insertIntakeSnapshot(snapshotOf(glob, planText, input.intake ?? null, input.source ?? 'api'), embedding);
@@ -2690,6 +2702,7 @@ export class GlobService implements AutomaticRelations {
     const update: { readonly id: string; readonly patch: { readonly until: RelationUntil; readonly reason: string | null; readonly group?: string } }[] = [];
     const remove: string[] = [];
     let growing: Relation[] = universe.value;
+    const mentionWeak = isFromMention(by) && isWeak((await this.deps.relationLearning?.posturesIn(tx, glob.boardId))?.mention);
     for (const w of list) {
       const target = found.get(w.to);
       if (target === undefined || !(await this.viewableTarget(tx, viewer, target))) return invalidInput(`No glob ${w.to}`);
@@ -2719,9 +2732,11 @@ export class GlobService implements AutomaticRelations {
       const carried = reason !== '' ? reason : (mine?.reason ?? '');
       if (asked && carried === '') return reasonRefusal(w.to);
       if (mine !== undefined) remove.push(mine.id);
-      const draft: NewRelation = { to: w.to, gate, until, reason: carried === '' ? null : carried, evidence: [], source: by, group: w.group ?? null };
+      // A source this board has found too often wrong makes only a weak link: it is checked like a gate but holds nothing.
+      const weak = mine === undefined && mentionWeak;
+      const draft: NewRelation = { to: w.to, gate, until, reason: carried === '' ? null : carried, evidence: [], source: by, group: w.group ?? null, ...(weak ? { kind: 'may_relate' as const } : {}) };
       add.push(draft);
-      growing = [...rest, draftOf(glob.boardId, glob.id, draft)];
+      growing = weak ? [...rest] : [...rest, draftOf(glob.boardId, glob.id, draft)];
     }
     return ok({ add, update, remove, ...(origin === undefined ? {} : { origin }) });
   }
@@ -2815,24 +2830,28 @@ export class GlobService implements AutomaticRelations {
    */
   async dismissRelation(email: string, id: string, version: number | null, relationId: string) {
     // The relation that was dismissed, for what is remembered about an automatic one.
-    const dismissed: { value: Relation | null } = { value: null };
+    const dismissed: { value: Relation | null; state: ToState } = { value: null, state: 'missing' };
     const result = await this.command(email, id, version, (glob) => ok({ glob, changed: false, events: [], effects: [] }), {
       applies: 'work',
       relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[], now: string): Promise<Result<RelationWrite>> => {
         dismissed.value = null;
         const found = board.find((r) => r.id === relationId && r.from === glob.id);
         const label = found === undefined ? (await tx.listSupersessions([glob.id])).find((r) => r.id === relationId) : undefined;
-        const row = found ?? label;
+        const weak = found === undefined && label === undefined ? (await tx.listWeakRelationsFrom([glob.id])).find((r) => r.id === relationId) : undefined;
+        const row = found ?? label ?? weak;
         if (row === undefined) return invalidInput(`${glob.id} has no relation ${relationId}`);
         if (row.dismissedAt !== null) return ok(NO_WRITE);
         const planHash = hash((await tx.artifactVersions(glob.id, 'plan', '')).at(-1)?.content ?? '');
         // A superseded label goes away; the steps it dismissed stay dismissed (that is history).
-        if (found !== undefined) dismissed.value = found;
+        if (found !== undefined || weak !== undefined) dismissed.value = found ?? weak ?? null;
+        if (found !== undefined) dismissed.state = (await this.statesOf(tx, [found.to])).get(found.to) ?? 'missing';
         return ok({ add: [], update: [{ id: row.id, patch: { dismissedAt: now, dismissedPlanHash: planHash } }], remove: [] });
       },
       // A person's "no" to a relation slop added is remembered by the pair, so the automatic pass never asks about it again.
       record: async (tx, before) => {
         const r = dismissed.value;
+        // Dismissing a relation that still held is a false positive for its source (a weak link held nothing, so it says nothing).
+        if (r !== null && r.kind !== 'may_relate') await this.learn(() => this.deps.relationLearning?.dismissed(tx, r, dismissed.state));
         if (r === null || !isFromMention(r.source)) return;
         const now = this.deps.clock.now();
         const key = sentenceHash(r.reason ?? '');
@@ -2847,6 +2866,46 @@ export class GlobService implements AutomaticRelations {
     if (result.value.status === 'planning' && result.value.waiting != null) await this.release(id);
     const resumed = await this.gateReleased(id);
     return resumed.ok ? resumed : result;
+  }
+
+  /**
+   * A person makes a weak link (`may_relate`, holding nothing) a gate: the relation keeps its source, reason and evidence and becomes
+   * a `waits` row, after the checks every relation writer makes (nothing is waiting for it already, `to` still holds, a start gate
+   * only before the glob started, no cycle, within the limit). The promotion tells the board's learning the weak link was right
+   * (`tp_promoted`).
+   */
+  async promoteRelation(email: string, id: string, version: number | null, relationId: string): Promise<Result<Glob>> {
+    const promoted: { value: Relation | null } = { value: null };
+    const result = await this.command(email, id, version, (glob) => ok({ glob, changed: false, events: [], effects: [] }), {
+      applies: 'work',
+      relationPlan: async (tx: Tx, glob: Glob, board: readonly Relation[]): Promise<Result<RelationWrite>> => {
+        promoted.value = null;
+        const weak = (await tx.listWeakRelationsFrom([glob.id])).find((r) => r.id === relationId);
+        if (weak === undefined) return invalidInput(`${glob.id} has no weak link ${relationId}`);
+        if (weak.dismissedAt !== null) return invalidInput('That weak link was dismissed');
+        if (weak.gate === 'start' && glob.status !== 'planning') return invalidInput(`${glob.id} has already started`);
+        const target = await tx.getGlob(weak.to);
+        const state = (await this.statesOf(tx, [weak.to])).get(weak.to);
+        if (target === null || !stillHolds(weak, state)) return invalidInput(`${ignoredWhy(weak.to, state)}, so a gate would hold nothing`);
+        if (board.some((r) => r.from === glob.id && r.to === weak.to && r.gate === weak.gate)) return invalidInput(`${glob.id} already has a ${weak.gate} relation to ${weak.to}`);
+        const universe = await this.relationUniverse(tx, board, [weak.to]);
+        if (!universe.ok) return universe;
+        const checked = checkRelation({ from: glob.id, to: weak.to, gate: weak.gate, until: weak.until }, glob.boardId, universe.value, (gid) => (gid === target.id ? target : undefined));
+        if (!checked.ok) return checked;
+        promoted.value = weak;
+        return ok({ add: [], update: [{ id: weak.id, patch: { kind: 'waits' } }], remove: [] });
+      },
+      record: async (tx, before, _next, actor) => {
+        const weak = promoted.value;
+        if (weak === null) return;
+        const to = (await this.externalIds(tx, before.boardId, [weak.to])).has(weak.to) ? OTHER_BOARD_GLOB : weak.to;
+        await tx.appendEvents([{ type: 'RelationAdded', globId: weak.from, actor: actor?.email ?? null, at: this.deps.clock.now(), data: { to, gate: weak.gate, until: weak.until, source: weak.source, reason: weak.reason, note: 'promoted from a weak link' } }]);
+        await this.learn(() => this.deps.relationLearning?.promoted(tx, weak));
+      },
+    });
+    if (!result.ok) return result;
+    const held = await this.gateReleased(id);
+    return held.ok ? held : result;
   }
 
   /**
@@ -3434,6 +3493,8 @@ export class GlobService implements AutomaticRelations {
     // Human work (a decision or an action) has no overlaps to learn from.
     const source = await this.deps.store.transaction((tx) => tx.getGlob(mergedId));
     if (source === null || !isHumanCategory(source.category)) await this.deps.dependencyLearning?.onMerged(mergedId).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
+    // Collisions between globs that had no relation (a conflict, a red main) are false negatives; best effort like the learning above.
+    if (source === null || !isHumanCategory(source.category)) await this.deps.relationLearning?.onMerged(mergedId);
     const dependants = await this.deps.store.transaction(async (tx) => {
       // A merge on one board releases a holder on another (a relation may point across boards).
       const rows = (await tx.listRelationsTo([mergedId])).filter((r) => isActive(r));
@@ -3655,6 +3716,9 @@ export class GlobService implements AutomaticRelations {
           const growing: Relation[] = universe.value.filter((r) => !remove.includes(r.id));
           const add: NewRelation[] = [];
           const lines: string[] = [];
+          // How readily inference creates gates on this board: a weak source writes `may_relate` links, which hold nothing.
+          const inferredPosture = (await this.deps.relationLearning?.posturesIn(tx, glob.boardId))?.inferred;
+          const weakNow = await tx.listWeakRelationsFrom([glob.id]);
           for (const edge of fresh) {
             // A person's, a learned or an overridden one to the same glob wins; a deleted or merged glob needs nothing, and a decision
             // that has been decided holds nothing either. The kind must match what it points at.
@@ -3666,13 +3730,17 @@ export class GlobService implements AutomaticRelations {
             if (decision !== (target.category === 'decision')) continue;
             if (decision ? toState(target) !== 'planning' && toState(target) !== 'open' : !stillHolds({ gate: 'start', until: 'merged' }, states.get(edge.id))) continue;
             if (growing.some((r) => r.from === glob.id && r.to === edge.id && r.gate === 'start')) continue;
-            const draft: NewRelation = { to: edge.id, gate: 'start', until: decision ? 'decided' : 'merged', reason: edge.reason, evidence: edge.files, source: 'inferred' };
+            // A module-overlap proposal (inference is bold here) is weak unless the source's measured precision earns it a gate (or an admin pinned gate).
+            const gates = !isWeak(inferredPosture) && (edge.bold !== true || inferredPosture?.pinned === true || inferredPosture?.measured === true);
+            // A weak link already stored for the pair (any gate) is left as it is: the unique key would refuse a second.
+            if (!gates && weakNow.some((r) => r.to === edge.id)) continue;
+            const draft: NewRelation = { to: edge.id, gate: 'start', until: decision ? 'decided' : 'merged', reason: edge.reason, evidence: edge.files, source: 'inferred', ...(gates ? {} : { kind: 'may_relate' as const }) };
             const checked = checkRelation(draftOf(glob.boardId, glob.id, draft), glob.boardId, growing, (gid) => known.get(gid));
             if (!checked.ok) {
               lines.push(`Dropped the ${decision ? 'decision' : 'need'} on ${edge.id}: ${checked.error.message}`);
               continue;
             }
-            growing.push(draftOf(glob.boardId, glob.id, draft));
+            if (gates) growing.push(draftOf(glob.boardId, glob.id, draft));
             add.push(draft);
           }
           // The reason is the model's wording and changes between answers: a need to the same glob stays as it is.
@@ -3680,7 +3748,9 @@ export class GlobService implements AutomaticRelations {
           const reAdded = new Set(kept.map((a) => a.to));
           const finalRemove = remove.filter((rid) => !reAdded.has(mine.find((r) => r.id === rid)?.to ?? ''));
           const finalAdd = add.filter((a) => !reAdded.has(a.to));
-          return ok({ add: finalAdd, update: [], remove: finalRemove, ...(lines.length === 0 ? {} : { notes: { lines, planHash } }) });
+          // A weak link inference no longer proposes goes too (a dismissed one stays as the person's word).
+          const staleWeak = weakNow.filter((r) => r.source === 'inferred' && r.dismissedAt === null && !fresh.some((e) => e.id === r.to)).map((r) => r.id);
+          return ok({ add: finalAdd, update: [], remove: [...finalRemove, ...staleWeak], ...(lines.length === 0 ? {} : { notes: { lines, planHash } }) });
         },
       },
     );
@@ -4106,7 +4176,8 @@ export class GlobService implements AutomaticRelations {
         if (!planned.ok) return planned;
         write = planned.value;
         const applied = applyWrite(board.filter((r) => r.from === glob.id), write, { boardId: glob.boardId, from: glob.id, now: this.deps.clock.now(), newId: () => this.relationId() });
-        rows = applied.relations;
+        // A weak link is stored with the others but is not a fact the machine reads: it holds nothing.
+        rows = applied.relations.filter((r) => r.kind !== 'may_relate');
         inserted = applied.inserted;
       }
       const summaries = options.facts === true ? await tx.listArtifactSummaries(glob.boardId, [glob.id]) : [];
@@ -4138,7 +4209,22 @@ export class GlobService implements AutomaticRelations {
         for (const r of inserted) {
           if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
         }
-        for (const e of edits) await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
+        for (const e of edits) {
+          await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
+          // Going ahead of a relation that still held is a false positive for its source; learning never fails the write.
+          const held = before.find((r) => r.id === e.id);
+          if (held !== undefined) await this.learn(() => this.deps.relationLearning?.overridden(tx, held));
+        }
+        if (inserted.length > 0) {
+          const weakBefore = await tx.listWeakRelationsFrom([glob.id]);
+          // A person's relation that slop had not made (no row of any kind to that glob) is a false negative for slop's sources.
+          if (this.deps.relationLearning !== undefined) {
+            for (const r of inserted) await this.learn(() => this.deps.relationLearning?.personAdded(tx, glob, r, [...before, ...weakBefore]));
+          }
+          // A gate for a pair makes a weak link to the same glob redundant.
+          const gated = new Set(inserted.filter((r) => (r.kind ?? 'waits') === 'waits').map((r) => r.to));
+          for (const weak of weakBefore) if (gated.has(weak.to)) await tx.deleteRelation(weak.id);
+        }
         const external = await this.externalIds(tx, glob.boardId, [...before, ...inserted].map((r) => r.to));
         const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted, external);
         // A change to the relations alone still moves the glob's version, so live updates and stale forms see it.
@@ -4177,6 +4263,15 @@ export class GlobService implements AutomaticRelations {
       return ok(next);
     };
     return within === undefined ? this.deps.store.transaction(run) : run(within);
+  }
+
+  /** Runs a learning write that never fails the transition it rides on. */
+  private async learn(run: () => Promise<void> | undefined): Promise<void> {
+    try {
+      await run();
+    } catch (e) {
+      this.deps.log?.('relation learning', e instanceof Error ? e.message : String(e));
+    }
   }
 
   private relationId(): string {

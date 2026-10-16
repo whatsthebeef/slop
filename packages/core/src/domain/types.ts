@@ -323,10 +323,18 @@ export type RelationSource = (typeof RELATION_SOURCES)[number];
 export const isFromMention = (source: RelationSource): boolean => source === 'mention' || source === 'auto';
 /**
  * What a relation row means. `waits`: `from` can't pass `gate` until `to` reaches `until`. `superseded_by`: `from` is superseded by
- * `to` (gate and until are inert placeholders). The list methods the gate code reads return only `waits` rows.
+ * `to` (gate and until are inert placeholders). `may_relate`: a weak link slop made where its source is too often wrong on the
+ * board (it holds nothing; a person can promote it to `waits`). The list methods the gate code reads return only `waits` rows.
  */
-export const RELATION_KINDS = ['waits', 'superseded_by'] as const;
+export const RELATION_KINDS = ['waits', 'superseded_by', 'may_relate'] as const;
 export type RelationKind = (typeof RELATION_KINDS)[number];
+
+/** A post-merge verdict on whether a relation was really needed. */
+export const RELATION_VERDICTS = ['needed', 'not_needed', 'unsure'] as const;
+export type RelationVerdictValue = (typeof RELATION_VERDICTS)[number];
+/** Who reached a verdict: git and the code index, or the model (only when they were unclear). */
+export const RELATION_VERDICT_BY = ['git', 'model'] as const;
+export type RelationVerdictBy = (typeof RELATION_VERDICT_BY)[number];
 
 /**
  * One glob held back by another: `from` can't pass `gate` until `to` reaches `until`. Stored in the `relations` table, not on
@@ -346,7 +354,7 @@ export interface Relation {
   /** Files or symbols that show it. */
   readonly evidence: readonly string[];
   readonly source: RelationSource;
-  /** `waits` (the default; absent on a row written before supersedes) or `superseded_by`. */
+  /** `waits` (the default; absent on a row written before supersedes), `superseded_by` or `may_relate`. */
   readonly kind?: RelationKind;
   /** The group this relation was set for ("every glob in group X waits for D"); null for an ordinary one. Set on each glob's own row. */
   readonly group: string | null;
@@ -356,10 +364,17 @@ export interface Relation {
   /** Set when a person chose Start now over it (inferred and learned start relations only). */
   readonly overriddenAt: string | null;
   readonly createdAt: string;
+  /** The post-merge check's verdict (absent until it ran), with its one-line reason, who reached it and when. */
+  readonly verdict?: RelationVerdictValue;
+  readonly verdictReason?: string;
+  readonly verdictBy?: RelationVerdictBy;
+  readonly verdictAt?: string;
 }
 
-/** The fields of a relation that change after it is made. */
-export type RelationPatch = Partial<Pick<Relation, 'until' | 'reason' | 'evidence' | 'dismissedAt' | 'dismissedPlanHash' | 'overriddenAt' | 'group'>>;
+/** The fields of a relation that change after it is made (`kind`: a weak link promoted to `waits`). */
+export type RelationPatch = Partial<
+  Pick<Relation, 'until' | 'reason' | 'evidence' | 'dismissedAt' | 'dismissedPlanHash' | 'overriddenAt' | 'group' | 'kind' | 'verdict' | 'verdictReason' | 'verdictBy' | 'verdictAt'>
+>;
 
 /**
  * How two decisions relate, as the KB pipeline (or an admin) found: closed into another learning (`duplicate_of`,
