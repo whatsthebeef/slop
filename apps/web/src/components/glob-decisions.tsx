@@ -61,9 +61,11 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
           Confirm
         </Button>
       )}
-      <Button size='sm' variant='outline' disabled={change.isPending} onClick={() => change.mutate({ id, action: 'undo' })}>
-        {state === 'hint' ? 'Dismiss' : 'Undo'}
-      </Button>
+      {state === 'hint' && (
+        <Button size='sm' variant='outline' disabled={change.isPending} onClick={() => change.mutate({ id, action: 'undo' })}>
+          Dismiss
+        </Button>
+      )}
     </span>
   );
 
@@ -107,7 +109,7 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
             <span>
               Replaced by “{newer.statement}” on {day(newer.decidedAt)}
             </span>
-            {buttons(d.id, newer.state)}
+            {newer.state === 'hint' && buttons(d.id, newer.state)}
           </p>
         )}
         {d.replaces.map((r) => (
@@ -120,7 +122,7 @@ export const GlobDecisions = ({ boardId, globId }: { boardId: number; globId: st
                   Decide on {r.cardGlobId}
                 </Link>
               ) : (
-                buttons(r.id, r.state)
+                r.state === 'hint' && buttons(r.id, r.state)
               )}
             </p>
         ))}
