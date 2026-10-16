@@ -60,6 +60,8 @@ import {
   isOpenQuestion,
   matchOption,
   mergeQuestions,
+  isPlanChangedQuestion,
+  RERUN_OPTION,
   nextQuestionId,
   questionAwaits,
   questionGateText,
@@ -4426,11 +4428,25 @@ export const answerQuestion = (
     return q.answer.text === text ? unchanged(glob) : invalidTransition(glob, actor, `${q.id} is already answered`);
   }
   if (q.dismissed !== undefined) return invalidTransition(glob, actor, `${q.id} was dismissed`);
-  const answered: OpenQuestion = { ...q, answer: { text, ...(option === null ? {} : { option }), by: actor.email, at: ctx.now } };
-  return new Builder(glob, ctx)
+  // Re-run on a plan-changed question: the merge stays held until a run on the new plan pushes a new head, and that run starts now.
+  const rerun =
+    q.blocking === 'merge' &&
+    isPlanChangedQuestion(q) &&
+    option !== null &&
+    option.toLowerCase() === RERUN_OPTION.toLowerCase() &&
+    glob.status !== 'reviewing' &&
+    glob.status !== 'signed_off';
+  const answered: OpenQuestion = {
+    ...q,
+    answer: { text, ...(option === null ? {} : { option }), by: actor.email, at: ctx.now, ...(rerun ? { rerunFrom: glob.pr?.headSha ?? null } : {}) },
+  };
+  const b = new Builder(glob, ctx)
     .set({ questions: replaceQuestion(glob, answered) })
-    .event('QuestionAnswered', { id: q.id, blocking: q.blocking, ...(option === null ? {} : { option }) })
-    .done();
+    .event('QuestionAnswered', { id: q.id, blocking: q.blocking, ...(option === null ? {} : { option }) });
+  if (rerun && glob.implementer === null && !hasWorkingRun(glob)) {
+    b.endRun('superseded', null, { cause: 'plan_changed' }).queueRun(actor.email);
+  }
+  return b.done();
 };
 
 /** Row Q3: a person dismisses a question: go ahead as it is (the hold clears; the note is recorded). */
