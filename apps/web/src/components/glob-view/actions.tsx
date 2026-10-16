@@ -594,6 +594,7 @@ export const GlobActions = ({
     <>
       {(hasMain || escapes.length > 0 || info !== null || notice !== null) && (
         <div className="grid gap-1">
+          <Notice ctx={ctx} notice={notice} />
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {lead !== null && (
               <div className="inline-flex" data-testid="split-button">
@@ -668,7 +669,6 @@ export const GlobActions = ({
             )}
             {info}
           </div>
-          <Notice ctx={ctx} notice={notice} />
           <FinishAction ctx={ctx} state={state} />
           <AnywayConfirmation ctx={ctx} state={state} />
           {state.confirmingReady && (
