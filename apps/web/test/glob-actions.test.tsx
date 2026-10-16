@@ -1095,18 +1095,15 @@ describe('glob view: split moves in the action ▾', () => {
     });
   });
 
-  describe('the work kind control', () => {
-    it('is not shown to a non-admin, and is a select an admin can use', async () => {
-      const user = userEvent.setup();
-      cleanup();
+  describe('the fix and work kind controls', () => {
+    it('are gone, for a non-admin and an admin alike', () => {
       renderGlob(view({ category: 'task', type: 'same' }));
+      expect(screen.queryByTestId('fix')).toBeNull();
       expect(screen.queryByTestId('work-kind')).toBeNull();
       cleanup();
-      const cb = renderGlob(view({ category: 'task', type: 'same' }), { ...board, role: 'admin' });
-      const select = screen.getByTestId<HTMLSelectElement>('work-kind');
-      expect(select.disabled).toBe(false);
-      await user.selectOptions(select, 'rnd');
-      await waitFor(() => expect(cb.onUpdate).toHaveBeenCalledWith({ workKind: 'rnd' }));
+      renderGlob(view({ category: 'task', type: 'same' }), { ...board, role: 'admin' });
+      expect(screen.queryByTestId('fix')).toBeNull();
+      expect(screen.queryByTestId('work-kind')).toBeNull();
     });
   });
 

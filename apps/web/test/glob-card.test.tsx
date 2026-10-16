@@ -1033,8 +1033,9 @@ describe('an action glob card', () => {
     const icon = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"] [role="img"]');
     const plain = dom(markup(view({ category: 'feature', type: 'sub' })));
     expect(plain.querySelector('[data-testid="card-type"]')?.textContent).toBe('sub');
-    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('aria-label')).toBe('task');
-    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('class')).toContain('lucide-list-checks');
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('aria-label')).toBe('feature');
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('class')).toContain('lucide-sparkles');
+    expect(icon(view({ category: 'task', type: 'sub', workKind: 'maintenance' }))?.getAttribute('class')).toContain('lucide-list-checks');
     expect(icon(view({ category: 'task', type: 'super' }))?.getAttribute('aria-label')).toBe('task');
     const fix = dom(markup(view({ category: 'task', type: 'same', fix: true })));
     expect(fix.querySelector('[data-testid="card-type"]')?.textContent).toBe('same');

@@ -1,6 +1,6 @@
-import { armLabel, cardTargets, isHumanCategory, modeOf, stripMarkdown } from '@slop/core';
+import { armLabel, cardTargets, isHumanCategory, modeOf, stripMarkdown, workKindOf } from '@slop/core';
 import type { Action, ArmLabel, CornerStatus, GlobTarget, HumanStepViewer, PendingAction } from '@slop/core';
-import { Bug, ListChecks, Rocket, Scale } from 'lucide-react';
+import { Bug, ListChecks, Rocket, Scale, Sparkles } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { ActorIcon, MachineIcon, PersonRunning } from '@/components/actor-icons';
 import type { CSSProperties, ReactNode } from 'react';
@@ -36,13 +36,17 @@ export const KIND_ICON: Record<Kind, { icon: MarkerGlyph; className: string; lab
   decision: { icon: Scale, className: 'text-muted-foreground', label: 'Decision' },
 };
 
-/** The corner marker of every glob: the icon of its kind, named by its tooltip. */
-export const KindMarker = ({ glob }: { glob: Pick<GlobView, 'category' | 'type' | 'fix'> }) => {
+/** The feature icon: shown in place of the task icon for work counted as R&D. */
+const FEATURE_ICON = { icon: Sparkles, className: 'text-muted-foreground', label: 'Feature (R&D)' };
+
+/** The corner marker of every glob: the icon of its kind (a task counted as R&D shows the feature icon), named by its tooltip. */
+export const KindMarker = ({ glob }: { glob: Pick<GlobView, 'category' | 'type' | 'fix' | 'workKind'> }) => {
   const kind = kindOf(glob);
-  const { icon: Icon, className, label } = KIND_ICON[kind];
+  const feature = kind === 'task' && workKindOf(glob) === 'rnd';
+  const { icon: Icon, className, label } = feature ? FEATURE_ICON : KIND_ICON[kind];
   return (
     <Tip text={label}>
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={kind} role='img' />
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', className)} aria-label={feature ? 'feature' : kind} role='img' />
     </Tip>
   );
 };
