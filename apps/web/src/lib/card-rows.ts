@@ -7,7 +7,7 @@ import { reviewOpen } from './human-steps';
 import { clickTip, positionClick, sentence, statusClick, tipLines, yourTurnClick } from './chip-actions';
 import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
-import { heldByQuestion, holdingQuestionsOf, questionChipTip, WAITING_FOR_ANSWER } from './questions';
+import { heldByQuestion, openQuestionsOf, questionChipTip, questionText } from './questions';
 import type { Position } from './position';
 import { blockedParts, holdLine, relationTips, statusLine, workstreamLine } from './status-line';
 import type { StatusLine } from './status-line';
@@ -141,13 +141,13 @@ const decidedStatus = (glob: GlobView, decision: DecisionAttributes): CornerStat
   return { kind: 'decided', icon: 'check', text, label: text, tip, tone, click: { kind: 'section', target: cardTargets.decision() } };
 };
 
-/** "Waiting for an answer": the hold a person clears in the Questions section. */
-const questionHold = (
+/** An open question: the human icon with "question" ("questions" for more), the first question's text in the tooltip. */
+const questionStatus = (
   glob: GlobView,
   make: (kind: string, icon: StatusIcon, text: string, tone: string, click: ChipClick | null, lead: string[]) => CornerStatus,
 ): CornerStatus =>
-  make('hold', 'human', WAITING_FOR_ANSWER, 'text-required', { kind: 'section', target: cardTargets.questions() }, [
-    `${WAITING_FOR_ANSWER}. ${questionChipTip(glob) ?? ''}`.trim(),
+  make('question', 'human', questionText(openQuestionsOf(glob).length), 'text-required', { kind: 'section', target: cardTargets.questions() }, [
+    questionChipTip(glob) ?? '',
   ]);
 
 /**
@@ -200,7 +200,7 @@ export const cornerStatus = (
       ...(waitingTip === null || kind === 'waiting-on-this' ? [] : [waitingTip]),
     ];
     const hint =
-      click === null || kind === 'needs-human' ? [] : [kind === 'hold' || kind === 'waiting-on-this' ? "Opens this glob's related globs." : clickTip(click)];
+      click === null || kind === 'needs-human' || kind === 'question' ? [] : [kind === 'hold' || kind === 'waiting-on-this' ? "Opens this glob's related globs." : clickTip(click)];
     const shown = plainText(text);
     // What the text dropped (a time, a commit) stays in the tooltip.
     const detail = shown === text ? [] : [text];
@@ -239,7 +239,7 @@ export const cornerStatus = (
   }
   // A start question holds the glob in Planning: that is the reason it waits, ahead of any relation hold. Built from the glob's
   // questions (the single glob read has no `move`, and `holding` lists relations only).
-  if (heldByQuestion(glob)) return questionHold(glob, make);
+  if (heldByQuestion(glob)) return questionStatus(glob, make);
   if (status !== null && status.kind === 'ready') {
     // Merge and Done (an `act` click) are run by the corner itself unless something blocks; any other step opens the glob view.
     const turn = yourTurnClick(status, glob);
@@ -251,7 +251,8 @@ export const cornerStatus = (
     const icon = position.spinning ? 'machine-spinning' : 'machine';
     return make('machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip, status.tip]);
   }
-  if (status !== null) {
+  // "Behind <base>" is not shown on the card (the glob view has it); the status falls through to what else there is.
+  if (status !== null && status.kind !== 'behind') {
     const icon = status.kind === 'base-red' || status.kind === 'merge-waits' || status.kind === 'start-queued' ? 'hourglass' : status.kind === 'rollout' ? 'human' : status.kind === 'merging' ? 'machine' : 'alert';
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
@@ -277,8 +278,8 @@ export const cornerStatus = (
     const isStandby = position.label.toLowerCase() === 'standby';
     return make(isStandby ? 'standby' : 'machine', icon, position.label, position.tone, positionClick(position, glob, repo), [position.tip]);
   }
-  // A merge question lets the run finish; the merge waits for the answer.
-  if (holdingQuestionsOf(glob).length > 0) return questionHold(glob, make);
+  // Any other open question (a merge question lets the run finish, the merge waits for the answer; a notice holds nothing).
+  if (openQuestionsOf(glob).length > 0) return questionStatus(glob, make);
   if (held !== null) {
     return make('hold', held.icon, held.text, 'text-muted-foreground', { kind: 'section', target: cardTargets.related() }, [held.tip, ...learnedReasons(glob)]);
   }

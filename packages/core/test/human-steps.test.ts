@@ -9,7 +9,7 @@ import { hash } from '../src/app/text-hash.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import type { RelationScanRow } from '../src/domain/relation-scan.js';
 import { sentenceHash } from '../src/domain/relation-scan.js';
-import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, defaultStepBlocks, derivedSteps, dueText, humanSteps, isHumanStepDue, isForViewer, stepsForViewer, storedBlockProgress, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
+import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, defaultStepBlocks, derivedSteps, dueText, environmentOf, humanSteps, unknownEnvironmentText, isHumanStepDue, isForViewer, stepsForViewer, storedBlockProgress, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
 import { armOf, armView, armsStored, rolloutStages } from '../src/domain/rollout-stages.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
@@ -159,6 +159,48 @@ describe('work steps and due-ness', () => {
     expect(humanSteps(glob({ status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'x' } }), {}, [open])[0]?.state).toBe('due');
     expect(humanSteps(glob({ status: 'in_progress', pr: { number: 7, state: 'merged', headSha: 'x' } }), {}, [open])[0]?.state).toBe('due');
     expect(humanSteps(glob({ status: 'signed_off' }), {}, [open])[0]?.state).toBe('due');
+  });
+
+  describe('once steps (s15t237)', () => {
+    const once = (patch: Partial<StoredHumanStep> = {}) => stored({ due: 'once', ...patch });
+    const stateIn = (g: ReturnType<typeof glob>, step: StoredHumanStep, facts = {}) => humanSteps(g, facts, [step])[0]?.state;
+
+    it('is due at once without a repo script, before the merge, and when the branch was not checked', () => {
+      expect(stateIn(glob({ status: 'in_progress' }), once())).toBe('due');
+      expect(stateIn(glob({ status: 'in_progress' }), once({ script: { artifact: 'rollout: x' } }))).toBe('due');
+      expect(stateIn(glob({ status: 'in_progress' }), once({ script: { path: 'scripts/rollout/x.sh' } }))).toBe('due');
+    });
+
+    it('waits for its script to be on the branch, and is due once it is (or once merged)', () => {
+      const step = once({ script: { path: 'scripts/rollout/x.sh' } });
+      const draft = glob({ status: 'in_progress', pr: { number: 1, state: 'draft', headSha: 'abc' } });
+      expect(stateIn(draft, step, { scriptsOnBranch: new Set<string>() })).toBe('pending');
+      expect(stateIn(draft, step, { scriptsOnBranch: new Set(['scripts/rollout/x.sh']) })).toBe('due');
+      expect(stateIn(glob({ status: 'reviewing', pr: { number: 1, state: 'merged', headSha: 'abc' } }), step, { scriptsOnBranch: new Set<string>() })).toBe('due');
+    });
+
+    it('is done or dismissed whatever the branch has, and is not a deploy step', () => {
+      const step = once({ script: { path: 'scripts/rollout/x.sh' } });
+      expect(stateIn(glob(), { ...step, state: 'done' }, { scriptsOnBranch: new Set<string>() })).toBe('done');
+      expect(stateIn(glob(), { ...step, state: 'dismissed' }, { scriptsOnBranch: new Set<string>() })).toBe('dismissed');
+      expect(defaultStepBlocks('once')).toEqual(['sign_off', 'dependants']);
+      expect(isHumanStepDue('once')).toBe(true);
+      expect(dueText('once')).toBe('once, when its script is on the branch');
+    });
+
+    it('holds back sign-off until done', () => {
+      const open = [once()];
+      expect(storedBlockProgress(open, 'sign_off')).toEqual({ open: 1, total: 1 });
+      expect(storedBlockProgress([once({ state: 'done' })], 'sign_off')).toEqual({ open: 0, total: 1 });
+    });
+  });
+
+  it('names an environment of a deploy step, and the refusal lists the board\'s', () => {
+    expect(environmentOf('after_deploy:prod')).toBe('prod');
+    expect(environmentOf('after_merge')).toBeNull();
+    expect(environmentOf('once')).toBeNull();
+    expect(unknownEnvironmentText('eu', ['demo', 'dev'])).toBe("Unknown environment eu: this board's environments are demo, dev");
+    expect(unknownEnvironmentText('prod', [])).toContain('defines no environments');
   });
 
   it('now steps are due at once; after_deploy steps stay pending', () => {
