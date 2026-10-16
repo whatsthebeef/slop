@@ -7,8 +7,8 @@
 # check steps to the project's build doc.
 # Faster rounds: split the steps below into parallel jobs, compute which workspaces the PR affects (for pnpm:
 # `pnpm --filter "...[origin/<base>]"`; run everything on pushes, merge_group and root-file changes), and add a final job
-# named `checks` (`if: always()`, fails on any failed/cancelled need) so the required check keeps its name. See slop's own
-# .github/workflows/checks.yml.
+# named `checks` (`if: always()`, fails on a failed need and force-cancels its run on a cancelled one) so the required
+# check keeps its name and a cancel still reads as pending. See slop's own .github/workflows/checks.yml.
 name: checks
 
 on:
