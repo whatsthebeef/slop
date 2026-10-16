@@ -352,10 +352,8 @@ export const isWeak = (posture: RelationSourcePosture | undefined): boolean => p
 // Keys: one per cause, so a repeated cause records once.
 
 export const signalKey = {
-  override: (relationId: string): string => `override:${relationId}`,
-  dismissed: (relationId: string): string => `dismissed:${relationId}`,
-  verdict: (relationId: string): string => `verdict:${relationId}`,
-  promoted: (relationId: string): string => `promoted:${relationId}`,
+  /** One outcome per relation (override, dismissal, promotion, verdict, failed-run confirmation): the first recorded wins, so a relation counts once toward precision. */
+  outcome: (relationId: string): string => `outcome:${relationId}`,
   personAdded: (from: string, to: string): string => `person:${from}>${to}`,
   conflict: (culprit: string, other: string): string => `conflict:${culprit}>${other}`,
   redMain: (culprit: string, other: string): string => `redmain:${culprit}>${other}`,

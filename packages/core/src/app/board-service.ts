@@ -320,7 +320,10 @@ export class BoardService {
       return { checks: change.next, change };
     });
     if (recorded?.change.changed === true) this.deps.notifier.publish({ kind: 'board.changed', boardId });
-    if (recorded?.change.changed === true && recorded.checks.state === 'failed' && recorded.checks.since !== null) await this.deps.onBaseRed?.(boardId);
+    if (recorded?.change.changed === true && recorded.checks.state === 'failed' && recorded.checks.since !== null) {
+      // Off the critical path: it reads the code host, logs its own failures and never throws.
+      void this.deps.onBaseRed?.(boardId).catch(() => undefined);
+    }
     return recorded;
   }
 

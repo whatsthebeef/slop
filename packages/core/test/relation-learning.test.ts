@@ -261,7 +261,7 @@ describe('relation learning (service)', () => {
       const row = put(waiter.id, prerequisite.id, { source: 'mention' });
       unwrap(await globs.dismissRelation(DEV, waiter.id, null, row.id));
       expect(kinds()).toEqual([['mention', 'fp_dismissed']]);
-      expect(signals()[0]?.key).toBe(`dismissed:${row.id}`);
+      expect(signals()[0]?.key).toBe(`outcome:${row.id}`);
 
       const merged = await create();
       const holder = await create();
@@ -279,9 +279,44 @@ describe('relation learning (service)', () => {
       await depLearning.onFailed(waiter.id, `Blocked on unmerged ${prerequisite.id}`);
       expect(kinds()).toEqual([['inferred', 'tp_needed']]);
     });
+
+    it('counts a relation once: overridden then judged needed, or promoted then judged needed', async () => {
+      const prerequisite = await create();
+      const waiter = await create();
+      const row = put(waiter.id, prerequisite.id, { source: 'inferred' });
+      unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
+      await store.transaction((tx) => learning.confirmed(tx, row, 'uses X'));
+      await store.transaction((tx) => learning.refuted(tx, row, 'unused'));
+      // The first outcome stands.
+      expect(kinds()).toEqual([['inferred', 'fp_override']]);
+
+      const other = await create();
+      const holder = await create();
+      const weak = put(holder.id, other.id, { source: 'mention', kind: 'may_relate' });
+      unwrap(await globs.promoteRelation(DEV, holder.id, null, weak.id));
+      await store.transaction((tx) => learning.confirmed(tx, weak, 'uses Y'));
+      expect(kinds()).toEqual([
+        ['inferred', 'fp_override'],
+        ['mention', 'tp_promoted'],
+      ]);
+    });
   });
 
   describe('false negatives', () => {
+    it('records no missed dependency for a group hold, and still does for a plain person relation', async () => {
+      const decision = await create();
+      await create({ group: 'g' });
+      await create({ group: 'g' });
+      await create({ group: 'g' });
+      const held = unwrap(await globs.holdGroup(DEV, decision.id, 'g', {}));
+      expect(held.held).toHaveLength(3);
+      expect(signals()).toEqual([]);
+      const a = await create();
+      const b = await create();
+      unwrap(await globs.addRelation(DEV, b.id, null, { to: a.id }, 'held_by', 'person'));
+      expect(kinds()).toEqual([['person', 'fn_person_added']]);
+    });
+
     it('counts a person-added relation after creation, and not one slop had already made', async () => {
       const a = await create();
       const b = await create();

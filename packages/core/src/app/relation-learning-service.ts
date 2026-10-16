@@ -43,6 +43,9 @@ export interface SignalInput {
 
 const DAY_MS = 86_400_000;
 
+/** The most globs a red main is checked against (each check reads diffs from the code host). */
+const MAX_RED_MAIN_CANDIDATES = 20;
+
 /**
  * Learns, per board and relation source, how readily to create gating relations (spec, Dependencies). Every override, dismissal,
  * promotion, person-added relation and collision is recorded once as a signal; precision and recall are computed from the signals
@@ -80,28 +83,28 @@ export class RelationLearningService {
 
   /** Start now, Merge anyway or Sign off anyway went ahead of a relation that was still holding: it was too aggressive. */
   async overridden(tx: Tx, relation: Relation): Promise<void> {
-    await this.record(tx, this.about(relation, 'fp_override', signalKey.override(relation.id), `${relation.from} went ahead of its ${relation.gate} relation to ${relation.to} anyway`));
+    await this.record(tx, this.about(relation, 'fp_override', signalKey.outcome(relation.id), `${relation.from} went ahead of its ${relation.gate} relation to ${relation.to} anyway`));
   }
 
   /** A person dismissed a relation: a false positive only when `to` had not reached `until` (a met relation had already opened its gate). */
   async dismissed(tx: Tx, relation: Relation, toStateNow: ToState): Promise<void> {
     if (isMet(relation, toStateNow)) return;
-    await this.record(tx, this.about(relation, 'fp_dismissed', signalKey.dismissed(relation.id), `${relation.from} dismissed its ${relation.gate} relation to ${relation.to} before it was met`));
+    await this.record(tx, this.about(relation, 'fp_dismissed', signalKey.outcome(relation.id), `${relation.from} dismissed its ${relation.gate} relation to ${relation.to} before it was met`));
   }
 
   /** The relation was needed: the post-merge check found a use, or a run failed for the missing prerequisite. Once per relation. */
   async confirmed(tx: Tx, relation: Relation, evidence: string): Promise<void> {
-    await this.record(tx, this.about(relation, 'tp_needed', signalKey.verdict(relation.id), evidence));
+    await this.record(tx, this.about(relation, 'tp_needed', signalKey.outcome(relation.id), evidence));
   }
 
   /** The relation was not needed (the post-merge check). Once per relation. */
   async refuted(tx: Tx, relation: Relation, evidence: string): Promise<void> {
-    await this.record(tx, this.about(relation, 'fp_not_needed', signalKey.verdict(relation.id), evidence));
+    await this.record(tx, this.about(relation, 'fp_not_needed', signalKey.outcome(relation.id), evidence));
   }
 
   /** A person made a weak link a gate: it was right to suggest it. */
   async promoted(tx: Tx, relation: Relation): Promise<void> {
-    await this.record(tx, this.about(relation, 'tp_promoted', signalKey.promoted(relation.id), `${relation.from}'s weak link to ${relation.to} was made a ${relation.gate} gate`));
+    await this.record(tx, this.about(relation, 'tp_promoted', signalKey.outcome(relation.id), `${relation.from}'s weak link to ${relation.to} was made a ${relation.gate} gate`));
   }
 
   /**
@@ -110,7 +113,8 @@ export class RelationLearningService {
    * relation row of the glob read before this write.
    */
   async personAdded(tx: Tx, glob: Glob, added: Relation, before: readonly Relation[]): Promise<void> {
-    if (added.source !== 'person' || added.kind === 'superseded_by') return;
+    // A group hold (`holdGroup`) is a decision about the group, not a dependency slop missed for one glob.
+    if (added.source !== 'person' || added.kind === 'superseded_by' || added.group !== null) return;
     if (before.some((r) => r.to === added.to && r.source !== 'person' && r.kind !== 'superseded_by')) return;
     await this.record(tx, {
       boardId: glob.boardId,
@@ -147,11 +151,8 @@ export class RelationLearningService {
    */
   async onMerged(globId: string): Promise<void> {
     try {
-      await this.deps.store.transaction(async (tx) => {
-        const glob = await tx.getGlob(globId);
-        if (glob === null || !hasMerged(glob)) return;
-        await this.collisions(tx, glob);
-      });
+      const glob = await this.deps.store.transaction((tx) => tx.getGlob(globId));
+      if (glob !== null && hasMerged(glob)) await this.collisions(glob);
     } catch (e) {
       this.deps.log?.('relation learning', e instanceof Error ? e.message : String(e));
     }
@@ -160,11 +161,11 @@ export class RelationLearningService {
   /** The base branch just turned red because of `board.baseChecks.since`: records the red-main collision if that glob merged. Never throws. */
   async onBaseRed(boardId: number): Promise<void> {
     try {
-      await this.deps.store.transaction(async (tx) => {
+      const glob = await this.deps.store.transaction(async (tx) => {
         const since = (await tx.getBoard(boardId))?.baseChecks?.since ?? null;
-        const glob = since === null ? null : await tx.getGlob(since);
-        if (glob !== null && glob.boardId === boardId && hasMerged(glob)) await this.collisions(tx, glob);
+        return since === null ? null : tx.getGlob(since);
       });
+      if (glob !== null && glob.boardId === boardId && hasMerged(glob)) await this.collisions(glob);
     } catch (e) {
       this.deps.log?.('relation learning', e instanceof Error ? e.message : String(e));
     }
@@ -176,46 +177,64 @@ export class RelationLearningService {
     return rows.some((r) => (r.from === a && r.to === b) || (r.from === b && r.to === a));
   }
 
-  private async collisions(tx: Tx, glob: Glob): Promise<void> {
+  /**
+   * Reads the collisions in one transaction, evaluates `uses` (code-host reads) outside any transaction, then records the signals
+   * in a short second one. Keys make a repeat harmless.
+   */
+  private async collisions(glob: Glob): Promise<void> {
     const boardId = glob.boardId;
-    const events = (await tx.listBoardEvents(boardId, glob.createdAt, ['ConflictFlagged'], [glob.id])).filter((e) => e.globId === glob.id);
-    for (const e of events) {
-      const since = e.data['since'];
-      if (typeof since !== 'string' || since === glob.id) continue;
-      const other = await tx.getGlob(since);
-      if (other === null || other.boardId !== boardId || (await this.related(tx, glob.id, since))) continue;
-      await this.record(tx, {
-        boardId,
-        from: glob.id,
-        to: since,
-        relationId: null,
-        source: 'none',
-        signal: 'fn_conflict',
-        evidence: `${glob.id} conflicted with main after ${since} merged, and no relation joined them`,
-        key: signalKey.conflict(glob.id, since),
-      });
-    }
-    const board = await tx.getBoard(boardId);
-    if (board?.baseChecks?.state !== 'failed' || board.baseChecks.since !== glob.id) return;
-    const merges = await tx.listBoardEvents(boardId, glob.createdAt, ['Merged']);
-    const others = new Set(merges.filter((m) => m.globId !== glob.id).map((m) => m.globId));
+    const read = await this.deps.store.transaction(async (tx) => {
+      const signals: SignalInput[] = [];
+      const events = (await tx.listBoardEvents(boardId, glob.createdAt, ['ConflictFlagged'], [glob.id])).filter((e) => e.globId === glob.id);
+      for (const e of events) {
+        const since = e.data['since'];
+        if (typeof since !== 'string' || since === glob.id) continue;
+        const other = await tx.getGlob(since);
+        if (other === null || other.boardId !== boardId || (await this.related(tx, glob.id, since))) continue;
+        signals.push({
+          boardId,
+          from: glob.id,
+          to: since,
+          relationId: null,
+          source: 'none',
+          signal: 'fn_conflict',
+          evidence: `${glob.id} conflicted with main after ${since} merged, and no relation joined them`,
+          key: signalKey.conflict(glob.id, since),
+        });
+      }
+      const candidates: Glob[] = [];
+      const board = await tx.getBoard(boardId);
+      if (board?.baseChecks?.state === 'failed' && board.baseChecks.since === glob.id) {
+        const merges = await tx.listBoardEvents(boardId, glob.createdAt, ['Merged']);
+        for (const id of new Set(merges.filter((m) => m.globId !== glob.id).map((m) => m.globId))) {
+          if (candidates.length >= MAX_RED_MAIN_CANDIDATES) break;
+          const other = await tx.getGlob(id);
+          if (other === null || other.boardId !== boardId || !hasMerged(other) || (await this.related(tx, glob.id, id))) continue;
+          candidates.push(other);
+        }
+      }
+      return { signals, candidates };
+    });
     const predicted = new Set((glob.impliedAfter ?? []).map((i) => i.id));
-    for (const id of others) {
-      const other = await tx.getGlob(id);
-      if (other === null || other.boardId !== boardId || !hasMerged(other) || (await this.related(tx, glob.id, id))) continue;
-      const collided = this.deps.uses === undefined ? predicted.has(id) : await this.deps.uses(glob, other);
+    const uses = this.deps.uses;
+    for (const other of read.candidates) {
+      const collided = uses === undefined ? predicted.has(other.id) : await uses(glob, other);
       if (!collided) continue;
-      await this.record(tx, {
+      read.signals.push({
         boardId,
         from: glob.id,
-        to: id,
+        to: other.id,
         relationId: null,
         source: 'none',
         signal: 'fn_red_main',
-        evidence: `main went red at ${glob.id}, which ${this.deps.uses === undefined ? 'overlapped' : 'uses what was added by'} ${id}, and no relation joined them`,
-        key: signalKey.redMain(glob.id, id),
+        evidence: `main went red at ${glob.id}, which ${uses === undefined ? 'overlapped' : 'uses what was added by'} ${other.id}, and no relation joined them`,
+        key: signalKey.redMain(glob.id, other.id),
       });
     }
+    if (read.signals.length === 0) return;
+    await this.deps.store.transaction(async (tx) => {
+      for (const input of read.signals) await this.record(tx, input);
+    });
   }
 
   // -------------------------------------------------------------------------

@@ -82,7 +82,7 @@ describe('relation check in Postgres', () => {
     expect(stored).toMatchObject({ verdict: 'needed', verdictBy: 'git', verdictReason: `uses \`holdWords\` from ${b.id} (in src/a.ts)` });
     expect(stored?.verdictAt).toEqual(expect.any(String));
     const signals = await store.transaction((tx) => tx.listRelationSignals(boardId));
-    expect(signals.map((s) => [s.source, s.signal, s.key])).toEqual([['inferred', 'tp_needed', `verdict:rel_${a.id}_${b.id}`]]);
+    expect(signals.map((s) => [s.source, s.signal, s.key])).toEqual([['inferred', 'tp_needed', `outcome:rel_${a.id}_${b.id}`]]);
     const events = await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['RelationVerdict']));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ globId: a.id, data: { to: b.id, verdict: 'needed', by: 'git' } });
