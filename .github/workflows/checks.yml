@@ -166,11 +166,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: timeout 12m pnpm --filter ./packages/core test
 
+  # Two shards in separate jobs, each with its own Postgres, so the suite doesn't fight itself (and the other jobs) for a
+  # 2-4 core runner: vitest runs at most 2 workers in CI (apps/server/vitest.config.ts) and retries a failed test once.
   test-server:
     needs: changes
     if: ${{ needs.changes.outputs.server == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/2', '2/2']
     services:
       # The server tests create throwaway databases next to this one.
       postgres:
@@ -184,7 +190,9 @@ jobs:
           POSTGRES_PASSWORD: slop
           POSTGRES_DB: slop
         ports: ['5432:5432']
+        # The data directory is on tmpfs (a throwaway database needs no disk); the next step turns durability off.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U slop" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
@@ -194,7 +202,34 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: timeout 17m pnpm --filter ./apps/server test
+      # A test database: fsync, synchronous_commit and full_page_writes off (all take effect on reload).
+      - name: Tune Postgres for tests
+        env:
+          PGPASSWORD: slop
+        run: |
+          set -euo pipefail
+          psql -h localhost -U slop -d slop -v ON_ERROR_STOP=1 \
+            -c "alter system set fsync = off" \
+            -c "alter system set synchronous_commit = off" \
+            -c "alter system set full_page_writes = off" \
+            -c "select pg_reload_conf()"
+      # CI=true gives vitest the capped pool and `retry: 1`; the JSON report keeps the failures of a retried test, so a test that failed
+      # and then passed shows up as flaky (below) instead of being hidden.
+      - name: Test server (shard ${{ matrix.shard }})
+        run: timeout 17m pnpm --filter ./apps/server test --shard=${{ matrix.shard }} --reporter=default --reporter=json --outputFile.json=report.json
+      - name: List tests that passed on retry
+        if: ${{ always() }}
+        run: |
+          [ -f apps/server/report.json ] || exit 0
+          node scripts/flaky-tests.mjs apps/server/report.json > flaky-tests.json || true
+          cat flaky-tests.json
+      - name: Upload flaky-test list
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-tests-${{ strategy.job-index }}
+          path: flaky-tests.json
+          if-no-files-found: ignore
 
   test-other:
     needs: changes
