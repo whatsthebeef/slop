@@ -4,9 +4,9 @@ An ATF runner is any system that runs a board's acceptance tests and tells slop 
 
 ## The contract
 
-1. **Trigger.** The runner's own pipeline runs after a deploy (or a branch deploy). A runner that can't watch for deploys itself can register a webhook (see "Deploy-live webhook" below): slop calls it once the deploy is live and checked, and the runner then does steps 3 and 4.
+1. **Trigger.** The runner's own pipeline runs after a branch deploy succeeds in a dev environment. A runner that can't watch for deploys itself can register a webhook (see "Deploy-live webhook" below): slop calls it once the deploy has succeeded, and the runner then does steps 3 and 4.
 2. **Identity.** One of the methods below, sent as `Authorization: Bearer <credential>`. slop resolves it to one registered runner on one board; anything else is a plain `401`.
-3. **Specs.** `GET /integrations/boards/:b/atf-specs?environment=<env>&sha=<sha>`. `202` means slop is still checking the deploy (wait `retryAfterSeconds`), `409` means a newer deploy replaced the commit, `200` has the planned `specs` and `greps`. Run the default suite on anything else.
+3. **Specs.** `GET /integrations/boards/:b/atf-specs?environment=<env>&sha=<sha>`. `202` means slop has not seen a succeeded branch deploy of that commit in the environment (yet; wait `retryAfterSeconds`), `409` means a newer deploy replaced the commit in the environment, `200` has the `specs` and `greps` planned by the deployed glob. Run the default suite on anything else.
 4. **Results.** `POST /integrations/boards/:b/atf-results` with `{environment | branch, sha, passed, failed, skipped, url?, specs?: [{file, status, tests, failed}]}` and an `Idempotency-Key` header naming this pipeline run (a build id; one per run, not per commit, or an identical re-run is dropped as a redelivery). `201` recorded, `200` ignored (a redelivery, or nothing on the board to attach it to), `403` the runner doesn't serve that environment, `401` identity not accepted.
 
 `atf-specs.sh` and `atf-report.sh` in this directory do steps 3 and 4 and choose the identity from the environment. They never fail the pipeline and never print a token.
@@ -57,17 +57,19 @@ Without the scripts: `POST <tokenUrl>` with HTTP Basic auth `clientId:clientSecr
 
 ## Deploy-live webhook (push, for runners that can't pull)
 
-Pull is the default: the runner's pipeline asks `atf-specs`. A runner whose system can only be called can have slop call it once a deploy is live and checked. The webhook is an extra setting of any runner, whatever its identity method. It has no screen yet: set it through the API.
+Pull is the default: the runner's pipeline asks `atf-specs`. A runner whose system can only be called can have slop call it once a branch deploy has succeeded. The webhook is an extra setting of any runner, whatever its identity method. It has no screen yet: set it through the API.
 
 1. **Board admin:** `POST /api/boards/:b/atf-runners`, or `PATCH /api/boards/:b/atf-runners/:id`, with `config: {..., "webhook": {"url": "https://ci.example.com/hooks/slop"}}`. `PATCH`'s `config.webhook` is the whole setting: leave it out to turn delivery off.
 2. **URL rules:** `https`, no user name or password, a public host name (not `localhost`, a single label or an internal-looking suffix), and every address it resolves to must be public (private, loopback, link-local and other reserved ranges are refused). slop resolves the host when you set the webhook and again at every delivery, and connects to the address it resolved (the host name is the TLS name and the `Host` header). Redirects are not followed. The server must have `SIGNING_SECRET` set, or webhooks can't be turned on.
 3. **Read the signing secret once.** The answer that turns the webhook on has `webhookSecret` (`whsec_...`), with `Cache-Control: no-store`. slop keeps it sealed and shows it nowhere else. Moving the URL keeps it; turning the webhook off and on again makes a new one. Don't send a secret of your own: it is refused.
 
-**What slop sends.** One `POST` per runner and deploy, once the deploy is live and slop has checked what it contains, for each enabled runner that serves the environment. The body is JSON:
+**What slop sends.** One `POST` per runner and deploy, once a branch deploy has succeeded in the environment, for each enabled runner that serves the environment. The body is JSON:
 
 ```json
-{"event": "deploy.live", "id": "atf-<runner>-<deploy>", "board": {"id": 4, "name": "..."}, "environment": "staging", "sha": "<commit>", "deployId": 123, "deployedAt": "<ISO time>"}
+{"event": "deploy.live", "id": "atf-<runner>-<deploy>", "board": {"id": 4, "name": "..."}, "environment": "dev", "sha": "<commit>", "deployId": "<the branch deploy's id>", "deployedAt": "<ISO time>"}
 ```
+
+`deployId` is the branch deploy's own string id (it was a number for the release deploys slop no longer tracks): read it as text. `deployedAt` is when that deploy finished.
 
 | Header | Meaning |
 | --- | --- |

@@ -44,7 +44,7 @@ export interface AtfRunner {
   readonly name: string;
   readonly method: AtfRunnerMethod;
   readonly config: AtfRunnerConfig;
-  /** The observed environments the runner may ask specs for and report on. */
+  /** The environments the runner may ask specs for and report on. */
   readonly environments: readonly string[];
   readonly enabled: boolean;
   readonly createdBy: string;
@@ -179,7 +179,7 @@ const validateAwsIam = (config: AtfRunnerConfig): Result<null> => {
 
 /**
  * Checks a runner to register (or an update's resulting runner) against the board: a name, one known method with the
- * settings it needs, and a non-empty list of environments the board observes. Name uniqueness is the service's.
+ * settings it needs, and a non-empty list of the board's environments. Name uniqueness is the service's.
  */
 export const validateRunner = (
   input: {
@@ -197,7 +197,7 @@ export const validateRunner = (
   if (environments.length === 0) return invalidInput('A runner serves at least one environment');
   const unknown = environments.filter((e) => !observedEnvironments.includes(e));
   if (unknown.length > 0)
-    return invalidInput(`${unknown.join(', ')} isn't an environment this board observes`);
+    return invalidInput(`${unknown.join(', ')} isn't an environment of this board`);
   const checked =
     input.method === 'oidc'
       ? validateOidc(input.config)

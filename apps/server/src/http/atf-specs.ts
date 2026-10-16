@@ -15,7 +15,7 @@ export interface AtfSpecsRoutesDeps {
   readonly log?: (task: string, message: string) => void;
 }
 
-/** How long a pipeline waits before asking again while the deploy's check is running. */
+/** How long a pipeline waits before asking again while the deploy has not succeeded. */
 export const RETRY_AFTER_SECONDS = 15;
 
 const querySchema = z.object({
@@ -28,7 +28,7 @@ const querySchema = z.object({
 
 /**
  * The spec list the board's ATF stage runs after a deploy (spec, ATF results): the union of the specs (and greps) of the
- * test plans of the globs the deploy newly holds, each with the globs that asked for it. Two doors onto one answer:
+ * test plans of the globs whose succeeded branch deploys put the commit in the environment, each with the globs that asked for it. Two doors onto one answer:
  * `/api/boards/:b/atf-specs` for a signed-in member (a session or a person's bearer token), and
  * `/integrations/boards/:b/atf-specs` for a runner, with its own credential as a bearer token (or the board's integration
  * token, deprecated: those answers carry `Deprecation: true`). A credential is bound to its board and a runner to the
@@ -59,14 +59,12 @@ export const mountAtfSpecs = (app: Hono<Env>, deps: AtfSpecsRoutesDeps): void =>
     }
     if (found.status === 'superseded')
       return c.json({ status: 'superseded', latestSha: found.latestSha }, 409);
-    const { batch } = found;
     return c.json({
       status: 'ready',
-      environment: batch.environment,
-      sha: batch.sha,
-      specs: batch.specs.map((s) => ({ spec: s.spec, globs: s.globIds })),
-      greps: batch.greps.map((g) => ({ grep: g.grep, globs: g.globIds })),
-      batchId: batch.id,
+      environment: found.environment,
+      sha: found.sha,
+      specs: found.specs.map((s) => ({ spec: s.spec, globs: s.globIds })),
+      greps: found.greps.map((g) => ({ grep: g.grep, globs: g.globIds })),
     });
   };
 

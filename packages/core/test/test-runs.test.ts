@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { EnvironmentService } from '../src/app/environment-service.js';
 import { TestRunService } from '../src/app/test-run-service.js';
 import type { ReportedAtfRun } from '../src/app/test-run-service.js';
-import type { GlobPresence } from '../src/domain/environments.js';
+import type { Deploy } from '../src/domain/deploys.js';
 import * as testRuns from '../src/domain/test-runs.js';
 import type { TestRun } from '../src/domain/test-runs.js';
 import type { Board } from '../src/domain/types.js';
@@ -13,8 +12,8 @@ const board: Board = {
   ...baseBoard,
   environments: [
     { name: 'dev', allowBranchDeploy: true },
-    { name: 'staging', allowBranchDeploy: false, role: 'integration' },
-    { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
+    { name: 'qa', allowBranchDeploy: true },
+    { name: 'prod', allowBranchDeploy: true },
   ],
 };
 
@@ -27,8 +26,8 @@ const run = (patch: Partial<TestRun> = {}): TestRun => ({
   id: 1,
   boardId: board.id,
   kind: 'atf',
-  globId: null,
-  environment: 'staging',
+  globId: 's1t1',
+  environment: 'qa',
   sha: DEPLOYED,
   passed: 10,
   failed: 0,
@@ -40,15 +39,11 @@ const run = (patch: Partial<TestRun> = {}): TestRun => ({
   ...patch,
 });
 
-const presence = (patch: Partial<GlobPresence> = {}): GlobPresence => ({
-  boardId: board.id,
+/** A branch deploy of the glob's commit that succeeded (the shape the run-finding rules read). */
+const deployed = (patch: Partial<Pick<Deploy, 'globId' | 'environment' | 'sha'>> = {}) => ({
   globId: 's1t1',
-  environment: 'staging',
-  mergeSha: 'm1',
-  contained: true,
-  checkedSha: DEPLOYED,
-  checkedAt: NOW,
-  since: NOW,
+  environment: 'qa',
+  sha: DEPLOYED,
   ...patch,
 });
 
@@ -61,8 +56,8 @@ describe('ATF rules', () => {
   });
 
   it("shows the glob's latest branch run, stale when it tested an older commit than the PR head", () => {
-    const older = run({ id: 1, globId: 's1t1', sha: HEAD.slice(0, 7), finishedAt: '2026-10-05T10:00:00.000Z' });
-    const latest = run({ id: 2, globId: 's1t1', sha: OLD_HEAD, failed: 3, finishedAt: '2026-10-05T11:00:00.000Z' });
+    const older = run({ id: 1, environment: null, sha: HEAD.slice(0, 7), finishedAt: '2026-10-05T10:00:00.000Z' });
+    const latest = run({ id: 2, environment: null, sha: OLD_HEAD, failed: 3, finishedAt: '2026-10-05T11:00:00.000Z' });
     expect(testRuns.atfIndicators(g, [older], [])).toEqual([
       expect.objectContaining({ scope: 'branch', sha: HEAD.slice(0, 7), failing: false }),
     ]);
@@ -70,19 +65,21 @@ describe('ATF rules', () => {
     expect(testRuns.atfIndicators(g, [older, latest], [])).toEqual([
       expect.objectContaining({ scope: 'branch', sha: OLD_HEAD, failed: 3, failing: true, stale: true }),
     ]);
-    // Another glob's branch run is not this glob's.
-    expect(testRuns.atfIndicators(g, [run({ globId: 's1t2' })], [])).toEqual([]);
+    // Another glob's run is not this glob's.
+    expect(testRuns.atfIndicators(g, [run({ globId: 's1t2' })], [deployed({ globId: 's1t2' })])).toEqual([]);
   });
 
-  it("shows an environment run only at the commit the environment was checked at, while it holds the glob", () => {
+  it('shows a run against a commit the glob\'s branch deploy put in the environment, as an environment run', () => {
     const atDeploy = run({ id: 1, sha: DEPLOYED.slice(0, 7), failed: 2 });
-    expect(testRuns.atfIndicators(g, [atDeploy], [presence()])).toEqual([
-      expect.objectContaining({ scope: 'environment', environment: 'staging', failing: true }),
+    expect(testRuns.atfIndicators(g, [atDeploy], [deployed()])).toEqual([
+      expect.objectContaining({ scope: 'environment', environment: 'qa', failing: true }),
     ]);
-    // Not held, another environment's run, or another commit: nothing.
-    expect(testRuns.atfIndicators(g, [atDeploy], [presence({ contained: false })])).toEqual([]);
-    expect(testRuns.atfIndicators(g, [run({ environment: 'prod' })], [presence()])).toEqual([]);
-    expect(testRuns.atfIndicators(g, [run({ sha: NEWER })], [presence()])).toEqual([]);
+    // Another glob's deploy, another environment, or another commit is no deploy of this run.
+    expect(testRuns.atfIndicators(g, [atDeploy], [deployed({ globId: 's1t2' })])).toEqual([
+      expect.objectContaining({ scope: 'branch' }),
+    ]);
+    expect(testRuns.atfIndicators(g, [run({ environment: 'prod' })], [deployed()]).map((i) => i.scope)).toEqual(['branch']);
+    expect(testRuns.atfIndicators(g, [run({ sha: NEWER })], [deployed()]).map((i) => i.scope)).toEqual(['branch']);
   });
 
   it('shows the latest run per environment, newest first, after the branch run', () => {
@@ -90,16 +87,16 @@ describe('ATF rules', () => {
       run({ id: 1, finishedAt: '2026-10-05T10:00:00.000Z', failed: 4 }),
       run({ id: 2, finishedAt: '2026-10-05T11:00:00.000Z' }),
       run({ id: 3, environment: 'prod', sha: NEWER }),
-      run({ id: 4, globId: 's1t1', environment: 'dev', sha: HEAD }),
+      run({ id: 4, environment: 'dev', sha: HEAD }),
     ];
-    const presences = [presence(), presence({ environment: 'prod', checkedSha: NEWER })];
-    expect(testRuns.atfIndicators(g, runs, presences).map((i) => [i.scope, i.environment, i.failed])).toEqual([
+    const deploys = [deployed(), deployed({ environment: 'prod', sha: NEWER })];
+    expect(testRuns.atfIndicators(g, runs, deploys).map((i) => [i.scope, i.environment, i.failed])).toEqual([
       ['branch', 'dev', 0],
       ['environment', 'prod', 0],
-      ['environment', 'staging', 0],
+      ['environment', 'qa', 0],
     ]);
     // The glob view lists every one of them.
-    expect(testRuns.globTestRuns(g, runs, presences)).toHaveLength(4);
+    expect(testRuns.globTestRuns(g, runs, deploys)).toHaveLength(4);
   });
 
   it('takes the glob ID from a full branch ref', () => {
@@ -112,13 +109,12 @@ describe('TestRunService', () => {
   let store: MemoryStore;
   let notifier: RecordingNotifier;
   let service: TestRunService;
-  let environments: EnvironmentService;
   let now = NOW;
 
   const report = (patch: Partial<ReportedAtfRun> = {}): ReportedAtfRun => ({
     repo: 'Acme/App',
     sha: DEPLOYED,
-    environment: 'staging',
+    environment: 'qa',
     branch: null,
     passed: 12,
     failed: 0,
@@ -129,8 +125,31 @@ describe('TestRunService', () => {
     ...patch,
   });
 
-  const deploy = async (sha: string, eventId: string, at: string) => {
-    await environments.recordDeploy({ repo: 'acme/app', environment: 'staging', sha, ref: null, succeeded: true, url: null, at, eventId });
+  let deployCount = 0;
+  /** A succeeded branch deploy of the glob's commit (newest request first, as the store lists them). */
+  const deploy = async (sha: string, at: string, globId = 's1t1', environment = 'qa') => {
+    deployCount += 1;
+    await store.transaction((tx) =>
+      tx.saveDeploys([
+        {
+          id: `dep${String(deployCount)}`,
+          boardId: board.id,
+          environment,
+          globId,
+          sha,
+          state: 'succeeded',
+          trigger: 'push',
+          requestedBy: null,
+          requestedAt: at,
+          runningSince: at,
+          startedAt: at,
+          finishedAt: at,
+          providerRef: null,
+          url: null,
+          error: null,
+        },
+      ]),
+    );
   };
 
   beforeEach(async () => {
@@ -139,7 +158,7 @@ describe('TestRunService', () => {
     now = NOW;
     const clock = { now: () => now };
     service = new TestRunService({ store, notifier, clock });
-    environments = new EnvironmentService({ store, notifier, clock });
+    deployCount = 0;
     await store.transaction(async (tx) => {
       await tx.insertBoard({ ...board, environments: [...board.environments], sensitivePaths: [] });
       await tx.insertGlob(glob({ id: 's1t1', status: 'reviewing', environment: 'dev', pr: { number: 7, state: 'ready', headSha: HEAD } }), null);
@@ -174,68 +193,77 @@ describe('TestRunService', () => {
     expect(store.state.testRuns).toEqual([]);
   });
 
-  it('ignores an environment run without an observed environment, or without a commit and a deploy', async () => {
+  it("ignores an environment run without a board environment, without a deploy of its commit, or on another repo", async () => {
     expect(await service.recordAtf(report({ environment: null }))).toEqual([]);
-    expect(await service.recordAtf(report({ environment: 'dev' }))).toEqual([]);
+    expect(await service.recordAtf(report({ environment: 'nowhere' }))).toEqual([]);
     expect(await service.recordAtf(report({ sha: null }))).toEqual([]);
-    expect(await service.recordAtf(report({ repo: 'acme/other' }))).toEqual([]);
+    // A deploy, but not of this commit, and one that never succeeded.
+    await deploy(NEWER, '2026-10-05T11:00:00.000Z');
+    await store.transaction((tx) =>
+      tx.saveDeploys([
+        {
+          id: 'failed1',
+          boardId: board.id,
+          environment: 'qa',
+          globId: 's1t1',
+          sha: DEPLOYED,
+          state: 'failed',
+          trigger: 'push',
+          requestedBy: null,
+          requestedAt: NOW,
+          runningSince: NOW,
+          startedAt: NOW,
+          finishedAt: NOW,
+          providerRef: null,
+          url: null,
+          error: 'exit 1',
+        },
+      ]),
+    );
+    expect(await service.recordAtf(report())).toEqual([]);
+    expect(await service.recordAtf(report({ repo: 'acme/other', sha: NEWER }))).toEqual([]);
     expect(store.state.testRuns).toEqual([]);
   });
 
-  it("records an environment run once, at the environment's latest deploy when it names no commit", async () => {
-    await deploy(DEPLOYED, 'aws:d1', '2026-10-05T11:00:00.000Z');
+  it("records an environment run once on the deploy's glob, at the environment's latest deploy when it names no commit", async () => {
+    await deploy(DEPLOYED, '2026-10-05T11:00:00.000Z');
     expect(await service.recordAtf(report({ sha: null, branch: 'main' }))).toEqual([board.id]);
     expect(await service.recordAtf(report({ sha: null }))).toEqual([]);
-    expect(store.state.testRuns).toEqual([expect.objectContaining({ globId: null, environment: 'staging', sha: DEPLOYED })]);
-    // Logged once in the table, not on each glob, and the board refreshes once.
+    expect(store.state.testRuns).toEqual([expect.objectContaining({ globId: 's1t1', environment: 'qa', sha: DEPLOYED })]);
+    // Not logged as a branch run; the glob's deploys refresh.
     expect(store.state.events).toEqual([]);
-    expect(notifier.hints).toEqual([{ kind: 'board.tests', boardId: board.id }]);
+    expect(notifier.hints).toEqual([{ kind: 'glob.deploys', boardId: board.id, globId: 's1t1' }]);
   });
 
-  it('shows an environment run on every glob the commit holds', async () => {
-    await deploy(DEPLOYED, 'aws:d1', '2026-10-05T11:00:00.000Z');
-    await environments.recordContainment(board.id, 'staging', DEPLOYED, [
-      { globId: 's1t1', mergeSha: 'm1', contained: true },
-      { globId: 's1t2', mergeSha: 'm2', contained: true },
-    ]);
+  it('shows an environment run on the glob whose deploy it tested, and on no other', async () => {
+    await deploy(DEPLOYED, '2026-10-05T11:00:00.000Z');
     await service.recordAtf(report({ failed: 1 }));
     const state = await service.boardState(board.id, ['s1t1', 's1t2']);
-    expect([...state.keys()]).toEqual(['s1t1', 's1t2']);
-    expect(state.get('s1t2')).toEqual([expect.objectContaining({ scope: 'environment', environment: 'staging', failing: true })]);
-    const view = await service.forGlob('dev@example.com', 's1t2');
+    expect([...state.keys()]).toEqual(['s1t1']);
+    expect(state.get('s1t1')).toEqual([expect.objectContaining({ scope: 'environment', environment: 'qa', failing: true })]);
+    const view = await service.forGlob('dev@example.com', 's1t1');
     expect(view.ok && view.value.runs.map((r) => [r.scope, r.sha])).toEqual([['environment', DEPLOYED]]);
-    expect((await service.forGlob('stranger@example.com', 's1t2')).ok).toBe(false);
+    expect((await service.forGlob('stranger@example.com', 's1t1')).ok).toBe(false);
   });
 
-  it("shows a run reported before its deploy's check once the check stores presence at that commit", async () => {
-    await service.recordAtf(report());
-    expect((await service.boardState(board.id, ['s1t1'])).size).toBe(0);
-    await deploy(DEPLOYED, 'aws:d1', '2026-10-05T11:00:00.000Z');
-    notifier.hints.length = 0;
-    await environments.recordContainment(board.id, 'staging', DEPLOYED, [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
-    // One board refresh shows the run on every glob held, moved or not.
-    expect(notifier.hints).toEqual([{ kind: 'board.tests', boardId: board.id }]);
+  it('keeps a run for an older commit of the glob while its deploy is among the glob\'s succeeded ones', async () => {
+    await deploy(DEPLOYED, '2026-10-05T11:00:00.000Z');
+    now = '2026-10-05T13:00:00.000Z';
+    await deploy(NEWER, '2026-10-05T12:30:00.000Z');
+    expect(await service.recordAtf(report({ eventId: 'aws:late' }))).toEqual([board.id]);
+    expect(store.state.testRuns).toHaveLength(1);
     expect((await service.boardState(board.id, ['s1t1'])).get('s1t1')).toEqual([
       expect.objectContaining({ scope: 'environment', sha: DEPLOYED }),
     ]);
   });
 
-  it('keeps a run for an older commit that arrives after a newer deploy, but shows it on no glob', async () => {
-    await deploy(DEPLOYED, 'aws:d1', '2026-10-05T11:00:00.000Z');
-    await environments.recordContainment(board.id, 'staging', DEPLOYED, [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
-    now = '2026-10-05T13:00:00.000Z';
-    await deploy(NEWER, 'aws:d2', '2026-10-05T12:30:00.000Z');
-    await environments.recordContainment(board.id, 'staging', NEWER, [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
-    expect(await service.recordAtf(report({ eventId: 'aws:late' }))).toEqual([board.id]);
-    expect(store.state.testRuns).toHaveLength(1);
-    expect((await service.boardState(board.id, ['s1t1'])).size).toBe(0);
-  });
-
-  it("removes a glob's branch runs with it, not the environment's", async () => {
+  it("removes a glob's runs with it", async () => {
+    await deploy(DEPLOYED, '2026-10-05T11:00:00.000Z');
     await service.recordAtf(report({ branch: 's1t1', sha: HEAD, eventId: 'aws:b1' }));
     await service.recordAtf(report({ eventId: 'aws:e1' }));
+    expect(store.state.testRuns).toHaveLength(2);
     await store.transaction((tx) => tx.deleteGlob('s1t1'));
-    expect(store.state.testRuns.map((r) => r.globId)).toEqual([null]);
+    expect(store.state.testRuns).toEqual([]);
   });
 
   describe('bound to a runner', () => {
@@ -254,7 +282,7 @@ describe('TestRunService', () => {
             name,
             method: 'oidc',
             config: {},
-            environments: ['staging'],
+            environments: ['qa'],
             enabled: true,
             createdBy: 'admin@example.com',
             createdAt: NOW,
@@ -264,7 +292,29 @@ describe('TestRunService', () => {
         };
         return [other.id, await make('GitHub Actions'), await make('CodeBuild')];
       });
-      await deploy(DEPLOYED, 'aws:d1', '2026-10-05T11:00:00.000Z');
+      await deploy(DEPLOYED, '2026-10-05T11:00:00.000Z');
+      // The other board's glob was deployed at the same commit, so an unbound report fans out to it too.
+      await store.transaction((tx) =>
+        tx.saveDeploys([
+          {
+            id: 'other-dep',
+            boardId: otherBoardId,
+            environment: 'qa',
+            globId: `s${String(otherBoardId)}t1`,
+            sha: DEPLOYED,
+            state: 'succeeded',
+            trigger: 'push',
+            requestedBy: null,
+            requestedAt: NOW,
+            runningSince: NOW,
+            startedAt: NOW,
+            finishedAt: NOW,
+            providerRef: null,
+            url: null,
+            error: null,
+          },
+        ]),
+      );
     });
 
     it('records on the runner’s board only, whatever repo the report names, and keeps the runner', async () => {
@@ -272,7 +322,7 @@ describe('TestRunService', () => {
       expect(await service.recordAtf(report({ eventId: 'aws:fan' }))).toEqual([board.id, otherBoardId]);
       store.state.testRuns = [];
       expect(await service.recordAtf(report({ repo: '', eventId: 'runner:1:a' }), { boardId: board.id, runnerId: runnerA })).toEqual([board.id]);
-      expect(store.state.testRuns).toEqual([expect.objectContaining({ boardId: board.id, runnerId: runnerA, environment: 'staging', sha: DEPLOYED })]);
+      expect(store.state.testRuns).toEqual([expect.objectContaining({ boardId: board.id, runnerId: runnerA, environment: 'qa', sha: DEPLOYED })]);
     });
 
     it('stamps the runner’s last result, and records the legacy board token with no runner', async () => {
@@ -300,13 +350,12 @@ describe('TestRunService', () => {
       expect(store.state.testRuns).toEqual([expect.objectContaining({ globId: 's1t1', runnerId: runnerA })]);
     });
 
-    it('ignores an environment the board does not observe, and a board that is gone', async () => {
+    it('ignores an environment with no deploy of the commit, and a board that is gone', async () => {
       expect(await service.recordAtf(report({ environment: 'dev', eventId: 'runner:1:z' }), { boardId: board.id, runnerId: runnerA })).toEqual([]);
       expect(await service.recordAtf(report({ eventId: 'runner:1:w' }), { boardId: 9999, runnerId: runnerA })).toEqual([]);
     });
 
     it('names the runners on the card and in the glob view only when the board has more than one', async () => {
-      await environments.recordContainment(board.id, 'staging', DEPLOYED, [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
       await service.recordAtf(report({ eventId: 'runner:1:a' }), { boardId: board.id, runnerId: runnerA });
       const names = async () => (await service.boardState(board.id, ['s1t1'])).get('s1t1')?.map((i) => i.runnerName);
       // Two registered runners, one of them posting: names show.

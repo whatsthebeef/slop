@@ -8,8 +8,8 @@ import { NOW } from './fixtures.js';
 const run = (patch: Partial<NewTestRun> = {}): NewTestRun => ({
   boardId: 1,
   kind: 'atf',
-  globId: null,
-  environment: 'staging',
+  globId: 's1t1',
+  environment: 'qa',
   sha: 'abc1234',
   passed: 3,
   failed: 1,
@@ -35,7 +35,7 @@ describe('per-spec test results in the store', () => {
     expect(await store.transaction((tx) => tx.insertTestRun(run({ specs })))).toBe(true);
     await store.transaction((tx) => tx.insertTestRun(run({ eventId: 'e2' })));
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(1, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(1, { globIds: ['s1t1'] }),
     );
     expect(runs).toHaveLength(2);
     // The run itself carries no spec rows.
@@ -66,33 +66,6 @@ describe('per-spec test results in the store', () => {
     expect(store.state.testRunSpecs).toHaveLength(1);
     await store.transaction((tx) => tx.deleteGlob('s1t1'));
     expect(store.state.testRunSpecs).toEqual([]);
-  });
-});
-
-describe('ATF batches in the store', () => {
-  it('stores one batch per board, environment and commit and returns the first on a repeat', async () => {
-    const store = new MemoryStore();
-    const batch = {
-      boardId: 1,
-      environment: 'staging',
-      sha: 'abc1234',
-      specs: [{ spec: 'a.spec.ts', globIds: ['s1t1'] }],
-      greps: [{ grep: '@x', globIds: ['s1t1'] }],
-      createdAt: NOW,
-    };
-    const first = await store.transaction((tx) => tx.insertAtfBatch(batch));
-    const again = await store.transaction((tx) =>
-      tx.insertAtfBatch({ ...batch, specs: [], createdAt: '2026-10-06T00:00:00.000Z' }),
-    );
-    expect(again).toEqual(first);
-    expect(await store.transaction((tx) => tx.getAtfBatch(1, 'staging', 'abc1234'))).toEqual(first);
-    expect(await store.transaction((tx) => tx.getAtfBatch(1, 'staging', 'other'))).toBeNull();
-    expect(await store.transaction((tx) => tx.getAtfBatch(2, 'staging', 'abc1234'))).toBeNull();
-    const later = await store.transaction((tx) =>
-      tx.insertAtfBatch({ ...batch, sha: 'def5678', createdAt: '2026-10-06T00:00:00.000Z' }),
-    );
-    expect(await store.transaction((tx) => tx.latestAtfBatch(1, 'staging'))).toEqual(later);
-    expect(await store.transaction((tx) => tx.latestAtfBatch(1, 'prod'))).toBeNull();
   });
 });
 

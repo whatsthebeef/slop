@@ -348,6 +348,27 @@ describe('deploy results and executors', () => {
     ]);
   });
 
+  it('records an environment ATF run on the glob whose succeeded branch deploy put the commit there, and ignores one nobody deployed', async () => {
+    const requested = await deploys.requestFromPush('s9f2', 'e2e2e2e2e2e2');
+    const deploy = requested.ok ? requested.value : null;
+    expect(deploy?.state).toBe('running');
+    // Not deployed yet: the run has no glob to belong to.
+    const early = await atfEvent('atf-env-0', { ...atf, environment: 'dev1', sha: 'e2e2e2e2e2e2' });
+    expect(await early.json()).toEqual({ ok: true, ignored: true });
+    await deploys.finished(deploy?.id ?? '', { succeeded: true, error: null });
+    expect(await (await atfEvent('atf-env-1', { ...atf, environment: 'dev1', sha: 'E2E2E2E2E2E2', failed: 3 })).json()).toMatchObject({ ok: true });
+    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json();
+    expect(state).toMatchObject({ atf: { s9f2: [{ scope: 'environment', environment: 'dev1', sha: 'e2e2e2e2e2e2', failing: true }] } });
+    // The other glob keeps only its earlier branch run: nothing of this deploy's run.
+    expect(state).toMatchObject({ atf: { s9f1: [{ scope: 'branch', sha: 'a1b2c3d4e5f6' }] } });
+    // A commit no branch deploy put in the environment, and an environment that deployed nothing.
+    for (const detail of [{ environment: 'dev1', sha: '999999999999' }, { environment: 'prod', sha: 'e2e2e2e2e2e2' }]) {
+      expect(await (await atfEvent('atf-env-2', { ...atf, ...detail })).json()).toEqual({ ok: true, ignored: true });
+    }
+    const view = z.object({ value: z.array(z.object({ scope: z.string(), environment: z.string().nullable() })) }).parse(await (await app.request('/api/globs/s9f2/tests')).json());
+    expect(view.value.map((r) => [r.scope, r.environment])).toEqual([['environment', 'dev1']]);
+  });
+
   it('ignores malformed ATF events', async () => {
     for (const detail of [
       { ...atf },
@@ -355,7 +376,7 @@ describe('deploy results and executors', () => {
       { ...atf, environment: 'prod', failed: 1.5 },
       { ...atf, environment: 'prod', sha: 'zzz' },
       { ...atf, environment: 'prod', url: 'javascript:alert(1)' },
-      { ...atf, environment: 'dev1' },
+      { ...atf, environment: 'dev1', sha: '999999999999' },
       { ...atf, branch: 's9f404', sha: 'a1b2c3d4e5f6' },
     ]) {
       const response = await atfEvent('atf-bad', detail);

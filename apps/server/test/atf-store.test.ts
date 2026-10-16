@@ -1,29 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AtfIntegration, NewEnvironmentDeploy, NewTestRun } from '@slop/core';
+import type { AtfIntegration, NewTestRun } from '@slop/core';
 import { PgStore } from '../src/db/store.js';
 import { createTestDatabase } from './support/database.js';
 
 const AT = '2026-10-05T12:00:00.000Z';
-const LATER = '2026-10-06T12:00:00.000Z';
-
-const deploy = (
-  boardId: number,
-  patch: Partial<NewEnvironmentDeploy> = {},
-): NewEnvironmentDeploy => ({
-  boardId,
-  environment: 'staging',
-  sha: 'abc1234',
-  ref: null,
-  succeeded: true,
-  url: null,
-  at: AT,
-  eventId: 'd1',
-  ...patch,
-});
 const run = (boardId: number, patch: Partial<NewTestRun> = {}): NewTestRun => ({
   boardId,
   kind: 'atf',
-  globId: null,
+  globId: 's1t1',
   environment: 'staging',
   sha: 'abc1234',
   passed: 1,
@@ -39,7 +23,6 @@ describe('ATF storage in Postgres', () => {
   let drop: () => Promise<void>;
   let store: PgStore;
   let boardId: number;
-  let otherBoardId: number;
 
   beforeAll(async () => {
     const test = await createTestDatabase('atf_store');
@@ -58,7 +41,6 @@ describe('ATF storage in Postgres', () => {
         }),
       );
     boardId = (await board('a')).id;
-    otherBoardId = (await board('b')).id;
   });
 
   afterAll(async () => {
@@ -97,7 +79,7 @@ describe('ATF storage in Postgres', () => {
       true,
     );
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(boardId, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(boardId, { globIds: ['s1t1'] }),
     );
     expect(runs).toHaveLength(2);
     const withSpecs = runs.find((r) => r.eventId === 'r1');
@@ -118,7 +100,7 @@ describe('ATF storage in Postgres', () => {
       await store.transaction((tx) => tx.insertTestRun(run(boardId, { eventId: 'dup', specs }))),
     ).toBe(false);
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(boardId, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(boardId, { globIds: ['s1t1'] }),
     );
     const dup = runs.find((r) => r.eventId === 'dup');
     expect((await store.transaction((tx) => tx.listTestRunSpecs([dup?.id ?? 0]))).length).toBe(1);
@@ -138,88 +120,12 @@ describe('ATF storage in Postgres', () => {
       ),
     );
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(boardId, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(boardId, { globIds: ['s1t1'] }),
     );
     const rows = await store.transaction((tx) =>
       tx.listTestRunSpecs([runs.find((r) => r.eventId === 'twice')?.id ?? 0]),
     );
     expect(rows.map((r) => [r.spec, r.status])).toEqual([['e2e/same.spec.ts', 'passed']]);
-  });
-
-  it('lists an environment’s deploys newest first and stamps checked_at on the commit’s rows', async () => {
-    await store.transaction(async (tx) => {
-      await tx.insertEnvironmentDeploy(deploy(boardId));
-      await tx.insertEnvironmentDeploy(
-        deploy(boardId, { sha: 'def5678', eventId: 'd2', at: LATER }),
-      );
-      await tx.insertEnvironmentDeploy(
-        deploy(boardId, {
-          sha: 'bad0000',
-          eventId: 'd3',
-          at: '2026-10-07T00:00:00.000Z',
-          succeeded: false,
-        }),
-      );
-      await tx.insertEnvironmentDeploy(deploy(otherBoardId, { eventId: 'd1' }));
-    });
-    const listed = await store.transaction((tx) =>
-      tx.listEnvironmentDeploys(boardId, 'staging', 10),
-    );
-    expect(listed.map((d) => [d.sha, d.succeeded, d.checkedAt])).toEqual([
-      ['bad0000', false, null],
-      ['def5678', true, null],
-      ['abc1234', true, null],
-    ]);
-    expect(
-      await store.transaction((tx) => tx.listEnvironmentDeploys(boardId, 'staging', 2)),
-    ).toHaveLength(2);
-    await store.transaction((tx) =>
-      tx.markEnvironmentDeployChecked(boardId, 'staging', 'def5678', '2026-10-06T12:05:00.000Z'),
-    );
-    const after = await store.transaction((tx) =>
-      tx.listEnvironmentDeploys(boardId, 'staging', 10),
-    );
-    expect(after.map((d) => [d.sha, d.checkedAt])).toEqual([
-      ['bad0000', null],
-      ['def5678', '2026-10-06T12:05:00.000Z'],
-      ['abc1234', null],
-    ]);
-    // The latest succeeded deploy carries the stamp; other boards are untouched.
-    expect(
-      (await store.transaction((tx) => tx.latestEnvironmentDeploy(boardId, 'staging')))?.checkedAt,
-    ).toBe('2026-10-06T12:05:00.000Z');
-    expect(
-      (await store.transaction((tx) => tx.latestEnvironmentDeploy(otherBoardId, 'staging')))
-        ?.checkedAt,
-    ).toBeNull();
-  });
-
-  it('stores one batch per board, environment and commit and returns the stored one on a repeat', async () => {
-    const batch = {
-      boardId,
-      environment: 'staging',
-      sha: 'def5678',
-      specs: [{ spec: 'e2e/a.spec.ts', globIds: ['s1t1', 's1t2'] }],
-      greps: [{ grep: '@x', globIds: ['s1t1'] }],
-      createdAt: LATER,
-    };
-    const first = await store.transaction((tx) => tx.insertAtfBatch(batch));
-    expect(first).toMatchObject(batch);
-    const again = await store.transaction((tx) =>
-      tx.insertAtfBatch({ ...batch, specs: [], createdAt: '2026-10-08T00:00:00.000Z' }),
-    );
-    expect(again).toEqual(first);
-    expect(await store.transaction((tx) => tx.getAtfBatch(boardId, 'staging', 'def5678'))).toEqual(
-      first,
-    );
-    expect(
-      await store.transaction((tx) => tx.getAtfBatch(otherBoardId, 'staging', 'def5678')),
-    ).toBeNull();
-    const newer = await store.transaction((tx) =>
-      tx.insertAtfBatch({ ...batch, sha: 'fff9999', createdAt: '2026-10-09T00:00:00.000Z' }),
-    );
-    expect(await store.transaction((tx) => tx.latestAtfBatch(boardId, 'staging'))).toEqual(newer);
-    expect(await store.transaction((tx) => tx.latestAtfBatch(boardId, 'prod'))).toBeNull();
   });
 
   it('reads the spec rows of a branch run', async () => {
@@ -228,10 +134,10 @@ describe('ATF storage in Postgres', () => {
     ] as const;
     await store.transaction((tx) =>
       tx.insertTestRun(
-        run(boardId, { eventId: 'branch', globId: 's1t1', environment: null, specs }),
+        run(boardId, { eventId: 'branch', globId: 's1t2', environment: null, specs }),
       ),
     );
-    const runs = await store.transaction((tx) => tx.listTestRuns(boardId, { globIds: ['s1t1'] }));
+    const runs = await store.transaction((tx) => tx.listTestRuns(boardId, { globIds: ['s1t2'] }));
     expect(runs).toHaveLength(1);
     expect(await store.transaction((tx) => tx.listTestRunSpecs([runs[0]?.id ?? 0]))).toHaveLength(
       1,

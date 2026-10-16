@@ -50,7 +50,7 @@ describe('AWS IAM runner identity (outbound identity federation)', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+        environments: [{ name: 'staging', allowBranchDeploy: true }],
         sensitivePaths: [],
       });
       await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });

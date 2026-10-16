@@ -1,12 +1,13 @@
-import type { GlobPresence } from './environments.js';
 import { LEGACY_RUNNER_NAME } from './atf-runners.js';
+import type { Deploy } from './deploys.js';
 import { sameCommit } from './signals.js';
+import type { RequestedSpec } from './test-plan.js';
 import type { Glob } from './types.js';
 
 /**
  * Acceptance test (ATF) results. Slop doesn't start ATF; the board's pipeline does and reports each run's counts. A
- * branch run belongs to the glob named by the branch. A run against a release or integration environment belongs to
- * the commit that environment ran, so every glob that commit contains shows it, with no per-glob rows. Results are a
+ * branch run belongs to the glob named by the branch. A run against a dev environment belongs to the glob whose branch
+ * deploy put that commit there (a succeeded `Deploy` of the glob at that environment and commit). Results are a
  * flag only: a failure never blocks PR creation, approval, sign-off or a production deploy, and nothing here drives a
  * transition. Every rule here is pure.
  */
@@ -19,7 +20,7 @@ export interface TestRun {
   readonly id: number;
   readonly boardId: number;
   readonly kind: TestRunKind;
-  /** The glob named by the run's branch; null for a run against a release or integration environment. */
+  /** The glob the run belongs to: the one named by its branch, or the one whose branch deploy put its commit in the environment. */
   readonly globId: string | null;
   /** The environment it ran against (a branch run's may be null). */
   readonly environment: string | null;
@@ -37,7 +38,7 @@ export interface TestRun {
   readonly runnerId: number | null;
 }
 
-/** What one spec did in a run. `missing`: the batch listed it and the run reported no test for it. */
+/** What one spec did in a run. `missing`: the deploy's spec list had it and the run reported no test for it. */
 export const SPEC_STATUSES = ['passed', 'failed', 'skipped', 'missing'] as const;
 export type SpecStatus = (typeof SPEC_STATUSES)[number];
 
@@ -60,34 +61,8 @@ export interface StoredRunSpec extends TestRunSpec {
 /** A run to record; `specs` (per-spec rows, when the reporter sent them) are written in the same transaction. */
 export type NewTestRun = Omit<TestRun, 'id' | 'runnerId'> & { readonly runnerId?: number | null; readonly specs?: readonly TestRunSpec[] };
 
-/** One spec (or grep) of a deploy's batch with the globs whose test plans asked for it. */
-export interface AtfBatchSpec {
-  readonly spec: string;
-  readonly globIds: readonly string[];
-}
-export interface AtfBatchGrep {
-  readonly grep: string;
-  readonly globIds: readonly string[];
-}
-
-/** The union of specs one deploy (environment and commit) should run, stored on first request so a repeat call returns the same list. */
-export interface AtfBatch {
-  readonly id: number;
-  readonly boardId: number;
-  readonly environment: string;
-  readonly sha: string;
-  readonly specs: readonly AtfBatchSpec[];
-  readonly greps: readonly AtfBatchGrep[];
-  readonly createdAt: string;
-}
-
-export type NewAtfBatch = Omit<AtfBatch, 'id'>;
-
-/** An environment's commit, for finding the runs against it. */
-export interface EnvironmentCommit {
-  readonly environment: string;
-  readonly sha: string;
-}
+/** A deploy of a glob's branch, as far as finding the runs against it goes. */
+export type DeployedCommit = Pick<Deploy, 'globId' | 'environment' | 'sha'>;
 
 /** Any failing test fails the run. */
 export const testRunFailed = (run: Pick<TestRun, 'failed'>): boolean => run.failed > 0;
@@ -96,7 +71,7 @@ export const testRunFailed = (run: Pick<TestRun, 'failed'>): boolean => run.fail
 export interface AtfIndicator {
   /** The run's own ID (unique on the board). */
   readonly id: number;
-  /** `branch`: the glob's own branch; `environment`: the commit a release or integration environment runs. */
+  /** `branch`: the glob's own branch; `environment`: the commit a branch deploy of the glob put in a dev environment. */
   readonly scope: 'branch' | 'environment';
   readonly environment: string | null;
   readonly sha: string;
@@ -204,17 +179,18 @@ const indicator = (
   ...(own !== undefined && own !== null && { plannedSpecs: own }),
 });
 
-/** The runs against the environment commits that hold the glob (its contained presences), newest first. */
-const environmentRuns = (glob: Pick<Glob, 'id'>, runs: readonly TestRun[], presences: readonly GlobPresence[]): TestRun[] => {
-  const held = presences.filter((p) => p.globId === glob.id && p.contained);
-  return runs
-    .filter(
-      (r) =>
-        r.globId === null &&
-        held.some((p) => p.environment === r.environment && sameCommit(p.checkedSha, r.sha)),
-    )
-    .sort(newestFirst);
-};
+/** Whether the glob has a (succeeded) branch deploy of the run's commit to the run's environment. */
+const againstDeploy = (glob: Pick<Glob, 'id'>, run: TestRun, deploys: readonly DeployedCommit[]): boolean =>
+  run.environment !== null &&
+  deploys.some((d) => d.globId === glob.id && d.environment === run.environment && sameCommit(d.sha, run.sha));
+
+/** The glob's runs against a commit its branch was deployed at in that environment, newest first. */
+const environmentRuns = (glob: Pick<Glob, 'id'>, runs: readonly TestRun[], deploys: readonly DeployedCommit[]): TestRun[] =>
+  runs.filter((r) => r.globId === glob.id && againstDeploy(glob, r, deploys)).sort(newestFirst);
+
+/** The glob's other runs: on its branch, at a commit none of its deploys put in the run's environment. */
+const branchRunsOf = (glob: Pick<Glob, 'id'>, runs: readonly TestRun[], deploys: readonly DeployedCommit[]): TestRun[] =>
+  runs.filter((r) => r.globId === glob.id && !againstDeploy(glob, r, deploys)).sort(newestFirst);
 
 /** The newest run of each runner, newest first (`sorted` is newest first). */
 const latestPerRunner = (sorted: readonly TestRun[]): TestRun[] => {
@@ -229,9 +205,7 @@ const latestPerRunner = (sorted: readonly TestRun[]): TestRun[] => {
 
 /**
  * What a glob's card shows: the latest branch run of each runner (stale when it tested an older commit than the PR's
- * head), and for each environment holding it, the latest run of each runner against the commit that environment was
- * checked at. A run against an environment's older commit shows on no glob once a newer deploy's check has replaced the
- * presence; a run reported before its deploy's check shows once the check stores presence at that commit.
+ * head), and for each environment its branch was deployed to, the latest run of each runner against a commit deployed there.
  *
  * Runners at the same commit are one result: the planned-spec counts of every indicator in a group (the current branch
  * runs, or one environment's runs) combine the runners' rows, so a failure from any runner makes the chip red and a spec
@@ -240,7 +214,7 @@ const latestPerRunner = (sorted: readonly TestRun[]): TestRun[] => {
 export const atfIndicators = (
   glob: Pick<Glob, 'id' | 'pr'>,
   runs: readonly TestRun[],
-  presences: readonly GlobPresence[],
+  deploys: readonly DeployedCommit[],
   own?: OwnSpecs,
   names?: RunnerNames,
 ): AtfIndicator[] => {
@@ -249,14 +223,14 @@ export const atfIndicators = (
   const combined = (group: readonly TestRun[]) =>
     own === undefined || byRun === null ? null : aggregateSpecCounts(own.planned, group.map((r) => byRun.get(r.id)));
   const head = glob.pr?.headSha ?? null;
-  const branchRuns = latestPerRunner(runs.filter((r) => r.globId === glob.id).sort(newestFirst));
+  const branchRuns = latestPerRunner(branchRunsOf(glob, runs, deploys));
   const currentCounts = combined(branchRuns.filter((r) => sameCommit(r.sha, head)));
   for (const run of branchRuns) {
     const stale = !sameCommit(run.sha, head);
     result.push(indicator(run, 'branch', stale, stale ? combined([run]) : currentCounts, names));
   }
   const byEnvironment = new Map<string, TestRun[]>();
-  for (const run of environmentRuns(glob, runs, presences)) {
+  for (const run of environmentRuns(glob, runs, deploys)) {
     if (run.environment === null) continue;
     const group = byEnvironment.get(run.environment) ?? [];
     if (group.some((r) => runnerKey(r) === runnerKey(run))) continue;
@@ -274,18 +248,16 @@ export const atfIndicators = (
 export const globTestRuns = (
   glob: Pick<Glob, 'id' | 'pr'>,
   runs: readonly TestRun[],
-  presences: readonly GlobPresence[],
+  deploys: readonly DeployedCommit[],
   own?: OwnSpecs,
   names?: RunnerNames,
 ): AtfIndicator[] => {
   const byRun = own === undefined ? null : rowsOf(own.rows);
   const counts = (run: TestRun) => (own === undefined || byRun === null ? null : plannedSpecCounts(own.planned, byRun.get(run.id)));
   return [
-    ...runs
-      .filter((r) => r.globId === glob.id)
-      .sort(newestFirst)
+    ...branchRunsOf(glob, runs, deploys)
       .map((r) => indicator(r, 'branch', !sameCommit(r.sha, glob.pr?.headSha ?? null), counts(r), names)),
-    ...environmentRuns(glob, runs, presences).map((r) => indicator(r, 'environment', false, counts(r), names)),
+    ...environmentRuns(glob, runs, deploys).map((r) => indicator(r, 'environment', false, counts(r), names)),
   ];
 };
 
@@ -302,7 +274,7 @@ export interface GlobSpecResult {
 
 /**
  * Each planned spec's latest result for the glob, in plan order. The runs that apply are the glob's own branch runs (not
- * those of an older commit than its PR head) and the runs against the environment commits holding the glob. Each runner's
+ * those of an older commit than its PR head) and the runs against a commit its branch deploys put in an environment. Each runner's
  * newest run with a row for the spec speaks for that runner, whatever its status, so a `missing` row is a result. When
  * runners disagree a failure wins, then a pass, a skip, and `missing` only when no runner has another row; of equal rows the
  * newest wins. Unreported specs have status null.
@@ -312,12 +284,12 @@ export const globSpecResults = (
   planned: readonly string[],
   runs: readonly TestRun[],
   rows: readonly StoredRunSpec[],
-  presences: readonly GlobPresence[],
+  deploys: readonly DeployedCommit[],
 ): GlobSpecResult[] => {
   const head = glob.pr?.headSha ?? null;
   const applicable = [
-    ...runs.filter((r) => r.globId === glob.id && (head === null || sameCommit(r.sha, head))),
-    ...environmentRuns(glob, runs, presences),
+    ...branchRunsOf(glob, runs, deploys).filter((r) => head === null || sameCommit(r.sha, head)),
+    ...environmentRuns(glob, runs, deploys),
   ].sort(newestFirst);
   const byRun = rowsOf(rows);
   return [...new Set(planned)].map((spec): GlobSpecResult => {
@@ -337,24 +309,12 @@ export const globSpecResults = (
   });
 };
 
-/** The `missing` rows for a deploy's batch: every listed spec the run reported no test for. */
-export const missingSpecs = (batch: readonly AtfBatchSpec[], reported: readonly TestRunSpec[]): TestRunSpec[] => {
+/** The `missing` rows for a deploy's spec list: every listed spec the run reported no test for. */
+export const missingSpecs = (batch: readonly RequestedSpec[], reported: readonly TestRunSpec[]): TestRunSpec[] => {
   const seen = new Set(reported.map((r) => r.spec));
   return batch
     .filter((b) => !seen.has(b.spec))
     .map((b) => ({ spec: b.spec, status: 'missing' as const, tests: 0, failedTests: 0, durationMs: null }));
-};
-
-/** How far back a deploy's spec batch looks for newly contained globs: since the last batch, else the previous deploy, else this long. */
-export const batchWindowStart = (
-  previousBatchAt: string | null,
-  previousDeployAt: string | null,
-  now: string,
-  maxDays: number,
-): string => {
-  const floor = new Date(Date.parse(now) - maxDays * 86_400_000).toISOString();
-  const since = previousBatchAt ?? previousDeployAt ?? floor;
-  return since > floor ? since : floor;
 };
 
 /** A run's branch names a glob when it is the glob's ID (a full ref's `refs/heads/` prefix aside). */

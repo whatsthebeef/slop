@@ -4,11 +4,10 @@ import {
   AtfRunnerService,
   BoardService,
   DeployService,
-  EnvironmentService,
   IntegrationTokenService,
   TestRunService,
 } from '@slop/core';
-import type { AtfCredentialMethod, AtfRunner, Board, Glob } from '@slop/core';
+import type { AtfCredentialMethod, AtfRunner, Board, Deploy, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -76,7 +75,6 @@ const readyBody = z.object({
   sha: z.string(),
   specs: z.array(z.object({ spec: z.string(), globs: z.array(z.string()) })),
   greps: z.array(z.object({ grep: z.string(), globs: z.array(z.string()) })),
-  batchId: z.number(),
 });
 
 describe('the ATF spec list endpoint', () => {
@@ -84,7 +82,6 @@ describe('the ATF spec list endpoint', () => {
   let store: PgStore;
   let app: Hono<Env>;
   let testRuns: TestRunService;
-  let environments: EnvironmentService;
   let artifacts: ArtifactService;
   let board: Board;
   let other: Board;
@@ -104,7 +101,6 @@ describe('the ATF spec list endpoint', () => {
     store = new PgStore(test.database.db);
     const notifier = { publish: () => undefined };
     const clockPort = { now };
-    environments = new EnvironmentService({ store, notifier, clock: clockPort });
     testRuns = new TestRunService({ store, notifier, clock: clockPort });
     artifacts = new ArtifactService({ store, clock: clockPort, notifier });
     const boards = new BoardService({ store, notifier });
@@ -133,7 +129,6 @@ describe('the ATF spec list endpoint', () => {
         clock: clockPort,
         newDeployId: () => `dep-${String(clock)}`,
       }),
-      environments,
       testRuns,
       boards,
       links: new SignedLinks('test-secret'),
@@ -151,7 +146,7 @@ describe('the ATF spec list endpoint', () => {
           defaultRoutineOwner: null,
           environments: [
             { name: 'dev1', allowBranchDeploy: true },
-            { name: 'staging', allowBranchDeploy: false, role: 'integration' },
+            { name: 'staging', allowBranchDeploy: true },
           ],
           sensitivePaths: [],
         });
@@ -181,18 +176,29 @@ describe('the ATF spec list endpoint', () => {
     await drop();
   });
 
-  const deployed = (id: string, sha: string, time: string) =>
-    app.request('/webhooks/aws', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-slop-key': KEY },
-      body: JSON.stringify({
-        id,
-        'detail-type': 'Slop Environment Deployed',
-        source: 'slop.ci',
-        time,
-        detail: { repo: 'acme/sandbox', environment: 'staging', sha, status: 'succeeded' },
-      }),
-    });
+  /** A branch deploy of a glob's commit to staging, in the given state, requested at `time`. */
+  const deploy = (id: string, globId: string, sha: string, time: string, state: Deploy['state'] = 'succeeded') =>
+    store.transaction((tx) =>
+      tx.saveDeploys([
+        {
+          id,
+          boardId: board.id,
+          environment: 'staging',
+          globId,
+          sha,
+          state,
+          trigger: 'push',
+          requestedBy: null,
+          requestedAt: new Date(time).toISOString(),
+          runningSince: new Date(time).toISOString(),
+          startedAt: new Date(time).toISOString(),
+          finishedAt: state === 'succeeded' ? new Date(time).toISOString() : null,
+          providerRef: null,
+          url: null,
+          error: null,
+        },
+      ]),
+    );
 
   const query = (sha: string, environment = 'staging') => `environment=${environment}&sha=${sha}`;
   const viaApi = (sha: string, email = DEV, environment = 'staging') =>
@@ -204,19 +210,16 @@ describe('the ATF spec list endpoint', () => {
       headers: bearer === '' ? {} : { authorization: `Bearer ${bearer}` },
     });
 
-  it('is pending until the deploy is reported and checked, then returns the union with its globs, and the same list again', async () => {
+  it('is pending until the branch deploy has succeeded, then returns the deployed glob’s specs, and the same list again', async () => {
     const early = await viaApi(D1);
     expect(early.status).toBe(202);
     expect(await early.json()).toEqual({ status: 'pending', retryAfterSeconds: 15 });
     expect(early.headers.get('retry-after')).toBe('15');
 
-    await deployed('dep-1', D1, '2026-10-05T12:30:00Z');
+    await deploy('dep-1', 's9f2', D1, '2026-10-05T12:30:00Z', 'running');
     expect((await viaApi(D1)).status).toBe(202);
     tick();
-    await environments.recordContainment(board.id, 'staging', D1, [
-      { globId: 's9f1', mergeSha: 'm1', contained: true },
-      { globId: 's9f2', mergeSha: 'm2', contained: true },
-    ]);
+    await deploy('dep-1', 's9f2', D1, '2026-10-05T12:30:00Z');
     const first = await viaApi(D1);
     expect(first.status).toBe(200);
     const body = readyBody.parse(await first.json());
@@ -224,19 +227,18 @@ describe('the ATF spec list endpoint', () => {
       environment: 'staging',
       sha: D1,
       specs: [
-        { spec: 'e2e/a.spec.ts', globs: ['s9f1'] },
-        { spec: 'e2e/b.spec.ts', globs: ['s9f1', 's9f2'] },
+        { spec: 'e2e/b.spec.ts', globs: ['s9f2'] },
         { spec: 'e2e/c.spec.ts', globs: ['s9f2'] },
       ],
       greps: [{ grep: '@smoke', globs: ['s9f2'] }],
     });
-    // The second call (by the pipeline, with an abbreviated commit) is the stored batch.
+    // The pipeline asks again (with an abbreviated commit, by token) and gets the same list.
     const second = readyBody.parse(await (await viaToken(D1.slice(0, 10))).json());
     expect(second).toEqual(body);
   });
 
   it('answers 409 for a commit a newer deploy replaced', async () => {
-    await deployed('dep-2', D2, '2026-10-05T14:00:00Z');
+    await deploy('dep-2', 's9f1', D2, '2026-10-05T14:00:00Z');
     const old = await viaApi(D1);
     expect(old.status).toBe(409);
     expect(await old.json()).toEqual({ status: 'superseded', latestSha: D2 });
@@ -262,8 +264,8 @@ describe('the ATF spec list endpoint', () => {
     expect((await viaApi('not-a-sha')).status).toBe(422);
     expect((await viaApi('abc')).status).toBe(422);
     expect((await viaApi(D2, DEV, 'x'.repeat(101))).status).toBe(422);
-    // An environment the board doesn't observe, and a board that isn't there.
-    expect((await viaApi(D2, DEV, 'dev1')).status).toBe(422);
+    // An environment the board doesn't have, and a board that isn't there.
+    expect((await viaApi(D2, DEV, 'nowhere')).status).toBe(422);
     expect(
       (await app.request('/api/boards/9999/atf-specs?environment=staging&sha=' + D2)).status,
     ).toBe(404);
@@ -275,11 +277,7 @@ describe('the ATF spec list endpoint', () => {
   it('takes per-spec results with the report, derives the missing ones and shows each planned spec on its glob', async () => {
     await store.transaction((tx) => tx.insertGlob(glob('s9f3', board.id), null));
     await artifacts.putTestPlan(DEV, 's9f3', plan(['e2e/z.spec.ts']));
-    await deployed('dep-3', D3, '2026-10-05T15:00:00Z');
-    tick();
-    await environments.recordContainment(board.id, 'staging', D3, [
-      { globId: 's9f3', mergeSha: 'm3', contained: true },
-    ]);
+    await deploy('dep-3', 's9f3', D3, '2026-10-05T15:00:00Z');
     const batch = readyBody.parse(await (await viaApi(D3)).json());
     expect(batch.specs).toEqual([{ spec: 'e2e/z.spec.ts', globs: ['s9f3'] }]);
 

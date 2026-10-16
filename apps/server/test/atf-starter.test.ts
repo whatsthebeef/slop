@@ -159,13 +159,10 @@ describe('the start_atf executor', () => {
     sha: job.sha,
   };
   const batch: AtfBatch = {
-    id: 1,
-    boardId: 7,
     environment: 'staging',
     sha: job.sha,
     specs: [{ spec: 'e2e/a.spec.ts', globIds: ['s1t1'] }],
     greps: [{ grep: '@smoke', globIds: ['s1t1'] }],
-    createdAt: '2026-10-05T13:00:00.000Z',
   };
   const starts: AtfStart[] = [];
   const starter: RunnerStarter = {
@@ -178,7 +175,7 @@ describe('the start_atf executor', () => {
     answer: Result<
       | { status: 'pending' }
       | { status: 'superseded'; latestSha: string }
-      | { status: 'ready'; batch: AtfBatch }
+      | ({ status: 'ready' } & AtfBatch)
     >,
     atf: AtfIntegration | null = integration,
   ) => {
@@ -196,8 +193,8 @@ describe('the start_atf executor', () => {
     starts.length = 0;
   });
 
-  it('starts the build with the stored batch, and a repeat starts it again with the same token (CodeBuild dedupes)', async () => {
-    const { outcome } = run({ ok: true, value: { status: 'ready', batch } });
+  it('starts the build with the deploy spec list, and a repeat starts it again with the same token (CodeBuild dedupes)', async () => {
+    const { outcome } = run({ ok: true, value: { status: 'ready', ...batch } });
     expect(await outcome()).toBe('done');
     expect(await outcome()).toBe('done');
     expect(starts).toHaveLength(2);
@@ -208,7 +205,7 @@ describe('the start_atf executor', () => {
     const refusing: RunnerStarter = { start: () => Promise.reject(new AtfRefusedError('not on the allow-list')) };
     const logged: string[] = [];
     const outcome = await startAtf(effect, {
-      testRuns: { atfBatch: () => Promise.resolve({ ok: true, value: { status: 'ready', batch } }) },
+      testRuns: { atfBatch: () => Promise.resolve({ ok: true, value: { status: 'ready', ...batch } }) },
       starter: refusing,
       boardOf: () => Promise.resolve({ atf: integration }),
       log: (_t: string, m: string) => logged.push(m),
@@ -217,14 +214,14 @@ describe('the start_atf executor', () => {
     expect(logged.join('\n')).toContain('not on the allow-list');
   });
 
-  it('drops the effect when the board went back to pull, a newer deploy replaced the commit, or the batch errors', async () => {
+  it('drops the effect when the board went back to pull, a newer deploy replaced the commit, or the list errors', async () => {
     expect(
       await run(
-        { ok: true, value: { status: 'ready', batch } },
+        { ok: true, value: { status: 'ready', ...batch } },
         { ...integration, mode: 'pull' },
       ).outcome(),
     ).toBe('dropped');
-    expect(await run({ ok: true, value: { status: 'ready', batch } }, null).outcome()).toBe(
+    expect(await run({ ok: true, value: { status: 'ready', ...batch } }, null).outcome()).toBe(
       'dropped',
     );
     expect(
@@ -236,9 +233,9 @@ describe('the start_atf executor', () => {
     expect(starts).toEqual([]);
   });
 
-  it('retries (throws) while the deploy is not checked yet', async () => {
+  it('retries (throws) while no branch deploy of the commit has succeeded yet', async () => {
     await expect(run({ ok: true, value: { status: 'pending' } }).outcome()).rejects.toThrow(
-      /isn't checked yet/,
+      /has no succeeded deploy yet/,
     );
   });
 });

@@ -27,7 +27,7 @@ const runner = (boardId: number, patch: Partial<NewAtfRunner> = {}): NewAtfRunne
 const run = (boardId: number, patch: Partial<NewTestRun> = {}): NewTestRun => ({
   boardId,
   kind: 'atf',
-  globId: null,
+  globId: 's1t1',
   environment: 'staging',
   sha: 'abc1234',
   passed: 1,
@@ -186,7 +186,7 @@ describe('ATF runners in Postgres', () => {
       expect(await tx.insertTestRun(run(boardId, { eventId: 'without' }))).toBe(true);
     });
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(boardId, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(boardId, { globIds: ['s1t1'] }),
     );
     expect(Object.fromEntries(runs.map((r) => [r.eventId, r.runnerId]))).toEqual({
       with: first.id,
@@ -199,7 +199,7 @@ describe('ATF runners in Postgres', () => {
     if (first === undefined) throw new Error('no runner');
     await database.db.execute(sql`delete from atf_runners where id = ${first.id}`);
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(boardId, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(boardId, { globIds: ['s1t1'] }),
     );
     expect(runs.map((r) => [r.eventId, r.runnerId])).toEqual(
       expect.arrayContaining([
