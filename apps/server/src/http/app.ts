@@ -815,12 +815,55 @@ export const createApp = (deps: AppDeps) => {
     'done',
   ]);
 
+  // The clicks whose effect shows later (a queued run, a merge, a provisioning job): the glob keeps them as pending until it moves on.
+  const PENDING_ACTIONS = {
+    start: 'start',
+    'start-anyway': 'start_anyway',
+    investigate: 'investigate',
+    'pick-up': 'pick_up',
+    'take-over': 'take_over',
+    retrigger: 'retrigger',
+    'retry-autofix': 'retry_autofix',
+    'resolve-conflict': 'resolve_conflict',
+    'start-again': 'start_again',
+    merge: 'merge',
+    'merge-anyway': 'merge_anyway',
+    'merge-continue': 'merge_continue',
+    'retry-merge': 'retry_merge',
+    'mark-ready': 'mark_ready',
+    prepare: 'prepare_action',
+  } as const satisfies { readonly [route: string]: machine.Action };
+  // Of those, the ones that queue a routine run: the pending click then names it, and ends with it.
+  const RUN_ACTIONS: ReadonlySet<string> = new Set(['start', 'start-anyway', 'investigate', 'retrigger', 'retry-autofix', 'resolve-conflict', 'start-again']);
+  // Refusals worth keeping on the glob: a stale version or a missing glob says nothing about the glob itself.
+  const KEPT_REFUSALS: ReadonlySet<string> = new Set(['invalid_transition', 'run_active', 'invalid_input', 'forbidden']);
+
   app.post('/api/globs/:id/actions/:action', async (c) => {
     const action = z.enum(Object.keys(actions) as [keyof typeof actions]).safeParse(c.req.param('action'));
     if (!action.success) return c.json({ code: 'not_found', message: 'Unknown action' }, 404);
     const body = await parse(c, actionSchema);
     if (body instanceof Response) return body;
-    const result = await actions[action.data](c.get('email'), c.req.param('id'), body);
+    const email = c.get('email');
+    const result = await actions[action.data](email, c.req.param('id'), body);
+    const kind = (PENDING_ACTIONS as { readonly [route: string]: machine.Action | undefined })[action.data];
+    {
+      // Recording never fails the click: a stale version (a webhook moved the glob first) or a store error just leaves it unrecorded.
+      try {
+        if (result.ok && kind === undefined) {
+          // Not a click with an effect to wait for, but still the next click: the last outcome's notice goes away.
+          await globs.clearOutcome(email, result.value.id, result.value.version);
+        } else if (result.ok && kind !== undefined) {
+          const run = machine.currentRun(result.value);
+          const runId = RUN_ACTIONS.has(action.data) && run?.state === 'queued' ? run.id : undefined;
+          // Before the drain: a job that settles the glob right away must find the click already pending, not set it afterwards.
+          await globs.recordRequested(email, result.value.id, kind, result.value.version, runId);
+        } else if (!result.ok && kind !== undefined && KEPT_REFUSALS.has(result.error.code)) {
+          await globs.recordRefusal(email, c.req.param('id'), kind, result.error.message);
+        }
+      } catch {
+        /* the answer below is the click's result */
+      }
+    }
     if (result.ok) {
       const drained = deps.outbox.drain(result.value.id);
       // A review takes minutes, and starting or handing over a glob provisions its branch and PR and fires a routine (GitHub

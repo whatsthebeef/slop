@@ -1,5 +1,5 @@
-import { isForViewer } from '@slop/core';
-import type { HumanStepScript, HumanStepViewer } from '@slop/core';
+import { isForViewer, deployEnv, groupText, stageGroups, stripMarkdown, blocksReadOnly } from '@slop/core';
+import type { HumanStepScript, HumanStepViewer, StageGroup } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Plus } from 'lucide-react';
@@ -32,16 +32,12 @@ import {
   writeStepsOpen,
 } from '@/lib/human-steps';
 import type { StepDraft } from '@/lib/human-steps';
-import { deployEnv, groupText, stageGroups } from '@/lib/rollout-stages';
-import type { StageGroup } from '@/lib/rollout-stages';
 import { copyOrSelect } from '@/lib/plan-text';
 import { cn } from '@/lib/utils';
 import { HumanIcon } from './actor-icons';
 import { SectionToggle } from './section-toggle';
 import { StepDetail } from './step-detail';
 import { MarkdownView } from './markdown-view';
-import { stripMarkdown } from '@/lib/markdown-text';
-import { blocksReadOnly } from '@/lib/blocking-item';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 

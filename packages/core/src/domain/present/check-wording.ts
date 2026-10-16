@@ -1,31 +1,33 @@
-import { CHECKS_RUNNING_TEXT, currentBehind, mergeQueueText, mergingFromBaseText, modeOf } from '@slop/core';
-import type { GlobView } from './api';
+import { CHECKS_RUNNING_TEXT, mergeQueueText, mergingFromBaseText } from '../whose-move.js';
+import { currentBehind } from '../readiness.js';
+import { modeOf } from '../types.js';
+import type { PresentableGlob } from './facts.js';
 
 /** The head moved past the checks slop recorded: it just merged the base in and waits for the new head's checks. */
-const catchingUp = (glob: GlobView): boolean => {
+const catchingUp = (glob: PresentableGlob): boolean => {
   const sha = glob.pr?.headSha ?? null;
   return sha !== null && glob.headChecks != null && glob.headChecks.sha !== sha;
 };
 
 /** Whether a merging glob's head still waits for its checks: none recorded yet, still pending, or recorded on an older head. */
-export const checksInFlightWhileMerging = (glob: GlobView): boolean =>
+export const checksInFlightWhileMerging = (glob: PresentableGlob): boolean =>
   catchingUp(glob) || glob.headChecks == null || glob.headChecks.state === 'pending';
 
 /**
  * What a glob slop will merge says while its checks are in flight; the status line and the position text both use it.
  * `base` is the board's base branch; after slop pushes the base merge `behind` is cleared, so it usually names the base.
  */
-export const mergingChecksText = (glob: GlobView, base?: string): string =>
+export const mergingChecksText = (glob: PresentableGlob, base?: string): string =>
   catchingUp(glob)
     ? mergingFromBaseText(glob.conflict?.base ?? currentBehind(glob)?.base ?? base ?? 'the base')
     : CHECKS_RUNNING_TEXT;
 
 /** What a glob in the code host's merge queue says ("in merge queue · N ahead", "merging" once its group merges); null when it isn't queued. */
-export const mergeQueueStatus = (glob: GlobView): string | null =>
+export const mergeQueueStatus = (glob: PresentableGlob): string | null =>
   glob.mergeQueue == null ? null : mergeQueueText(glob.mergeQueue.position, glob.mergeQueue.state);
 
 /** The tooltip for checks running on a PR slop isn't merging: the head, what comes after they pass, and what a failure does. */
-export const checksRunningTip = (glob: GlobView): string => {
+export const checksRunningTip = (glob: PresentableGlob): string => {
   const sha = glob.pr?.headSha ?? null;
   const next =
     glob.pr?.state === 'draft'

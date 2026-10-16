@@ -1,8 +1,6 @@
-import { fixOf, isHumanCategory, modeOf } from '@slop/core';
+import { fixOf, isHumanCategory, modeOf, needsPerson, armLabel } from '@slop/core';
 import type { HumanStepViewer, Mode } from '@slop/core';
 import type { GlobView } from './api';
-import { needsPerson } from './card-rows';
-import { armLabel } from './rollout-stages';
 
 /** What a filter may need beyond the glob itself: the time and the viewer decide whose turn it is. */
 export interface FilterContext {

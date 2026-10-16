@@ -1,4 +1,4 @@
-import { isFromMention, isHumanCategory } from '@slop/core';
+import { isFromMention, isHumanCategory, lacksReason, OTHER_BOARD_GLOB } from '@slop/core';
 import type { ExternalGlob, Holding, RelationGate, RelationSource, RelationSuggestion, RelationUntil, Supersession, VerdictFields } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -7,7 +7,6 @@ import { Link } from 'react-router';
 import { api } from '@/lib/api';
 import type { AddRelationInput, GlobView } from '@/lib/api';
 import { globsKey } from '@/lib/live';
-import { lacksReason, OTHER_BOARD_GLOB } from '@/lib/status-line';
 import { HumanIcon, MachineIcon } from '../actor-icons';
 import { SectionToggle } from '../section-toggle';
 import { Button } from '../ui/button';

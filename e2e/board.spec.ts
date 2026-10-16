@@ -42,8 +42,8 @@ test('a glob created and moved on one board shows up live on another', async ({ 
   const card = await a.getByTestId('list-planning').locator('[data-testid^="card-"]').first().getAttribute('data-testid');
   if (card === null) throw new Error('No card');
 
-  // Pick it up from the card in A (its move buttons are the only moves it has); B sees it move.
-  await a.getByTestId(card).getByTestId('move-pick_up').click();
+  // Start it from the card in A (its primary button is the only move it has); B sees it move.
+  await a.getByTestId(card).getByTestId('move-start').click();
   await expect(b.getByTestId('list-doing').getByText('Smoke glob')).toBeVisible();
   await expect(planningB.getByText('Smoke glob')).toHaveCount(0);
 

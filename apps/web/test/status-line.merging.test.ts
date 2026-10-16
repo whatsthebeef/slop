@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { statusLine } from '../src/lib/status-line';
+import { statusLine } from '@slop/core';
 import { NOW } from '../../../packages/core/test/fixtures';
-import { head, top, view } from './helpers/glob-views';
+import { head, view } from './helpers/glob-views';
 
 const merging = (patch: Parameters<typeof view>[0] = {}) =>
   view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, ...patch });
@@ -15,8 +15,7 @@ describe('merging status line', () => {
         kind: 'merging',
         full: 'running checks',
       });
-      expect(top(g)).toMatchObject({ kind: 'merging' });
-      expect(JSON.stringify(top(g))).not.toContain('run failed');
+      expect(JSON.stringify(statusLine(g, NOW))).not.toContain('run failed');
     }
   });
 

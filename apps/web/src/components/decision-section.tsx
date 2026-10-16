@@ -1,4 +1,4 @@
-import { channelLabel, channelSource, decisionOf, readSuggestion, SCOPE_KINDS, scopeLabel } from '@slop/core';
+import { channelLabel, channelSource, decisionOf, readSuggestion, SCOPE_KINDS, scopeLabel, blocksReadOnly, stripMarkdown } from '@slop/core';
 import type { ChannelSource, DecisionAttributes, DecisionLearning, DecisionScope, EditFailure, ScopeKind } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -6,7 +6,6 @@ import { Link } from 'react-router';
 import { HumanIcon, MachineIcon, MatrixIcon } from '@/components/actor-icons';
 import { DiffView } from '@/components/diff-view';
 import { DocumentProposal, EffectCheckView, inPipeline, PIPELINE_POLL_MS, ProcessingState, SignalFigures, StaleNote } from '@/components/decision-learning';
-import { blocksReadOnly } from '@/lib/blocking-item';
 import { isLearning, Outcomes, Recommendation } from '@/components/decision-outcomes';
 import type { DecideFlow } from '@/components/decision-outcomes';
 import { CollapsibleMarkdown, InlineMarkdown } from '@/components/markdown-view';
@@ -20,7 +19,6 @@ import { SUGGESTION_ACTION_TEXT } from '@/lib/suggestion';
 import { closedText, LINK_TEXT, linksByKind, targetText } from '@/lib/decision-links';
 import { artifactKey, globDecisionsKey, globDiffKey } from '@/lib/live';
 import { useToast } from '@/toast';
-import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from './ui/tip';
 import { boardGlobHref } from '@/lib/glob-section';
 

@@ -7,14 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
-import { lacksReason } from '@/lib/status-line';
+import { lacksReason, UNTIL_WORDS } from '@slop/core';
+import type { GroupSummary, GroupView } from '@slop/core';
 import { groupNames } from '@/lib/group-names';
 import { boardGroupPath, groupPath, holdText, movableIn, progressText, regroupNotice } from '@/lib/group-page';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
-import { UNTIL_WORDS } from '@slop/core';
-import type { GroupSummary, GroupView } from '@slop/core';
 
 const REFRESH_MS = 10_000;
 

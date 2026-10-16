@@ -5,7 +5,7 @@ import type { GlobSection } from '@/lib/glob-section';
 import type { ArtifactRef } from '../artifacts';
 import { HumanSteps } from '../human-steps';
 import { LabelReviews } from '../labels';
-import { reviewOpen } from '@/lib/human-steps';
+import { reviewOpen } from '@slop/core';
 import type { ReviewLabel } from '../labels';
 import { ActionOutcome } from './action';
 import { ActivityLog } from './activity';
@@ -13,7 +13,6 @@ import { GlobActions } from './actions';
 import type { GlobActionsState } from './actions';
 import { ArtifactsPanel } from './artifacts';
 import { ChoicesPanel } from './choices';
-import { ConflictSection } from './conflict';
 import type { GlobViewContext } from './context';
 import { DecisionAssessmentPanel, DecisionPanel } from './decision';
 import { DeploysPanel } from './deploys';
@@ -23,7 +22,6 @@ import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
 import { QuestionsSection } from './questions';
-import { ProblemSection } from './problem';
 import { RelatedSection } from './related';
 import type { SuggestionHandler } from './related';
 import { SizeSection } from './size';
@@ -79,8 +77,6 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   questions: ({ ctx, onAnswerQuestion, onDismissQuestion }) => (
     <QuestionsSection ctx={ctx} onAnswer={onAnswerQuestion} onDismiss={onDismissQuestion} />
   ),
-  conflict: ({ ctx }) => <ConflictSection ctx={ctx} />,
-  problem: ({ ctx, nowState }) => <ProblemSection ctx={ctx} state={nowState} />,
   escalation: ({ ctx, section }) => (
     <EscalationSection ctx={ctx} startOpen={section === 'escalation'} />
   ),
@@ -160,7 +156,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
 export const AFTER_SECTION: Partial<Record<GlobSection, SectionView>> = {
   actions: ({ ctx, actions, nowState, edits, onReload }) => (
     <>
-      <ActivityLog ctx={ctx} state={nowState} actions={actions} />
+      <ActivityLog ctx={ctx} state={nowState} />
       <EditFieldsSection
         ctx={ctx}
         decision={actions.human}

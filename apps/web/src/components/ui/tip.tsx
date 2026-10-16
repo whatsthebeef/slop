@@ -1,7 +1,7 @@
 import { cloneElement, isValidElement, useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { stripMarkdownLines } from '@/lib/markdown-text';
+import { stripMarkdownLines } from '@slop/core';
 
 /** Card icons and indicators explain themselves after a deliberate pause, not on every pass. */
 const DELAY_MS = 2000;

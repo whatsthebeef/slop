@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionLine, statusLine } from '../src/lib/status-line';
-import { cornerStatus, needsPerson } from '../src/lib/card-rows';
-import { actionPresentation } from '../src/lib/action-presentation';
-import { mainAction } from '../src/lib/main-action';
+import { actionLine, statusLine, cornerStatus, needsPerson, actionPresentation, mainAction } from '@slop/core';
 import { ACTION_PATHS } from '../src/lib/api';
 import type { GlobView } from '../src/lib/api';
 import { NOW } from '../../../packages/core/test/fixtures';
@@ -41,7 +38,7 @@ describe('a prepared action', () => {
 
   it('is ready to run with a person once the routine marked it ready', () => {
     expect(actionLine(ready())).toMatchObject({ state: 'ready', icon: 'human', text: 'ready to run' });
-    expect(cornerStatus(ready(), NOW)).toMatchObject({ icon: 'human', text: 'ready to run', click: { kind: 'section' } });
+    expect(cornerStatus(ready(), NOW)).toMatchObject({ icon: 'human', text: 'ready to run', click: { section: 'actions' } });
     expect(needsPerson(ready(), NOW)).toBe(true);
   });
 

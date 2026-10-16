@@ -1,31 +1,21 @@
-import { decisionOf, isHumanCategory, modeOf } from '@slop/core';
-import type { Action, HumanStepViewer } from '@slop/core';
-import { Bug, ListChecks, Loader2, Rocket, Scale } from 'lucide-react';
+import { armLabel, cardTargets, isHumanCategory, modeOf, stripMarkdown } from '@slop/core';
+import type { Action, ArmLabel, CornerStatus, GlobTarget, HumanStepViewer, PendingAction } from '@slop/core';
+import { Bug, ListChecks, Rocket, Scale } from 'lucide-react';
 import type { ComponentType } from 'react';
-import { ActorIcon, HumanIcon, MachineIcon, PersonRunning } from '@/components/actor-icons';
+import { ActorIcon, MachineIcon, PersonRunning } from '@/components/actor-icons';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { AtfRun, GlobView } from '@/lib/api';
 import type { MoveTag } from '@/lib/board-motion';
 import { kindOf } from '@/lib/board-filters';
 import type { Kind } from '@/lib/board-filters';
-import { cornerStatus, hasBlocker } from '@/lib/card-rows';
-import type { CornerStatus } from '@/lib/card-rows';
-import { armLabel } from '@/lib/rollout-stages';
-import type { ArmLabel } from '@/lib/rollout-stages';
 import { StatusIconView } from '@/components/status-icon';
 import { cn, groupSticker } from '@/lib/utils';
-import { mainAction } from '@/lib/main-action';
-import { workingLabel } from '@/lib/card-pending';
-import { prUrl } from '@/lib/chip-actions';
-import type { ChipClick } from '@/lib/chip-actions';
+import { cardMoveOf, presentOf } from '@/lib/present';
+import type { CardMove } from '@/lib/present';
 import { useConfirmClick } from '@/lib/use-confirm-click';
-import { cardTargets } from '@/lib/card-targets';
-import type { GlobTarget } from '@/lib/glob-section';
-import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from './ui/tip';
-import { LabelPopover } from './labels';
-import type { ReviewLabel } from './labels';
+import { TAG } from './glob-view/tag-style';
 
 /** The small dot between a header's values: the card's ID and type, its status and fix marker, and the glob view's header. */
 export const DotSeparator = ({ testId }: { testId?: string }) => (
@@ -125,7 +115,7 @@ export const GroupChip = ({
     '--st-base': base,
     '--st-lo': lo,
   };
-  const className = 'sticker max-w-full truncate whitespace-nowrap rounded-sm px-1.5 font-mono text-[10px] font-semibold';
+  const className = cn(TAG, 'sticker truncate');
   if (to !== undefined) {
     return (
       <Tip text={`Show only group: ${name}`}>
@@ -172,20 +162,13 @@ export const GroupChip = ({
 };
 
 /**
- * The card's one status (see `cornerStatus`): an icon and a few words on a single line that never wraps, truncated with the
- * full detail in its tooltip, anchored right. It shrinks before the ID does.
+ * The card's one status (see `presentGlob`): an icon and a few words on a single line that never wraps, truncated with the
+ * full detail in its tooltip, anchored right. It shrinks before the ID does. It is text and an icon: a click at most opens the
+ * glob view at a section, and it never runs an action or opens a link.
  */
-const CornerStatusView = ({
-  status,
-  onAct,
-  onOpenSection,
-}: {
-  status: CornerStatus;
-  onAct?: (action: Action) => void;
-  onOpenSection: (target: GlobTarget) => void;
-}) => {
+const CornerStatusView = ({ status, onOpenSection }: { status: CornerStatus; onOpenSection: (target: GlobTarget) => void }) => {
   const click = status.click;
-  const open = click === null ? undefined : () => runChip(click, onAct ?? (() => undefined), onOpenSection);
+  const open = click === null ? undefined : () => onOpenSection(click);
   const needsHuman = status.kind === 'needs-human';
   return (
     <span className='inline-flex min-w-0 shrink justify-end' data-testid='card-status' data-kind={status.kind} data-icon={status.icon}>
@@ -298,60 +281,56 @@ export const ChipButton = ({
     </CardButton>
   );
 
-import type { CardMove } from '@/lib/card-moves';
 export type { CardMove };
 
+/** The card's one button, bottom left: Pick up, Start, Merge or Fix conflict. Merge and Fix conflict ask for a second click on the button itself. */
 const MoveButton = ({
   move,
   hot,
-  primary,
-  disabled,
   onPreview,
   onMove,
 }: {
   move: CardMove;
   hot: boolean;
-  primary: boolean;
-  disabled: boolean;
   onPreview: (move: CardMove | null) => void;
   onMove: (move: CardMove) => void;
 }) => {
   const confirm = useConfirmClick();
   const inPlace = move.direction === 'none';
   const confirming = move.confirm && confirm.confirming;
-  const tip = confirming ? `${move.description}. Click again to start a conflict-fix run` : move.description;
+  // The second click does what the button is for: a merge lands the PR, a conflict fix starts a run.
+  const then = move.action === 'merge' ? 'merge' : 'start a conflict-fix run';
+  const tip = confirming ? `${move.description}. Click again to ${then}` : move.description;
   return (
-  <Tip text={tip}>
-  <button
-    type='button'
-    className={cn(
-      'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
-      confirming ? 'border-current bg-card text-required' : hot ? 'border-foreground bg-lcd text-lcd-foreground' : primary ? 'border-primary bg-primary text-primary-foreground hover:opacity-90' : 'border-foreground/70 bg-card text-foreground hover:bg-muted',
-      'disabled:pointer-events-none disabled:opacity-50',
-    )}
-    aria-label={tip}
-    disabled={disabled}
-    data-testid={`move-${move.action}`}
-    data-confirming={confirming ? 'true' : undefined}
-    // An in-place move has no ghost piece to preview.
-    onMouseEnter={() => !inPlace && onPreview(move)}
-    onMouseLeave={() => !inPlace && onPreview(null)}
-    onFocus={() => !inPlace && onPreview(move)}
-    onBlur={() => {
-      confirm.cancel();
-      if (!inPlace) onPreview(null);
-    }}
-    onClick={(e) => {
-      e.stopPropagation();
-      if (!confirm.click(move.confirm)) return;
-      onMove(move);
-    }}
-    onKeyDown={confirm.onKeyDown}
-  >
-    <ActorIcon actor={move.icon} className='h-3 w-3' decorative />
-    {confirming ? `Confirm ${move.label.toLowerCase()}` : move.label}
-  </button>
-  </Tip>
+    <Tip text={tip}>
+      <button
+        type='button'
+        className={cn(
+          'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-[10px] font-semibold shadow-[0_1px_0_var(--border)] active:translate-y-px active:shadow-none',
+          confirming ? 'border-current bg-card text-required' : hot ? 'border-foreground bg-lcd text-lcd-foreground' : 'border-primary bg-primary text-primary-foreground hover:opacity-90',
+        )}
+        aria-label={tip}
+        data-testid={`move-${move.action}`}
+        data-confirming={confirming ? 'true' : undefined}
+        // An in-place move has no ghost piece to preview.
+        onMouseEnter={() => !inPlace && onPreview(move)}
+        onMouseLeave={() => !inPlace && onPreview(null)}
+        onFocus={() => !inPlace && onPreview(move)}
+        onBlur={() => {
+          confirm.cancel();
+          if (!inPlace) onPreview(null);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!confirm.click(move.confirm)) return;
+          onMove(move);
+        }}
+        onKeyDown={confirm.onKeyDown}
+      >
+        <ActorIcon actor={move.icon} className='h-3 w-3' decorative />
+        {confirming ? `Confirm ${move.label.toLowerCase()}` : move.label}
+      </button>
+    </Tip>
   );
 };
 
@@ -375,57 +354,6 @@ export const plannedSpecsText = (p: NonNullable<AtfRun['plannedSpecs']>): string
     ...(p.unreported > 0 ? [`${p.unreported} not reported`] : []),
   ].join(', ');
 
-/** Whether a run is a failure for this glob: its own planned specs when the run reported them, else any failing test. */
-const failsForGlob = (run: AtfRun): boolean => (run.plannedSpecs === undefined ? run.failing : run.plannedSpecs.failed > 0);
-
-/** The chip's words for a run: the glob's own specs when the run reported them ("ATF 2/3 specs ✓"), else the run's counts. */
-const atfChipText = (run: AtfRun): string => {
-  const p = run.plannedSpecs;
-  if (p === undefined) return run.failing ? `ATF ${run.failed} failed` : `ATF ${run.passed}✓`;
-  if (p.failed > 0) return `ATF ${p.failed} of ${p.total} specs failed`;
-  return `ATF ${p.passed}/${p.total} specs ✓${p.missing > 0 ? ` ${p.missing} missing` : ''}`;
-};
-
-/**
- * The glob's ATF results in one chip: red when any current run has a failing test (a flag only; it never blocks),
- * muted when the only run tested an older commit. It links to the report of the run it summarises.
- */
-export const AtfChip = ({ runs }: { runs: readonly AtfRun[] }) => {
-  const current = runs.filter((r) => r.stale !== true);
-  const shown = current.find(failsForGlob) ?? current[0] ?? runs[0];
-  if (shown === undefined) return null;
-  const failing = current.some(failsForGlob);
-  // The text always says what the run found; a stale run is only muted, never shown as passing. With a test plan the
-  // chip counts the glob's own planned specs, so another glob's failing spec in the same run doesn't turn it red.
-  const text = atfChipText(shown);
-  const missing = shown.plannedSpecs !== undefined && shown.plannedSpecs.missing > 0;
-  const tone = failing ? 'text-red' : missing ? 'text-required' : current.length > 0 ? 'text-signal-strong' : 'text-muted-foreground';
-  const tip = runs.map((r) => `${atfLine(r)} · ${new Date(r.at).toLocaleString()}`).join('\n');
-  const chip = (
-    <span className={cn('whitespace-nowrap font-mono text-[11px]', tone)} data-testid='atf-chip' data-failing={failing}>
-      {text}
-    </span>
-  );
-  return (
-    <Tip text={tip}>
-      {shown.url === null ? (
-        chip
-      ) : (
-        <a
-          href={shown.url}
-          target='_blank'
-          rel='noreferrer'
-          className='hover:underline'
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          {chip}
-        </a>
-      )}
-    </Tip>
-  );
-};
-
 /**
  * The "Arm system" label: a person has a step at release (an open rollout step, or one due after the merge), named by its stage. Rocket and text in the
  * primary action's colour (not red, which means broken), normal weight. `onOpen` opens the glob at its Human steps; without it the
@@ -440,82 +368,42 @@ export const ArmSystemLabel = ({ label, onOpen }: { label: ArmLabel; onOpen?: ()
   </Tip>
 );
 
-/** An action glob's chip: who is meant to do it, or how it ended. Nothing for other globs. */
-export const ActionChips = ({ glob }: { glob: GlobView }) => {
-  const action = glob.category === 'action' && glob.attributes !== undefined && 'assignee' in glob.attributes ? glob.attributes : null;
-  if (action === null) return null;
-  const { outcome } = action;
-  const text = outcome === null ? (action.assignee ?? 'anyone') : outcome.kind === 'done' ? 'done' : 'dismissed';
-  const tip =
-    outcome === null
-      ? action.assignee === null
-        ? 'Anyone on the board can do this and mark it done'
-        : `${action.assignee} is meant to do this`
-      : `${outcome.kind === 'done' ? 'Done' : 'Dismissed'} by ${outcome.by}${outcome.note === undefined && outcome.reason === undefined ? '' : `: ${outcome.note ?? outcome.reason ?? ''}`}`;
-  return (
-    <Tip text={tip}>
-      <span className='inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground' data-testid='action-chip'>
-        <HumanIcon decorative />
-        {text}
-      </span>
-    </Tip>
-  );
-};
-
 const bumpStyle = (side: 'left' | 'right'): CSSProperties & Record<'--bump', string> => ({
   '--bump': side === 'left' ? '-3px' : '3px',
 });
-
-/** Runs a chip's click: an action, the glob view at a section, or a page in a new tab. */
-const runChip = (click: ChipClick, onAct: (action: Action) => void, onOpenSection: (target: GlobTarget) => void) => {
-  if (click.kind === 'act') onAct(click.action);
-  else if (click.kind === 'section') onOpenSection(click.target);
-  else window.open(click.url, '_blank', 'noopener,noreferrer');
-};
 
 export const GlobCard = ({
   glob,
   onOpen,
   onOpenSection,
-  onReviewLabel,
-  moves,
-  pending,
   previewing,
   onPreview,
   onMove,
-  onAct,
   repo,
   onArrow,
   lock,
   bump,
   tag,
-  atf,
   viewer,
   waitingOnThis = 0,
   base,
+  pending,
   onFilterGroup,
 }: {
   glob: GlobView;
   onOpen: () => void;
   /** Filters the board to a group (the card's group tag); without it the tag is plain. */
   onFilterGroup?: (name: string) => void;
-  /** Opens the glob at the section (and artifact or label) a chip or icon points to; `onOpen` opens it at the top. */
+  /** Opens the glob at the section the status points to; `onOpen` opens it at the top. */
   onOpenSection: (target: GlobTarget) => void;
-  /** Absent on a read-only card (the signed-off list): its label chips then offer no approve or re-open. */
-  onReviewLabel?: ReviewLabel;
-  /** Only the moves this glob can make; none means no buttons at all. */
-  moves: readonly CardMove[];
-  /** The move in flight on this glob, if any: the card shows it working and takes no other move. */
-  pending?: Action;
   /** The move whose ghost piece is showing, if it is this card's. */
   previewing: Action | null;
   onPreview: (move: CardMove | null) => void;
+  /** Runs the card's primary button (after its confirming click, for Merge and Fix conflict). */
   onMove: (move: CardMove) => void;
-  /** Runs an action from the corner status (Your turn: Merge, Done); the board's own action path, with its pending state. */
-  onAct?: (action: Action) => void;
-  /** The board's GitHub repo, for chips that open the PR's checks. */
+  /** The board's GitHub repo. */
   repo?: string;
-  /** ← / → on the focused card: cycle its moves that way (or bump the wall). */
+  /** ← / → on the focused card: preview its move that way (or bump the wall). */
   onArrow: (direction: 'left' | 'right') => void;
   /** The flash as the card locks into its new list: yours, or a move made elsewhere. */
   lock?: 'local' | 'remote';
@@ -523,30 +411,26 @@ export const GlobCard = ({
   bump?: 'left' | 'right';
   /** Who moved it, briefly, when the move was made elsewhere. */
   tag?: MoveTag;
-  /** Its ATF results (a flag only). */
-  atf?: readonly AtfRun[];
   /** Who is looking: Your turn shows the steps that are theirs. */
   viewer?: HumanStepViewer;
   /** How many globs in Planning wait for this one to merge. */
   waitingOnThis?: number;
   /** The board's base branch, for "merging from <base>". */
   base?: string;
+  /** A click this client sent that the glob does not show yet: the card shows it in progress at once. */
+  pending?: PendingAction | null;
 }) => {
   // A person implementing shows; otherwise (unassigned, or the machine implementing) the planner. Slop-created globs show the robot head.
   const person = glob.implementer ?? glob.planner;
   const failed = glob.status === 'failed' || glob.failure !== null;
   const age = aging(glob);
-  const now = new Date().toISOString();
-  const preview = moves.find((m) => m.action === previewing);
-  // Decision globs have their own look (an accent edge, the outcome in the corner) and no labels, branch or routine status; neither do actions.
-  const decision = decisionOf(glob) !== null;
+  // Everything the card says comes from the one presentation: the status top right, the single button bottom left.
+  const present = presentOf(glob, { ...(viewer === undefined ? {} : { viewer }), ...(base === undefined ? {} : { base }), repo: repo ?? null, waitingOnThis, ...(pending === undefined ? {} : { pending }) });
+  const { status } = present;
+  const move = present.cardPrimary === null ? null : cardMoveOf(present.cardPrimary);
+  const preview = move !== null && move.action === previewing ? move : undefined;
   const human = isHumanCategory(glob.category);
-  const status = cornerStatus(glob, now, viewer, repo, waitingOnThis, base);
-  const blocked = hasBlocker(glob, now, viewer);
   const arming = human ? null : armLabel(glob);
-  // The board hands over the glob's card moves (the one common action); a blocker hides them all.
-  // A blocker hides the moves, but not one that runs in place: Fix conflict is the answer to a conflict, which is itself a blocker.
-  const shown = blocked ? moves.filter((m) => m.direction === 'none') : moves;
 
   return (
     <div
@@ -554,7 +438,7 @@ export const GlobCard = ({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
-        // Keys from inside the card (label switches, their popover, buttons) are theirs, not the card's.
+        // Keys from inside the card (its button) are theirs, not the card's.
         if (e.target !== e.currentTarget) return;
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           e.preventDefault();
@@ -562,7 +446,7 @@ export const GlobCard = ({
         } else if (e.key === 'Enter') {
           e.preventDefault();
           if (preview === undefined) onOpen();
-          else if (pending === undefined) onMove(preview);
+          else onMove(preview);
         } else if (e.key === 'Escape' && preview !== undefined) {
           onPreview(null);
         }
@@ -579,7 +463,7 @@ export const GlobCard = ({
         bump !== undefined && 'wall-bump',
       )}
       style={bump === undefined ? undefined : bumpStyle(bump)}
-      aria-busy={pending !== undefined}
+      aria-busy={present.pending !== null}
       data-glob-id={glob.id}
       data-testid={`card-${glob.id}`}
     >
@@ -602,7 +486,7 @@ export const GlobCard = ({
           )}
           {tag === undefined && status !== null && (
             <>
-              <CornerStatusView status={status} onAct={onAct} onOpenSection={onOpenSection} />
+              <CornerStatusView status={status} onOpenSection={onOpenSection} />
               <DotSeparator testId='card-corner-separator' />
             </>
           )}
@@ -612,51 +496,18 @@ export const GlobCard = ({
       <div className='leading-snug font-medium break-words' data-testid='card-title'>
         {stripMarkdown(glob.title)}
       </div>
-      <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
-        <div className='flex min-w-0 flex-1 flex-col gap-1.5 empty:hidden'>
-          <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
-            {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} />}
-            {decision ? null : human ? (
-              <ActionChips glob={glob} />
-            ) : (
-              <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
-            )}
-            {atf !== undefined && <AtfChip runs={atf} />}
-            {age !== 'neutral' && glob.pr?.state === 'draft' && (
-              <Tip text='Two or more days in Doing and the PR is still a draft'>
-                <ChipButton
-                  onOpen={prUrl(repo, glob) === null ? undefined : () => window.open(prUrl(repo, glob) ?? '', '_blank', 'noopener,noreferrer')}
-                  className='font-mono text-[11px] text-muted-foreground'
-                  testId='draft-chip'
-                >
-                  PR still draft
-                </ChipButton>
-              </Tip>
-            )}
-          </div>
-          {(pending !== undefined || shown.length > 0) && (
-            <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-actions'>
-              {pending !== undefined && (
-                <span className='inline-flex items-center gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground' role='status' data-testid='card-pending'>
-                  <Loader2 className='size-3 animate-spin' aria-hidden />
-                  {workingLabel(pending)}
-                </span>
-              )}
-              {shown.map((move, _i, all) => (
-                <MoveButton
-                  key={move.action}
-                  move={move}
-                  hot={move.action === previewing}
-                  disabled={pending !== undefined}
-                  primary={move.direction === 'none' || mainAction(all.map((m) => m.action), glob, human) === move.action}
-                  onPreview={onPreview}
-                  onMove={onMove}
-                />
-              ))}
-            </div>
-          )}
+      {glob.group !== null && (
+        <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-chips'>
+          <GroupChip name={glob.group} onFilter={onFilterGroup} />
         </div>
-        <div className='flex shrink-0 items-center gap-1.5'>
+      )}
+      <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
+        {move !== null && (
+          <div className='flex min-w-0 flex-1 flex-wrap items-center gap-1.5' data-testid='card-actions'>
+            <MoveButton move={move} hot={move.action === previewing} onPreview={onPreview} onMove={onMove} />
+          </div>
+        )}
+        <div className='ml-auto flex shrink-0 items-center gap-1.5'>
           {arming !== null && (
             <>
               <ArmSystemLabel label={arming} onOpen={() => onOpenSection(cardTargets.humanSteps())} />

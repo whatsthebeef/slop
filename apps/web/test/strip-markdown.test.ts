@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stripMarkdown, stripMarkdownLines } from '../src/lib/markdown-text';
+import { stripMarkdown, stripMarkdownLines } from '@slop/core';
 
 describe('stripMarkdown', () => {
   it('removes bold, italics, inline code, links, headings, lists and quotes', () => {
@@ -25,7 +25,7 @@ describe('stripMarkdown', () => {
 
 describe('stripMarkdown in the status line', () => {
   it('oneLine strips the first line', async () => {
-    const { oneLine } = await import('../src/lib/status-line');
+    const { oneLine } = await import('@slop/core');
     expect(oneLine('Run **the** `thing`\nsecond')).toBe('Run the thing');
   });
 });

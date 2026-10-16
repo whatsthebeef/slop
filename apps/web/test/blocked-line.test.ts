@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockedParts, chainTip, holdLine } from '../src/lib/status-line';
+import { blockedParts, chainTip, holdLine } from '@slop/core';
 import { hold, prOpen, view } from './helpers/glob-views';
 
 describe('blocked parts', () => {

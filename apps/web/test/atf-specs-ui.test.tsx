@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TestsSection } from '../src/components/deploys';
-import { AtfChip, atfLine } from '../src/components/glob-card';
+import { atfLine } from '../src/components/glob-card';
 import type { AtfRun, GlobView } from '../src/lib/api';
 import { glob } from '../../../packages/core/test/fixtures';
 
@@ -32,48 +32,7 @@ const run = (patch: Partial<AtfRun> = {}): AtfRun => ({
   ...patch,
 });
 
-describe('the card ATF chip', () => {
-  it('counts the run when the glob has no planned specs, as before', () => {
-    render(<AtfChip runs={[run({ failed: 2, failing: true })]} />);
-    expect(screen.getByTestId('atf-chip').textContent).toBe('ATF 2 failed');
-    cleanup();
-    render(<AtfChip runs={[run()]} />);
-    expect(screen.getByTestId('atf-chip').textContent).toBe('ATF 40✓');
-  });
-
-  it('counts the glob’s own planned specs, and stays green when only another glob’s spec failed in the run', () => {
-    const plannedSpecs = { total: 3, passed: 3, failed: 0, skipped: 0, missing: 0, unreported: 0 };
-    render(<AtfChip runs={[run({ failed: 5, failing: true, plannedSpecs })]} />);
-    expect(screen.getByTestId('atf-chip').textContent).toBe('ATF 3/3 specs ✓');
-    expect(screen.getByTestId('atf-chip').getAttribute('data-failing')).toBe('false');
-  });
-
-  it('shows its own failing and missing specs', () => {
-    render(
-      <AtfChip
-        runs={[
-          run({
-            failing: true,
-            plannedSpecs: { total: 3, passed: 1, failed: 1, skipped: 0, missing: 1, unreported: 0 },
-          }),
-        ]}
-      />,
-    );
-    expect(screen.getByTestId('atf-chip').textContent).toBe('ATF 1 of 3 specs failed');
-    expect(screen.getByTestId('atf-chip').getAttribute('data-failing')).toBe('true');
-    cleanup();
-    render(
-      <AtfChip
-        runs={[
-          run({
-            plannedSpecs: { total: 3, passed: 2, failed: 0, skipped: 0, missing: 1, unreported: 0 },
-          }),
-        ]}
-      />,
-    );
-    expect(screen.getByTestId('atf-chip').textContent).toBe('ATF 2/3 specs ✓ 1 missing');
-  });
-
+describe('the ATF run line', () => {
   it('adds the planned spec counts to the run line', () => {
     expect(
       atfLine(

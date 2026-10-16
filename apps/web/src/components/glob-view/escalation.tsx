@@ -1,6 +1,6 @@
 import { HumanIcon } from '@/components/actor-icons';
 import { MarkdownView } from '../markdown-view';
-import { stripMarkdown } from '@/lib/markdown-text';
+import { stripMarkdown } from '@slop/core';
 import { Tip } from '../ui/tip';
 import { Block } from './block';
 import type { GlobViewContext } from './context';

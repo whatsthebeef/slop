@@ -1,6 +1,6 @@
+import { failedRepeatedly, mainAction, mainVariant, promotedAction } from '@slop/core';
 import type { Action, PullRequest } from '@slop/core';
 import { describe, expect, it } from 'vitest';
-import { failedRepeatedly, mainAction, mainVariant, promotedAction } from '../src/lib/main-action';
 
 const glob = (over: Partial<Parameters<typeof mainAction>[1]> = {}) => ({
   type: 'same' as const,

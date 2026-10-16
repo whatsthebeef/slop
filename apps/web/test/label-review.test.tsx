@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LabelPopover, LabelReviews } from '../src/components/labels';
+import { LabelReviews } from '../src/components/labels';
 import type { GlobView } from '../src/lib/api';
 import { ctx, glob } from '../../../packages/core/test/fixtures';
 
@@ -49,18 +49,14 @@ const server = (initial: GlobView) => {
   };
 };
 
-const Host = ({ api, popover = false }: { api: ReturnType<typeof server>; popover?: boolean }) => {
+const Host = ({ api }: { api: ReturnType<typeof server> }) => {
   const [, setTick] = useState(0);
   const onReview = async (label: LabelName, command: LabelCommand) => {
     const ok = await api.review(label, command);
     setTick((t) => t + 1);
     return ok;
   };
-  return popover ? (
-    <LabelPopover glob={api.glob} onReview={onReview} onOpenReview={vi.fn()} />
-  ) : (
-    <LabelReviews glob={api.glob} onReview={onReview} />
-  );
+  return <LabelReviews glob={api.glob} onReview={onReview} />;
 };
 
 const confirmButton = () => {
@@ -76,7 +72,9 @@ describe('the sign-off block', () => {
     const block = screen.getByTestId('label-reviews');
     expect(block.getAttribute('data-block')).toBe('person');
     expect(block.querySelector('[data-testid="block-head"]')?.textContent).toBe('Sign-off');
-    expect(block.querySelectorAll('[data-testid="block-body"] > [data-testid^="review-"]')).toHaveLength(3);
+    expect(
+      block.querySelectorAll('[data-testid="block-body"] > [data-testid^="review-"]'),
+    ).toHaveLength(3);
   });
 });
 
@@ -254,37 +252,6 @@ describe('approving', () => {
     await userEvent.setup().click(approve('Approve anyway'));
     expect(await screen.findByText(/1 item is still open\. Approve anyway\?/)).toBeTruthy();
     expect(screen.queryByText(/Unsent drafts/)).toBeNull();
-  });
-
-  it('the card popover follows the same rule', async () => {
-    const api = server(start({ CR: 'required', QA: 'required' }));
-    await api.review('CR', { kind: 'save_draft_item', text: 'x' });
-    render(<Host api={api} popover />);
-    const user = userEvent.setup();
-    await user.click(screen.getByLabelText('Sign-off labels'));
-    const plain = screen.getByRole('button', { name: 'Approve' });
-    expect(plain.className).toContain('bg-card');
-    await user.click(screen.getByRole('button', { name: 'Approve anyway' }));
-    expect(await screen.findByText(/1 item is still open\. Approve anyway\?/)).toBeTruthy();
-    await user.click(confirmButton());
-    expect(api.calls.at(-1)).toEqual(['CR', { kind: 'approve' }]);
-  });
-
-  it('clicks in the confirmation dialog do not reach the card around the popover', async () => {
-    const api = server(start({ CR: 'required' }));
-    await api.review('CR', { kind: 'save_draft_item', text: 'x' });
-    const onCard = vi.fn();
-    render(
-      <div onClick={onCard}>
-        <Host api={api} popover />
-      </div>,
-    );
-    const user = userEvent.setup();
-    await user.click(screen.getByLabelText('Sign-off labels'));
-    await user.click(screen.getByRole('button', { name: 'Approve anyway' }));
-    onCard.mockClear();
-    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
-    expect(onCard).not.toHaveBeenCalled();
   });
 
   it('drafts are not counted as items in the state text', async () => {

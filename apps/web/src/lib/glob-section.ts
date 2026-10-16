@@ -1,39 +1,8 @@
-import { LABEL_NAMES } from '@slop/core';
-import type { LabelName } from '@slop/core';
+import { GLOB_SECTIONS, LABEL_NAMES } from '@slop/core';
+import type { GlobSection, GlobTarget, LabelName } from '@slop/core';
 
-/** The parts of a glob's page a link can open it at (`?section=<name>`). */
-export const GLOB_SECTIONS = [
-  'plan',
-  'artifacts',
-  'findings',
-  'labels',
-  'related',
-  'questions',
-  'escalation',
-  'conflict',
-  'problem',
-  'size',
-  'deploys',
-  'tests',
-  'choices',
-  'decision',
-  'assessment',
-  'actions',
-  'action',
-  'human-steps',
-  'due-steps',
-] as const;
-
-export type GlobSection = (typeof GLOB_SECTIONS)[number];
-
-/** Where a link into a glob points: a section, and for `artifacts` an artifact (and the label of an attachment or review). */
-export interface GlobTarget {
-  section?: GlobSection;
-  artifact?: string;
-  label?: string;
-  /** The tab inside the section: `?section=plan&tab=test-plan` opens the Test plan beside plan.md. */
-  tab?: string;
-}
+export { GLOB_SECTIONS } from '@slop/core';
+export type { GlobSection, GlobTarget } from '@slop/core';
 
 /** What a glob page opens at, read from its URL; a missing or unknown section is null (the top of the page). */
 export interface ParsedGlobTarget {
@@ -48,6 +17,9 @@ const isSection = (name: string): name is GlobSection => GLOB_SECTIONS.some((s) 
 /** Other names a link may use for a section: `rollout` is what people call the Human steps section, `prerequisites` was the Dependencies section's id (now Related); `runs` and `pr` are carried by the Activity log under the actions. */
 const SECTION_ALIASES: Readonly<Record<string, GlobSection>> = {
   prerequisites: 'related',
+  // The conflict and the problems are one notice beside the primary action now.
+  conflict: 'actions',
+  problem: 'actions',
   rollout: 'human-steps',
   runs: 'actions',
   pr: 'actions',

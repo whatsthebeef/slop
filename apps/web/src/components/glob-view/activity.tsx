@@ -2,12 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router';
 import { GitPullRequest, TriangleAlert } from 'lucide-react';
 import { HumanIcon, MachineIcon } from '@/components/actor-icons';
-import { ACTIVITY_SHOWN, CONTINUE_LOCALLY_TITLE, activityOf } from '@/lib/activity';
-import type { ActivityEntry } from '@/lib/activity';
-import { turnKey } from '@/lib/dismissals';
-import type { GlobActionsState } from './actions';
+import { ACTIVITY_SHOWN, CONTINUE_LOCALLY_TITLE } from '@slop/core';
+import type { ActivityEntry } from '@slop/core';
 import type { GlobViewContext } from './context';
-import { ACTIVITY_ID, GotIt, LinkButton, headlineReason } from './status';
+import { ACTIVITY_ID, LinkButton } from './status';
 import type { NowState } from './status';
 
 const relative = (iso: string | null, now: number): string => {
@@ -60,47 +58,22 @@ const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
 };
 
 /**
- * The glob's Activity log, right under the action button: the viewer's turn line and a flat feed of what happened (machine steps, runs, PR, checks, conflicts, human actions), one line each: the last
- * few with "Show all", the only control in it.
+ * The glob's Activity log, right under the action button: a flat feed of what happened (clicks, machine steps, runs, PR, checks,
+ * conflicts, human actions), one line each, worded by `presentGlob`: the last few with "Show all", the only control in it.
  */
-export const ActivityLog = ({
-  ctx,
-  state,
-  actions,
-}: {
-  ctx: GlobViewContext;
-  state: NowState;
-  actions: GlobActionsState;
-}) => {
-  const { board, glob } = ctx;
-  const { move, turn, steps, problem, turnDismissed } = state;
+export const ActivityLog = ({ ctx, state }: { ctx: GlobViewContext; state: NowState }) => {
+  const { glob } = ctx;
+  const { move, presentation } = state;
   const [all, setAll] = useState(false);
   useEffect(() => {
     setAll(false);
-  }, [glob.id, problem?.kind]);
-  const feed = activityOf(glob, board.repo, steps, actions.viewer?.email);
+  }, [glob.id]);
+  const feed = presentation.activity;
   const shown = all ? feed : feed.slice(0, ACTIVITY_SHOWN);
   const now = Date.now();
   return (
     <section id={ACTIVITY_ID} className="grid min-w-0 grid-cols-[minmax(0,1fr)] scroll-mt-[calc(var(--glob-header-height,2.25rem)+0.5rem)] gap-1.5 text-sm" data-testid="activity" data-holder={move?.holder ?? 'none'}>
       <h3 className="text-xs font-semibold text-muted-foreground">Activity</h3>
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 break-words" data-testid="activity-pinned">
-        {turn !== null && turn.reason !== '' && (
-          <p className="font-medium" data-testid="turn-reason">
-            Your turn · {headlineReason(turn.reason)}
-            {turnDismissed ? (
-              <span className="font-normal">
-                {' · '}
-                <LinkButton testId="show-again" disabled={actions.busy} onClick={() => void actions.dismiss(turnKey(turn), false)}>
-                  Show again
-                </LinkButton>
-              </span>
-            ) : (
-              <GotIt disabled={actions.busy} onClick={() => void actions.dismiss(turnKey(turn), true)} />
-            )}
-          </p>
-        )}
-      </div>
       <ul className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 text-xs" data-testid="activity-feed">
         {shown.map((entry) => (
           <Entry key={entry.id} entry={entry} now={now} />

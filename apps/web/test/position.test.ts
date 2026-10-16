@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { statusLine, waitingFor } from '../src/lib/status-line';
-import { onStandby, positionOf } from '../src/lib/position';
+import { statusLine, waitingFor, onStandby, positionOf } from '@slop/core';
 import { NOW, run } from '../../../packages/core/test/fixtures';
 import { failedChecks, head, prOpen, view } from './helpers/glob-views';
 

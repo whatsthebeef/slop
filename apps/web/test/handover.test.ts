@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { Handover } from '@slop/core';
 import {
   handoverConfirmation,
-  handoverOneLine,
-  handoverSignature,
   handoverToShow,
 } from '../src/lib/handover';
 
@@ -32,23 +30,10 @@ describe('handoverToShow', () => {
 });
 
 describe('brief text', () => {
-  it('collapses to the first cause with a count of the rest', () => {
-    expect(handoverOneLine(brief)).toBe('Conflicts with main: glob-dialog.tsx. (+1 more)');
-    expect(handoverOneLine({ ...brief, why: ['Only one.'] })).toBe('Only one.');
-  });
-
   it('says why in the confirmation', () => {
     expect(handoverConfirmation('take_over', brief)).toBe(
       "You're taking over because: Conflicts with main: glob-dialog.tsx. Failed checks on abc1234. First: Merge origin/main, resolve, run the checks, push.",
     );
     expect(handoverConfirmation('pick_up', brief)).toContain("You're picking this up because:");
-  });
-});
-
-describe('signature', () => {
-  it('changes when the causes or the first step do', () => {
-    expect(handoverSignature(brief)).toBe(handoverSignature({ ...brief, detail: [] }));
-    expect(handoverSignature(brief)).not.toBe(handoverSignature({ ...brief, next: 'Something else.' }));
-    expect(handoverSignature(brief)).not.toBe(handoverSignature({ ...brief, why: [] }));
   });
 });

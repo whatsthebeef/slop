@@ -1,5 +1,6 @@
 import type { GlobAttributes } from './attributes.js';
 import type { JsonValue } from './events.js';
+import type { Action } from './machine.js';
 import type { OpenQuestion } from './questions.js';
 import type { ReviewBoardSettings } from './review-settings.js';
 
@@ -520,6 +521,30 @@ export interface Glob {
    * left alone by everything else. The board orders its lists by it. Absent on documents from before it existed (the migration backfills it).
    */
   readonly listSince?: string;
+  /**
+   * A person's click whose effect is still in flight (a queued run, a merge): every view shows it as in progress. Cleared when the glob
+   * moves on (see `Builder.done`) or, read through `pendingInForce`, when it times out. Absent on older documents.
+   */
+  readonly pendingAction?: PendingAction | null;
+  /** How the last click ended when it did not work (refused, failed or timed out); drives the notice until the next click clears it. */
+  readonly lastOutcome?: ClickOutcome | null;
+}
+
+/** A click whose effect has not shown yet. `runId` is the routine run the click queued, when it queued one. */
+export interface PendingAction {
+  readonly kind: Action;
+  readonly at: string;
+  readonly by: string;
+  readonly runId?: string;
+}
+
+/** A click that did not work: refused by the machine, failed afterwards, or without effect after the timeout. */
+export interface ClickOutcome {
+  readonly kind: Action;
+  readonly at: string;
+  readonly by: string;
+  readonly result: 'failed' | 'timed_out';
+  readonly reason: string;
 }
 
 /**

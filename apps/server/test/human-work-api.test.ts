@@ -461,7 +461,7 @@ describe('action globs over REST and MCP (Postgres)', () => {
     const sub = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Waits', type: 'sub', category: 'task', group: null, plan: 'p', needs: [a.id] }, ADMIN);
     const view = unwrap(await globs.get(DEV, sub.body.id));
     expect(view.holding.map((h) => [h.to, h.until])).toEqual([[a.id, 'done']]);
-    expect((await rest('POST', `/api/globs/${a.id}/actions/done`, { version: a.version })).status).toBe(200);
+    expect((await rest('POST', `/api/globs/${a.id}/actions/done`, { version: unwrap(await globs.get(DEV, a.id)).glob.version })).status).toBe(200);
     expect(unwrap(await globs.get(DEV, sub.body.id)).holding).toEqual([]);
   });
 
