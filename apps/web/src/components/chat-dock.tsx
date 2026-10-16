@@ -85,6 +85,8 @@ export const ChatDock = ({ open, wide, narrow, onExited, ...panel }: { open: boo
     >
       <div className='ml-auto h-full' style={{ width: fullScreen ? '100%' : width }}>
         <ChatPanel
+          // One panel per board: the draft, pinned page and any answer in progress belong to the board they were made on.
+          key={panel.boardId}
           {...panel}
           divider={wide && <ChatDivider width={width} available={available} onPreview={preview} onWidth={commit} />}
         />
