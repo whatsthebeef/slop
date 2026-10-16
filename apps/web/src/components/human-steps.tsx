@@ -445,16 +445,24 @@ const QuietGroup = ({
   busy,
   onMarkDeployed,
   render,
+  upcoming = false,
 }: {
   group: StageGroup;
   busy: boolean;
+  /** The next stage of a merged glob: its steps are listed, greyed, since the glob waits for them to fall due. */
+  upcoming?: boolean;
   onMarkDeployed?: (env: string) => Promise<boolean>;
   render: (step: ListedHumanStep) => ReactNode;
 }) => {
-  const [shown, setShown] = useState(false);
+  const [shown, setShown] = useState(upcoming);
   const env = deployEnv(group);
   return (
-    <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground' data-testid='quiet-steps' data-stage={group.stage}>
+    <div
+      className={`grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground ${upcoming ? 'opacity-60' : ''}`}
+      data-testid='quiet-steps'
+      data-stage={group.stage}
+      data-upcoming={upcoming ? 'true' : undefined}
+    >
       <div className='flex flex-wrap items-center gap-2'>
         <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='quiet-toggle' onClick={() => setShown(!shown)}>
           {groupText(group)} {shown ? '▾' : '▸'}
@@ -597,6 +605,8 @@ export const HumanSteps = ({
   const quiet = live.filter(isQuietStep);
   const steps = live.filter((s) => !due.includes(s) && !quiet.includes(s));
   const dismissed = all.filter(isDismissedStep);
+  // Merged and rolling out: only the next stage's steps are listed (greyed until they fall due), not every later one.
+  const rolledOut = glob.pr?.state === 'merged' && due.length === 0;
   const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : collapsed ? false : readStepsOpen()));
   const stepsOpenByDefault = defaultStepsOpen([...steps, ...quiet]);
   const [busy, setBusy] = useState(false);
@@ -688,9 +698,10 @@ export const HumanSteps = ({
                   ))}
                 </ul>
               )}
-              {stageGroups(quiet, environments).map((group) => (
+              {(rolledOut ? stageGroups(quiet, environments).slice(0, 1) : stageGroups(quiet, environments)).map((group) => (
                 <QuietGroup
                   key={group.stage}
+                  upcoming={rolledOut}
                   group={group}
                   busy={busy}
                   {...(wrappedMark === undefined ? {} : { onMarkDeployed: wrappedMark })}
