@@ -84,7 +84,7 @@ describe('whoseMove: priority', () => {
 
   it('waiting: checks and deploys, never machine', () => {
     const checking = glob({ status: 'pr_open', headChecks: { sha: 'abc1234def', state: 'pending' } });
-    expect(move(checking)).toMatchObject({ holder: 'waiting', reason: 'checks running', waitingOn: ['checks'] });
+    expect(move(checking)).toMatchObject({ holder: 'waiting', reason: 'running checks', waitingOn: ['checks'] });
     const deploy = { id: 'd', environment: 'staging', sha: 'a', state: 'running' as const, requestedAt: NOW, runningSince: NOW, url: null };
     expect(move(glob({ status: 'reviewing' }), { deploys: [deploy] })).toMatchObject({ holder: 'waiting', reason: 'deploying to staging' });
   });
