@@ -210,6 +210,20 @@ describe('steps grouped by stage', () => {
     expect(screen.getAllByTestId('quiet-toggle').map((el) => el.textContent)).toEqual(['After the deploy to production: 1 step, not due yet ▸']);
   });
 
+  it('lists only the next stage, greyed and open, once the glob is merged and waiting on a deploy', () => {
+    const glob = { ...coreGlob(), status: 'reviewing', pr: { number: 1, state: 'merged', headSha: 'abc' }, list: 'doing', branch: 's1t1', currentRun: null, humanSteps: [deploy('a', 'staging'), deploy('b', 'production')] } as GlobView;
+    render(
+      <MemoryRouter>
+        <HumanSteps glob={glob} canAdd environments={['staging', 'production']} onMarkDeployed={vi.fn(() => Promise.resolve(true))} onAdd={vi.fn(() => Promise.resolve(true))} onComplete={vi.fn(() => Promise.resolve(true))} onDismiss={vi.fn(() => Promise.resolve(true))} />
+      </MemoryRouter>,
+    );
+    const groups = screen.getAllByTestId('quiet-steps');
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.getAttribute('data-stage')).toBe('staging');
+    expect(groups[0]?.getAttribute('data-upcoming')).toBe('true');
+    expect(screen.getAllByTestId('step-title')).toHaveLength(1);
+  });
+
   it('marks a due once step with a once marker in the needs-you block', () => {
     showWith([step({ id: 'a', state: 'due', due: 'once' }), step({ id: 'b', state: 'due' })]);
     const cards = screen.getAllByTestId('due-step');
