@@ -43,6 +43,8 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   // Board-wide effects have no glob.
   'refresh_base_checks',
   'recheck_overlaps',
+  // Board-wide: the executor reads the whole line, whichever glob's change nudged it.
+  'advance_merge_line',
   'refresh_base_branch',
   'start_atf',
   'deliver_atf_webhook',

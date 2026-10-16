@@ -4,7 +4,7 @@ import type { ActionState } from '../action-glob.js';
 import type { ArtifactSummary } from '../knowledge.js';
 import type { Arm } from '../rollout-stages.js';
 import type { BuildFailed } from '../deploys.js';
-import type { ClickOutcome, Glob, List, Mode, PendingAction, Run, WorkActor } from '../types.js';
+import type { ClickOutcome, Glob, List, MergeLinePlace, Mode, PendingAction, Run, WorkActor } from '../types.js';
 import type { CompactHumanStep, HumanStep } from '../human-steps.js';
 import type { Handoff } from '../../app/glob-service.js';
 import type { Handover } from '../handover.js';
@@ -92,6 +92,8 @@ export interface PresentableGlob extends Glob {
   readonly arm?: Arm;
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
   readonly move?: Move;
+  /** Where a merging glob stands in its board's merge line, derived on the server (`mergeLinePlaces`): board list and glob read; absent when not in the line or on an older API (read with `?.`). */
+  readonly mergeLinePlace?: MergeLinePlace;
   /** What slop is doing for the glob (board list and glob read; absent on an older API). */
   readonly machineSteps?: readonly MachineStep[];
   /** The latest branch deploy's build failed and nobody has acted on the glob since: it feeds the build-failed status, notice and activity (board list and glob read; absent when none). */

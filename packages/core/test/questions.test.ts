@@ -381,7 +381,7 @@ describe('the merge gate and open merge questions', () => {
     expect(value(m.gateReleased(armed, { relations: [], states: new Map() }, null, ctx(null))).changed).toBe(false);
     const resumed = value(m.gateReleased({ ...armed, questions: answered }, { relations: [], states: new Map() }, null, ctx(null)));
     expect(resumed.glob).toMatchObject({ status: 'merging', mergeMode: null, mergeHold: null });
-    expect(resumed.effects).toEqual([{ kind: 'squash_merge', globId: armed.id, generation: armed.generation, sha: HEAD }]);
+    expect(resumed.effects).toEqual([{ kind: 'advance_merge_line', globId: 'board-1', boardId: 1 }]);
   });
 
   it('a start question does not hold a merge, and a merge question does not hold a start', () => {

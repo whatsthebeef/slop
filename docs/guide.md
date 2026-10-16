@@ -55,13 +55,15 @@ These buttons answer "who works on this now?".
 
 ## How slop merges
 
-Slop squash-merges with the glob's ID in the title. How it gets there depends on the repository.
+Slop squash-merges with the glob's ID in the title, one glob at a time: the merge line (a merge train). GitHub's merge queue isn't used.
 
-- **With a merge queue** (what `setup-repo.sh --protect` sets up; the repository needs the checks workflow with `on: merge_group` on its base branch before you run it, or queued pull requests never get a `checks` result): slop doesn't merge the pull request itself. Once its checks pass, it puts the pull request in GitHub's merge queue. GitHub tests it on top of the base branch plus the pull requests ahead of it, and merges them in order, so nothing has to be updated from the base branch by hand. The glob stays in Doing, reads "in merge queue · N ahead" (N pull requests are in front of it; just "in merge queue" when the position isn't known) and then "merging" once its group is being merged. It moves to Reviewing when GitHub has merged it.
-- **Without a merge queue**: slop updates the branch from the base branch if it is behind, waits for the checks on the new head and squash-merges. A conflict sends the glob back to the pull request as a conflict to resolve.
-- **Cancel merge** stops a merge that waits for checks, and takes a queued pull request out of the merge queue. The pull request stays open and Merge comes back.
-- **If the queue removes the pull request:** a conflict with the base branch is a conflict to resolve, as above. Anything else (failed checks, a timeout) fails the glob with the queue's reason and the failing check's lines. **Retry merge** puts it in the queue again.
-- **Emergencies:** slop's GitHub App is on the ruleset's bypass list for emergencies only. Slop never bypasses the queue, so main only receives commits whose checks passed on the combined result.
+- **Joining the line:** a glob joins when it is ready to merge: a sub whose checks and review passed with its merge armed, a same or super after you press Merge, or an agent-set glob. Nothing else is shown on the card for it: the Merge you pressed is done. Globs go in the order they joined, first come first served.
+- **The head of the line:** only the glob at the front works. Slop updates its branch from the base branch (the repository's default branch) if it is behind, waits for the checks on the new head and squash-merges it. Then the next glob becomes the head. So each merge costs one round of checks, not one per glob ahead of it.
+- **Waiting:** the others are not updated and their checks aren't rerun. The card reads "merging" for the head (or "running checks" while its checks run), "next to merge" for the second and "N ahead in the merge line" for the rest; hover it to see which globs are ahead. A new push to a waiting glob keeps its place, and the new head must pass before it merges.
+- **When the head fails:** red checks, a conflict with the base branch (the glob goes back to the pull request as a conflict to resolve) or a merge GitHub refuses take the glob out of the line with the reason, and the next one goes. A head that gets no check result for 20 minutes is rechecked once, then leaves the line the same way. **Retry merge** puts a failed glob at the back of the line.
+- **Relations:** a glob held by a `merge` relation or an open question isn't in the line and doesn't block the globs behind it. It joins, at the back, when it is released.
+- **Cancel merge** (in the glob view's menu) takes a glob out of the line. The pull request stays open and Merge comes back.
+- **Emergencies:** slop's GitHub App is on the ruleset's bypass list for emergencies only. The ruleset still requires the `checks` check on an up-to-date head, so main only receives commits whose checks passed.
 
 ## Relations and gates
 

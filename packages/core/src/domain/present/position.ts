@@ -14,7 +14,7 @@ import type { PresentableGlob } from './facts.js';
 import {
   checksInFlightWhileMerging,
   checksRunningTip,
-  mergeQueueStatus,
+  mergeLineStatus,
   mergingChecksText,
 } from './check-wording.js';
 
@@ -113,7 +113,7 @@ const machineText = (
   // An armed merge is queued until the checks pass, but what the machine is doing is merging (the shared wording while they run).
   if (step.kind === 'merge')
     return (
-      mergeQueueStatus(glob) ??
+      mergeLineStatus(glob) ??
       (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : DOING.merge)
     );
   if (step.state === 'queued') {

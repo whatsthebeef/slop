@@ -467,8 +467,8 @@ describe('pending clicks', () => {
     it.each([
       ['armed to merge when checks pass', { mergeMode: 'when_green' as const }],
       [
-        'in the merge queue',
-        { mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' as const } },
+        'waiting in the merge line',
+        { status: 'merging' as const, mergeLine: { joinedAt: NOW } },
       ],
       ['merging', { status: 'merging' as const }],
     ])('Merge %s says nothing', (_name, patch) => {

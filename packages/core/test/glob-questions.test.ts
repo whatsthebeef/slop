@@ -215,7 +215,7 @@ describe('open questions through the services', () => {
       // The answer resumes it, once.
       const resumed = unwrap(await globs.answerQuestion(DEV, g.id, 'q1', { answer: '', option: 'Accept as is' }));
       expect(resumed.status).toBe('merging');
-      expect(effectKinds().filter((k) => k === 'squash_merge')).toHaveLength(1);
+      expect(effectKinds().filter((k) => k === 'advance_merge_line')).toHaveLength(1);
       expect((await attachment(g.id, 'Clarifications'))?.content).toContain('**Answer (dev@example.com, 2026-10-05):** Accept as is');
     });
 

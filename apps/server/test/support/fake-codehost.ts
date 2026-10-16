@@ -49,8 +49,6 @@ export class FakeCodeHost implements CodeHost {
   rerunFailedJobs: CodeHost['rerunFailedJobs'] = () => Promise.resolve('unavailable');
   updateBranch: CodeHost['updateBranch'] = () => Promise.resolve('up_to_date');
   squashMerge: CodeHost['squashMerge'] = () => Promise.resolve({ outcome: 'merged', sha: 'm1' });
-  mergeQueueEntry: CodeHost['mergeQueueEntry'] = () => Promise.resolve(null);
-  dequeue: CodeHost['dequeue'] = () => Promise.resolve('not_queued');
   revertCommit: CodeHost['revertCommit'] = () => Promise.resolve('reverted');
 }
 

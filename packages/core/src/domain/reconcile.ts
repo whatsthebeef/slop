@@ -1,13 +1,11 @@
 import type { Glob } from './types.js';
 import { currentRun, isReconcilable } from './machine.js';
+import { mergeHeadStuck } from './merge-line.js';
 
 /** A ready PR whose head has no check result this long after the glob last changed is probably waiting on a lost webhook. */
 export const RECONCILE_CHECKS_AFTER_MS = 10 * 60_000;
 /** A glob nothing has changed for this long while a run is watching it may have missed any webhook. */
 export const RECONCILE_WATCHING_AFTER_MS = 60 * 60_000;
-
-/** A queued merge nothing has changed for this long may have missed a queue webhook (a dequeue, or its merge). */
-export const RECONCILE_QUEUE_AFTER_MS = 5 * 60_000;
 
 /**
  * Whether the periodic sweep should re-read a glob's PR from the code host. `updatedAt` stands in for the last
@@ -18,6 +16,7 @@ export const reconcileDue = (glob: Glob, nowMs: number): boolean => {
   const quietMs = nowMs - Date.parse(glob.updatedAt);
   const checked = glob.headChecks !== null && glob.headChecks.state !== 'pending' && glob.headChecks.sha === glob.pr.headSha;
   if (glob.pr.state === 'ready' && !checked && quietMs > RECONCILE_CHECKS_AFTER_MS) return true;
-  if (glob.status === 'merging' && glob.mergeQueue != null && quietMs > RECONCILE_QUEUE_AFTER_MS) return true;
+  // The merge line's head that has gone quiet (`MERGE_HEAD_STUCK_MS`): re-read the PR; `mergeHeadChecked` then rechecks, then fails it.
+  if (mergeHeadStuck(glob, nowMs) !== null) return true;
   return currentRun(glob)?.state === 'watching' && quietMs > RECONCILE_WATCHING_AFTER_MS;
 };

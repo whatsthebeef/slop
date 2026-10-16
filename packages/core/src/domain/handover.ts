@@ -153,8 +153,8 @@ const runCause = (glob: Glob, facts: HandoverFacts): Cause | null => {
     };
   }
   if (run.state === 'active' || run.state === 'watching') {
-    // A run that only watches a merging, armed or queued glob has nothing to report: the merge is slop's and GitHub's to
-    // finish. The glob's own failure (a dequeue, a failed merge) is its own cause.
+    // A run that only watches a merging (the head or waiting in the merge line) or armed glob has nothing to report: the merge
+    // is slop's to finish in its turn. The glob's own failure (a failed merge) is its own cause.
     if (glob.status === 'merging' || glob.mergeMode === 'when_green') return null;
     // Likewise a run watching a ready PR whose checks passed waits for a person to merge it (a failure, a conflict or failed
     // checks are their own causes, and a run that watches those is still stalled).

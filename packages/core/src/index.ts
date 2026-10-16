@@ -66,6 +66,7 @@ export * from './domain/size-check.js';
 export * from './domain/size-forecast.js';
 export * from './domain/manifests.js';
 export * from './domain/reconcile.js';
+export * from './domain/merge-line.js';
 export * from './domain/time-tracking.js';
 export * from './domain/board-sessions.js';
 export * from './domain/signed-off-cap.js';

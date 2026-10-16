@@ -173,6 +173,10 @@ export const globs = pgTable(
   (t) => [
     index('globs_board_status_idx').on(t.boardId, t.status),
     uniqueIndex('globs_creation_key_idx').on(t.boardId, t.creationKey),
+    // One merge head per board: the backstop for `Tx.lockMergeLine`, so no code path can leave two heads working at once.
+    uniqueIndex('globs_merge_head_idx')
+      .on(t.boardId)
+      .where(sql`${t.status} = 'merging' and jsonb_typeof(${t.data} #> '{mergeLine,head}') = 'object'`),
   ],
 );
 

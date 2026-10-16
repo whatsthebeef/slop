@@ -1,5 +1,5 @@
-import type { AttachmentService, BoardService, BuildFailed, DecisionGlobService, DeployService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import type { MergeLinePlace, AttachmentService, BoardService, BuildFailed, DecisionGlobService, DeployService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
+import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, mergeLinePlaces, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -581,14 +581,17 @@ export const createApp = (deps: AppDeps) => {
     const thresholds = stallThresholds(membership.value.board);
     // A picked-up learning's recommendation job reads as a machine step ("getting a recommendation").
     const recommending = result.ok ? await globs.recommendationEffectsOf(result.value.map((r) => r.glob)) : new Map<string, PendingEffect[]>();
+    // Each merging glob's place in the board's merge line: one read of the whole line (a status filter may list only part of it).
+    const places = result.ok && result.value.some((r) => r.glob.status === 'merging') ? mergeLinePlaces(await globs.peekAll(boardId, { include: 'all', status: ['merging'] })) : new Map<string, MergeLinePlace>();
     // Failed builds nobody has acted on: the status, notice and Retry read them.
     const buildFailed = result.ok ? await failedBuilds(boardId, result.value.map((r) => r.glob.id)) : new Map<string, BuildFailed>();
     return send(c, result, (list) =>
       list.map(({ glob, artifacts, relations, holding, holdsBack, suggestions }) => {
-        const view = globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id), scripts.get(glob.id), buildFailed.has(glob.id));
+        const place = places.get(glob.id);
+        const view = { ...globViewFor(glob, email, membership.value.role, artifacts, relations, holding, steps.get(glob.id), scripts.get(glob.id), buildFailed.has(glob.id)), ...(place === undefined ? {} : { mergeLinePlace: place }) };
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
-        const facts = machineSteps(glob, { effects: recommending.get(glob.id) ?? [] });
+        const facts = machineSteps(glob, { effects: recommending.get(glob.id) ?? [], ...(place === undefined ? {} : { mergeLinePlace: place }) });
         const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }), rolloutSteps: openRolloutSteps(steps.get(glob.id) ?? []) }, steps.get(glob.id) ?? []);
         const move = whoseMove(glob, human, facts, holding, now, { viewer, thresholds, complete: false });
         return {
@@ -696,7 +699,7 @@ export const createApp = (deps: AppDeps) => {
     const handoffs = await globs.handoffsOf(view.value.glob.boardId, view.value.glob.id);
     const effects = (await globs.recommendationEffectsOf([view.value.glob])).get(view.value.glob.id) ?? [];
     const buildFailed = (await failedBuilds(view.value.glob.boardId, [view.value.glob.id])).get(view.value.glob.id);
-    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob, { effects }), handoffs, ...buildFailedField(buildFailed), ...splitField(split), ...workstreamsField(workstreams) }));
+    return send(c, view, (v) => ({ ...globViewOf(v), gateCheck, machineSteps: machineSteps(v.glob, { effects, ...(v.mergeLinePlace === undefined ? {} : { mergeLinePlace: v.mergeLinePlace }) }), handoffs, ...buildFailedField(buildFailed), ...splitField(split), ...workstreamsField(workstreams) }));
   });
 
   app.patch('/api/globs/:id', async (c) => {
@@ -1067,7 +1070,7 @@ export const createApp = (deps: AppDeps) => {
     if (!view.ok) return send(c, view);
     const effects = (await globs.recommendationEffectsOf([view.value.glob])).get(view.value.glob.id) ?? [];
     const buildFailed = (await failedBuilds(view.value.glob.boardId, [view.value.glob.id])).get(view.value.glob.id);
-    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob, { effects }), ...buildFailedField(buildFailed) }));
+    return send(c, view, (v) => ({ ...globViewOf(v), machineSteps: machineSteps(v.glob, { effects, ...(v.mergeLinePlace === undefined ? {} : { mergeLinePlace: v.mergeLinePlace }) }), ...buildFailedField(buildFailed) }));
   };
 
   // ---------------------------------------------------------------------------

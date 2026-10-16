@@ -247,6 +247,16 @@ const latestAttachments = (all: readonly Artifact[]): Artifact[] => {
   return [...latest.values()].sort((a, b) => a.id - b.id);
 };
 
+/** The store's one-head-per-board rule (Postgres: the `globs_merge_head_idx` partial unique index): a second head is a bug, so it throws. */
+const assertOneMergeHead = (s: State, glob: Glob): void => {
+  if (glob.status !== 'merging' || glob.mergeLine?.head == null) return;
+  for (const row of s.globs.values()) {
+    const other = row.glob;
+    if (other.id !== glob.id && other.boardId === glob.boardId && other.status === 'merging' && other.mergeLine?.head != null)
+      throw new Error(`Board ${String(glob.boardId)} already has a merge head (${other.id}); ${glob.id} cannot be a second one`);
+  }
+};
+
 const byCreated = (a: StoredHumanStep, b: StoredHumanStep): number => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
 export class MemoryStore implements Store {
@@ -337,12 +347,14 @@ export class MemoryStore implements Store {
         ),
       insertGlob: (glob, creationKey) => {
         if (s.globs.has(glob.id)) return Promise.resolve(false);
+        assertOneMergeHead(s, glob);
         s.globs.set(glob.id, { glob, creationKey });
         return Promise.resolve(true);
       },
       updateGlob: (glob, expectedVersion) => {
         const row = s.globs.get(glob.id);
         if (row === undefined || row.glob.version !== expectedVersion) return Promise.resolve(false);
+        assertOneMergeHead(s, glob);
         s.globs.set(glob.id, { glob, creationKey: row.creationKey });
         return Promise.resolve(true);
       },
@@ -608,6 +620,7 @@ export class MemoryStore implements Store {
         return Promise.resolve();
       },
       lockBoardSessions: () => Promise.resolve(),
+      lockMergeLine: () => Promise.resolve(),
       listBoardSessions: (email) =>
         Promise.resolve(
           [...s.members.values()].flatMap((m): BoardSession[] => {

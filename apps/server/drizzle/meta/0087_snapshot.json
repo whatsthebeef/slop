@@ -1,5 +1,5 @@
 {
-  "id": "591357f2-7dac-4dad-a3bd-2ec56dbea519",
+  "id": "89591a1e-9f9f-490c-b3f9-62270c49dd97",
   "prevId": "9ffbdb4e-2673-42be-8a76-a1fabe3f8070",
   "version": "7",
   "dialect": "postgresql",
@@ -2792,24 +2792,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "log_group": {
-          "name": "log_group",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "log_stream": {
-          "name": "log_stream",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "log_url": {
-          "name": "log_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -3594,6 +3576,22 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "globs_merge_head_idx": {
+          "name": "globs_merge_head_idx",
+          "columns": [
+            {
+              "expression": "board_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"globs\".\"status\" = 'merging' and jsonb_typeof(\"globs\".\"data\" #> '{mergeLine,head}') = 'object'",
           "concurrently": false,
           "method": "btree",
           "with": {}
