@@ -273,7 +273,8 @@ export class GitHub implements CodeHost, CommitGraph {
   async syncLabels(repo: Repo, glob: Glob, prNumber: number): Promise<void> {
     const gh = await this.octokit(repo);
     const r = { owner: repo.owner, repo: repo.name };
-    const wanted = [`slop:${glob.type}`, ...(glob.environment === null ? [] : [`env:${glob.environment}`])];
+    // An action has no type and no environment: it is labelled `slop:action` and nothing else.
+    const wanted = glob.category === 'action' ? ['slop:action'] : [`slop:${String(glob.type)}`, ...(glob.environment === null ? [] : [`env:${glob.environment}`])];
     const { data: current } = await gh.request('GET /repos/{owner}/{repo}/issues/{issue_number}/labels', {
       ...r,
       issue_number: prNumber,

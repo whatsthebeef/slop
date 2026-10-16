@@ -3437,9 +3437,13 @@ export class GlobService implements AutomaticRelations {
     });
     const released: string[] = [];
     for (const glob of dependants) {
-      // An action has no start to release: its Done is offered again by what it reads, so the row is only told to reload.
+      // A plain action has no start to release: its Done is offered again by what it reads, so the row is only told to reload.
+      // A prepared action held in Planning starts its first preparation round once what it waited for is done.
       if (glob.category === 'action') {
-        this.publish(glob);
+        if (glob.status === 'planning' && glob.waiting != null && preparationOf(glob) !== null) {
+          const result = await this.release(glob.id);
+          if (result.ok && result.value.status !== 'planning') released.push(glob.id);
+        } else this.publish(glob);
         continue;
       }
       // A start relation: a glob held in Planning starts once everything it waits for has merged.

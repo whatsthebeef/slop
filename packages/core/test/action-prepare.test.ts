@@ -580,7 +580,8 @@ describe('prepared actions through the service', () => {
       if (g === null) throw new Error('missing');
       await tx.updateGlob({ ...g, status: 'signed_off', pr: { number: 3, state: 'merged', headSha: 'x' }, version: g.version + 1 }, g.version);
     });
-    unwrap(await globs.release(a.id));
+    // The outbox's release_waiting job calls releaseDependents (an action used to be skipped there).
+    expect(await globs.releaseDependents(work.id, work.boardId)).toEqual([a.id]);
     const started = await current(a.id);
     expect(started).toMatchObject({ status: 'implementing', waiting: null });
     expect(outbox('fire_routine').filter((e) => e.globId === a.id)).toMatchObject([{ purpose: 'prepare' }]);

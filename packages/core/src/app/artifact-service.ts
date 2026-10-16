@@ -8,7 +8,7 @@ import { testPlanSpecs } from '../domain/test-plan.js';
 import { planChangedQuestionEffect, recheckOverlapsEffect } from '../domain/events.js';
 import { humanSteps } from '../domain/human-steps.js';
 import { isOpenQuestion, planChangedQuestion, questionsOf } from '../domain/questions.js';
-import { preparationOf } from '../domain/action-glob.js';
+import { actionState, preparationOf } from '../domain/action-glob.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
@@ -248,6 +248,7 @@ export class ArtifactService {
       const inbox = await inboxSection(tx, globId);
       const group = await groupSection(tx, this.deps.clock, glob);
       const hotspotView = this.deps.hotspots === undefined ? null : await this.deps.hotspots(glob.boardId, this.deps.clock.now());
+      const state = actionState(glob);
       return ok({
         glob: {
           id: glob.id,
@@ -258,6 +259,7 @@ export class ArtifactService {
           mode: modeOf(glob),
           fix: fixOf(glob),
           workKind: workKindOf(glob),
+          ...(state === null ? {} : { actionState: state }),
           group: glob.group,
           environment: glob.environment,
           status: glob.status,
