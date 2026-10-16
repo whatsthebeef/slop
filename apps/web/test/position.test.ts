@@ -45,6 +45,21 @@ describe('position indicator', () => {
     expect(positionOf(agentSet, later(30))).toMatchObject({ holder: 'machine', text: 'committing agent set v58' });
   });
 
+  it('reads an agent-set glob with checks in flight like any other glob: running checks', () => {
+    const agentSet = prOpen({
+      title: 'Agent set v58',
+      category: 'task',
+      type: 'same',
+      implementer: 'slop',
+      currentRun: null,
+      runs: [],
+      headChecks: { sha: head, state: 'pending' },
+      mergeMode: 'when_green',
+      allowedActions: ['cancel_merge'],
+    });
+    expect(positionOf(agentSet, NOW)?.text).toBe('running checks');
+  });
+
   it('puts running checks for an armed merge, ahead of the plain checks wait', () => {
     const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] });
     expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: 'running checks', spinning: true });
