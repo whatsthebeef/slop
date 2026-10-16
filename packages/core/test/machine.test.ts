@@ -299,10 +299,12 @@ describe('pick up (rows 6–10)', () => {
   });
 
   it('does not offer Pick up to the person who already holds the glob, but still does to someone else', () => {
-    const held = glob({ status: 'in_progress', implementer: dev.email });
+    const held = glob({ status: 'in_progress', implementer: dev.email, runs: [run({ state: 'active' })] });
     expect(m.allowedActions(held, dev)).not.toContain('pick_up');
     expect(m.allowedActions(held, dev)).not.toContain('take_over');
-    expect(m.allowedActions(held, other)).toContain('pick_up');
+    expect(m.allowedActions(glob({ status: 'in_progress', implementer: dev.email }), other)).toContain('pick_up');
+    // Nothing live: Resume stays, so their own glob is never a dead end.
+    expect(m.allowedActions(glob({ status: 'in_progress', implementer: dev.email }), dev)).toContain('pick_up');
   });
 
   it('row 9: someone else picking up changes the implementer', () => {

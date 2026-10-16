@@ -3762,10 +3762,13 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
       glob.status === 'pr_open' ||
       // A merged glob stays open while its rollout steps do (row 9a): a person runs them from a session.
       (glob.status === 'reviewing' && (facts.rolloutSteps ?? 0) > 0));
-  // Not to the person who already holds the glob: for them it is a no-op (rows 8 and 9a), and the status already says "picked up".
+  // Not to the person who already holds the glob with their session live (rows 8 and 9a): for them it is a no-op and the status already
+  // says "picked up". With nothing live (a conflict, failed checks, rollout steps) they keep Resume, so their own glob is never a dead end.
   const holdsIt =
     glob.implementer === actor.email &&
-    (glob.status === 'reviewing' || ((glob.status === 'in_progress' || glob.status === 'pr_open') && (!hasLiveRun(glob) || liveInvestigation(glob) !== null)));
+    (glob.status === 'in_progress' || glob.status === 'pr_open') &&
+    hasLiveRun(glob) &&
+    liveInvestigation(glob) === null;
   if (canPickUp && !holdsIt) actions.push('pick_up');
   if (
     !restricted &&
