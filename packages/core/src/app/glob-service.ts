@@ -8,7 +8,7 @@ import { inGroup } from '../domain/group-view.js';
 import { formatId, letterFor } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
-import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, defaultStepBlocks, humanSteps, isHumanStepDue, openRolloutSteps, stateOf, storedBlockProgress } from '../domain/human-steps.js';
+import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, defaultStepBlocks, environmentOf, humanSteps, isHumanStepDue, isMerged, openRolloutSteps, stateOf, storedBlockProgress, unknownEnvironmentText } from '../domain/human-steps.js';
 import { maskSecrets, maskedNote } from '../domain/mask-secrets.js';
 import { armView, rolloutWhen } from '../domain/rollout-stages.js';
 import type { Arm } from '../domain/rollout-stages.js';
@@ -580,6 +580,8 @@ export interface NewHumanStep {
   readonly detail?: string;
   readonly who?: string;
   readonly due?: string;
+  /** A one-shot command inside the change (`due: 'once'`): it has no environment and is never reopened. */
+  readonly once?: boolean;
   readonly blocks?: readonly HumanStepBlock[];
   readonly check?: string;
   readonly script?: HumanStepScript;
@@ -637,6 +639,7 @@ export class GlobService implements AutomaticRelations {
   async get(email: string, id: string): Promise<Result<GlobView>> {
     // Read before the transaction: it asks the code host.
     const check = await this.scriptCheckFor(id);
+    const onBranch = await this.onceScriptsOnBranch(id);
     return this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(id);
       if (glob === null) return notFound(`No glob ${id}`);
@@ -648,8 +651,13 @@ export class GlobService implements AutomaticRelations {
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       const rolloutSteps = openRolloutSteps(stored);
       const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, rolloutSteps, ...scriptFacts(check) };
-      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts), rolloutSteps }, stored);
       const board = await tx.getBoard(glob.boardId);
+      const known = (board?.environments ?? []).map((e) => e.name);
+      // A step that waits for an environment the board doesn't define can never fall due: flag it so the view offers to dismiss it.
+      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts), rolloutSteps, ...(onBranch === undefined ? {} : { scriptsOnBranch: onBranch }) }, stored).map((step) => {
+        const environment = step.state === 'done' || step.state === 'dismissed' ? null : environmentOf(step.due);
+        return environment !== null && board !== null && !known.includes(environment) ? { ...step, unknownEnvironment: environment } : step;
+      });
       // What the viewer may see of globs on other boards: the others' ids and titles are left out for a non-member.
       const seen = await this.seeOthers(tx, email, glob.boardId, [...new Set(relations.relations.map((r) => r.to))]);
       const waited = await this.waitedOnBy(tx, glob.id, email);
@@ -690,6 +698,30 @@ export class GlobService implements AutomaticRelations {
     });
     if (read === null) return null;
     return this.checkScript(read.glob.boardId, read.baseBranch, scriptPathOf(read.plan));
+  }
+
+  /**
+   * The repo paths of the glob's open once steps' scripts that its branch has, for the steps' due-ness (a once step falls due when its
+   * script is on the branch). Undefined when nothing was checked: no code host, a merged glob (the script is on the base branch), no
+   * script to look for, or a code host that can't answer. A once step is then due, so a check slop could not make never holds a person up.
+   */
+  async onceScriptsOnBranch(id: string): Promise<ReadonlySet<string> | undefined> {
+    const view = this.deps.codeView;
+    if (view === undefined) return undefined;
+    const read = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      if (glob === null || isMerged(glob) || glob.pr === null) return null;
+      const paths = (await tx.listHumanSteps(glob.boardId, [id])).flatMap((s) => (s.state === 'open' && s.due === 'once' && s.script !== null && 'path' in s.script ? [s.script.path] : []));
+      return paths.length === 0 ? null : { boardId: glob.boardId, ref: glob.id, paths };
+    });
+    if (read === null) return undefined;
+    try {
+      const found = await Promise.all(read.paths.map(async (path) => ((await view.read(read.boardId, read.ref, path)) === null ? null : path)));
+      return new Set(found.filter((p): p is string => p !== null));
+    } catch (e) {
+      if (!(e instanceof CodeViewUnavailable)) this.deps.log?.('once step script check', e instanceof Error ? e.message : String(e));
+      return undefined;
+    }
   }
 
   /** The script checks of a board's open actions, by glob. */
@@ -886,8 +918,9 @@ export class GlobService implements AutomaticRelations {
     if (title === '') return invalidInput('A step needs a title');
     const kind = input.kind ?? 'rollout';
     if (!HUMAN_STEP_KINDS.includes(kind)) return invalidInput(`Unknown step kind ${kind}`);
-    const due = input.due ?? (kind === 'rollout' ? 'after_merge' : 'now');
-    if (!isHumanStepDue(due)) return invalidInput(`Unknown due ${due}: use now, after_merge or after_deploy:<env>`);
+    const due = input.due ?? (input.once === true ? 'once' : kind === 'rollout' ? 'after_merge' : 'now');
+    if (!isHumanStepDue(due)) return invalidInput(`Unknown due ${due}: use now, after_merge, once or after_deploy:<env>`);
+    if (input.once === true && due !== 'once') return invalidInput('A once step has no environment and is not due after the merge or a deploy: leave `due` out, or use once');
     const blocks = input.blocks ?? (kind === 'rollout' ? defaultStepBlocks(due) : []);
     const unknown = blocks.find((b) => !HUMAN_STEP_BLOCKS.includes(b));
     if (unknown !== undefined) return invalidInput(`Unknown block ${unknown}: use ${HUMAN_STEP_BLOCKS.join(', ')}`);
@@ -901,6 +934,12 @@ export class GlobService implements AutomaticRelations {
       const actor = await this.actorFor(tx, email, glob.boardId);
       if (!actor.ok) return actor;
       if (version !== null && glob.version !== version) return err({ code: 'version_conflict', message: 'The glob has changed', current: glob });
+      // A step that waits for a deploy must name one of the board's environments, or it can never fall due.
+      const environment = environmentOf(due);
+      if (environment !== null) {
+        const known = ((await tx.getBoard(glob.boardId))?.environments ?? []).map((e) => e.name);
+        if (!known.includes(environment)) return invalidInput(unknownEnvironmentText(environment, known));
+      }
       const now = this.deps.clock.now();
       const dueSince = await dueSinceFor(tx, glob, due, await tx.listHumanSteps(glob.boardId, [id]), now);
       const step: StoredHumanStep = {
@@ -1035,6 +1074,7 @@ export class GlobService implements AutomaticRelations {
           found.step = (await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === stepId) ?? null;
           if (found.step === null) return notFound(`No step ${stepId} on ${id}`);
           if (found.step.kind !== 'rollout') return invalidInput('Only a rollout step can be marked failed');
+          if (found.step.due === 'once') return invalidInput('A once step is done once and never reopened: it cannot start the next generation');
           const merges = await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['Merged'], [id]);
           const sha = merges.sort((a, b) => a.at.localeCompare(b.at)).at(-1)?.data.sha;
           found.mergeSha = typeof sha === 'string' ? sha : null;
@@ -1044,7 +1084,7 @@ export class GlobService implements AutomaticRelations {
           const step = found.step;
           if (step === null) return;
           const now = this.deps.clock.now();
-          if (step.state === 'done') await tx.saveHumanSteps([{ ...step, state: 'open', doneBy: null, doneAt: null }]);
+          if (step.state === 'done' && step.due !== 'once') await tx.saveHumanSteps([{ ...step, state: 'open', doneBy: null, doneAt: null }]);
           const commands = step.commands.map((c) => maskSecrets(c));
           await addArtifact(tx, this.deps.clock, next, email, {
             kind: 'attachment',
@@ -1081,7 +1121,7 @@ export class GlobService implements AutomaticRelations {
     const route = await this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(id);
       const step = glob === null ? undefined : (await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === stepId);
-      return glob !== null && step?.kind === 'rollout' && glob.status === 'reviewing' && glob.pr?.state === 'merged';
+      return glob !== null && step?.kind === 'rollout' && step.due !== 'once' && glob.status === 'reviewing' && glob.pr?.state === 'merged';
     });
     if (route) {
       const next = await this.failRolloutStep(email, id, stepId, note, version);
@@ -1314,7 +1354,7 @@ export class GlobService implements AutomaticRelations {
     createdBy: string,
     now: string,
     fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>,
-    when: Pick<RolloutStep, 'env' | 'blocks'> = { env: null, blocks: null },
+    when: Pick<RolloutStep, 'env' | 'blocks'> & { readonly once?: boolean } = { env: null, blocks: null },
   ): StoredHumanStep {
     const { due, blocks } = rolloutWhen(when);
     return {
@@ -1358,6 +1398,7 @@ export class GlobService implements AutomaticRelations {
       const now = this.deps.clock.now();
       const stored = await tx.listHumanSteps(glob.boardId, [id]);
       const own = stored.filter((s) => s.origin === ROLLOUT_SECTION_ORIGIN);
+      const environments = ((await tx.getBoard(glob.boardId))?.environments ?? []).map((e) => e.name);
       const events: DomainEvent[] = [];
       const save: StoredHumanStep[] = [];
       const note = (step: StoredHumanStep, change: string) =>
@@ -1371,7 +1412,12 @@ export class GlobService implements AutomaticRelations {
       const gained: string[] = [];
       const textOf = (step: { readonly title: string; readonly detail: string | null; readonly why: string | null }): string =>
         [step.title, step.why, step.detail].filter((t): t is string => t !== null && t.trim() !== '').join('\n');
-      for (const [i, step] of parsed.entries()) {
+      for (const [i, written] of parsed.entries()) {
+        // An environment the board doesn't define can never fall due: the step is filed after the merge instead, and says why.
+        const step =
+          written.env === null || environments.includes(written.env)
+            ? written
+            : { ...written, env: null, detail: [unknownEnvironmentText(written.env, environments) + '; the step is filed after the merge. Re-point or dismiss it.', written.detail].filter((t) => t !== null).join('\n\n') };
         let script: HumanStepScript | null = null;
         if (step.scriptPath !== null) {
           script = { path: step.scriptPath };

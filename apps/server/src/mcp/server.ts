@@ -1398,7 +1398,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'add_human_step',
     {
       description:
-        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge or after_deploy:<env> (falls due once a deploy of the glob's merge to <env> is recorded or mark_environment_deployed is called, and holds nothing back unless `blocks` says so). `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
+        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge, once or after_deploy:<env> (falls due once a deploy of the glob's merge to <env> is recorded or mark_environment_deployed is called, and holds nothing back unless `blocks` says so; <env> must be one of the board's environments from get_board, or the step is refused). `once` (or `once: true`) is a one-shot command inside the change that takes effect by being run, not by deploying (an IAM grant, an account setting): it has no environment, falls due as soon as its `script` path is on the glob's branch (at once when it has none), stays done once done, is never reopened when a later step fails, and holds back sign-off like an after-merge step. `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
       inputSchema: {
         id: z.string(),
         version: z.number().int().optional(),
@@ -1419,6 +1419,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         verify: z.string().optional().describe('How to tell it worked, one line'),
         who: z.string().optional(),
         due: z.string().optional(),
+        once: z.boolean().optional().describe('A one-shot command inside the change: no environment, due when its script is on the branch, never reopened'),
         blocks: z.array(z.enum(HUMAN_STEP_BLOCKS)).optional(),
         check: z.string().optional().describe('A capability slop can verify'),
         script: z.union([z.object({ artifact: z.string() }), z.object({ path: z.string() })]).optional(),

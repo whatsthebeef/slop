@@ -33,11 +33,22 @@ export type HumanStepKind = (typeof HUMAN_STEP_KINDS)[number];
 export const HUMAN_STEP_ROLES = ['implementer', 'admin', 'po', 'qa', 'anyone'] as const;
 export type HumanStepWho = string;
 
-/** When a step falls due. `after_deploy:<env>` falls due once the step's `dueSince` is set: a recorded deploy of the glob's merge to <env>, or a person's mark. */
-export type HumanStepDue = 'now' | 'after_merge' | `after_deploy:${string}`;
+/**
+ * When a step falls due. `after_deploy:<env>` falls due once the step's `dueSince` is set: a recorded deploy of the glob's merge to <env>, or a person's mark.
+ * `once` is a one-shot command inside the change: it has no environment, falls due as soon as its script is on the glob's branch
+ * (at once when it has none), stays done once done and is never reopened by a later generation.
+ */
+export type HumanStepDue = 'now' | 'after_merge' | 'once' | `after_deploy:${string}`;
 
 export const isHumanStepDue = (value: string): value is HumanStepDue =>
-  value === 'now' || value === 'after_merge' || (value.startsWith('after_deploy:') && value.length > 'after_deploy:'.length);
+  value === 'now' || value === 'after_merge' || value === 'once' || (value.startsWith('after_deploy:') && value.length > 'after_deploy:'.length);
+
+/** The environment an `after_deploy:<env>` step names; null for any other step. */
+export const environmentOf = (due: HumanStepDue): string | null => (due.startsWith('after_deploy:') ? due.slice('after_deploy:'.length) : null);
+
+/** The refusal for a step that waits for an environment the board doesn't have, naming the ones it has. */
+export const unknownEnvironmentText = (environment: string, known: readonly string[]): string =>
+  `Unknown environment ${environment}: this board's environments are ${known.length === 0 ? 'none (it defines no environments, so use after_merge or once)' : known.join(', ')}`;
 
 export const HUMAN_STEP_STATES = ['pending', 'due', 'done', 'dismissed'] as const;
 export type HumanStepState = (typeof HUMAN_STEP_STATES)[number];
@@ -88,6 +99,8 @@ export interface HumanStep {
   readonly action?: StepAction;
   /** The one other action the glob view offers beside `action`; never shown on the card. */
   readonly alternative?: Action;
+  /** The environment this step waits for, when the board no longer (or never did) define it: it can never fall due, so the glob view offers to dismiss or re-point it. */
+  readonly unknownEnvironment?: string;
 }
 
 /** What a stored work step is in the database: open until it is ticked or dismissed; due-ness is worked out on read. */
@@ -130,6 +143,11 @@ export interface HumanStepFacts {
   readonly missingUploads?: readonly { readonly key: string; readonly fileName: string }[];
   /** Open rollout steps holding back sign-off (`openRolloutSteps`): a same with any is merged with Merge and continue. */
   readonly rolloutSteps?: number;
+  /**
+   * The repo paths of once steps' scripts that are on the glob's branch. Absent when the branch wasn't checked (no code host, or it
+   * couldn't answer): a once step is then due, since a person isn't held up by a check slop could not make.
+   */
+  readonly scriptsOnBranch?: ReadonlySet<string>;
 }
 
 /** The person looking: their email and role on the board. */
@@ -233,14 +251,24 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   return steps;
 };
 
+/** Whether a once step is due: it has no script in the repo, the glob is merged (so the script is on the base branch), the branch wasn't checked, or the script is on the branch. */
+const onceDue = (glob: Pick<Glob, 'pr' | 'status'>, script: HumanStepScript | null | undefined, onBranch: ReadonlySet<string> | undefined): boolean =>
+  script == null || !('path' in script) || isMerged(glob) || onBranch === undefined || onBranch.has(script.path);
+
 /**
  * What a stored step is for this glob. After the merge: due once the glob is merged, but not while it is still in Merging
- * (the code host may show the PR merged before slop has moved the glob on). After a deploy: due once `dueSince` is set.
+ * (the code host may show the PR merged before slop has moved the glob on). After a deploy: due once `dueSince` is set. Once:
+ * due as soon as its script is on the branch (see `onceDue`), merged or not.
  */
-export const stateOf = (glob: Pick<Glob, 'pr' | 'status'>, step: Pick<StoredHumanStep, 'state' | 'due' | 'dueSince'>): HumanStepState => {
+export const stateOf = (
+  glob: Pick<Glob, 'pr' | 'status'>,
+  step: Pick<StoredHumanStep, 'state' | 'due' | 'dueSince'> & Partial<Pick<StoredHumanStep, 'script'>>,
+  onBranch?: ReadonlySet<string>,
+): HumanStepState => {
   if (step.state === 'done') return 'done';
   if (step.state === 'dismissed') return 'dismissed';
   if (step.due === 'now') return 'due';
+  if (step.due === 'once') return onceDue(glob, step.script, onBranch) ? 'due' : 'pending';
   if (step.due === 'after_merge') return isMerged(glob) && glob.status !== 'merging' ? 'due' : 'pending';
   return step.dueSince !== null ? 'due' : 'pending';
 };
@@ -249,14 +277,14 @@ export const stateOf = (glob: Pick<Glob, 'pr' | 'status'>, step: Pick<StoredHuma
 export const defaultStepBlocks = (due: HumanStepDue): readonly HumanStepBlock[] =>
   due.startsWith('after_deploy:') ? [] : ['sign_off', 'dependants'];
 
-const fromStored = (glob: Glob, s: StoredHumanStep): HumanStep => ({
+const fromStored = (glob: Glob, s: StoredHumanStep, onBranch?: ReadonlySet<string>): HumanStep => ({
   id: s.id,
   kind: s.kind,
   title: s.title,
   detail: s.detail,
   who: s.who,
   due: s.due,
-  state: stateOf(glob, s),
+  state: stateOf(glob, s, onBranch),
   blocks: s.blocks,
   check: s.check,
   script: s.script,
@@ -282,7 +310,7 @@ export const humanSteps = (
   facts: HumanStepFacts = {},
   stored: readonly StoredHumanStep[] = [],
 ): HumanStep[] => {
-  const all = [...derivedSteps(glob, facts), ...stored.filter((s) => s.globId === glob.id).map((s) => fromStored(glob, s))];
+  const all = [...derivedSteps(glob, facts), ...stored.filter((s) => s.globId === glob.id).map((s) => fromStored(glob, s, facts.scriptsOnBranch))];
   return all
     .map((step, index) => ({ step, index }))
     .sort(
@@ -347,10 +375,10 @@ export const upcomingSteps = (steps: readonly Pick<HumanStep, 'kind' | 'state'>[
 };
 
 /** The compact form on board and glob views: enough for the card, the filters and the status line, without detail text. */
-export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'predicted' | 'action' | 'alternative'> &
+export type CompactHumanStep = Pick<HumanStep, 'id' | 'kind' | 'title' | 'state' | 'who' | 'due' | 'blocks' | 'predicted' | 'action' | 'alternative' | 'unknownEnvironment'> &
   Partial<Pick<HumanStep, 'doneBy' | 'doneAt' | 'dismissedReason'>>;
 
-export const compactStep = ({ id, kind, title, state, who, due, blocks, predicted, action, alternative, doneBy, doneAt, dismissedReason }: HumanStep): CompactHumanStep => ({
+export const compactStep = ({ id, kind, title, state, who, due, blocks, predicted, action, alternative, unknownEnvironment, doneBy, doneAt, dismissedReason }: HumanStep): CompactHumanStep => ({
   id,
   kind,
   title,
@@ -361,6 +389,7 @@ export const compactStep = ({ id, kind, title, state, who, due, blocks, predicte
   ...(predicted === undefined ? {} : { predicted }),
   ...(action === undefined ? {} : { action }),
   ...(alternative === undefined ? {} : { alternative }),
+  ...(unknownEnvironment === undefined ? {} : { unknownEnvironment }),
   // Only a dismissed step carries its closing facts here; a done step's are read from the full step.
   ...(state === 'dismissed' ? { doneBy, doneAt, dismissedReason: dismissedReason ?? null } : {}),
 });
@@ -369,6 +398,7 @@ export const compactStep = ({ id, kind, title, state, who, due, blocks, predicte
 export const dueText = (due: HumanStepDue): string => {
   if (due === 'now') return 'now';
   if (due === 'after_merge') return 'after the merge';
+  if (due === 'once') return 'once, when its script is on the branch';
   return `after the deploy to ${due.slice('after_deploy:'.length)}`;
 };
 

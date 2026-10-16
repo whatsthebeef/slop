@@ -198,6 +198,21 @@ describe('steps grouped by stage', () => {
     expect(screen.getAllByTestId('quiet-toggle').map((el) => el.textContent)).toEqual(['After the deploy to production: 1 step, not due yet ▸']);
   });
 
+  it('marks a due once step with a once marker in the needs-you block', () => {
+    showWith([step({ id: 'a', state: 'due', due: 'once' }), step({ id: 'b', state: 'due' })]);
+    const cards = screen.getAllByTestId('due-step');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.querySelector('[data-testid="step-once"]')?.textContent).toBe('once');
+    expect(cards[1]?.querySelector('[data-testid="step-once"]')).toBeNull();
+  });
+
+  it('flags a step whose environment the board no longer has, with Dismiss still on offer', async () => {
+    showWith([step({ id: 'a', state: 'pending', due: 'after_deploy:prod', unknownEnvironment: 'prod' })]);
+    await userEvent.click(screen.getAllByTestId('quiet-toggle')[0] as HTMLElement);
+    expect(screen.getByTestId('step-unknown-environment').textContent).toContain('no environment “prod”');
+    expect(screen.getByTestId('step-dismiss')).toBeTruthy();
+  });
+
   it('shows an empty due block while the glob is merging with an after-merge step pending', () => {
     showWith([step({ id: 'a', state: 'pending' })]);
     expect(screen.queryByTestId('due-steps')).toBeNull();

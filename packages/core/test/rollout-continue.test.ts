@@ -440,7 +440,7 @@ describe('through the service', () => {
       for (const email of [ADMIN, DEV, PO, 'outsider@example.com']) await tx.upsertUser({ email, name: email, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await boards.setMember(ADMIN, boardId, PO, 'po'));
   });
@@ -499,6 +499,104 @@ describe('through the service', () => {
     unwrap(await globs.completeHumanStep(DEV, g.id, step.id, null));
     const signedOff = await peek(g.id);
     expect((await globs.pickUp(DEV, g.id, signedOff.version, false)).ok).toBe(false);
+  });
+
+  describe('once steps (s15t237)', () => {
+    const mergedWithOnce = async () => {
+      const g = await readyGlob();
+      const once = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Grant the Lambda access', once: true, commands: ['aws iam put-role-policy'] }));
+      const rollout = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out the host stack' }));
+      const done = await update(g.id, { status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'abc1234' }, labels: { CR: 'required' } });
+      return { glob: done, once, rollout };
+    };
+
+    it('is stored as due once, with no environment, holding back sign-off and dependants like an after-merge step', async () => {
+      const { once } = await mergedWithOnce();
+      expect(once).toMatchObject({ due: 'once', dueSince: null, blocks: ['sign_off', 'dependants'], kind: 'rollout' });
+    });
+
+    it('stays done when a later step fails and the glob starts its next generation, while the failed step comes back open', async () => {
+      const { glob, once, rollout } = await mergedWithOnce();
+      unwrap(await globs.completeHumanStep(DEV, glob.id, once.id, null));
+      unwrap(await globs.failHumanStep(DEV, glob.id, rollout.id, 'Policy refused.', (await peek(glob.id)).version));
+      expect((await peek(glob.id)).generation).toBe(glob.generation + 1);
+      const steps = await stepsOf(glob.id);
+      expect(steps.find((s) => s.id === once.id)).toMatchObject({ state: 'done', doneBy: DEV });
+      expect(steps.find((s) => s.id === rollout.id)).toMatchObject({ state: 'open' });
+    });
+
+    it('is never reopened by its own failure: a done once step is refused the next generation', async () => {
+      const { glob, once } = await mergedWithOnce();
+      unwrap(await globs.completeHumanStep(DEV, glob.id, once.id, null));
+      const failed = await globs.failRolloutStep(DEV, glob.id, once.id, 'It broke.', (await peek(glob.id)).version);
+      expect(!failed.ok && failed.error.message).toContain('once');
+      expect((await peek(glob.id)).generation).toBe(glob.generation);
+      expect((await stepsOf(glob.id)).find((s) => s.id === once.id)?.state).toBe('done');
+    });
+
+    it('failing an open once step asks for a fix glob instead of starting a generation', async () => {
+      const { glob, once } = await mergedWithOnce();
+      unwrap(await globs.failHumanStep(DEV, glob.id, once.id, 'Access denied.', (await peek(glob.id)).version));
+      expect((await peek(glob.id)).generation).toBe(glob.generation);
+      expect((await stepsOf(glob.id)).find((s) => s.id === once.id)?.state).toBe('open');
+    });
+
+    it('is pending until its script path is on the glob branch, then due', async () => {
+      const g = await readyGlob();
+      unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Grant access', once: true, script: { path: 'scripts/rollout/x-grant.sh' } }));
+      const onBranch = new Set<string>();
+      const seen: (string | null)[] = [];
+      const withView = new GlobService({
+        store,
+        notifier: new RecordingNotifier(),
+        clock: { now: () => '2026-10-13T12:00:00.000Z' },
+        ids: { runId: () => `view-${++runs}` },
+        routines: { hasRoutine: () => Promise.resolve(true) },
+        codeView: {
+          read: (_board, ref, path) => {
+            seen.push(ref);
+            return Promise.resolve(onBranch.has(path) ? ({ path } as never) : null);
+          },
+        },
+      });
+      const stateNow = async () => unwrap(await withView.get(DEV, g.id)).humanSteps.find((s) => s.title === 'Grant access')?.state;
+      expect(await stateNow()).toBe('pending');
+      onBranch.add('scripts/rollout/x-grant.sh');
+      expect(await stateNow()).toBe('due');
+      expect(seen.every((ref) => ref === g.id)).toBe(true);
+    });
+
+    it('refuses once with another due', async () => {
+      const g = await readyGlob();
+      const refused = await globs.addHumanStep(DEV, g.id, null, { title: 'x', once: true, due: 'after_deploy:prod' });
+      expect(!refused.ok && refused.error.message).toContain('once');
+    });
+
+    it('is due before the merge when it has no script, and still holds back sign-off', async () => {
+      const g = await readyGlob();
+      unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Grant access', due: 'once' }));
+      const view = unwrap(await globs.get(DEV, g.id));
+      expect(view.humanSteps.find((s) => s.title === 'Grant access')).toMatchObject({ due: 'once', state: 'due' });
+      expect(view.rolloutSteps).toBe(1);
+    });
+  });
+
+  it('refuses a step for an environment the board does not define, naming the ones it has', async () => {
+    const g = await readyGlob();
+    const refused = await globs.addHumanStep(DEV, g.id, null, { title: 'Later', due: 'after_deploy:eu' });
+    expect(!refused.ok && refused.error.message).toBe("Unknown environment eu: this board's environments are staging, production, prod");
+    expect(await stepsOf(g.id)).toHaveLength(0);
+  });
+
+  it('flags an open step whose environment the board no longer has in the glob view', async () => {
+    const g = await readyGlob();
+    const step = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Later', due: 'after_deploy:prod' }));
+    await store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      if (board !== null) await tx.updateBoard({ ...board, environments: [{ name: 'staging', allowBranchDeploy: false }] }, board.version);
+    });
+    const view = unwrap(await globs.get(DEV, g.id));
+    expect(view.humanSteps.find((s) => s.id === step.id)).toMatchObject({ unknownEnvironment: 'prod', state: 'pending' });
   });
 
   describe('failHumanStep routes a failed step', () => {
