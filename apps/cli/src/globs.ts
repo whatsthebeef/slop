@@ -11,7 +11,7 @@ export interface GlobDeps {
   readonly git: Git;
   /** The enclosing git checkout's root, or undefined outside one. */
   readonly root: string | undefined;
-  readonly settings: Settings;
+  settings: Settings;
   readonly stdout: (text: string) => void;
   readonly log: (message: string) => void;
   /** Milliseconds since the epoch. */
@@ -306,8 +306,17 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
   const environment = values.get('--env');
 
   const glob = await getGlob(deps, id);
-  if (MERGED_STATUSES.has(glob.status))
+  // A merged glob is refused by slop with what is left (its steps, labels) and how to follow up: show that, with its links made full.
+  if (MERGED_STATUSES.has(glob.status)) {
+    try {
+      await deps.client.call('pick_up', { id, version: glob.version });
+    } catch (e) {
+      const base = deps.settings.SLOP_URL?.replace(/\/+$/, '');
+      if (e instanceof SlopError && base !== undefined) throw new SlopError(e.message.replace(/(^|\s)(\/globs\/)/g, `$1${base}$2`));
+      throw e;
+    }
     throw new SlopError(`${id} is already merged (${glob.status})`);
+  }
   const run = liveRun(glob);
   if (run !== null && !takeOver) {
     if (run.state === 'active') {
