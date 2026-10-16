@@ -610,6 +610,13 @@
       "when": 1792176456111,
       "tag": "0086_drop_default_project",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1792176466111,
+      "tag": "0087_deploy_build_logs",
+      "breakpoints": true
     }
   ]
 }
