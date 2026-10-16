@@ -134,17 +134,23 @@ export const readCancelledChecks = async (request: Request, repo: Repo, sha: str
 
 /**
  * Re-runs the failed jobs of every workflow run on `sha` that failed, unless one of them is already a re-run
- * (`run_attempt` above 1): a commit is re-run once, whatever happens to the event that asked. The App needs the
+ * (`run_attempt` above 1): a commit is re-run once, whatever happens to the event that asked. `force` is a person's Retry
+ * checks: it re-runs again whatever an earlier re-run did. The App needs the
  * Actions permission (write); without it GitHub answers 403/404 and nothing is re-run.
  */
-export const rerunFailedJobs = async (request: Request, repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'> => {
+export const rerunFailedJobs = async (
+  request: Request,
+  repo: Repo,
+  sha: string,
+  opts: { force?: boolean } = {},
+): Promise<'rerun' | 'already_rerun' | 'unavailable'> => {
   const { data } = await request('GET /repos/{owner}/{repo}/actions/runs', { owner: repo.owner, repo: repo.name, head_sha: sha, per_page: 100 });
   const runs = (isRecord(data) && Array.isArray(data.workflow_runs) ? data.workflow_runs : []).flatMap((r: unknown) =>
     isRecord(r) && typeof r.id === 'number' && typeof r.conclusion === 'string' && FAILED_CONCLUSIONS.has(r.conclusion)
       ? [{ id: r.id, attempt: typeof r.run_attempt === 'number' ? r.run_attempt : 1 }]
       : [],
   );
-  if (runs.some((r) => r.attempt > 1)) return 'already_rerun';
+  if (opts.force !== true && runs.some((r) => r.attempt > 1)) return 'already_rerun';
   let asked = false;
   for (const run of runs) {
     try {

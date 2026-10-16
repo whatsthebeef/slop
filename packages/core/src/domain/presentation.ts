@@ -134,6 +134,7 @@ const IN_PROGRESS: Readonly<Partial<Record<Action, string>>> = {
   merge_anyway: 'merging',
   merge_continue: 'merging',
   retry_merge: 'merging',
+  retry_checks: 'retrying checks',
   mark_ready: 'marking ready',
   prepare_action: 'preparing',
 };
