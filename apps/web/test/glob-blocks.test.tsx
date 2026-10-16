@@ -95,7 +95,7 @@ const everything = (patch: Partial<GlobView> = {}) =>
     status: 'pr_open',
     list: 'doing',
     pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
-    implementer: 'dev@example.com',
+    implementer: null,
     allowedActions: ['pick_up'],
     conflict: { base: 'develop', files, since: 's15f169', at: NOW },
     headChecks: {
@@ -224,7 +224,7 @@ describe('the blocks above the action button', () => {
   });
 
   it('shows the conflict example for a non-main base, in plain text', () => {
-    renderGlob(everything());
+    renderGlob(everything({ implementer: 'dev@example.com' }));
     const block = screen.getByTestId('conflict-block');
     expect(block.textContent.replace(/\s+/g, ' ')).toMatchInlineSnapshot(
       `"Conflicts with developSince s15f169 merged, both sides changed 2 files.Files changed on both sides (2)apps/web/src/a.tsapps/web/src/b.tsLet your Claude session merge develop: it resolves additive conflicts and asks you about the rest.sstor --glob s1t1CopyResolve by hand instead (advanced)git fetch origin develop && git checkout s1t1 && git merge origin/develop # resolve the conflicts, commit git push origin s1t1 # mergetool only, no Claude: sstor --glob s1t1 --resolve"`,
@@ -234,7 +234,7 @@ describe('the blocks above the action button', () => {
   });
 
   it('shows the conflict fix line with the take-over command and no extra button besides Copy', () => {
-    renderGlob(everything());
+    renderGlob(everything({ implementer: 'dev@example.com' }));
     const block = screen.getByTestId('conflict-block');
     expect(within(block).getByTestId('conflict-command').textContent).toBe('sstor --glob s1t1');
     expect(
@@ -313,7 +313,7 @@ describe('the blocks above the action button', () => {
       expect(screen.queryByTestId('problem-block')).toBeNull();
     });
 
-    it('shows a red block with a dismiss control for failed checks on the glob\'s own change', () => {
+    it('shows a red block with no dismiss control for failed checks on the glob\'s own change', () => {
       renderGlob(
         view({
           ...calm,
@@ -325,10 +325,23 @@ describe('the blocks above the action button', () => {
       );
       const block = screen.getByTestId('problem-block');
       expect(block.getAttribute('data-block')).toBe('problem');
-      expect(within(block).getByTestId('dismiss-message')).not.toBeNull();
+      expect(within(block).queryByTestId('dismiss-message')).toBeNull();
     });
 
-    it('shows a red block with a dismiss control for a failed run', () => {
+    it.each(['pending', 'passed'] as const)('keeps the block hidden when the new head\'s checks are %s', (state) => {
+      renderGlob(
+        view({
+          ...calm,
+          status: 'reviewing',
+          list: 'reviewing',
+          pr: { number: 7, state: 'ready', headSha: 'fedcba7654321' },
+          headChecks: { sha: 'fedcba7654321', state },
+        }),
+      );
+      expect(screen.queryByTestId('problem-block')).toBeNull();
+    });
+
+    it('shows a red block with no dismiss control for a failed run', () => {
       renderGlob(
         view({
           ...calm,
@@ -338,7 +351,7 @@ describe('the blocks above the action button', () => {
         }),
       );
       const block = screen.getByTestId('problem-block');
-      expect(within(block).getByTestId('dismiss-message')).not.toBeNull();
+      expect(within(block).queryByTestId('dismiss-message')).toBeNull();
     });
   });
 });
