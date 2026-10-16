@@ -1,7 +1,8 @@
 # Slop checks for slop's own repo (from catalog/scripts/checks.yml): lint, type check and tests on
 # the head of every ready PR (sub, same or super), including the head after slop updates the
-# branch from main, and on every merge queue entry (`merge_group`). Make the `checks` check required on main so
-# nothing merges without it.
+# branch from main, and on every merge queue entry (`merge_group`). A PR runs only the workspaces it affects, in
+# parallel jobs; pushes to main and merge queue entries run everything. The final `checks` job is the required check:
+# make it required on main so nothing merges without it.
 name: checks
 
 on:
@@ -25,8 +26,144 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  # Decides what to run. A PR runs only the workspaces it changes plus their dependents (`pnpm --filter "...[origin/<base>]"`);
+  # a push to the base branch, a merge_group entry, or a change to a root file (package.json, the lockfile, base configs, this
+  # workflow) runs everything. A change outside the workspaces runs the tests that read
+  # repo files (core, server, cli, infra), plus the catalog shell tests when it is under catalog/.
+  changes:
     if: ${{ github.event_name == 'push' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      lint: ${{ steps.plan.outputs.lint }}
+      lint_paths: ${{ steps.plan.outputs.lint_paths }}
+      typecheck: ${{ steps.plan.outputs.typecheck }}
+      core: ${{ steps.plan.outputs.core }}
+      server: ${{ steps.plan.outputs.server }}
+      web: ${{ steps.plan.outputs.web }}
+      cli: ${{ steps.plan.outputs.cli }}
+      infra: ${{ steps.plan.outputs.infra }}
+      catalog: ${{ steps.plan.outputs.catalog }}
+      full: ${{ steps.plan.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: pnpm/action-setup@v4
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+          all() { for k in lint typecheck core server web cli infra catalog; do out "$k" true; done; out full true; }
+          if [ "$EVENT" != pull_request ]; then all; exit 0; fi
+          git fetch --no-tags origin "$BASE"
+          changed=$(git diff --name-only "origin/$BASE...HEAD")
+          echo "$changed"
+          # Here-strings, not `echo | grep`: with pipefail, grep -q exiting early on a big diff kills echo with SIGPIPE.
+          if grep -Eq '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig[^/]*\.json|eslint\.config\.js|vitest[^/]*|\.github/)' <<<"$changed"; then all; exit 0; fi
+          out full false
+          # `!{.}` leaves out the root workspace, which every file outside the packages belongs to (its scripts recurse).
+          affected=$(pnpm ls -r --depth -1 --parseable --filter "...[origin/$BASE]" --filter '!{.}' | sed "s|^$PWD/||")
+          echo "affected: $affected"
+          has() { if grep -qx "$1" <<<"$affected"; then echo true; else echo false; fi; }
+          catalog=false
+          if grep -q '^catalog/' <<<"$changed"; then catalog=true; fi
+          core=$(has packages/core); server=$(has apps/server); cli=$(has apps/cli); infra=$(has infra)
+          # Files outside the workspaces (catalog, .claude, scripts, docs, integrations, skills, e2e, Dockerfile) are read by
+          # core, server, cli and infra tests; apps/web's tests only read its own sources.
+          if grep -Eqv '^(apps|packages|infra)/' <<<"$changed"; then core=true; server=true; cli=true; infra=true; fi
+          out core "$core"; out server "$server"; out web "$(has apps/web)"; out cli "$cli"; out infra "$infra"
+          out catalog "$catalog"
+          # Lint the affected workspaces whole (type-aware rules can break in an unchanged dependent), plus the changed
+          # lint-able files outside the workspaces that still exist. One path per line.
+          lint_paths=$affected
+          outside=$(grep -Ev '^(apps|packages|infra)/' <<<"$changed" | grep -E '\.(ts|tsx|js|mjs|cjs|mts|cts)$' || true)
+          while IFS= read -r f; do
+            if [ -n "$f" ] && [ -f "$f" ]; then lint_paths+=$'\n'"$f"; fi
+          done <<<"$outside"
+          lint_paths=$(sed '/^$/d' <<<"$lint_paths")
+          if [ -n "$lint_paths" ]; then
+            out lint true
+            { echo 'lint_paths<<LINT_PATHS_EOF'; echo "$lint_paths"; echo 'LINT_PATHS_EOF'; } >> "$GITHUB_OUTPUT"
+          else
+            out lint false
+          fi
+          if [ -n "$affected" ]; then out typecheck true; else out typecheck false; fi
+
+  lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.lint == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # No history needed: the paths come from the `changes` job.
+      - uses: actions/checkout@v4
+      # The pnpm version comes from package.json's packageManager.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        env:
+          FULL: ${{ needs.changes.outputs.full }}
+          LINT_PATHS: ${{ needs.changes.outputs.lint_paths }}
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = true ]; then exec timeout 12m pnpm lint; fi
+          mapfile -t paths <<<"$LINT_PATHS"
+          printf '%s\n' "${paths[@]}"
+          timeout 12m pnpm exec eslint --no-warn-ignored "${paths[@]}"
+
+  typecheck:
+    needs: changes
+    if: ${{ needs.changes.outputs.typecheck == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Type check
+        env:
+          FULL: ${{ needs.changes.outputs.full }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "$FULL" = true ]; then exec timeout 12m pnpm typecheck; fi
+          git fetch --no-tags origin "$BASE"
+          timeout 12m pnpm --filter "...[origin/$BASE]" --filter '!{.}' typecheck
+
+  test-core:
+    needs: changes
+    if: ${{ needs.changes.outputs.core == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: timeout 12m pnpm --filter ./packages/core test
+
+  test-server:
+    needs: changes
+    if: ${{ needs.changes.outputs.server == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -46,22 +183,48 @@ jobs:
           --health-cmd "pg_isready -U slop" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      # The pnpm version comes from package.json's packageManager.
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - name: Install
-        run: pnpm install --frozen-lockfile
-      - name: Lint
-        run: pnpm lint
-      - name: Type check
-        run: pnpm typecheck
-      - name: Test
-        run: pnpm test
-      # Shell tests of the catalog scripts. shellcheck and jq are on ubuntu-latest; install them if a runner image lacks them,
-      # so the tests' shellcheck checks run instead of skipping.
+      - run: pnpm install --frozen-lockfile
+      - run: timeout 17m pnpm --filter ./apps/server test
+
+  test-other:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' || needs.changes.outputs.cli == 'true' || needs.changes.outputs.infra == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Test web, cli and infra
+        env:
+          WEB: ${{ needs.changes.outputs.web }}
+          CLI: ${{ needs.changes.outputs.cli }}
+          INFRA: ${{ needs.changes.outputs.infra }}
+        run: |
+          args=()
+          [ "$WEB" = true ] && args+=(--filter ./apps/web)
+          [ "$CLI" = true ] && args+=(--filter ./apps/cli)
+          [ "$INFRA" = true ] && args+=(--filter ./infra)
+          timeout 12m pnpm "${args[@]}" test
+
+  # Shell tests of the catalog scripts. shellcheck and jq are on ubuntu-latest; install them if a runner image lacks them,
+  # so the tests' shellcheck checks run instead of skipping.
+  test-catalog:
+    needs: changes
+    if: ${{ needs.changes.outputs.catalog == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
       - name: Catalog shell tests
         run: |
           for t in shellcheck jq; do
@@ -73,3 +236,31 @@ jobs:
             bash "$t" || status=1
           done < <(find catalog/scripts -name '*.test.sh' -print0 | sort -z)
           exit $status
+
+  # The one required check (the "slop" ruleset and slop's merge logic read the `checks` context). It runs even when a job it
+  # needs failed, and fails unless every job succeeded or was skipped as unaffected. A draft PR skips everything, as before.
+  # A cancelled job with none failed (a newer push, a cancelled run) cancels this run too, so `checks` concludes `cancelled`
+  # as the single job did: slop reads that as pending and waits for (or asks for) the run that replaces it. Force-cancel,
+  # because a plain cancel leaves this `always()` job running to a failure. The jobs' commands run under `timeout`, shorter
+  # than their `timeout-minutes`, so a hang concludes `failure` rather than `cancelled` (which would cancel and re-run forever).
+  checks:
+    needs: [changes, lint, typecheck, test-core, test-server, test-other, test-catalog]
+    if: ${{ always() && (github.event_name == 'push' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Require every job to have passed or been skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$RESULTS"
+          case " $RESULTS " in *" failure "*) exit 1 ;; esac
+          case " $RESULTS " in *" cancelled "*)
+            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/force-cancel" || echo "::warning::force-cancel refused; failing instead"
+            # The cancel stops this job; if it didn't, a cancelled need is still not a pass.
+            sleep 60
+            exit 1 ;;
+          esac
