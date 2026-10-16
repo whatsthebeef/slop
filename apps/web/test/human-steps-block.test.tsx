@@ -7,7 +7,7 @@ import { HumanSteps } from '../src/components/human-steps';
 import { viewSections } from '../src/components/glob-view/sections';
 import type { GlobView, ListedHumanStep } from '../src/lib/api';
 import { hasDueSteps } from '../src/lib/human-steps';
-import { groupText, stageGroups } from '../src/lib/rollout-stages';
+import { groupText, stageGroups } from '@slop/core';
 import { glob as coreGlob } from '../../../packages/core/test/fixtures';
 
 afterEach(() => {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobView } from '../src/lib/api';
-import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts, waitingOnOwn } from '../src/lib/card-rows';
-import { humanSteps as deriveHumanSteps, signOffText, whoseMove } from '@slop/core';
+import { cornerStatus, hasBlocker, plainText, specifics, waitingOnCounts, waitingOnOwn, humanSteps as deriveHumanSteps, signOffText, whoseMove } from '@slop/core';
 import type { StoredHumanStep } from '@slop/core';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
@@ -121,7 +120,7 @@ describe('cornerStatus', () => {
     const status = at(view({ status: 'planning', provisioning: 'failed' }));
     expect(status).toMatchObject({ kind: 'stalled', text: 'provisioning failed', icon: 'alert' });
     expect(status?.tip).toContain('slop could not create the branch and draft PR');
-    expect(status?.click).toEqual({ kind: 'section', target: { section: 'actions' } });
+    expect(status?.click).toEqual({ section: 'actions' });
   });
 
   it('puts standby in a stall\'s tooltip, not a second status', () => {
@@ -142,13 +141,13 @@ describe('cornerStatus', () => {
     const status = at(prOpen({ allowedActions: ['merge'] }));
     expect(status).toMatchObject({ kind: 'ready', icon: 'human' });
     expect(status?.text).not.toMatch(/your turn/i);
-    expect(status?.click?.kind).toBe('section');
+    expect(status?.click).toEqual({ section: 'actions' });
   });
 
   it('opens the glob view for a ready step that needs input, or when something blocks', () => {
     const noMerge = at(prOpen({ allowedActions: [] }));
     expect(noMerge).toMatchObject({ kind: 'ready' });
-    expect(noMerge?.click?.kind).toBe('section');
+    expect(noMerge?.click).toEqual({ section: 'actions' });
   });
 
   it('says the other problems in a few words, with the detail in the tooltip', () => {
@@ -360,15 +359,15 @@ describe('a startable same in Planning', () => {
 
 describe('"N waiting on this" in the corner status', () => {
   it('is the status of a glob with nothing else to say, opening its related globs', () => {
-    const status = cornerStatus(view({ status: 'planning' }), NOW, undefined, undefined, 2);
+    const status = cornerStatus(view({ status: 'planning' }), NOW, undefined, 2);
     expect(status).toMatchObject({ kind: 'waiting-on-this', icon: 'hourglass', text: '2 waiting on this' });
-    expect(status?.click).toMatchObject({ kind: 'section' });
+    expect(status?.click).toEqual({ section: 'related' });
     expect(status?.tip).toContain('2 in Planning wait for this glob to merge.');
     expect(cornerStatus(view({ status: 'planning' }), NOW)).toBeNull();
   });
 
   it('goes in the tooltip when a higher-priority status wins', () => {
-    const status = cornerStatus(view({ status: 'in_progress', ...live('active') }), NOW, undefined, undefined, 2);
+    const status = cornerStatus(view({ status: 'in_progress', ...live('active') }), NOW, undefined, 2);
     expect(status).toMatchObject({ kind: 'machine', text: 'implementing' });
     expect(status?.tip).toContain('2 in Planning wait for this glob to merge.');
   });
@@ -397,7 +396,7 @@ describe('open questions on the card', () => {
     const status = cornerStatus(held, NOW);
     expect(status).toMatchObject({ kind: 'question', icon: 'human', text: 'question' });
     expect(status?.tip).toContain('Is prod in scope?');
-    expect(status?.click).toEqual({ kind: 'section', target: { section: 'questions' } });
+    expect(status?.click).toEqual({ section: 'questions' });
     expect(hasBlocker(held, NOW)).toBe(true);
   });
 

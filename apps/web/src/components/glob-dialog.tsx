@@ -4,7 +4,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AddRelationInput, AnswerQuestionInput, BoardView, DecideInput, GlobChanges, GlobView } from '@/lib/api';
 import { findSection, scrollWhenReady } from '@/lib/glob-scroll';
-import { hasDueSteps } from '@/lib/human-steps';
+import { hasDueSteps } from '@slop/core';
 import type { GlobSection } from '@/lib/glob-section';
 import { OPEN_OVERLAY, escapeGoesBack } from '@/lib/glob-back';
 import type { ArtifactRef } from './artifacts';
@@ -53,7 +53,6 @@ export const GlobDetail = ({
   onAddRelation,
   onAnswerQuestion,
   onDismissQuestion,
-  onDismiss,
   onDecide,
   onDelete,
 }: {
@@ -100,27 +99,29 @@ export const GlobDetail = ({
   onAnswerQuestion: (questionId: string, input: AnswerQuestionInput) => Promise<boolean>;
   /** The Questions section's Dismiss (go ahead as is, optional note); resolves false when it failed. */
   onDismissQuestion: (questionId: string, note?: string) => Promise<boolean>;
-  /** "Got it" / ×: dismisses a status message for the viewer (`dismiss` false is Show again); resolves false when it failed. */
-  onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Decision globs: the outcome chosen in Doing; resolves false when it failed. */
   onDecide: (input: DecideInput) => Promise<boolean>;
   onDelete: () => Promise<void>;
 }) => {
+  // Whether an action or save is running: the actions and the decide flow both read it.
+  const [running, setRunning] = useState(false);
+  const decide = useDecideFlow({ board, glob, busy: running, onDecide });
   const actionState = useGlobActions({
     board,
     glob,
     onAction,
     onUpdate,
-    onDismiss,
     onCompleteStep,
+    running,
+    setRunning,
+    learningOpen: decide === null || decide.learning === null || decide.learning.status === 'open',
     ...(email === undefined ? {} : { email }),
   });
-  const { decision, human, busy, disabled } = actionState;
-  const decide = useDecideFlow({ board, glob, busy, onDecide });
+  const { decision, human, busy } = actionState;
   // A learning has its own, shorter view (see LEARNING_VIEW_SECTIONS).
   const attributes = decisionOf(glob);
   const learning = attributes !== null && isLearning(attributes);
-  const nowState = useNowState(glob, human, disabled, actionState);
+  const nowState = useNowState(glob, human, actionState);
   const edits = useGlobEdits(glob.id);
   const [artifact, setArtifact] = useState<ArtifactRef | null>(initialArtifact);
   useEffect(() => setArtifact(initialArtifact), [glob.id, initialArtifact]);

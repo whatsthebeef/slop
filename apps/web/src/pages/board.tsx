@@ -1,5 +1,5 @@
-import { LISTS, byListSinceNewest, bySignedOffNewest, decisionOf, latestSignedOff } from '@slop/core';
-import type { Action, HumanStepViewer, LabelCommand, LabelName, List } from '@slop/core';
+import { LISTS, PENDING_TIMEOUT_MS, actionLabel, byListSinceNewest, bySignedOffNewest, decisionOf, haltedBy, latestSignedOff, waitingOnCounts } from '@slop/core';
+import type { Action, HumanStepViewer, List, PendingAction } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -9,21 +9,18 @@ import { Link, useLocation, useNavigate, useOutletContext, useParams, useSearchP
 import { FILTER_TEXT_ID, FILTER_TOGGLE_ID, FilterPane, FilterToggle, useBoardFilters } from '@/components/board-filter-pane';
 import { CreateGlobDialog } from '@/components/create-glob';
 import { GlobCard } from '@/components/glob-card';
-import type { CardMove } from '@/components/glob-card';
 import type { BoardShellContext } from '@/components/board-shell';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ACTION_PATHS, api, isTransient, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
-import { actionLabel, haltedBy } from '@/lib/action-presentation';
-import { cardMoves } from '@/lib/card-moves';
+import { cardMoveOf, clickOf, presentOf } from '@/lib/present';
+import type { CardMove } from '@/lib/present';
 import { groupNames } from '@/lib/group-names';
 import { groupPath } from '@/lib/group-page';
-import { hasBlocker, waitingOnCounts } from '@/lib/card-rows';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
-import { mergeOutcomeText, opensGlobView, runCardAction } from '@/lib/card-pending';
-import type { CardPending } from '@/lib/card-pending';
+import { mergeOutcomeText, opensGlobView, outcomeRecorded } from '@/lib/click-outcome';
 import { matchesFilters } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
 import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
@@ -33,7 +30,7 @@ import { LIST_TITLES } from '@/lib/list-titles';
 import { listScrollLeft, visibleListIndex } from '@/lib/list-snap';
 import { cn } from '@/lib/utils';
 import { useCurrentPage, usePageContext } from '@/lib/page-context';
-import { deploysKey, globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
+import { globsKey, signedOffCountKey, useLiveBoard } from '@/lib/live';
 import type { LiveState } from '@/lib/live';
 import { useSstorCopy } from '@/components/sstor-notice';
 import { useToast } from '@/toast';
@@ -41,12 +38,15 @@ import { useToast } from '@/toast';
 type Direction = 'left' | 'right';
 
 /**
- * The moves a glob can make from its card (`cardMoves`: the one common action, or Start and Pick up for a same; Fix conflict
- * in place outside Planning), and while anything blocks it only the in-place Fix conflict. The same rule hides the card's
- * buttons, so ← → and Enter never preview a move without a button.
+ * The move a glob can make from its card: its one primary button (`presentGlob`'s `cardPrimary`: Pick up, Start, Merge or Fix
+ * conflict), with where it lands. The card's button, ← → and Enter all read this, so none previews a move without a button.
  */
-const movesFor = (glob: GlobView, viewer?: HumanStepViewer): { move: CardMove; target: List }[] =>
-  hasBlocker(glob, new Date().toISOString(), viewer) ? cardMoves(glob, viewer).filter((m) => m.move.direction === 'none') : cardMoves(glob, viewer);
+const moveFor = (glob: GlobView, viewer?: HumanStepViewer, base?: string): { move: CardMove; target: List } | null => {
+  const primary = presentOf(glob, { ...(viewer === undefined ? {} : { viewer }), ...(base === undefined ? {} : { base }) }).cardPrimary;
+  if (primary === null) return null;
+  const move = cardMoveOf(primary);
+  return { move, target: move.direction === 'none' ? glob.list : 'doing' };
+};
 
 /** A previewed move: its ghost piece shows in the target list where the card would land. */
 interface Preview {
@@ -148,9 +148,6 @@ const Unavailable = ({ boardId, error }: { boardId: number; error: unknown }) =>
     </p>
   );
 };
-
-/** How often the board re-reads deploy state while a deploy is in progress (a safety net for missed hints). */
-const DEPLOY_POLL_MS = 15_000;
 
 /** How long a first connection may take before the board says it isn't live. */
 const CONNECT_GRACE_MS = 3000;
@@ -270,17 +267,6 @@ export const BoardPage = () => {
     if (linked !== null) void navigate(globPath(boardId, linked) + linkedTarget, { replace: true });
   }, [linked, linkedTarget, boardId, navigate]);
   const openGlob = (id: string, target: GlobTarget = {}) => void navigate(globPath(boardId, id, target));
-  // Deploy state (branch deploys and ATF results) lives beside the globs; read it for the globs on the board.
-  const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
-  const deployState = useQuery({
-    queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
-    queryFn: () => api.boardDeploys(boardId, boardGlobIds),
-    enabled: boardGlobIds.length > 0,
-    // Hints normally refresh it; while something is deploying, also check now and then.
-    refetchInterval: (query) =>
-      Object.values(query.state.data?.indicators ?? {}).some((i) => i.state === 'deploying') ? DEPLOY_POLL_MS : false,
-  });
-
   // The status bar's counts include this board; refresh them when its globs change, at most every
   // few seconds (a burst of live updates shouldn't refetch every board's counts each time), with a
   // trailing refresh so the last change in a burst still shows. The first load needs none: the
@@ -310,32 +296,49 @@ export const BoardPage = () => {
   const store = (glob: GlobView) =>
     client.setQueryData<GlobView[]>(globsKey(glob.boardId), (list) => withGlob(list, glob, glob.boardId));
 
-  /** Shows the error; on a version conflict, takes the current glob so the next click works. */
-  const fail = (error: unknown) => {
-    if (error instanceof RequestError) {
-      if (error.body.current !== undefined) {
-        void api.glob(error.body.current.id).then(store);
-        toast(`${error.body.current.id} changed meanwhile; it has been refreshed.`);
-        return;
-      }
-      toast(error.body.message);
+  /**
+   * Handles a failed request. A version conflict takes the current glob. A click the machine refused is stored on the glob as its
+   * last outcome, which the card and the glob view show, so the glob is reloaded and only toasted when nothing was stored (the
+   * refusal bumps its version). Anything else (the network, the server) is toasted.
+   */
+  const fail = (error: unknown, clicked?: { glob: GlobView; action: Action }) => {
+    if (!(error instanceof RequestError)) {
+      toast('Something went wrong');
       return;
     }
-    toast('Something went wrong');
+    if (error.body.current !== undefined) {
+      void api.glob(error.body.current.id).then(store);
+      toast(`${error.body.current.id} changed meanwhile; it has been refreshed.`);
+      return;
+    }
+    const message = error.body.message;
+    if (clicked === undefined) {
+      toast(message);
+      return;
+    }
+    api.glob(clicked.glob.id).then(
+      (fresh) => {
+        store(fresh);
+        if (!outcomeRecorded(fresh, clicked.glob, clicked.action)) toast(message);
+      },
+      () => toast(message),
+    );
   };
 
   const copyCommand = useSstorCopy();
   const inFlight = useRef(new Set<string>());
-  const [pending, setPending] = useState<CardPending>({});
+  // The clicks this client has sent whose result the glob does not carry yet: the card shows them in progress at once.
+  const [clicks, setClicks] = useState<Readonly<Record<string, PendingAction>>>({});
+  const setClick = (id: string, click: PendingAction | null) =>
+    setClicks((p) => (click === null ? Object.fromEntries(Object.entries(p).filter(([k]) => k !== id)) : { ...p, [id]: click }));
   const mutation = useMutation({
     mutationFn: (work: () => Promise<GlobView | null>) => work(),
     onSuccess: (glob) => {
       if (glob !== null) store(glob);
     },
-    onError: fail,
   });
 
-  /** Runs an action; false when it failed (the failure is already shown). */
+  /** Runs an action; false when it failed (the failure is on the glob, or toasted). */
   const act = async (glob: GlobView, action: Action): Promise<boolean> => {
     const path = ACTION_PATHS[action];
     if (path === null) return false;
@@ -348,33 +351,30 @@ export const BoardPage = () => {
         await finish();
         return true;
       },
-      () => false,
+      (error: unknown) => {
+        fail(error, { glob, action });
+        return false;
+      },
     );
   };
-
-  const reviewLabel = (glob: GlobView) => (label: LabelName, command: LabelCommand) =>
-    mutation.mutateAsync(() => api.reviewLabel(glob.id, label, command, glob.version)).then(
-      () => true,
-      () => false,
-    );
 
   /** Drops the card: the action runs and, once the board updates, the card steps into place. */
   const commit = async (glob: GlobView, action: Action) => {
     setPreview(null);
     // One action in flight per glob: a repeat click, drop or key while one is pending does nothing.
     if (inFlight.current.has(glob.id)) return;
+    inFlight.current.add(glob.id);
     motion.markLocal(glob.id);
-    const done = await runCardAction(
-      inFlight.current,
-      glob.id,
-      action,
-      () => act(glob, action),
-      (id, pendingAction) =>
-        setPending((p) => (pendingAction === null ? Object.fromEntries(Object.entries(p).filter(([k]) => k !== id)) : { ...p, [id]: pendingAction })),
-      () => toast(`${glob.id} is still working; refresh if it doesn't move.`),
-    );
+    // The card shows the click in progress at once, and the glob's own pending takes over once the response is stored.
+    setClick(glob.id, clickOf(action, viewer?.email ?? ''));
+    const timer = setTimeout(() => setClick(glob.id, null), PENDING_TIMEOUT_MS);
+    const done = await act(glob, action).finally(() => {
+      clearTimeout(timer);
+      inFlight.current.delete(glob.id);
+      setClick(glob.id, null);
+    });
     // The card has already stepped into place (the mutation stored the returned glob); a failed action opens nothing.
-    if (done === true && opensGlobView(action)) openGlob(glob.id);
+    if (done && opensGlobView(action)) openGlob(glob.id);
     // If nothing moved (the action failed), a later move made elsewhere mustn't look like ours.
     setTimeout(() => motion.forgetLocal(glob.id), 1000);
   };
@@ -387,17 +387,15 @@ export const BoardPage = () => {
     else void commit(glob, move.action);
   };
 
-  /** ← / → on a focused card: cycle its moves that way, or bump the wall when there are none. */
+  /** ← / → on a focused card: preview its move that way, or bump the wall when there is none. */
   const arrow = (glob: GlobView, direction: Direction) => {
-    const options = movesFor(glob, viewer).filter((m) => m.move.direction === direction);
-    if (options.length === 0) {
+    const option = moveFor(glob, viewer, board.data?.baseBranch);
+    if (option === null || option.move.direction !== direction) {
       setBumps((b) => ({ ...b, [glob.id]: direction }));
       setTimeout(() => setBumps((b) => Object.fromEntries(Object.entries(b).filter(([id]) => id !== glob.id))), 210);
       return;
     }
-    const current = preview?.glob.id === glob.id ? options.findIndex((m) => m.move.action === preview.move.action) : -1;
-    const next = options[(current + 1) % options.length] ?? options[0];
-    if (next !== undefined) setPreview({ glob, ...next });
+    setPreview({ glob, ...option });
   };
 
   if (board.data === undefined || globs.data === undefined) {
@@ -485,7 +483,7 @@ export const BoardPage = () => {
             return (
               <Column key={list} list={list} count={items.length} total={total} boardId={boardId} ghost={preview?.target === list ? preview : null} filtered={filtering > 0}>
                 {items.map((glob) => {
-                  const moves = movesFor(glob, viewer);
+                  const option = moveFor(glob, viewer, board.data.baseBranch);
                   return (
                     <GlobCard
                       key={glob.id}
@@ -496,26 +494,20 @@ export const BoardPage = () => {
                         setFilters({ ...filters, group: name });
                         setFilterOpen(true);
                       }}
-                      onReviewLabel={reviewLabel(glob)}
-                      moves={moves.map((m) => m.move)}
-                      pending={pending[glob.id]}
+                      pending={clicks[glob.id] ?? null}
                       previewing={preview?.glob.id === glob.id ? preview.move.action : null}
                       onPreview={(move) => {
-                        const target = moves.find((m) => m.move.action === move?.action)?.target;
-                        setPreview(move === null || target === undefined ? null : { glob, move, target });
+                        setPreview(move === null || option === null || option.move.action !== move.action ? null : { glob, ...option });
                       }}
                       onMove={(move) => {
-                        const target = moves.find((m) => m.move.action === move.action)?.target;
-                        if (target !== undefined) runMove(glob, move, target);
+                        if (option !== null && option.move.action === move.action) runMove(glob, move, option.target);
                       }}
-                      onAct={(action) => void commit(glob, action)}
                       repo={board.data.repo ?? undefined}
                       base={board.data.baseBranch}
                       onArrow={(direction) => arrow(glob, direction)}
                       lock={motion.locks[glob.id]}
                       bump={bumps[glob.id]}
                       tag={motion.tags[glob.id]}
-                      atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
                       waitingOnThis={waitingOn.get(glob.id) ?? 0}
                     />

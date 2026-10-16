@@ -1,6 +1,6 @@
+import { canContinueLocally } from '@slop/core';
 import type { Action } from '@slop/core';
 import { copyOrSelect } from '@/lib/plan-text';
-import { canContinueLocally } from '@/lib/activity';
 
 /** The sstor command that starts the person's own session after Pick up (plain: the click already picked the glob up); null for any other action. */
 export const sstorCommand = (action: Action, globId: string): string | null => {

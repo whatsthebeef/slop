@@ -28,7 +28,6 @@ export const GlobHeader = ({
   state: NowState;
 }) => {
   const { glob } = ctx;
-  const human = isHumanCategory(glob.category);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -87,7 +86,7 @@ export const GlobHeader = ({
         <span className="hidden min-w-0 truncate text-sm text-muted-foreground sm:inline" data-testid="glob-list">
           {LIST_TITLES[glob.list]}
         </span>
-        <HeaderStatus glob={glob} decision={human} state={state} />
+        <HeaderStatus glob={glob} state={state} />
       </div>
     </>
   );

@@ -2,7 +2,7 @@ import { HumanIcon, MachineIcon } from '../actor-icons';
 import type { GlobViewContext } from './context';
 import { InlineMarkdown } from '../markdown-view';
 import { CommandBox } from '../human-steps';
-import { actionLine } from '@/lib/status-line';
+import { actionLine } from '@slop/core';
 
 /** The action section: who is meant to do an action glob and, once it ended, who finished it, when, and the note or reason. Nothing for other globs. */
 export const ActionOutcome = ({ ctx: { glob } }: { ctx: GlobViewContext }) => {

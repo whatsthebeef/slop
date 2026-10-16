@@ -8,7 +8,7 @@ import {
   draftRequest,
   parseClaimRules,
 } from '../src/components/settings/atf-runners-group';
-import { AtfChip, atfLine } from '../src/components/glob-card';
+import { atfLine } from '../src/components/glob-card';
 import { RequestError } from '../src/lib/api';
 import type { AtfRun, AtfRunnerView } from '../src/lib/api';
 
@@ -367,18 +367,8 @@ describe('the runner name on results', () => {
     ...patch,
   });
 
-  it('names the runner in the line and the chip tooltip only when the server sent a name', () => {
+  it('names the runner in the line only when the server sent a name', () => {
     expect(atfLine(run())).not.toContain('runner:');
     expect(atfLine(run({ runnerName: 'GitHub CI' }))).toContain('· runner: GitHub CI');
-    render(
-      <AtfChip
-        runs={[run({ runnerName: 'GitHub CI' }), run({ id: 2, runnerName: 'CodeBuild' })]}
-      />,
-    );
-    expect(document.body.textContent).toContain('runner: GitHub CI');
-    expect(document.body.textContent).toContain('runner: CodeBuild');
-    cleanup();
-    render(<AtfChip runs={[run()]} />);
-    expect(document.body.textContent).not.toContain('runner:');
   });
 });

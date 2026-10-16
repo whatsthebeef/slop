@@ -101,7 +101,6 @@ const renderGlob = (glob: GlobView, role: BoardView['role'] = 'admin', decide?: 
           onAddRelation={vi.fn(() => Promise.resolve(true))}
           onAnswerQuestion={vi.fn(() => Promise.resolve(true))}
           onDismissQuestion={vi.fn(() => Promise.resolve(true))}
-          onDismiss={vi.fn(() => Promise.resolve(true))}
           onDecide={onDecide}
           onDelete={vi.fn(() => Promise.resolve())}
           onAddStep={vi.fn(() => Promise.resolve(true))}

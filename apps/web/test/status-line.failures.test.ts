@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { statusLine } from '../src/lib/status-line';
+import { statusLine } from '@slop/core';
 import { NOW } from '../../../packages/core/test/fixtures';
-import { failedChecks, top, view } from './helpers/glob-views';
+import { failedChecks, view } from './helpers/glob-views';
 
 describe('needs_pairing failure', () => {
   it('says which decision needs a person, and falls back to the reason', () => {
@@ -16,10 +16,10 @@ describe('needs_pairing failure', () => {
           ...(decision === undefined ? {} : { decision }),
         },
       });
-    expect(JSON.stringify(top(failed('Which storage to use?')))).toContain(
+    expect(JSON.stringify(statusLine(failed('Which storage to use?'), NOW))).toContain(
       'Needs a person: Which storage to use?',
     );
-    expect(JSON.stringify(top(failed()))).toContain('Needs a person: Gave up');
+    expect(JSON.stringify(statusLine(failed(), NOW))).toContain('Needs a person: Gave up');
   });
 });
 
@@ -36,6 +36,5 @@ describe('provisioning failure', () => {
     const line = statusLine(g, NOW);
     expect(line).toMatchObject({ kind: 'provisioning', full: reason });
     expect(line?.tip).not.toContain('the routine run failed');
-    expect(top(g)).toMatchObject({ kind: 'provisioning', full: reason });
   });
 });

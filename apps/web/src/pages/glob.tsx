@@ -14,7 +14,7 @@ import { labelToOpen, parseGlobTarget } from '@/lib/glob-section';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { usePageContext } from '@/lib/page-context';
 import { useSstorCopy } from '@/components/sstor-notice';
-import { mergeOutcomeText } from '@/lib/card-pending';
+import { mergeOutcomeText, outcomeRecorded } from '@/lib/click-outcome';
 import { useToast } from '@/toast';
 
 /** How often the glob is read again; the board's live hints refresh the cards, not this page's glob. */
@@ -69,8 +69,12 @@ export const GlobPage = () => {
   const reload = async () => {
     store(await api.glob(open.id));
   };
-  /** Runs a change; the page shows the glob as it is afterwards. False when it failed (the failure is shown). */
-  const change = async (work: () => Promise<unknown>): Promise<boolean> => {
+  /**
+   * Runs a change; the page shows the glob as it is afterwards. False when it failed (the failure is shown). A click the machine
+   * refused is stored on the glob as its last outcome (which bumps the version): the page reloads it and the notice says why, so
+   * only a failure with nothing stored is toasted.
+   */
+  const change = async (work: () => Promise<unknown>, clicked?: Action): Promise<boolean> => {
     try {
       await work();
       await reload();
@@ -79,6 +83,10 @@ export const GlobPage = () => {
       if (error instanceof RequestError && error.body.current !== undefined) {
         await reload();
         toast(`${open.id} changed meanwhile; it has been refreshed.`);
+      } else if (error instanceof RequestError && clicked !== undefined) {
+        const fresh = await api.glob(open.id).catch(() => null);
+        if (fresh !== null) store(fresh);
+        if (fresh === null || !outcomeRecorded(fresh, open, clicked)) toast(error.body.message);
       } else toast(error instanceof RequestError ? error.body.message : 'Something went wrong');
       return false;
     }
@@ -104,7 +112,7 @@ export const GlobPage = () => {
         const finish = copyCommand(action, open.id, open.type);
         // Start now, Merge anyway and Sign off anyway carry the reason typed in their confirmation.
         const reason = action === 'start_anyway' || action === 'merge_anyway' || action === 'sign_off_anyway' ? text : undefined;
-        return change(() => api.action(open.id, path, open.version, anyway, reason)).then(async (ok) => {
+        return change(() => api.action(open.id, path, open.version, anyway, reason), action).then(async (ok) => {
           const after = client.getQueryData<GlobView>(globKey(open.id));
           const said = ok && after !== undefined ? mergeOutcomeText(action, after) : null;
           if (said !== null) toast(said);
@@ -117,7 +125,6 @@ export const GlobPage = () => {
       onAddRelation={(input) => change(() => api.addRelation(open.id, input))}
       onAnswerQuestion={(questionId, input) => change(() => api.answerQuestion(open.id, questionId, input))}
       onDismissQuestion={(questionId, note) => change(() => api.dismissQuestion(open.id, questionId, note))}
-      onDismiss={(key, dismiss) => change(() => api.setDismissed(open.id, key, dismiss))}
       onDecide={(input) => change(() => api.decide(open.id, open.version, input))}
       onUpdate={async (changes: GlobChanges) => {
         try {

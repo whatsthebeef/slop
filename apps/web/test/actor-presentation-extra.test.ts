@@ -3,16 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { MemoryRouter } from 'react-router';
 import { GlobCard } from '../src/components/glob-card';
-import type { CardMove } from '../src/components/glob-card';
 import { HumanIcon, MachineIcon } from '../src/components/actor-icons';
-import { actionPresentation } from '../src/lib/action-presentation';
-import { positionOf } from '../src/lib/position';
+import { actionPresentation, positionOf } from '@slop/core';
 import type { GlobView } from '../src/lib/api';
 import { NOW, glob, run } from '../../../packages/core/test/fixtures';
 
 const view = (patch: Partial<GlobView> = {}): GlobView => ({ ...glob(), ...patch }) as GlobView;
 const noop = () => undefined;
-const card = (g: GlobView, moves: readonly CardMove[] = []) =>
+const card = (g: GlobView) =>
   renderToStaticMarkup(
     createElement(
       MemoryRouter,
@@ -21,8 +19,6 @@ const card = (g: GlobView, moves: readonly CardMove[] = []) =>
         glob: g,
         onOpen: noop,
         onOpenSection: noop,
-        onReviewLabel: noop as never,
-        moves,
         previewing: null,
         onPreview: noop,
         onMove: noop,
@@ -178,7 +174,7 @@ describe('escalation chip (s15f88)', () => {
     );
   });
 
-  it('is the one card status, in the header and not among the chips', () => {
+  it('is the one card status, in the header above the title', () => {
     const html = card(
       view({
         status: 'planning',
@@ -187,7 +183,7 @@ describe('escalation chip (s15f88)', () => {
     );
     expect(html.split('data-testid="card-status"')).toHaveLength(2);
     expect(html).toContain('data-kind="needs-human"');
-    expect(html.indexOf('data-testid="escalation-chip"')).toBeLessThan(html.indexOf('data-testid="card-chips"'));
+    expect(html.indexOf('data-testid="escalation-chip"')).toBeLessThan(html.indexOf('data-testid="card-title"'));
   });
 
   it('shows no escalation chip outside Planning', () => {
@@ -203,23 +199,12 @@ describe('escalation chip (s15f88)', () => {
 
 describe('card moves (s15f88)', () => {
   it('shows the actor icon, hidden from screen readers, beside the move label', () => {
-    const g = view({ status: 'planning' });
-    const move = (action: 'start' | 'pick_up'): CardMove => {
-      const { label, tip, icon } = actionPresentation(action, g);
-      return {
-        action,
-        direction: 'right',
-        confirm: false,
-        label: `${label} ▸`,
-        description: `${label} ${g.id}: ${tip}`,
-        icon,
-      };
-    };
-    const html = card(g, [move('start'), move('pick_up')]);
-    expect(html).toMatch(
+    const start = view({ status: 'planning', list: 'planning', type: 'sub', allowedActions: ['start'] });
+    expect(card(start)).toMatch(
       /data-testid="move-start"[^>]*><svg[^>]*lucide-bot[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Start ▸/,
     );
-    expect(html).toMatch(
+    const pick = view({ status: 'planning', list: 'planning', type: 'super', allowedActions: ['pick_up'] });
+    expect(card(pick)).toMatch(
       /data-testid="move-pick_up"[^>]*><svg[^>]*lucide-user-round[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Pick up ▸/,
     );
   });

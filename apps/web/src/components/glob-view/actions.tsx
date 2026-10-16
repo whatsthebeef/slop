@@ -1,8 +1,8 @@
-import { decisionOf, isHumanCategory, machine } from '@slop/core';
+import { actionPresentation, armLabel, blockedParts, chainTip, decisionOf, isHumanCategory, machine, mainVariant, mergeWarning, viewActions, waitingFor } from '@slop/core';
+import type { Action, EditFailure, PendingAction } from '@slop/core';
 import { isLearning } from '../decision-outcomes';
-import type { Action, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
-import { ChevronDown, Ellipsis, Loader2 } from 'lucide-react';
+import { ChevronDown, Ellipsis } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -12,28 +12,21 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { actionTiers, orderActions } from '@/lib/action-style';
-import { actionPresentation } from '@/lib/action-presentation';
-import { mainVariant, promotedAction, viewActions, viewMainAction } from '@/lib/main-action';
-import { mainStep } from '@/lib/human-steps';
-import { blockingItem } from '@/lib/blocking-item';
+import { clickOf, presentOf } from '@/lib/present';
 import { takeOverConfirmation } from '@/lib/sstor-command';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { findSection } from '@/lib/glob-scroll';
-import { workingLabel } from '@/lib/card-pending';
-import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
-import type { PendingAction } from '@/lib/pending-action';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { handoverConfirmation, handoverToShow } from '@/lib/handover';
-import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { anywayConfirmation, anywayOf, reasonRequired } from '@/lib/anyway';
 import type { AnywayAction } from '@/lib/anyway';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { ArmSystemLabel } from '../glob-card';
-import { armLabel } from '@/lib/rollout-stages';
 import { META } from './tag-style';
 import { Dot } from './status';
+import { Notice } from './notice';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
 import { splittable } from './size';
@@ -48,34 +41,37 @@ export const useGlobActions = ({
   glob,
   onAction,
   onUpdate,
-  onDismiss,
   onCompleteStep,
   email,
+  learningOpen,
+  running,
+  setRunning: setBusy,
 }: Pick<GlobViewContext, 'board' | 'glob' | 'onAction' | 'onUpdate'> & {
+  /** An action or save is running (owned by the page: the decide flow reads it too). */
+  running: boolean;
+  setRunning: (running: boolean) => void;
   /** Ticks a work step (the main button of a due rollout step); resolves false when it failed. */
   onCompleteStep?: (stepId: string) => Promise<boolean>;
-  /** "Got it" / ×, and "Show again": stores the viewer's dismissal of a status message; resolves false when it failed. */
-  onDismiss: (key: string, dismiss: boolean) => Promise<boolean>;
   /** Who is looking, for the steps that are theirs (unknown until /api/me has answered). */
   email?: string;
+  /** False for a learning whose outcome is already in (its decision block has nothing left to decide). */
+  learningOpen?: boolean;
 }) => {
   // A decision glob has no branch, PR, runs, deploys or labels: those parts of the view are left out. Nor has an action.
   const decision = decisionOf(glob) !== null;
   const human = isHumanCategory(glob.category);
-  const [running, setBusy] = useState(false);
-  // An action stays pending until the glob has moved (its version changes), not just until the request returns.
-  const [pending, setPending] = useState<PendingAction | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (pending === null) return undefined;
-    const timer = setTimeout(
-      () => setNow(Date.now()),
-      PENDING_TIMEOUT_MS - (Date.now() - pending.at) + 50,
-    );
-    return () => clearTimeout(timer);
-  }, [pending]);
-  const pendingNow = isPending(pending, glob, Math.max(now, pending?.at ?? 0));
-  const busy = running || pendingNow;
+  // The click this page has sent, until the glob shows it itself (the page reloads the glob when the request returns): same shape as the stored one.
+  const [sent, setSent] = useState<PendingAction | null>(null);
+  const viewer = email === undefined ? undefined : { email, role: board.role };
+  // Everything the page says about the glob (status, primary action, notice, activity) comes from this one presentation.
+  const presentation = presentOf(glob, {
+    ...(viewer === undefined ? {} : { viewer }),
+    base: board.baseBranch,
+    repo: board.repo,
+    pending: sent,
+    ...(learningOpen === undefined ? {} : { learningOpen }),
+  });
+  const busy = running;
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -86,6 +82,21 @@ export const useGlobActions = ({
     }
   };
 
+  /** Sends an action: the glob shows it in progress at once, and a second click does nothing while one is out. */
+  const act = async (action: Action, anyway?: boolean, text?: string): Promise<boolean> => {
+    if (running || presentation.pending !== null) return false;
+    setSent(clickOf(action, email ?? ''));
+    setBusy(true);
+    try {
+      // Only what was asked for goes along: a plain click is a plain `onAction(action)`.
+      return await (text !== undefined ? onAction(action, anyway, text) : anyway !== undefined ? onAction(action, anyway) : onAction(action));
+    } finally {
+      setBusy(false);
+      setSent(null);
+    }
+  };
+
+  const [stepsSignal, setStepsSignal] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmingRetrigger, setConfirmingRetrigger] = useState(false);
   // The type chip's popover says what follows before it changes the type.
@@ -95,7 +106,7 @@ export const useGlobActions = ({
     setTypeFailure(null);
     if (option.via === 'update') {
       setTypeFailure(await onUpdate({ type: option.to }));
-    } else if (option.via !== null && !(await onAction(option.via))) {
+    } else if (option.via !== null && !(await act(option.via))) {
       setTypeFailure({ message: `Could not make it a ${option.to}`, conflict: false });
     }
   };
@@ -111,9 +122,7 @@ export const useGlobActions = ({
   const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | 'fail_action' | null>(null);
   // Start now, Merge anyway and Sign off anyway override what holds the glob back: they say what it is and ask why first.
   const [confirmingAnyway, setConfirmingAnyway] = useState<AnywayAction | null>(null);
-  // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
-  const [readyAsked, setReadyAsked] = useState(false);
-  // "Why you're needed": shown in the problem block while nobody is on the problem.
+  // "Why you're needed": what the confirmations of Pick up and Start say.
   const brief = handoverToShow(glob);
   useEffect(() => {
     setConfirmingAgain(false);
@@ -123,39 +132,28 @@ export const useGlobActions = ({
     setFinishing(null);
     setConfirmingAnyway(null);
   }, [glob.id]);
-  // Dismissing the Your turn reason is stored per person on the server; the page reloads the glob afterwards.
-  const dismiss = (key: string, on: boolean) =>
-    run(async () => {
-      await onDismiss(key, on);
-    });
 
   // deescalate and make_super are reached through the type popover.
   const shownActions = viewActions(glob, email);
   // Decide has its own panel with the five outcomes: it can be the main button (which goes to
   // the panel), never a More entry.
   const allActions = shownActions.filter((a) => a !== 'decide');
-  const viewer = email === undefined ? undefined : { email, role: board.role };
-  // A due blocking step for the viewer (a rollout) is the next thing to do, ahead of the state's next step but not a recovery.
-  const stepTurn = mainStep(glob, viewer);
-  const [stepsSignal, setStepsSignal] = useState(0);
   // A stalled glob's step names the one action to lead with and one alternative to follow it.
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
-  // With no natural main (and no due step) a menu item is promoted, so the ▾ never stands alone.
-  const natural = viewMainAction(glob, viewer);
-  const main = natural ?? (stepTurn === null ? promotedAction(allActions, glob) : null);
+  // The one primary action (none while a click is pending or a block holds the glob): the presentation decides, never this row.
+  const main = presentation.primary;
   // A stalled glob's step (nobody moving it) makes Pick up the black main; while a sub's machine progresses it stays quiet.
   const variant = mainVariant(main, glob, stall !== undefined);
   const actions = orderActions(allActions, main, stall?.alternative);
   const tiers = actionTiers(allActions, main);
   const disabled = waitingFor(glob, actions, board.role);
-  const readyPending = readyAsked && glob.status === 'in_progress' && glob.pr?.state === 'draft';
   const reviewedAtHead = (glob.artifacts ?? []).some(
     (a) => a.kind === 'local_review' && machine.sameCommit(a.commitSha, glob.pr?.headSha),
   );
   const markReady = () =>
     run(async () => {
       setConfirmingReady(false);
-      if (await onAction('mark_ready')) setReadyAsked(true);
+      await act('mark_ready');
     });
 
   const begin = (action: Action) => {
@@ -207,14 +205,7 @@ export const useGlobActions = ({
       setConfirmingOversized(action);
       return;
     }
-    void startAction(
-      pending,
-      running,
-      { action, version: glob.version, at: Date.now() },
-      glob,
-      () => onAction(action),
-      setPending,
-    );
+    void act(action);
   };
 
   /** Ends the action glob: Done with the note, or Dismiss with the reason. */
@@ -225,20 +216,15 @@ export const useGlobActions = ({
 
   /** Runs the overriding action with the reason typed in its confirmation: one request, whatever the clicks. */
   const confirmAnyway = (action: AnywayAction, reason: string) =>
-    startAction(
-      pending,
-      running,
-      { action, version: glob.version, at: Date.now() },
-      glob,
-      () => onAction(action, undefined, reason),
-      setPending,
-    ).then((ok) => {
+    act(action, undefined, reason).then((ok) => {
       if (ok) setConfirmingAnyway(null);
     });
 
   return {
     decision,
     human,
+    presentation,
+    act,
     confirmingAnyway,
     setConfirmingAnyway,
     confirmAnyway,
@@ -247,7 +233,6 @@ export const useGlobActions = ({
     finish,
     busy,
     run,
-    pending,
     begin,
     main,
     variant,
@@ -263,7 +248,6 @@ export const useGlobActions = ({
     typeFailure,
     changeType,
     brief,
-    dismiss,
     confirmDelete,
     setConfirmDelete,
     confirmingAgain,
@@ -276,7 +260,6 @@ export const useGlobActions = ({
     setConfirmingOversized,
     confirmingReady,
     setConfirmingReady,
-    readyPending,
     markReady,
     completeStep: onCompleteStep,
   };
@@ -291,22 +274,9 @@ const tipOf = (action: Action, glob: GlobViewContext['glob'], email?: string) =>
   return warning === null ? tip : `${tip}\n${warning}`;
 };
 
-const ActionContent = ({
-  action,
-  ctx,
-  state,
-}: {
-  action: Action;
-  ctx: GlobViewContext;
-  state: GlobActionsState;
-}) => {
+const ActionContent = ({ action, ctx, state }: { action: Action; ctx: GlobViewContext; state: GlobActionsState }) => {
   const shown = actionPresentation(action, ctx.glob, false, state.viewer?.email);
-  return state.busy && state.pending?.action === action ? (
-    <>
-      <Loader2 className="size-3.5 animate-spin" aria-hidden />
-      {workingLabel(action)}
-    </>
-  ) : (
+  return (
     <>
       <ActorIcon actor={shown.icon} decorative />
       {shown.label}
@@ -388,12 +358,10 @@ const TakeOverConfirmation = ({
           size="sm"
           disabled={state.busy}
           data-testid="confirm-take-over"
-          onClick={() =>
-            void state.run(async () => {
-              state.setConfirmingTakeOver(false);
-              await ctx.onAction('take_over');
-            })
-          }
+          onClick={() => {
+            state.setConfirmingTakeOver(false);
+            void state.act('take_over');
+          }}
         >
           Confirm pick up
         </Button>
@@ -536,30 +504,18 @@ export const GlobActions = ({
   onSplitting: (splitting: boolean) => void;
 }) => {
   const { glob } = ctx;
-  const { pending, actions, tiers, disabled, brief } = state;
+  const { actions, tiers, disabled, brief } = state;
   const busy = state.busy;
   const moves = splitMoves(ctx, state, onSplitting);
   // While a block needs the person (a decision to make, a blocking question, a due step, a review to approve) its buttons are the
-  // only way forward: the row has no main button and no ▾. In Planning the blocks have no buttons and the main action stays.
-  const flow = ctx.decide ?? null;
-  const blocking = blockingItem(
-    glob,
-    ctx.board.role,
-    state.viewer,
-    flow === null || flow.learning === null || flow.learning.status === 'open',
-  );
+  // only way forward: the row has no main button and no ▾ (the presentation's `primary` is then none). In Planning the blocks have
+  // no buttons and the main action stays. A click in progress hides the button too: the header's status says so, never this row.
+  const blocking = state.presentation.blocking;
   const lead = blocking === null ? moves.lead : null;
-  // The decision's outcomes live in its block, so Decide is never the row's button.
-  const inBlock = ctx.decide != null && state.main === 'decide';
-  const main = blocking === null && lead === null && !inBlock ? state.main : null;
+  const main = lead === null ? state.main : null;
   // Only the glob-wide escape stays while a block holds the glob: the quiet ⋯.
   const escapes = blocking === null ? [] : actions.filter((a) => a === 'take_over');
-  const moreActions = actions.filter(
-    (a) => a !== main && !(inBlock && a === 'decide') && tiers.get(a) !== 'destructive',
-  );
-  // The menu closes on select, so the More button shows the action it started while it runs.
-  const moreRunning =
-    busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
+  const moreActions = actions.filter((a) => a !== main && a !== 'decide' && tiers.get(a) !== 'destructive');
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || lead !== null;
@@ -623,14 +579,7 @@ export const GlobActions = ({
           aria-label="More actions"
           data-testid="more-actions"
         >
-          {moreRunning === null ? (
-            <ChevronDown className="size-3.5" aria-hidden />
-          ) : (
-            <Loader2
-              className="size-3.5 animate-spin"
-              aria-label={workingLabel(moreRunning)}
-            />
-          )}
+          <ChevronDown className="size-3.5" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-testid="more-menu">
@@ -640,9 +589,10 @@ export const GlobActions = ({
   ) : undefined;
   const line = actionLine(ctx);
   const info = line === null ? null : <ActionLineInfo ctx={ctx} line={line} />;
+  const notice = state.presentation.notice;
   return (
     <>
-      {(hasMain || escapes.length > 0 || info !== null) && (
+      {(hasMain || escapes.length > 0 || info !== null || notice !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {lead !== null && (
@@ -718,6 +668,7 @@ export const GlobActions = ({
             )}
             {info}
           </div>
+          <Notice ctx={ctx} notice={notice} />
           <FinishAction ctx={ctx} state={state} />
           <AnywayConfirmation ctx={ctx} state={state} />
           {state.confirmingReady && (
@@ -762,13 +713,11 @@ export const GlobActions = ({
                 size="sm"
                 disabled={busy}
                 data-testid="confirm-start-oversized"
-                onClick={() =>
-                  void state.run(async () => {
-                    const action = confirmingOversized;
-                    state.setConfirmingOversized(null);
-                    await ctx.onAction(action);
-                  })
-                }
+                onClick={() => {
+                  const action = confirmingOversized;
+                  state.setConfirmingOversized(null);
+                  void state.act(action);
+                }}
               >
                 Continue
               </Button>
@@ -790,22 +739,14 @@ export const GlobActions = ({
                 size="sm"
                 disabled={busy}
                 data-testid="confirm-retrigger"
-                onClick={() =>
-                  void state.run(async () => {
-                    state.setConfirmingRetrigger(false);
-                    await ctx.onAction('retrigger', true);
-                  })
-                }
+                onClick={() => {
+                  state.setConfirmingRetrigger(false);
+                  void state.act('retrigger', true);
+                }}
               >
                 Retry anyway
               </Button>
             </div>
-          )}
-          {state.readyPending && (
-            <p role="status" className="text-xs text-muted-foreground">
-              Asked GitHub to mark PR #{glob.pr?.number} ready; the glob moves to PR open when
-              GitHub confirms.
-            </p>
           )}
         </div>
       )}
@@ -874,12 +815,10 @@ export const GlobReset = ({
             variant="destructive"
             disabled={busy}
             data-testid="confirm-start-again"
-            onClick={() =>
-              void state.run(async () => {
-                state.setConfirmingAgain(false);
-                await ctx.onAction('start_again');
-              })
-            }
+            onClick={() => {
+              state.setConfirmingAgain(false);
+              void state.act('start_again');
+            }}
           >
             {actionPresentation('start_again', glob).label}
           </Button>

@@ -1,11 +1,12 @@
-import { isHumanCategory } from '@slop/core';
-import type { Action, HumanStepViewer } from '@slop/core';
-import { actionPresentation, isReviewRetry, presentedActions } from './action-presentation';
-import type { GlobView } from './api';
-import { mainStep } from './human-steps';
+import { isHumanCategory } from '../types.js';
+import type { Action } from '../machine.js';
+import type { HumanStepViewer } from '../human-steps.js';
+import { actionPresentation, isReviewRetry, presentedActions } from './action-presentation.js';
+import type { PresentableGlob } from './facts.js';
+import { mainStep } from './human-steps.js';
 
-type Subject = Pick<GlobView, 'type' | 'status' | 'implementer' | 'pr'> &
-  Partial<Pick<GlobView, 'runs' | 'artifacts'>>;
+type Subject = Pick<PresentableGlob, 'type' | 'status' | 'implementer' | 'pr'> &
+  Partial<Pick<PresentableGlob, 'runs' | 'artifacts'>>;
 
 /** The machine has failed this many runs in a row (a retry included, whatever the cause): another retry is unlikely to help, so a person steps in. */
 export const REPEATED_FAILURES = 2;
@@ -47,7 +48,13 @@ const NEXT_STEPS: readonly Action[] = [
 ];
 
 /** Never the main button: they jump ahead, throw work away or remove the glob. */
-const NEVER_MAIN: readonly Action[] = ['start_anyway', 'merge_anyway', 'sign_off_anyway', 'start_again', 'delete'];
+const NEVER_MAIN: readonly Action[] = [
+  'start_anyway',
+  'merge_anyway',
+  'sign_off_anyway',
+  'start_again',
+  'delete',
+];
 
 /** Led with only when nothing else is left, so a glob held for a merge or sign-off still has its ▾ and the way to force it through. */
 const LAST_RESORT: readonly Action[] = ['merge_anyway', 'sign_off_anyway'];
@@ -93,11 +100,13 @@ export const mainAction = (
 };
 
 /** The actions the glob view lists (main button and More menu) for this viewer: the allowed ones it presents, never Delete or one with no placement. */
-export const viewActions = (glob: GlobView, email?: string): Action[] =>
-  presentedActions(glob.allowedActions ?? []).filter((a) => a !== 'delete' && actionPresentation(a, glob, false, email).placement !== 'none');
+export const viewActions = (glob: PresentableGlob, email?: string): Action[] =>
+  presentedActions(glob.allowedActions ?? []).filter(
+    (a) => a !== 'delete' && actionPresentation(a, glob, false, email).placement !== 'none',
+  );
 
 /** The action a stalled glob's step names to lead with, if any. */
-export const leadingAction = (glob: Pick<GlobView, 'humanSteps'>): Action | undefined => {
+export const leadingAction = (glob: Pick<PresentableGlob, 'humanSteps'>): Action | undefined => {
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
   return stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
 };
@@ -106,8 +115,15 @@ export const leadingAction = (glob: Pick<GlobView, 'humanSteps'>): Action | unde
  * The natural main action of the glob view for this viewer (null when none leads). The glob view's primary button and the
  * board card's primary button both read it, so they never disagree.
  */
-export const viewMainAction = (glob: GlobView, viewer?: HumanStepViewer): Action | null =>
-  mainAction(viewActions(glob, viewer?.email), glob, isHumanCategory(glob.category), mainStep(glob, viewer) !== null, viewer?.email, leadingAction(glob));
+export const viewMainAction = (glob: PresentableGlob, viewer?: HumanStepViewer): Action | null =>
+  mainAction(
+    viewActions(glob, viewer?.email),
+    glob,
+    isHumanCategory(glob.category),
+    mainStep(glob, viewer) !== null,
+    viewer?.email,
+    leadingAction(glob),
+  );
 
 /** Promoted in this order when nothing is the natural main: undo what the person just started, retry a missing review, then step in. */
 const PROMOTION: readonly Action[] = ['cancel_merge', 'review_now', 'take_over', 'pick_up'];
@@ -124,7 +140,13 @@ export const promotedAction = (available: readonly Action[], glob: Subject): Act
   const rest = available.filter((a) => !NEVER_MAIN.includes(a));
   const leading = rest.filter((a) => a !== 'review_now' || isReviewRetry(glob));
   // Only when nothing else is left does a person's own Review code lead, so the row isn't empty.
-  return PROMOTION.find((a) => leading.includes(a)) ?? leading[0] ?? rest[0] ?? LAST_RESORT.find((a) => available.includes(a)) ?? null;
+  return (
+    PROMOTION.find((a) => leading.includes(a)) ??
+    leading[0] ??
+    rest[0] ??
+    LAST_RESORT.find((a) => available.includes(a)) ??
+    null
+  );
 };
 
 /**

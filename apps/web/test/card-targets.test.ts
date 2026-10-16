@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardTargets } from '../src/lib/card-targets';
+import { cardTargets } from '@slop/core';
 import { globPath } from '../src/lib/glob-section';
 
 const path = (target: ReturnType<(typeof cardTargets)[keyof typeof cardTargets]>) => globPath(15, 's15f1', target);
@@ -16,7 +16,6 @@ describe('cardTargets', () => {
   it('opens the chips at their sections', () => {
     expect(path(cardTargets.related())).toBe('/boards/15/globs/s15f1?section=related');
     expect(path(cardTargets.escalation())).toBe('/boards/15/globs/s15f1?section=escalation');
-    expect(path(cardTargets.conflict())).toBe('/boards/15/globs/s15f1?section=conflict');
     expect(path(cardTargets.size())).toBe('/boards/15/globs/s15f1?section=size');
     expect(path(cardTargets.decision())).toBe('/boards/15/globs/s15f1?section=decision');
     expect(path(cardTargets.deploys())).toBe('/boards/15/globs/s15f1?section=deploys');

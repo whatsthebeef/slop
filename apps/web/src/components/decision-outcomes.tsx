@@ -1,4 +1,4 @@
-import { decisionOf, KNOWLEDGE_KINDS, RULES_MODEL } from '@slop/core';
+import { decisionOf, KNOWLEDGE_KINDS, RULES_MODEL, stripMarkdown } from '@slop/core';
 import type { DecisionAttributes, DecisionLearning, KbTarget, KnowledgeKind, SuggestionPrefill } from '@slop/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, Loader2 } from 'lucide-react';
@@ -18,7 +18,6 @@ import { globDiffKey } from '@/lib/live';
 import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action';
 import type { PendingAction } from '@/lib/pending-action';
 import { boardGlobHref } from '@/lib/glob-section';
-import { stripMarkdown } from '@/lib/markdown-text';
 import { applyPrefill, recommendedLabel, SUGGEST_POLL_MS, SUGGESTION_ACTION_TEXT, suggestionState } from '@/lib/suggestion';
 
 /** A learning an agent submitted or slop mined: the decision is a KB item (same ID), with a knowledge change to apply. */

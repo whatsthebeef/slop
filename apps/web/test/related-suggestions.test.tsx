@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { holdLine, relationTips } from '@slop/core';
 import type { Holding, RelationsView, RelationSuggestion } from '@slop/core';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -11,7 +12,6 @@ import type { SuggestionHandler } from '../src/components/glob-view/related';
 import { RelationScanSpend } from '../src/pages/settings';
 import type { AddRelationInput, BoardView, GlobView, ListedHumanStep } from '../src/lib/api';
 import { relationScanLine, spendBreakdown } from '../src/lib/review-settings';
-import { holdLine, relationTips } from '../src/lib/status-line';
 import { board as coreBoard, glob as coreGlob } from '../../../packages/core/test/fixtures';
 
 vi.mock('../src/lib/api', async (importOriginal) => ({

@@ -39,7 +39,6 @@ const renderGlob = (glob: GlobView) => {
           onAddRelation={vi.fn(() => Promise.resolve(true))}
           onAnswerQuestion={vi.fn(() => Promise.resolve(true))}
           onDismissQuestion={vi.fn(() => Promise.resolve(true))}
-          onDismiss={vi.fn(() => Promise.resolve(true))}
           onDecide={vi.fn(() => Promise.resolve(true))}
           onAddStep={vi.fn(() => Promise.resolve(true))}
           onCompleteStep={vi.fn(() => Promise.resolve(true))}

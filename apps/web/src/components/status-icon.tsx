@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, Hourglass } from 'lucide-react';
 import { ActorIcon, MachineIcon } from '@/components/actor-icons';
-import type { StatusIcon } from '@/lib/card-rows';
+import type { StatusIcon } from '@slop/core';
 
 /** The icon of the status in the card's and the glob view header's top right; it sits right of the status text. */
 export const StatusIconView = ({ icon }: { icon: StatusIcon }) => {

@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { holdLine, statusLine, waitingFor } from '../src/lib/status-line';
-import { cornerStatus } from '../src/lib/card-rows';
-import { positionOf } from '../src/lib/position';
+import { holdLine, statusLine, waitingFor, cornerStatus, positionOf } from '@slop/core';
 import type { GlobView } from '../src/lib/api';
 import { NOW, run } from '../../../packages/core/test/fixtures';
-import { failedChecks, head, hold, prOpen, top, view } from './helpers/glob-views';
+import { failedChecks, head, hold, prOpen, view } from './helpers/glob-views';
 
 describe('shared status line', () => {
   it('shows checks failed on a sub in the card and the view alike, linking the run and the routine fixing it', () => {
@@ -22,7 +20,6 @@ describe('shared status line', () => {
       sessionUrl: 'https://claude.ai/code/s',
     });
     expect(card?.text).toMatch(/^Type check failed: packages\/core typecheck/);
-    expect(top(g)).toEqual(card);
   });
 
   it("shows a red base as not this glob's change, and that the branch updates when fixed", () => {
@@ -30,7 +27,7 @@ describe('shared status line', () => {
       type: 'sub',
       headChecks: { ...failedChecks, inheritedFrom: { base: 'main', since: 's15t11' } },
     });
-    const line = top(g);
+    const line = statusLine(g, NOW);
     expect(line).toMatchObject({
       kind: 'base-red',
       doing: 'this branch is updated when the base is fixed',
@@ -42,15 +39,13 @@ describe('shared status line', () => {
 
   it('shows a run failure', () => {
     const g = view({ status: 'failed', failure: { reason: 'Routine run failed: boom', at: NOW } });
-    expect(top(g)).toMatchObject({ kind: 'failure', full: 'Routine run failed: boom' });
-    expect(top(g)).toEqual(statusLine(g, NOW));
+    expect(statusLine(g, NOW)).toMatchObject({ kind: 'failure', full: 'Routine run failed: boom' });
   });
 
   it('shows a stuck hint', () => {
     const g = prOpen({ type: 'sub', headChecks: null, updatedAt: '2026-10-05T10:00:00.000Z' });
     const card = statusLine(g, NOW);
     expect(card?.kind).toBe('stuck');
-    expect(top(g)).toEqual(card);
   });
 
   it("names the board's own gate check in the stuck hint, `checks` by default", () => {
@@ -63,20 +58,18 @@ describe('shared status line', () => {
 
   it('shows a same that is ready as ready, with no wait', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'] });
-    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge' });
-    expect(top(g)).toEqual(statusLine(g, NOW));
+    expect(statusLine(g, NOW)).toMatchObject({ kind: 'ready', full: 'Merge' });
   });
 
   it('shows a same with open rollout steps as ready for Merge, the same as without', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'passed' }, allowedActions: ['merge'], rolloutSteps: 1 });
-    expect(top(g)).toMatchObject({ kind: 'ready', full: 'Merge' });
-    expect(top(g)?.tip).not.toContain('--merge');
+    expect(statusLine(g, NOW)).toMatchObject({ kind: 'ready', full: 'Merge' });
+    expect(statusLine(g, NOW)?.tip).not.toContain('--merge');
   });
 
   it('keeps waiting for checks off the status line: the position indicator carries it', () => {
     const g = prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: [] });
     expect(statusLine(g, NOW)).toBeNull();
-    expect(top(g)).toBeNull();
     expect(positionOf(g, NOW)).toMatchObject({
       holder: 'waiting',
       text: 'running checks',
@@ -84,14 +77,12 @@ describe('shared status line', () => {
     });
   });
 
-  it('says why a same with failed checks cannot merge, keeping the link', () => {
+  it('says why a same with failed checks cannot merge, on the disabled Merge', () => {
     const g = prOpen({ headChecks: failedChecks, allowedActions: [] });
-    const line = top(g);
-    expect(line?.full).toMatch(
-      /^Merge waits: checks failed on d16d563 Type check: packages\/core typecheck/,
-    );
-    expect(line?.url).toBe(failedChecks.failure.url);
-    expect(line?.kind).toBe('checks');
+    expect(waitingFor(g, [], 'dev')).toMatchObject([
+      { action: 'merge', why: ': checks failed on d16d563 Type check: packages/core typecheck: TS2322 not assignable' },
+    ]);
+    expect(statusLine(g, NOW)).toMatchObject({ kind: 'checks', url: failedChecks.failure.url });
   });
 
   it('says a red main is why a same cannot merge', () => {
@@ -99,7 +90,7 @@ describe('shared status line', () => {
       headChecks: { ...failedChecks, inheritedFrom: { base: 'main', since: 's15t11' } },
       allowedActions: [],
     });
-    expect(top(g)?.full).toBe('Merge waits: main is red since s15t11');
+    expect(waitingFor(g, [], 'dev')).toMatchObject([{ action: 'merge', why: ': main is red since s15t11' }]);
   });
 
   it('says a conflict with the base is why a same with passing checks cannot merge', () => {
@@ -121,9 +112,9 @@ describe('shared status line', () => {
       headChecks: { sha: head, state: 'passed' },
       allowedActions: ['merge'],
     });
-    expect(top(g)?.full).toBe(
-      'Merge & keep working waits for the implementation record at the head',
-    );
+    expect(waitingFor(g, ['merge'], 'dev')).toMatchObject([
+      { action: 'merge_continue', label: 'Merge & keep working', why: 'for the implementation record at the head' },
+    ]);
   });
 
   it('says Merge waits for the checks on a same with open rollout steps', () => {
@@ -188,12 +179,11 @@ describe('an action waiting for its script', () => {
     expect(cornerStatus(action({ holding: [], script: null, allowedActions: ['complete_action', 'dismiss_action', 'delete'] }), NOW)).toBeNull();
   });
 
-  it('disables Done with the reason, for any role, and the status line says what it waits for', () => {
+  it('disables Done with the reason, for any role', () => {
     const waiting = waitingFor(action(), ['dismiss_action', 'delete'], 'qa');
     expect(waiting).toMatchObject([
       { action: 'complete_action', label: 'Done', tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`, why: 'for s1t1 to be merged and rolled out' },
     ]);
-    expect(top(action())?.full).toBe('Done waits for s1t1 to be merged and rolled out');
   });
 
   it('disables Done for a script that is not on main yet when nothing else holds it', () => {
