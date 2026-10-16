@@ -36,6 +36,8 @@ export interface RolloutStep {
   readonly checkCommands: readonly string[];
   /** The environment the step waits for a deploy to (`(env: production)`); null: it is due after the merge. */
   readonly env: string | null;
+  /** `(once)`: a one-shot command inside the change. It has no environment (an `env` beside it is dropped and said so), falls due as soon as its script is on the branch and is never reopened. */
+  readonly once: boolean;
   /** What the step says it holds back (`(blocks: sign_off, dependants)`); null when it doesn't say, so the default for its due applies. */
   readonly blocks: readonly HumanStepBlock[] | null;
 }
@@ -59,7 +61,10 @@ export interface RolloutStep {
  *   itself once it is on. A name slop doesn't know is dropped and said so in the detail, so the step still shows.
  * - A parenthesised suffix can carry more, as comma-separated `key: value` pairs in any order:
  *   `(env: production, blocks: sign_off, dependants, check: fileAttachments)`. `env` names the environment the step waits for
- *   a deploy to (none: it is due after the merge; a name the board doesn't list is kept). `blocks` lists what an open step holds
+ *   a deploy to (none: it is due after the merge; the board's environments are checked when the record is read, see `reconcileRollout`).
+ *   `once` (or `once: true`) marks a one-shot command inside the change: no environment (an `env` beside it is dropped), due as soon as its
+ *   script is on the glob's branch, done once and never reopened. Use it for work that takes effect by being run (an IAM grant, a setting),
+ *   not by deploying. `blocks` lists what an open step holds
  *   back (`sign_off`, `reviewing`, `dependants`, or `none`); without it a step after the merge holds back sign-off and
  *   dependants, and a step after a deploy holds back nothing. A key slop doesn't know is dropped and said so in the detail.
  * - A script's body is its first fenced code block; any other fenced block stays in the detail.
@@ -97,6 +102,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
     /** The labelled field wrapped lines continue until a blank line, a bullet, a label or a fence. */
     open: 'why' | 'permissions' | 'verify' | 'run' | null;
     env: string | null;
+    once: boolean;
     blocks: readonly HumanStepBlock[] | null;
   } | null = null;
   const finish = () => {
@@ -118,6 +124,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
       verify: current.verify,
       checkCommands: current.checkCommands,
       env: current.env,
+      once: current.once,
       blocks: current.blocks,
     });
     current = null;
@@ -158,6 +165,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
         checkCommands: [],
         open: null,
         env: parsed.env,
+        once: parsed.once,
         blocks: parsed.blocks,
       };
       if (parsed.overflow !== null) current.detail.push(parsed.overflow);
@@ -321,7 +329,7 @@ const withExports = (commands: readonly string[]): string[] => {
 };
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
 const OPTIONS_SUFFIX = /\s*\(([^()]*)\)\s*$/;
-const KNOWN_OPTIONS: readonly string[] = ['env', 'blocks', 'check'];
+const KNOWN_OPTIONS: readonly string[] = ['env', 'blocks', 'check', 'once'];
 const ENV_NAME = /^[\w.-]+$/;
 /** A bold kind: `**manual:** x`, `**manual**: x` (or with `__`). */
 const BOLD_KIND = /^(\*\*|__)(script|setting|manual)(?:\s*:\s*\1|\1\s*:)\s*/i;
@@ -421,6 +429,7 @@ const titleOf = (text: string) => {
   let check: string | null = null;
   let env: string | null = null;
   let blocks: HumanStepBlock[] | null = null;
+  let once = false;
   const notes: string[] = [];
   const capability = (name: string): string | null => {
     if (isCapabilityName(name)) return name;
@@ -436,6 +445,8 @@ const titleOf = (text: string) => {
       else if (key === 'env') {
         if (ENV_NAME.test(value)) env = value;
         else notes.push(`env: ${value} is not an environment name`);
+      } else if (key === 'once') {
+        once = !/^(false|no|0)$/i.test(value);
       } else if (key === 'blocks') {
         blocks = [];
         for (const word of value.split(/[\s,+]+/).filter((w) => w !== '' && w !== 'none')) {
@@ -453,8 +464,13 @@ const titleOf = (text: string) => {
     }
   }
   if (title === '') title = kind === 'script' ? 'Run the script' : 'Do this by hand';
+  // A once step is environment-independent: it is never filed under an environment.
+  if (once && env !== null) {
+    notes.push(`env: ${env} is ignored: a once step has no environment`);
+    env = null;
+  }
   const cut = shortTitle(title);
-  return { kind, title: cut.title, check, notes, overflow: cut.overflow, env, blocks };
+  return { kind, title: cut.title, check, notes, overflow: cut.overflow, env, once, blocks };
 };
 
 const isBlock = (word: string): word is HumanStepBlock => HUMAN_STEP_BLOCKS.some((b) => b === word);
@@ -467,6 +483,11 @@ const isBlock = (word: string): word is HumanStepBlock => HUMAN_STEP_BLOCKS.some
 const optionPairs = (text: string): [string, string][] | null => {
   const pairs: [string, string][] = [];
   for (const segment of text.split(',')) {
+    // A bare `once` is the flag with no value.
+    if (/^\s*once\s*$/i.test(segment)) {
+      pairs.push(['once', 'true']);
+      continue;
+    }
     const keyed = /^\s*([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(segment);
     const last = pairs[pairs.length - 1];
     if (keyed?.[1] !== undefined) pairs.push([keyed[1].toLowerCase(), (keyed[2] ?? '').trim()]);
@@ -559,7 +580,7 @@ The server image deploys on merge; drizzle migrations run when the server starts
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
 A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
 Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: 'Why: <one sentence>', 'Permissions: <the exact login and rights, for a step run in a terminal>', one 'Run: <command>' line per command (no backticks, no Markdown), 'Check: <what you should see>'. Anything else a person needs goes in plain lines under the title.
-A step that can only be done after a deploy to another environment (for example production) ends its title with '(env: <environment name>)', using a name the record or diff shows; a step with no env is for right after the merge. Add 'blocks: sign_off' there only when the glob must not be signed off before that step is done; steps after a deploy hold nothing back by default. Add 'check: <capability>' only when told that capability exists. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
+A step that can only be done after a deploy to another environment (for example production) ends its title with '(env: <environment name>)', using a name the record or diff shows; a step with no env is for right after the merge. A one-shot command that does not depend on an environment (an IAM grant, an account setting) ends its title with '(once)' and has no env. Add 'blocks: sign_off' there only when the glob must not be signed off before that step is done; steps after a deploy hold nothing back by default. Add 'check: <capability>' only when told that capability exists. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
 {"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Permissions / Run / Check lines indented under it, '(env: <environment>, blocks: sign_off, check: <capability>)' at the end of a title, each part only when it applies>"}

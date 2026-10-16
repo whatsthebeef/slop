@@ -81,6 +81,7 @@ describe('parseRollout', () => {
         verify: null,
         checkCommands: [],
         env: null,
+        once: false,
         blocks: null,
       },
       {
@@ -96,6 +97,7 @@ describe('parseRollout', () => {
         verify: null,
         checkCommands: [],
         env: null,
+        once: false,
         blocks: null,
       },
       {
@@ -111,6 +113,7 @@ describe('parseRollout', () => {
         verify: null,
         checkCommands: [],
         env: null,
+        once: false,
         blocks: null,
       },
     ]);
@@ -188,6 +191,7 @@ ${FENCE}
       verify: 'the list shows the atf group.',
       checkCommands: [],
       env: null,
+      once: false,
       blocks: null,
     });
   });
@@ -381,6 +385,7 @@ ${FENCE}
       verify: null,
       checkCommands: [],
       env: null,
+      once: false,
       blocks: null,
     });
   });
@@ -423,13 +428,26 @@ ${FENCE}
     expect(parseRollout('## Rollout\n- manual: Do it (env: two words)\n')[0]?.detail).toContain('env: two words is not an environment name');
   });
 
+  it('reads `(once)` and `once: true` as a once step with no environment, and drops an env beside it with a note', () => {
+    expect(parseRollout('## Rollout\n- manual: Grant the Lambda access (once)\n')[0]).toMatchObject({ title: 'Grant the Lambda access', once: true, env: null, blocks: null });
+    expect(parseRollout('## Rollout\n- manual: Grant it (once: true, check: fileAttachments)\n')[0]).toMatchObject({ title: 'Grant it', once: true, check: 'fileAttachments' });
+    expect(parseRollout('## Rollout\n- manual: Grant it (once: false)\n')[0]).toMatchObject({ once: false });
+    const [both] = parseRollout('## Rollout\n- manual: Grant it (once, env: production)\n');
+    expect(both).toMatchObject({ once: true, env: null });
+    expect(both?.detail).toContain('env: production is ignored: a once step has no environment');
+  });
+
+  it('has once false when the item does not say once', () => {
+    expect(parseRollout('## Rollout\n- manual: Plain (env: production)\n')[0]).toMatchObject({ once: false, env: 'production' });
+  });
+
   it('says `blocks: none` explicitly: nothing held back, unlike no blocks at all', () => {
     expect(parseRollout('## Rollout\n- manual: Do it (blocks: none)\n')[0]).toMatchObject({ blocks: [] });
   });
 
   it('leaves a parenthesis that carries no known key in the title', () => {
     expect(parseRollout('## Rollout\n- manual: Run the job (staging: needs approval)\n')[0]).toMatchObject({ title: 'Run the job (staging: needs approval)', env: null, blocks: null });
-    expect(parseRollout('## Rollout\n- manual: Run the job (once)\n')[0]).toMatchObject({ title: 'Run the job (once)' });
+    expect(parseRollout('## Rollout\n- manual: Run the job (twice)\n')[0]).toMatchObject({ title: 'Run the job (twice)' });
   });
 
   it('knows the capability names the parser accepts', () => {
@@ -542,7 +560,7 @@ describe('the implementation record becomes rollout steps', () => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -716,6 +734,29 @@ describe('the implementation record becomes rollout steps', () => {
     expect((await globs.peek(g.id))?.status).toBe('signed_off');
   });
 
+  it('writes a once step as due once, holding back sign-off and dependants, and re-reading it changes nothing', async () => {
+    const g = await newGlob();
+    const text = '## Rollout\n- script: Grant the Lambda access (once)\n  - script: scripts/rollout/x-grant.sh\n';
+    await put(g.id, record(text));
+    expect(stepsOf(g.id).map((s) => [s.title, s.due, s.blocks, s.dueSince, s.script])).toEqual([['Grant the Lambda access', 'once', ['sign_off', 'dependants'], null, { path: 'scripts/rollout/x-grant.sh' }]]);
+    await put(g.id, record(text));
+    expect(stepsOf(g.id)).toHaveLength(1);
+    expect(events('updated')).toHaveLength(0);
+  });
+
+  it('files a step for an environment the board does not define after the merge, with the board\'s names in its detail', async () => {
+    const g = await newGlob();
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: eu-west)\n- manual: Flip it (env: staging)\n'));
+    const steps = stepsOf(g.id);
+    expect(steps.map((s) => [s.title, s.due])).toEqual([
+      ['Set the flag', 'after_merge'],
+      ['Flip it', 'after_deploy:staging'],
+    ]);
+    expect(steps[0]?.detail).toContain("Unknown environment eu-west: this board's environments are staging, production, prod");
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: eu-west)\n- manual: Flip it (env: staging)\n'));
+    expect(events('updated')).toHaveLength(0);
+  });
+
   it('writes a step with an env as due after that deploy, holding nothing back unless it says so', async () => {
     const g = await newGlob();
     await merge(g.id);
@@ -794,7 +835,7 @@ describe('the rollout job answer', () => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -903,7 +944,7 @@ describe('steps that tick themselves', () => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
