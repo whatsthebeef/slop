@@ -497,26 +497,34 @@ export const GlobCard = ({
         {stripMarkdown(glob.title)}
       </div>
       {glob.group !== null && (
-        <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-chips'>
-          <GroupChip name={glob.group} onFilter={onFilterGroup} />
+        // The avatar shares the group tag's row (tag left, avatar right), so the card has no row of its own for it.
+        <div className='flex min-w-0 items-center justify-between gap-1.5' data-testid='card-group-row'>
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-chips'>
+            <GroupChip name={glob.group} onFilter={onFilterGroup} />
+          </div>
+          <div className='ml-auto flex shrink-0 items-center' data-testid='card-avatar'>
+            <Avatar email={person} planner={glob.implementer === null} />
+          </div>
         </div>
       )}
-      <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
-        {move !== null && (
-          <div className='flex min-w-0 flex-1 flex-wrap items-center gap-1.5' data-testid='card-actions'>
-            <MoveButton move={move} hot={move.action === previewing} onPreview={onPreview} onMove={onMove} />
-          </div>
-        )}
-        <div className='ml-auto flex shrink-0 items-center gap-1.5'>
-          {arming !== null && (
-            <>
-              <ArmSystemLabel label={arming} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
-              <DotSeparator testId='card-arm-separator' />
-            </>
+      {(glob.group === null || move !== null || arming !== null) && (
+        <div className='flex min-w-0 items-end justify-between gap-2' data-testid='card-bottom'>
+          {move !== null && (
+            <div className='flex min-w-0 flex-1 flex-wrap items-center gap-1.5' data-testid='card-actions'>
+              <MoveButton move={move} hot={move.action === previewing} onPreview={onPreview} onMove={onMove} />
+            </div>
           )}
-          <Avatar email={person} planner={glob.implementer === null} />
+          <div className='ml-auto flex shrink-0 items-center gap-1.5'>
+            {arming !== null && (
+              <>
+                <ArmSystemLabel label={arming} onOpen={() => onOpenSection(cardTargets.humanSteps())} />
+                {glob.group === null && <DotSeparator testId='card-arm-separator' />}
+              </>
+            )}
+            {glob.group === null && <Avatar email={person} planner={glob.implementer === null} />}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
