@@ -20,7 +20,7 @@ import { groupNames } from '@/lib/group-names';
 import { groupPath } from '@/lib/group-page';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { useBoardMotion } from '@/lib/board-motion';
-import { mergeOutcomeText, opensGlobView, outcomeRecorded } from '@/lib/click-outcome';
+import { mergeOutcomeText, opensGlobView, reportRefusal } from '@/lib/click-outcome';
 import { matchesFilters } from '@/lib/board-filters';
 import { withGlob } from '@/lib/glob-list';
 import { globPath, globQuery, globTargetOf } from '@/lib/glob-section';
@@ -298,8 +298,8 @@ export const BoardPage = () => {
 
   /**
    * Handles a failed request. A version conflict takes the current glob. A click the machine refused is stored on the glob as its
-   * last outcome, which the card and the glob view show, so the glob is reloaded and only toasted when nothing was stored (the
-   * refusal bumps its version). Anything else (the network, the server) is toasted.
+   * last outcome, but only the glob view shows that notice (the card shows status only), so the card always toasts it, after
+   * reloading the glob for its new version. Anything else (the network, the server) is toasted.
    */
   const fail = (error: unknown, clicked?: { glob: GlobView; action: Action }) => {
     if (!(error instanceof RequestError)) {
@@ -316,13 +316,7 @@ export const BoardPage = () => {
       toast(message);
       return;
     }
-    api.glob(clicked.glob.id).then(
-      (fresh) => {
-        store(fresh);
-        if (!outcomeRecorded(fresh, clicked.glob, clicked.action)) toast(message);
-      },
-      () => toast(message),
-    );
+    void reportRefusal(() => api.glob(clicked.glob.id), store, toast, message);
   };
 
   const copyCommand = useSstorCopy();

@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { mergeOutcomeText, opensGlobView, outcomeRecorded } from '../src/lib/click-outcome';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  mergeOutcomeText,
+  opensGlobView,
+  outcomeRecorded,
+  reportRefusal,
+} from '../src/lib/click-outcome';
 
 describe('mergeOutcomeText', () => {
   it('says which happened: merged, armed, merging, cancelled or why it failed', () => {
@@ -61,5 +66,22 @@ describe('outcomeRecorded', () => {
     expect(
       outcomeRecorded({ version: 4, lastOutcome: { kind: 'start' } }, { version: 3 }, 'merge'),
     ).toBe(false);
+  });
+});
+
+describe('reportRefusal (the board card)', () => {
+  it('toasts the reason after reloading, even when the reloaded glob carries the refusal as its outcome', async () => {
+    const fresh = { version: 4, lastOutcome: { kind: 'merge' } };
+    const [store, toast] = [vi.fn(), vi.fn()];
+    await reportRefusal(() => Promise.resolve(fresh), store, toast, 'Not mergeable');
+    expect(store).toHaveBeenCalledWith(fresh);
+    expect(toast).toHaveBeenCalledWith('Not mergeable');
+  });
+
+  it('toasts when the reload fails', async () => {
+    const [store, toast] = [vi.fn(), vi.fn()];
+    await reportRefusal(() => Promise.reject(new Error('offline')), store, toast, 'Not mergeable');
+    expect(store).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith('Not mergeable');
   });
 });

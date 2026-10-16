@@ -14,15 +14,14 @@ const FILES = ['apps/web/src/lib/api.ts'];
 const MINUTE = 60_000;
 const ago = (ms: number): string => new Date(Date.parse(NOW) - ms).toISOString();
 
-const view = (patch: Partial<PresentableGlob> = {}): PresentableGlob =>
-  ({
-    ...glob(),
-    list: 'doing',
-    branch: 's1t1',
-    currentRun: null,
-    allowedActions: [],
-    ...patch,
-  });
+const view = (patch: Partial<PresentableGlob> = {}): PresentableGlob => ({
+  ...glob(),
+  list: 'doing',
+  branch: 's1t1',
+  currentRun: null,
+  allowedActions: [],
+  ...patch,
+});
 const prOpen = (patch: Partial<PresentableGlob> = {}): PresentableGlob =>
   view({
     type: 'same',
@@ -401,6 +400,50 @@ describe('pending clicks', () => {
     expect(p.status?.text).not.toBe('merging');
     expect(p.notice?.text).toBe('Merge had no effect after a minute.');
     expect(p.cardPrimary?.kind).toBe('merge');
+  });
+
+  describe('an expired click whose effect is still going is not a timeout', () => {
+    const old = (kind: Action) => click(kind, ago(PENDING_TIMEOUT_MS + 1000));
+    const noTimeout = (p: ReturnType<typeof present>) => {
+      expect(p.notice?.text ?? '').not.toContain('had no effect');
+      expect(p.activity.some((e) => e.text.includes('had no effect'))).toBe(false);
+    };
+
+    it.each(['queued', 'active'] as const)('Fix conflict with its run %s says nothing', (state) => {
+      const queued = run({ id: 'run-7', state, purpose: 'resolve_conflict' });
+      const g = prOpen({
+        conflict,
+        runs: [queued],
+        currentRun: queued,
+        pendingAction: { ...old('resolve_conflict'), runId: 'run-7' },
+      });
+      noTimeout(present(g));
+    });
+
+    it('Fix conflict whose run ended without a result is a timeout', () => {
+      const ended = run({
+        id: 'run-7',
+        state: 'ended',
+        outcome: 'completed',
+        purpose: 'resolve_conflict',
+      });
+      const g = prOpen({
+        runs: [ended],
+        pendingAction: { ...old('resolve_conflict'), runId: 'run-7' },
+      });
+      expect(present(g).notice?.text).toBe('Fix conflict had no effect after a minute.');
+    });
+
+    it.each([
+      ['armed to merge when checks pass', { mergeMode: 'when_green' as const }],
+      [
+        'in the merge queue',
+        { mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' as const } },
+      ],
+      ['merging', { status: 'merging' as const }],
+    ])('Merge %s says nothing', (_name, patch) => {
+      noTimeout(present(prOpen({ ...patch, pendingAction: old('merge') })));
+    });
   });
 
   it('every in-progress status is a status: no click action, a section at most', () => {

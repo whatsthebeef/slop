@@ -143,6 +143,32 @@ describe('action outcomes (REST)', () => {
     expect((await viewOf(g.id)).lastOutcome ?? null).toBeNull();
   });
 
+  it('an action that records no pending action still clears the last outcome (Cancel merge)', async () => {
+    const g = await create({ type: 'super' });
+    await put(g.id, {
+      status: 'pr_open',
+      provisioning: 'ok',
+      implementer: DEV,
+      pr: { number: 8, state: 'ready', headSha: HEAD },
+      headChecks: { sha: HEAD, state: 'pending' },
+      mergeMode: 'when_green',
+      lastOutcome: {
+        kind: 'merge',
+        at: '2026-10-05T12:00:00.000Z',
+        by: DEV,
+        result: 'failed',
+        reason: 'Merge failed: no',
+      },
+    });
+    const before = await viewOf(g.id);
+    expect(before.lastOutcome).not.toBeNull();
+    const done = await post(g.id, '/actions/cancel-merge', { version: before.version });
+    expect(done.status).toBe(200);
+    const after = await viewOf(g.id);
+    expect(after.lastOutcome ?? null).toBeNull();
+    expect(after.pendingAction ?? null).toBeNull();
+  });
+
   it('Fix conflict stores the pending action with the run it queued, and a new click clears an earlier refusal', async () => {
     const g = await create();
     await put(g.id, {

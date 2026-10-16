@@ -846,15 +846,18 @@ export const createApp = (deps: AppDeps) => {
     const email = c.get('email');
     const result = await actions[action.data](email, c.req.param('id'), body);
     const kind = (PENDING_ACTIONS as { readonly [route: string]: machine.Action | undefined })[action.data];
-    if (kind !== undefined) {
+    {
       // Recording never fails the click: a stale version (a webhook moved the glob first) or a store error just leaves it unrecorded.
       try {
-        if (result.ok) {
+        if (result.ok && kind === undefined) {
+          // Not a click with an effect to wait for, but still the next click: the last outcome's notice goes away.
+          await globs.clearOutcome(email, result.value.id, result.value.version);
+        } else if (result.ok && kind !== undefined) {
           const run = machine.currentRun(result.value);
           const runId = RUN_ACTIONS.has(action.data) && run?.state === 'queued' ? run.id : undefined;
           // Before the drain: a job that settles the glob right away must find the click already pending, not set it afterwards.
           await globs.recordRequested(email, result.value.id, kind, result.value.version, runId);
-        } else if (KEPT_REFUSALS.has(result.error.code)) {
+        } else if (!result.ok && kind !== undefined && KEPT_REFUSALS.has(result.error.code)) {
           await globs.recordRefusal(email, c.req.param('id'), kind, result.error.message);
         }
       } catch {

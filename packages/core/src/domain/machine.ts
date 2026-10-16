@@ -21,7 +21,7 @@ import {
   validateAttributes,
   validateScopeEdit,
 } from './attributes.js';
-import { PENDING_TIMEOUT_MS } from './pending-action.js';
+import { pendingTimedOut } from './pending-action.js';
 import { actionOf, actionState, hasBranchRecord, preparationOf } from './action-glob.js';
 import type {
   ActionAttributes,
@@ -522,14 +522,15 @@ class Builder {
       const failedRun = runEnded && run.outcome === 'failed';
       const reason = failedNow ? now.failure.reason : failedRun ? (run.failureReason ?? 'The run failed') : null;
       this.glob = { ...now, pendingAction: null, lastOutcome: reason === null ? null : outcome('failed', reason) };
-    } else if (Date.parse(this.ctx.now) - Date.parse(pending.at) >= PENDING_TIMEOUT_MS) {
+    } else if (pendingTimedOut(now, pending, this.ctx.now)) {
       this.glob = { ...now, pendingAction: null, lastOutcome: outcome('timed_out', `${pending.kind} had no effect after a minute`) };
     }
   }
 
-  done(): Result<Transition> {
+  /** `touch: false` leaves `updatedAt` alone (a click's own record is not activity on the glob: reconcile and stall clocks read it). */
+  done(touch = true): Result<Transition> {
     this.settlePending();
-    const glob = this.changed ? { ...this.glob, updatedAt: this.ctx.now } : this.glob;
+    const glob = this.changed && touch ? { ...this.glob, updatedAt: this.ctx.now } : this.glob;
     return ok({
       glob,
       changed: this.changed,
@@ -564,13 +565,17 @@ export const actionRequested = (glob: Glob, input: { readonly kind: Action; read
       },
       lastOutcome: null,
     })
-    .done();
+    .done(false);
+
+/** Any other action click clears the last outcome, so a notice goes away on the next click whatever it was; nothing to write without one. */
+export const outcomeCleared = (glob: Glob, ctx: Context): Result<Transition> =>
+  glob.lastOutcome == null ? unchanged(glob) : new Builder(glob, ctx).set({ lastOutcome: null }).done(false);
 
 /** A click the machine refused is kept as the glob's last outcome (with the reason), so the refusal shows after the toast is gone. */
 export const actionRefused = (glob: Glob, input: { readonly kind: Action; readonly reason: string }, ctx: Context): Result<Transition> =>
   new Builder(glob, ctx)
     .set({ lastOutcome: { kind: input.kind, at: ctx.now, by: ctx.actor?.email ?? '', result: 'failed', reason: input.reason } })
-    .done();
+    .done(false);
 
 const invalidTransition = (glob: Glob, actor: Actor | null, message: string): Result<never> =>
   err({

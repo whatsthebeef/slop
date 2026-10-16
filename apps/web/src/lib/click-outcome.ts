@@ -40,3 +40,21 @@ export const outcomeRecorded = (
   clicked: { readonly version: number },
   action: Action,
 ): boolean => fresh.version > clicked.version && fresh.lastOutcome?.kind === action;
+
+/**
+ * A refused click on the board card: the glob is reloaded (the refusal bumped its version) and the reason is always toasted, because
+ * the card shows status only and the stored notice lives in the glob view. A failed reload toasts too.
+ */
+export const reportRefusal = <G>(
+  reload: () => Promise<G>,
+  store: (glob: G) => void,
+  toast: (message: string) => void,
+  message: string,
+): Promise<void> =>
+  reload().then(
+    (fresh) => {
+      store(fresh);
+      toast(message);
+    },
+    () => toast(message),
+  );

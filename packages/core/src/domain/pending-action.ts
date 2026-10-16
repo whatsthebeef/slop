@@ -12,3 +12,23 @@ export const pendingInForce = (
   if (pending == null) return null;
   return Date.parse(now) - Date.parse(pending.at) < PENDING_TIMEOUT_MS ? pending : null;
 };
+
+/**
+ * Whether the click `pending` has timed out at `now`: older than `PENDING_TIMEOUT_MS` and the thing it started is not still going.
+ * A run it named that is queued or active, or a merge that is armed (when checks pass), queued or merging, is the click doing its
+ * job slowly, not having no effect. Pure; one rule for the notice, the activity log and the write in `Builder.settlePending`.
+ */
+export const pendingTimedOut = (
+  glob: Pick<Glob, 'runs' | 'mergeMode' | 'mergeQueue' | 'status'>,
+  pending: PendingAction,
+  now: string,
+): boolean => {
+  if (Date.parse(now) - Date.parse(pending.at) < PENDING_TIMEOUT_MS) return false;
+  if (pending.runId !== undefined) {
+    const run = glob.runs.find((r) => r.id === pending.runId);
+    if (run !== undefined && run.state !== 'ended') return false;
+  }
+  const merging =
+    glob.mergeMode === 'when_green' || glob.mergeQueue != null || glob.status === 'merging';
+  return !merging;
+};

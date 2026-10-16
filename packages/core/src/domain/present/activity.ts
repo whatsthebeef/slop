@@ -4,7 +4,7 @@ import { stripMarkdown, stripMarkdownLines } from './text.js';
 import { firstNameOf } from './text.js';
 import { stepLabel } from './position.js';
 import { actionPresentation } from './action-presentation.js';
-import { PENDING_TIMEOUT_MS } from '../pending-action.js';
+import { PENDING_TIMEOUT_MS, pendingTimedOut } from '../pending-action.js';
 
 /** Who or what an activity entry is about, which picks its icon. */
 export type ActivityActor = 'machine' | 'human' | 'github' | 'warn';
@@ -299,11 +299,7 @@ export const activityOf = (
     );
   }
   // A click older than the timeout with nothing to show for it has timed out, even though nothing wrote that down yet.
-  if (
-    clicked != null &&
-    outcome == null &&
-    Date.parse(now) - Date.parse(clicked.at) >= PENDING_TIMEOUT_MS
-  ) {
+  if (clicked != null && outcome == null && pendingTimedOut(glob, clicked, now)) {
     out.push(
       entry(
         `outcome:${clicked.kind}:${clicked.at}:timeout`,

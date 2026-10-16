@@ -1,7 +1,7 @@
 import { decisionOf } from './decision-glob.js';
 import type { HumanStepViewer } from './human-steps.js';
 import type { Action } from './machine.js';
-import { pendingInForce } from './pending-action.js';
+import { pendingInForce, pendingTimedOut } from './pending-action.js';
 import { activityOf } from './present/activity.js';
 import type { ActivityEntry } from './present/activity.js';
 import { actionPresentation } from './present/action-presentation.js';
@@ -124,7 +124,6 @@ const IN_PROGRESS: Readonly<Partial<Record<Action, string>>> = {
   start: 'starting',
   start_anyway: 'starting',
   investigate: 'investigating',
-  review_now: 'reviewing',
   pick_up: 'picking up',
   take_over: 'picking up',
   retrigger: 'retrying',
@@ -135,13 +134,8 @@ const IN_PROGRESS: Readonly<Partial<Record<Action, string>>> = {
   merge_anyway: 'merging',
   merge_continue: 'merging',
   retry_merge: 'merging',
-  cancel_merge: 'cancelling',
   mark_ready: 'marking ready',
   prepare_action: 'preparing',
-  complete_action: 'marking done',
-  dismiss_action: 'dismissing',
-  fail_action: 'reporting',
-  sign_off_anyway: 'signing off',
 };
 
 /** The in-progress words for a click. */
@@ -240,7 +234,7 @@ const noticeOf = (
   }
   // A click that was neither refused nor settled by the time it timed out: say so (it is written down by the next change).
   const stale = glob.pendingAction;
-  if (stale != null) {
+  if (stale != null && pendingTimedOut(glob, stale, now)) {
     const label = actionPresentation(stale.kind, glob).label;
     return {
       kind: 'outcome',

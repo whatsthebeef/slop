@@ -3141,6 +3141,11 @@ export class GlobService implements AutomaticRelations {
     return this.command(email, id, null, (glob, ctx) => machine.actionRefused(glob, { kind, reason }, ctx), { applies: 'any' });
   }
 
+  /** An action click that records no pending action still clears the last outcome (`machine.outcomeCleared`); a stale version is ignored by the caller. */
+  clearOutcome(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.outcomeCleared(glob, ctx), { applies: 'any' });
+  }
+
   /** Cancel merge: disarms "merge when checks pass". */
   cancelMerge(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx), { applies: 'prepared' });

@@ -3,7 +3,11 @@ import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
-import { PENDING_TIMEOUT_MS, pendingInForce } from '../src/domain/pending-action.js';
+import {
+  PENDING_TIMEOUT_MS,
+  pendingInForce,
+  pendingTimedOut,
+} from '../src/domain/pending-action.js';
 import type { PendingAction } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { NOW, ctx, dev, glob, run } from './fixtures.js';
@@ -108,10 +112,74 @@ describe('pending action transitions', () => {
   });
 
   it('records a timeout on the next change once the pending action is old and nothing new showed', () => {
-    const before = glob({ status: 'merging', pendingAction: pending() });
+    const before = glob({ status: 'pr_open', pendingAction: pending() });
     const t = value(m.relationsChanged(before, { ...ctx(null), now: later(PENDING_TIMEOUT_MS) }));
     expect(t.glob.pendingAction).toBeNull();
     expect(t.glob.lastOutcome).toMatchObject({ kind: 'merge', result: 'timed_out', by: dev.email });
+  });
+});
+
+describe('a click whose effect is still going does not time out', () => {
+  const old = (p: Partial<PendingAction> = {}) => pending({ at: NOW, ...p });
+  const at = later(PENDING_TIMEOUT_MS + 5000);
+
+  it.each(['queued', 'active'] as const)(
+    'names a run that is %s: no timeout, no write',
+    (state) => {
+      const before = glob({
+        status: 'pr_open',
+        runs: [run({ id: 'run-1', state })],
+        pendingAction: old({ kind: 'resolve_conflict', runId: 'run-1' }),
+      });
+      expect(pendingTimedOut(before, before.pendingAction as PendingAction, at)).toBe(false);
+      const t = value(m.relationsChanged(before, { ...ctx(null), now: at }));
+      expect(t.glob.pendingAction).toEqual(before.pendingAction);
+      expect(t.glob.lastOutcome ?? null).toBeNull();
+    },
+  );
+
+  it.each([
+    ['armed', { mergeMode: 'when_green' as const }],
+    ['merging', { status: 'merging' as const }],
+  ])('a merge that is %s: no timeout, no write', (_n, patch) => {
+    const before = glob({ status: 'pr_open', ...patch, pendingAction: old() });
+    expect(pendingTimedOut(before, old(), at)).toBe(false);
+    const t = value(m.relationsChanged(before, { ...ctx(null), now: at }));
+    expect(t.glob.pendingAction).toEqual(old());
+  });
+
+  it('times out when the named run has ended and nothing else is going', () => {
+    const before = glob({
+      status: 'pr_open',
+      runs: [run({ id: 'run-1', state: 'ended' })],
+      pendingAction: old({ kind: 'resolve_conflict', runId: 'run-1' }),
+    });
+    expect(pendingTimedOut(before, before.pendingAction as PendingAction, at)).toBe(true);
+  });
+});
+
+describe('clicks and the clocks', () => {
+  it("a click and a refusal leave updatedAt alone, the version is the service's to bump", () => {
+    const before = glob({ updatedAt: '2026-10-01T00:00:00.000Z' });
+    const a = value(m.actionRequested(before, { kind: 'merge' }, ctx()));
+    const r = value(m.actionRefused(before, { kind: 'merge', reason: 'no' }, ctx()));
+    expect(a.changed && r.changed).toBe(true);
+    expect(a.glob.updatedAt).toBe(before.updatedAt);
+    expect(r.glob.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('outcomeCleared drops the last outcome and writes nothing without one', () => {
+    const outcome = {
+      kind: 'merge' as const,
+      at: NOW,
+      by: dev.email,
+      result: 'failed' as const,
+      reason: 'no',
+    };
+    const t = value(m.outcomeCleared(glob({ lastOutcome: outcome }), ctx()));
+    expect(t.changed).toBe(true);
+    expect(t.glob.lastOutcome).toBeNull();
+    expect(value(m.outcomeCleared(glob(), ctx())).changed).toBe(false);
   });
 });
 
