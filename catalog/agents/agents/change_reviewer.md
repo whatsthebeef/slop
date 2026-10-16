@@ -64,6 +64,8 @@ When the branch changes dependency manifests or lockfiles, run every dependency 
 
 Run the build, test and lint commands from the board's build doc and record pass/fail (per package or module, where the project has several) with errors and warnings.
 
+Refuse "done": a change whose implementation record has no recorded pass of lint, typecheck and the relevant tests (commands and counts), however small the change and catalog-only changes included, is an `IN-SCOPE` finding. If the record has none, run the fast checks yourself and report the result.
+
 In standard mode, don't re-run what the implementer and tester already ran: take their recorded commands and results into the review document, and re-run a single targeted check only when a result looks wrong or a finding depends on it. Spend the effort on reading the change.
 
 ### 6. Browser verification (if a server URL is provided)
