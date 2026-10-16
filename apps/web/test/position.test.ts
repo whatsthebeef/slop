@@ -46,9 +46,9 @@ describe('position indicator', () => {
     expect(positionOf(agentSet, later(30))).toMatchObject({ holder: 'machine', text: 'committing agent set v58' });
   });
 
-  it('puts merging when checks pass ahead of the plain checks wait', () => {
+  it('puts running checks for an armed merge, ahead of the plain checks wait', () => {
     const armed = prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] });
-    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: 'merging when checks pass', spinning: true });
+    expect(positionOf(armed, NOW)).toMatchObject({ holder: 'waiting', text: 'running checks', spinning: true });
     expect(waitingFor(armed, armed.allowedActions ?? [], 'dev')).toEqual([]);
     const settled = { ...armed, headChecks: { sha: head, state: 'passed' as const } };
     expect(positionOf(settled, NOW)).toMatchObject({ holder: 'machine', text: 'merging' });
@@ -70,26 +70,26 @@ describe('position indicator', () => {
     expect(positionOf(merging, NOW)?.text).toBe('merging from the base');
   });
 
-  it('says merging when checks pass, not plain merging, for a merging glob whose checks are still running', () => {
+  it('says running checks, not plain merging, for a merging glob whose checks are still running', () => {
     const merging = view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'pending' } });
-    expect(positionOf(merging, NOW)?.text).toBe('merging when checks pass');
-    expect(statusLine(merging, NOW)?.full).toBe('merging when checks pass');
+    expect(positionOf(merging, NOW)?.text).toBe('running checks');
+    expect(statusLine(merging, NOW)?.full).toBe('running checks');
   });
 
   it.each([
     ['a ready sub', prOpen({ type: 'sub', headChecks: { sha: head, state: 'pending' } }), "the board's sub gate decides whether slop merges it or a person reviews it"],
     ['a same awaiting a person\'s merge', prOpen({ type: 'same', headChecks: { sha: head, state: 'pending' }, allowedActions: ['merge'] }), 'a person merges it with Merge (pressed before then, slop merges it once they pass)'],
     ['a draft', prOpen({ type: 'same', pr: { number: 7, state: 'draft', headSha: head }, headChecks: { sha: head, state: 'pending' } }), 'nothing changes: the PR stays a draft until the work is marked ready'],
-  ])('reads bare "checks running" for %s, with the head, the next step and a failure in the tooltip', (_name, g, next) => {
+  ])('reads bare "running checks" for %s, with the head, the next step and a failure in the tooltip', (_name, g, next) => {
     const position = positionOf(g, NOW);
-    expect(position).toMatchObject({ holder: 'waiting', text: 'checks running', label: 'checks running' });
+    expect(position).toMatchObject({ holder: 'waiting', text: 'running checks', label: 'running checks' });
     expect(position?.tip).toBe(`Checks are running on ${head.slice(0, 7)}. When they pass, ${next}; if any fail, the glob says which one failed.`);
   });
 
   it('says a ready PR is waiting for checks before they have started', () => {
     expect(positionOf(prOpen({ headChecks: null }), NOW)).toMatchObject({
       holder: 'waiting',
-      text: 'checks running',
+      text: 'running checks',
       spinning: false,
     });
   });
