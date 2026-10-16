@@ -4,6 +4,8 @@ import type { AnswerQuestionInput } from '@/lib/api';
 import { closedQuestionsOf, openQuestionsOf } from '@/lib/questions';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { CommandBox } from '../human-steps';
+import { MarkdownView } from '../markdown-view';
 import { Block } from './block';
 import type { GlobViewContext } from './context';
 
@@ -47,9 +49,12 @@ const OpenQuestionRow = ({
   return (
     <li className="grid gap-2 rounded border border-edge p-2" data-testid={`question-${question.id}`}>
       <div className="grid gap-0.5">
-        <span className="whitespace-pre-wrap break-words font-medium" data-testid="question-text">
-          {question.text}
-        </span>
+        <div className="min-w-0 break-words font-medium [overflow-wrap:anywhere]" data-testid="question-text">
+          <MarkdownView content={question.text} bare commands />
+        </div>
+        {(question.commands ?? []).map((command, i) => (
+          <CommandBox key={`${String(i)}:${command}`} command={command} />
+        ))}
         <span className="text-xs text-muted-foreground">
           {raisedLine(question)}. {HOLDS[question.blocking]}.
         </span>
@@ -160,7 +165,12 @@ export const QuestionsSection = ({
           <ul className="grid gap-2">
             {closed.map((q) => (
               <li key={q.id} className="grid gap-0.5" data-testid={`answered-${q.id}`}>
-                <span className="whitespace-pre-wrap break-words font-medium">{q.text}</span>
+                <div className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">
+                  <MarkdownView content={q.text} bare commands />
+                </div>
+                {(q.commands ?? []).map((command, i) => (
+                  <CommandBox key={`${String(i)}:${command}`} command={command} />
+                ))}
                 <span className="text-xs text-muted-foreground">{closedLine(q)}</span>
               </li>
             ))}

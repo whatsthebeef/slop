@@ -364,3 +364,13 @@ describe('the merge gate and open merge questions', () => {
     expect(m.allowedActions(same, dev)).toContain('start');
   });
 });
+
+describe('questionLine titles', () => {
+  it('is the first sentence, without code spans, cut at a word', async () => {
+    const { questionLine } = await import('../src/domain/questions.js');
+    expect(questionLine({ text: 'Pre-merge check (review finding #4). Run `bash .reviews/s14b3-pool-trigger-check.sh <profile>` in the repo.' })).toBe('Pre-merge check (review finding #4).');
+    const long = questionLine({ text: `${'word '.repeat(40)}end` });
+    expect(long.length).toBeLessThanOrEqual(100);
+    expect(long.endsWith(' word…') || long.endsWith('word…')).toBe(true);
+  });
+});

@@ -26,6 +26,8 @@ export const MAX_QUESTIONS = 20;
 export const MAX_QUESTION_TEXT = 1000;
 export const MAX_QUESTION_OPTIONS = 6;
 export const MAX_QUESTION_OPTION = 120;
+export const MAX_QUESTION_COMMANDS = 5;
+export const MAX_QUESTION_COMMAND = 300;
 export const MAX_QUESTION_ANSWER = 4000;
 export const MAX_QUESTION_KEY = 120;
 export const MAX_QUESTION_NOTE = 1000;
@@ -61,6 +63,8 @@ export interface OpenQuestion {
   readonly key?: string;
   readonly text: string;
   readonly options?: readonly string[];
+  /** Shell commands the question shows, each in its own copyable box under the text (one command per entry). */
+  readonly commands?: readonly string[];
   readonly raisedBy: QuestionRaiser;
   readonly source: QuestionSource;
   readonly blocking: QuestionBlocking;
@@ -76,6 +80,7 @@ export interface NewQuestion {
   readonly key?: string;
   readonly text: string;
   readonly options?: readonly string[];
+  readonly commands?: readonly string[];
   readonly blocking: QuestionBlocking;
   readonly source: QuestionSource;
   readonly raisedBy: QuestionRaiser;
@@ -125,11 +130,27 @@ export const nextQuestionId = (existing: readonly Pick<OpenQuestion, 'id'>[]): s
 
 const shorten = (text: string, max: number): string => {
   const one = text.replace(/\s+/g, ' ').trim();
-  return one.length <= max ? one : `${one.slice(0, max - 1).trimEnd()}…`;
+  if (one.length <= max) return one;
+  const cut = one.slice(0, max - 1);
+  // Cut at a word, never mid-word.
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 };
 
-/** One line of a question, for a title or a refusal. */
-export const questionLine = (q: Pick<OpenQuestion, 'text'>): string => shorten(q.text, 100);
+/** The first sentence of a text, with fenced blocks and code spans taken out: plain words for a title. */
+const firstSentence = (text: string): string => {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (plain === '') return text.replace(/`/g, '').replace(/\s+/g, ' ').trim();
+  const end = /[.!?](?=\s|$)/.exec(plain);
+  return end === null ? plain : plain.slice(0, end.index + 1);
+};
+
+/** One plain line of a question, for a title or a refusal: its first sentence, no code spans, cut at a word. */
+export const questionLine = (q: Pick<OpenQuestion, 'text'>): string => shorten(firstSentence(q.text), 100);
 
 // ---------------------------------------------------------------------------
 // Holds
@@ -170,6 +191,11 @@ export const checkNewQuestion = (input: NewQuestion): Result<NewQuestion> => {
   if (options.length > MAX_QUESTION_OPTIONS) return invalidInput(`A question has at most ${String(MAX_QUESTION_OPTIONS)} options`);
   if (options.some((o) => o.length > MAX_QUESTION_OPTION)) return invalidInput(`An option is limited to ${String(MAX_QUESTION_OPTION)} characters`);
   if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) return invalidInput('A question\'s options must differ');
+  const commands = (input.commands ?? []).map((c) => c.trim()).filter((c) => c !== '');
+  if (commands.length > MAX_QUESTION_COMMANDS) return invalidInput(`A question has at most ${String(MAX_QUESTION_COMMANDS)} commands`);
+  if (commands.some((c) => c.length > MAX_QUESTION_COMMAND || c.includes('\n'))) {
+    return invalidInput(`A command is one line of at most ${String(MAX_QUESTION_COMMAND)} characters`);
+  }
   const key = trimmed(input.key);
   if (key.length > MAX_QUESTION_KEY) return invalidInput(`A question key is limited to ${String(MAX_QUESTION_KEY)} characters`);
   return ok({
@@ -178,6 +204,7 @@ export const checkNewQuestion = (input: NewQuestion): Result<NewQuestion> => {
     source: input.source,
     raisedBy: input.raisedBy,
     ...(options.length === 0 ? {} : { options }),
+    ...(commands.length === 0 ? {} : { commands }),
     ...(key === '' ? {} : { key }),
   });
 };
