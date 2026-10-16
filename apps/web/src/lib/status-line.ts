@@ -490,9 +490,7 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
               why: `for the checks on ${head.slice(0, 7)}`,
               running: true,
             };
-    // A same with open rollout steps merges with Merge and continue, so that is the action that waits.
-    const rolloutSame = glob.type === 'same' && (glob.rolloutSteps ?? 0) > 0;
-    waiting.push({ ...named(rolloutSame ? 'merge_continue' : 'merge'), ...wait });
+    waiting.push({ ...named('merge'), ...wait });
     if (glob.type === 'super') waiting.push({ ...named('merge_continue'), ...wait });
   }
   if (glob.type !== 'super') return waiting;

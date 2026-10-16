@@ -3121,9 +3121,9 @@ export class GlobService implements AutomaticRelations {
   }
 
   /**
-   * Merge, or (`continueAfter`) Merge and continue: a super's, which needs the latest implementation record at the head, or a
-   * same's with open rollout steps, which lands as a plain merge and keeps the glob in Doing for the steps. A same with
-   * open rollout steps is refused a plain Merge.
+   * Merge. A same with open rollout steps lands as a plain merge and slop keeps the glob open for the steps, so there is one
+   * Merge for everyone; `continueAfter` (the `merge_continue` alias, or a super's Merge and continue, which needs the latest
+   * implementation record at the head) is still accepted.
    */
   merge(email: string, id: string, version: number, continueAfter = false) {
     return this.command(
@@ -3131,7 +3131,7 @@ export class GlobService implements AutomaticRelations {
       id,
       version,
       (glob, ctx, _board, facts) => machine.requestMerge(glob, ctx, { continue: continueAfter, facts }),
-      { facts: continueAfter, relations: true, rollout: true, applies: 'prepared' },
+      { facts: true, relations: true, rollout: true, applies: 'prepared' },
     );
   }
 
