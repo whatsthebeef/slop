@@ -58,7 +58,7 @@ const tokens = (raw: string): string[] => raw.split(/[\s,]+/).filter((t) => t !=
 export const KINDS = ['task', 'bug', 'action', 'decision'] as const;
 export type Kind = (typeof KINDS)[number];
 
-/** The kind a card's corner icon shows; the filter uses the same test, so a chip selects exactly the cards that show its icon. */
+/** The kind the filter chips select; the corner icon follows it, except that a task counted as R&D shows the feature icon. */
 export const kindOf = (glob: Pick<GlobView, 'category' | 'type' | 'fix'>): Kind => {
   const mode: Mode = modeOf(glob);
   if (mode === 'decision' || mode === 'action') return mode;
