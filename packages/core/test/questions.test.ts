@@ -6,6 +6,7 @@ import {
   appendClarification,
   canAnswer,
   checkNewQuestion,
+  isCommandQuestion,
   clarificationEntry,
   mergeQuestions,
   nextQuestionId,
@@ -93,6 +94,16 @@ describe('question helpers', () => {
     expect(checkNewQuestion(ask({ options: ['same', 'Same'] })).ok).toBe(false);
     const ok = checkNewQuestion(ask({ text: ' Prod? ', options: [' yes ', '', 'no'], key: ' k ' }));
     expect(ok.ok && ok.value).toMatchObject({ text: 'Prod?', options: ['yes', 'no'], key: 'k' });
+  });
+
+  it('refuses a command for a person to run from an agent, but not a real choice or a person', () => {
+    const text = 'Run `bash .reviews/s14b3-pool-trigger-check.sh <profile>` and paste the result';
+    const agent = { kind: 'agent', actor: null } as const;
+    expect(checkNewQuestion(ask({ text, raisedBy: agent })).ok).toBe(false);
+    expect(checkNewQuestion(ask({ text, options: ['Done', 'Failed'], raisedBy: { kind: 'routine', actor: null } })).ok).toBe(false);
+    expect(checkNewQuestion(ask({ text, options: ['Add it here', 'Follow-up'], raisedBy: agent })).ok).toBe(true);
+    expect(checkNewQuestion(ask({ text, raisedBy: { kind: 'person', actor: 'a@b.c' } })).ok).toBe(true);
+    expect(isCommandQuestion('Add the restoration in this glob?', [])).toBe(false);
   });
 
   it('a run of this glob can never answer; a member without a run can', () => {
