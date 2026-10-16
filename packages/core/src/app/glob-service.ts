@@ -1417,7 +1417,7 @@ export class GlobService implements AutomaticRelations {
         const step =
           written.env === null || environments.includes(written.env)
             ? written
-            : { ...written, env: null, detail: [unknownEnvironmentText(written.env, environments) + '; the step is filed after the merge. Re-point or dismiss it.', written.detail].filter((t) => t !== null).join('\n\n') };
+            : { ...written, env: null, detail: [unknownEnvironmentText(written.env, environments) + '; the step is filed after the merge. Dismiss it and add it again for one of the board\'s environments.', written.detail].filter((t) => t !== null).join('\n\n') };
         let script: HumanStepScript | null = null;
         if (step.scriptPath !== null) {
           script = { path: step.scriptPath };
