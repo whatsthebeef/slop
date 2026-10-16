@@ -1,7 +1,7 @@
 import * as environments from '../domain/environments.js';
 import type { Containment, EnvironmentDeploy, EnvironmentIndicator, GlobPresence } from '../domain/environments.js';
 import { webhookSubscribers } from '../domain/atf-runners.js';
-import { forbidden, notFound, ok } from '../domain/errors.js';
+import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { Effect } from '../domain/events.js';
 import { markStepsDue } from './step-due.js';
@@ -39,7 +39,36 @@ export interface GlobEnvironment {
   readonly latest: EnvironmentDeploy | null;
 }
 
+/** What a board member records for a manual environment: a commit (the caller resolved any ref to it) and the ref it came from. */
+export interface RecordedDeploy {
+  readonly sha: string;
+  readonly ref: string | null;
+}
+
+/** One observed environment's health on the board: how its deploys are known and what was last seen. */
+export interface BoardEnvironment {
+  readonly environment: string;
+  readonly role: EnvironmentRole;
+  readonly production: boolean;
+  readonly deployKnown: 'pipeline' | 'manual';
+  /** The latest succeeded deploy, whoever reported it. */
+  readonly latest: EnvironmentDeploy | null;
+  /** The member who recorded `latest` by hand; null when a pipeline reported it (or none yet). */
+  readonly recordedBy: string | null;
+}
+
 const DAY_MS = 86_400_000;
+const PERSON_PREFIX = 'person:';
+
+/** The event ID of a deploy a person recorded; it carries who, so the board can say. */
+const personEventId = (email: string, nonce: string): string => `${PERSON_PREFIX}${email}:${nonce}`;
+
+/** Who recorded a deploy by hand, from its event ID; null for a pipeline's. */
+export const recordedBy = (deploy: EnvironmentDeploy): string | null => {
+  if (!deploy.eventId.startsWith(PERSON_PREFIX)) return null;
+  const rest = deploy.eventId.slice(PERSON_PREFIX.length);
+  return rest.slice(0, rest.lastIndexOf(':'));
+};
 
 /**
  * Application service for release and integration environments: records the deploys pipelines report, works out
@@ -172,6 +201,56 @@ export class EnvironmentService {
     // A step falling due changes the board's Arm system label and Human steps, which the glob hint above doesn't refresh.
     for (const glob of outcome.due) this.deps.notifier.publish({ kind: 'glob.changed', boardId, globId: glob.id, version: glob.version });
     return 'recorded';
+  }
+
+  /**
+   * A board member records that a manual environment now runs `deploy.sha`. It is stored exactly as a reported deploy
+   * (so the containment check, the globs' cards and their after-deploy steps follow), with the member in the event ID.
+   * Refused for an environment that is unknown, unobserved, or whose deploys a pipeline reports.
+   */
+  async recordManualDeploy(email: string, boardId: number, environment: string, deploy: RecordedDeploy): Promise<Result<EnvironmentDeploy>> {
+    const at = this.deps.clock.now();
+    return this.deps.store.transaction(async (tx): Promise<Result<EnvironmentDeploy>> => {
+      if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
+      const board = await tx.getBoard(boardId);
+      if (board === null) return notFound(`No board ${String(boardId)}`);
+      const env = environments.observedEnvironment(board, environment);
+      if (env === null) return invalidInput(`${environment} isn't an environment with a pipeline role`);
+      if (env.deployKnown !== 'manual') return invalidInput(`${environment}'s deploys are reported by its pipeline, not recorded by hand`);
+      const eventId = personEventId(email, `${String(Date.parse(at))}.${deploy.sha}`);
+      await tx.lockEnvironment(boardId, environment);
+      await tx.insertEnvironmentDeploy({ boardId, environment, sha: deploy.sha, ref: deploy.ref, succeeded: true, url: null, at, eventId });
+      const latest = await tx.latestEnvironmentDeploy(boardId, environment);
+      // Another deploy was recorded later in the same instant: it checks.
+      if (latest?.eventId === eventId) {
+        await tx.enqueueEffects([{ kind: 'check_environment', globId: `board-${String(boardId)}`, boardId, environment, sha: deploy.sha }]);
+      }
+      const own = (await tx.listEnvironmentDeploys(boardId, environment, 20)).find((d) => d.eventId === eventId);
+      return own === undefined ? notFound('The deploy was not recorded') : ok(own);
+    });
+  }
+
+  /** The board's observed environments with how their deploys are known and the last one seen, for the board's environments panel. */
+  async forBoard(email: string, boardId: number): Promise<Result<BoardEnvironment[]>> {
+    return this.deps.store.transaction(async (tx) => {
+      if ((await tx.getMember(boardId, email)) === null) return forbidden(`You are not a member of board ${String(boardId)}`);
+      const board = await tx.getBoard(boardId);
+      if (board === null) return notFound(`No board ${String(boardId)}`);
+      const result: BoardEnvironment[] = [];
+      for (const env of board.environments) {
+        if (env.role === undefined) continue;
+        const latest = await tx.latestEnvironmentDeploy(boardId, env.name);
+        result.push({
+          environment: env.name,
+          role: env.role,
+          production: env.production === true,
+          deployKnown: env.deployKnown ?? 'pipeline',
+          latest,
+          recordedBy: latest === null ? null : recordedBy(latest),
+        });
+      }
+      return ok(result);
+    });
   }
 
   /** The observed environments each of the given globs is in, for their cards. */

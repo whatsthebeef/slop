@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import type { BoardService, DeployService, EnvironmentService, Result, TestRunService } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
+import { repoOf } from '../codehost.js';
+import type { ReleaseRefs } from '../codehost.js';
 import type { SignedLinks } from '../signed-links.js';
 import type { Env } from './app.js';
 import { atfDetailSchema, linkSchema, reportedSpecs, shaSchema } from './atf-report.js';
@@ -13,6 +15,8 @@ export interface DeployRoutesDeps {
   readonly testRuns: TestRunService;
   readonly boards: BoardService;
   readonly links: SignedLinks;
+  /** Resolves the refs a person records a manual deploy with; without it Record a deploy is off. */
+  readonly refs?: ReleaseRefs;
   /** The keys EventBridge API destinations send (one per deploy-target stack); `/webhooks/aws` is off without any. */
   readonly awsWebhookKeys: readonly string[];
   readonly log: (task: string, message: string) => void;
@@ -109,6 +113,8 @@ const CODEBUILD_FINAL: Record<string, boolean> = {
   TIMED_OUT: false,
 };
 
+const recordSchema = z.object({ ref: z.string().max(255).optional() });
+
 const send = <T>(c: Context<Env>, result: Result<T>) =>
   result.ok ? c.json({ value: result.value }) : c.json(errorBody(result.error), statusOf(result.error));
 
@@ -182,6 +188,37 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     const result = await deps.testRuns.forGlob(c.get('email'), c.req.param('id'));
     if (!result.ok) return c.json(errorBody(result.error), statusOf(result.error));
     return c.json({ value: result.value.runs, specs: result.value.specs });
+  });
+
+  // The board's observed environments: how each one's deploys are known and the last one seen.
+  app.get('/api/boards/:b/environments', async (c) =>
+    send(c, await deps.environments.forBoard(c.get('email'), Number(c.req.param('b')))),
+  );
+
+  // Recent release tags, to offer when a person records a deploy by hand.
+  app.get('/api/boards/:b/release-tags', async (c) => {
+    const membership = await deps.boards.get(c.get('email'), Number(c.req.param('b')));
+    if (!membership.ok) return send(c, membership);
+    const repo = repoOf(membership.value.board);
+    if (deps.refs === undefined || repo === null) return c.json({ value: [] });
+    return c.json({ value: await deps.refs.recentTags(repo, 10) });
+  });
+
+  // A member records that a manual environment now runs a branch, tag or commit (default: the base branch's head).
+  app.post('/api/boards/:b/environments/:env/deploys', async (c) => {
+    const email = c.get('email');
+    const boardId = Number(c.req.param('b'));
+    const body = recordSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ error: 'expected {"ref"?: string}' }, 400);
+    const membership = await deps.boards.get(email, boardId);
+    if (!membership.ok) return send(c, membership);
+    const repo = repoOf(membership.value.board);
+    if (deps.refs === undefined || repo === null) return c.json({ error: "This board's repo isn't connected, so slop can't look up the commit" }, 409);
+    const ref = body.data.ref?.trim() ?? '';
+    const named = ref === '' ? repo.base : ref;
+    const sha = await deps.refs.resolveRef(repo, named);
+    if (sha === null) return c.json({ error: `${named} isn't a branch, tag or commit in ${repo.owner}/${repo.name}` }, 404);
+    return send(c, await deps.environments.recordManualDeploy(email, boardId, c.req.param('env'), { sha, ref: named }));
   });
 
   app.get('/api/globs/:id/environments', async (c) =>
