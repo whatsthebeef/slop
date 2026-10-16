@@ -608,7 +608,7 @@ export const createApp = (deps: AppDeps) => {
           // A stalled glob also hands a step to its implementer (or planner).
           humanSteps: withUnstick(human, move, glob, { allowed: view.allowedActions ?? [], session: glob.runs.some((r) => r.state !== 'ended' && r.sessionUrl != null) }).map(compactStep),
           move,
-          ...armField(armView(human, membership.value.board)),
+          ...armField(armView(human)),
           dismissedKeys: dismissed.get(glob.id) ?? [],
           gateCheck,
           machineSteps: facts,

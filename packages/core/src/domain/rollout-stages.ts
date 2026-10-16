@@ -24,7 +24,11 @@ export const stageOf = (due: HumanStepDue): string =>
 export const rolloutStages = (board: Pick<Board, 'environments'>): string[] => [AFTER_MERGE_STAGE, ...board.environments.map((e) => e.name)];
 
 /** When a step written in a `## Rollout` section falls due and what it holds back: its `env` and `blocks`, else the defaults for its due. */
-export const rolloutWhen = (step: Pick<RolloutStep, 'env' | 'blocks'> & { readonly once?: boolean }): { readonly due: HumanStepDue; readonly blocks: readonly HumanStepBlock[] } => {
+export const rolloutWhen = (
+  step: Pick<RolloutStep, 'env' | 'blocks'> & { readonly once?: boolean; readonly downstream?: readonly string[] | null },
+): { readonly due: HumanStepDue; readonly blocks: readonly HumanStepBlock[] } => {
+  // A downstream step holds nothing back whatever it says: slop never sees the deploys it waits for.
+  if (step.downstream != null) return { due: 'downstream', blocks: [] };
   const due: HumanStepDue = step.once === true ? 'once' : step.env === null ? 'after_merge' : `after_deploy:${step.env}`;
   return { due, blocks: step.blocks ?? defaultStepBlocks(due) };
 };

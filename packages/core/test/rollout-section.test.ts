@@ -83,6 +83,7 @@ describe('parseRollout', () => {
         env: null,
         once: false,
         blocks: null,
+        downstream: null,
       },
       {
         kind: 'setting',
@@ -99,6 +100,7 @@ describe('parseRollout', () => {
         env: null,
         once: false,
         blocks: null,
+        downstream: null,
       },
       {
         kind: 'manual',
@@ -115,6 +117,7 @@ describe('parseRollout', () => {
         env: null,
         once: false,
         blocks: null,
+        downstream: null,
       },
     ]);
   });
@@ -193,6 +196,7 @@ ${FENCE}
       env: null,
       once: false,
       blocks: null,
+      downstream: null,
     });
   });
 
@@ -387,6 +391,7 @@ ${FENCE}
       env: null,
       once: false,
       blocks: null,
+      downstream: null,
     });
   });
 
@@ -744,16 +749,15 @@ describe('the implementation record becomes rollout steps', () => {
     expect(events('updated')).toHaveLength(0);
   });
 
-  it('files a step for an environment the board does not define after the merge, with the board\'s names in its detail', async () => {
+  it('files a step for an environment the board does not define as the downstream step, title unchanged, holding nothing back', async () => {
     const g = await newGlob();
-    await put(g.id, record('## Rollout\n- manual: Set the flag (env: eu-west)\n- manual: Flip it (env: staging)\n'));
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: eu-west, blocks: sign_off)\n- manual: Flip it (env: staging)\n'));
     const steps = stepsOf(g.id);
-    expect(steps.map((s) => [s.title, s.due])).toEqual([
-      ['Set the flag', 'after_merge'],
-      ['Flip it', 'after_deploy:staging'],
+    expect(steps.map((s) => [s.title, s.due, s.blocks])).toEqual([
+      ['Set the flag', 'downstream', []],
+      ['Flip it', 'after_deploy:staging', []],
     ]);
-    expect(steps[0]?.detail).toContain("Unknown environment eu-west: this board's environments are staging, production, prod");
-    await put(g.id, record('## Rollout\n- manual: Set the flag (env: eu-west)\n- manual: Flip it (env: staging)\n'));
+    await put(g.id, record('## Rollout\n- manual: Set the flag (env: eu-west, blocks: sign_off)\n- manual: Flip it (env: staging)\n'));
     expect(events('updated')).toHaveLength(0);
   });
 
@@ -789,11 +793,11 @@ describe('the implementation record becomes rollout steps', () => {
     expect(events('updated')).toHaveLength(2);
   });
 
-  it('a step written for an environment the glob is already in is due at once', async () => {
+  it('a step written for an environment the glob was already deployed to is due at once', async () => {
     const g = await newGlob();
     await merge(g.id);
     await store.transaction((tx) =>
-      tx.saveGlobPresence([{ boardId, globId: g.id, environment: 'production', mergeSha: 'abc1234', contained: true, checkedSha: 'def', checkedAt: '2026-10-13T11:00:00.000Z', since: '2026-10-13T11:00:00.000Z' }]),
+      tx.saveDeploys([{ id: 'd1', boardId, environment: 'production', globId: g.id, sha: 'abc1234', state: 'succeeded', trigger: 'push', requestedBy: null, requestedAt: '2026-10-13T11:00:00.000Z', runningSince: '2026-10-13T11:00:00.000Z', startedAt: '2026-10-13T11:00:00.000Z', finishedAt: '2026-10-13T11:05:00.000Z', providerRef: null, url: null, error: null }]),
     );
     await put(g.id, record('## Rollout\n- manual: Set the flag (env: production)\n- manual: Other (env: staging)\n'));
     expect(stepsOf(g.id).map((s) => [s.title, s.dueSince])).toEqual([
