@@ -1,4 +1,4 @@
-import { decisionOf, feedbackText, isHumanCategory, labelsWaiting, openFeedback, signOffText } from '@slop/core';
+import { DEPLOY_STALLED_LABEL, decisionOf, feedbackText, isHumanCategory, labelsWaiting, openFeedback, signOffText } from '@slop/core';
 import type { DecisionAttributes, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { OUTCOME_TEXT } from './decide-flow';
@@ -230,9 +230,9 @@ export const cornerStatus = (
   if (position?.holder === 'stalled') {
     const cause = specifics(position.label) || specifics(position.text) || 'nobody on it';
     // A cause that already carries its age ("no progress 12 min") is not given it twice.
-    const minutes = position.minutes !== null && position.minutes > 0 && !/\d+ min/.test(cause) ? ` · ${String(position.minutes)} min` : '';
+    const minutes = position.minutes !== null && position.minutes > 0 && !/\d+ min/.test(cause) && cause !== DEPLOY_STALLED_LABEL ? ` · ${String(position.minutes)} min` : '';
     // The stall's next step is a person's (the viewer's turn): the human outline with that action, not the warning.
-    if (status !== null && status.kind === 'ready') {
+    if (status !== null && status.kind === 'ready' && status.action !== 'mark_deployed') {
       const turn = yourTurnClick(status, glob);
       const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
       return make('ready', 'human', status.text, status.tone, click, [position.tip, `Stalled: ${cause}${minutes}`, status.tip]);

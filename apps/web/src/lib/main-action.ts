@@ -96,7 +96,7 @@ export const viewActions = (glob: GlobView, email?: string): Action[] =>
 /** The action a stalled glob's step names to lead with, if any. */
 export const leadingAction = (glob: Pick<GlobView, 'humanSteps'>): Action | undefined => {
   const stall = glob.humanSteps?.find((s) => s.kind === 'unstick');
-  return stall?.action === undefined || stall.action === 'open_session' ? undefined : stall.action;
+  return stall?.action === undefined || stall.action === 'open_session' || stall.action === 'mark_deployed' ? undefined : stall.action;
 };
 
 /**

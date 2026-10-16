@@ -93,7 +93,7 @@ export type HumanStepBlock = (typeof HUMAN_STEP_BLOCKS)[number];
 export type HumanStepScript = { readonly artifact: string } | { readonly path: string };
 
 /** What a step's chip runs: a state-machine action, or opening the run's session (a link, not a state change). */
-export type StepAction = Action | 'open_session';
+export type StepAction = Action | 'open_session' | 'mark_deployed';
 
 /** The title of the placeholder step the investigator leaves when it predicts a rollout (origin `investigation`). */
 export const PREDICTED_ROLLOUT_TITLE = 'Rollout: steps to be written';
