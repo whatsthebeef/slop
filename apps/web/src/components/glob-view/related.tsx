@@ -1,5 +1,5 @@
 import { isFromMention, isHumanCategory } from '@slop/core';
-import type { ExternalGlob, Holding, RelationGate, RelationSource, RelationSuggestion, RelationUntil, Supersession } from '@slop/core';
+import type { ExternalGlob, Holding, RelationGate, RelationSource, RelationSuggestion, RelationUntil, Supersession, VerdictFields } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -36,8 +36,16 @@ const SOURCE_WORDS: Record<RelationSource, string> = {
 /** Accepts (writes the relation; a failed step's `glob` is the fix to link) or dismisses a card suggestion; resolves false when it failed. */
 export type SuggestionHandler = (suggestionId: string, action: 'accept' | 'dismiss', glob?: string) => Promise<boolean>;
 
+/** What the post-merge check found, in words: "needed: uses `X` from s15t246", "not needed: no shared files", or "unsure"; null before it ran. */
+export const verdictText = (v: VerdictFields): string | null => {
+  if (v.verdict === undefined) return null;
+  const reason = (v.verdictReason ?? '').trim();
+  const lead = v.verdict === 'needed' ? 'needed' : v.verdict === 'not_needed' ? 'not needed' : 'unsure';
+  return reason === '' ? lead : `${lead}: ${reason}`;
+};
+
 /** One row of the Related section, whichever group it is in. */
-export interface RelatedRow {
+export interface RelatedRow extends VerdictFields {
   readonly relationId: string;
   /** The other glob. */
   readonly id: string;
@@ -61,6 +69,8 @@ export interface RelatedGroups {
   readonly holdsBack: readonly RelatedRow[];
   /** Relations that stopped holding (met, deleted, dismissed, overridden). */
   readonly done: readonly (RelatedRow & { readonly how: string })[];
+  /** Weak links ("may relate"): they hold nothing back; a person can make one a gate. */
+  readonly weak: readonly RelatedRow[];
   /** The glob that supersedes this one (a muted line, not a status). */
   readonly supersededBy: Supersession | null;
   /** The globs this one supersedes. */
@@ -71,6 +81,13 @@ export interface RelatedGroups {
   readonly suggestions: readonly RelationSuggestion[];
 }
 
+/** The verdict fields of a relation view row, only those it has. */
+const verdictFields = (r: VerdictFields): VerdictFields => ({
+  ...(r.verdict === undefined ? {} : { verdict: r.verdict }),
+  ...(r.verdictReason === undefined ? {} : { verdictReason: r.verdictReason }),
+  ...(r.verdictBy === undefined ? {} : { verdictBy: r.verdictBy }),
+});
+
 const rowOf = (h: Holding): RelatedRow => ({
   relationId: h.relationId,
   id: h.to,
@@ -79,6 +96,7 @@ const rowOf = (h: Holding): RelatedRow => ({
   reason: h.reason,
   source: h.source,
   dismissible: h.source !== 'split',
+  ...verdictFields(h),
   ...(h.external === undefined ? {} : { external: h.external }),
 });
 
@@ -100,7 +118,18 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
       reason: h.reason,
       source: h.source,
       dismissible: false,
+      ...verdictFields(h),
       ...(h.external === undefined ? {} : { external: h.external }),
+    })),
+    weak: (view.weak ?? []).map((w) => ({
+      relationId: w.relationId,
+      id: w.to,
+      title: w.toTitle,
+      words: 'may relate',
+      reason: w.reason,
+      source: w.source,
+      dismissible: true,
+      ...(w.external === undefined ? {} : { external: w.external }),
     })),
     done: view.done.map((d) => ({
       relationId: d.relationId,
@@ -110,6 +139,7 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
       reason: d.reason,
       source: d.source,
       dismissible: false,
+      ...verdictFields(d),
       how: HOW_WORDS[d.how],
     })),
     supersededBy: view.supersededBy ?? null,
@@ -118,7 +148,7 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
     suggestions: glob.suggestions ?? [],
   };
   const empty =
-    groups.holding.length + groups.decisions.length + groups.holdsBack.length + groups.done.length + groups.supersedes.length + groups.suggestions.length === 0 &&
+    groups.holding.length + groups.decisions.length + groups.holdsBack.length + groups.weak.length + groups.done.length + groups.supersedes.length + groups.suggestions.length === 0 &&
     groups.supersededBy === null &&
     groups.otherBoards === 0;
   return empty ? null : groups;
@@ -158,6 +188,7 @@ export const Row = ({
   how,
   holdsBack = false,
   onDismiss,
+  onPromote,
 }: {
   boardId: number;
   row: RelatedRow;
@@ -165,8 +196,11 @@ export const Row = ({
   /** The row is a glob that waits for this one (its hidden text reads from that side). */
   holdsBack?: boolean;
   onDismiss: ((relationId: string) => Promise<boolean>) | null;
+  /** "Make it a gate" on a weak link; absent for any other row. */
+  onPromote?: ((relationId: string) => Promise<boolean>) | null;
 }) => {
   const hidden = row.external?.hidden === true;
+  const verdict = verdictText(row);
   const reason = (row.reason ?? '').trim();
   const fromMention = isFromMention(row.source);
   return (
@@ -201,6 +235,16 @@ export const Row = ({
           {row.source === 'person' ? <HumanIcon decorative /> : <MachineIcon decorative />}
           {SOURCE_WORDS[row.source]}
         </span>
+      )}
+      {verdict !== null && (
+        <span className="ml-2 text-xs text-muted-foreground" data-testid={`verdict-${row.id}`} title={row.verdictBy === 'model' ? 'Judged by a model' : 'Checked against the code'}>
+          · {verdict}
+        </span>
+      )}
+      {onPromote != null && (
+        <Button size="sm" variant="outline" className="ml-2 h-6 px-2 text-xs" data-testid={`promote-${row.id}`} onClick={() => void onPromote(row.relationId)}>
+          Make it a gate
+        </Button>
       )}
       {row.dismissible && onDismiss !== null && <DismissRelation id={row.id} relationId={row.relationId} onDismiss={onDismiss} />}
     </li>
@@ -426,6 +470,7 @@ export const RelatedSection = ({
   onDismissEdge,
   onAddRelation,
   onSuggestion,
+  onPromote,
 }: {
   ctx: GlobViewContext;
   /** The ✕ on a row: the relation is not a dependency; resolves false when it failed. */
@@ -433,6 +478,8 @@ export const RelatedSection = ({
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
   /** The answers on a failed step's question; without it the question shows without buttons. */
   onSuggestion?: SuggestionHandler;
+  /** "Make it a gate" on a "may relate" row; resolves false when it failed. Without it the rows show without the button. */
+  onPromote?: (relationId: string) => Promise<boolean>;
 }) => {
   const { glob } = ctx;
   const groups = relatedGroups(glob);
@@ -440,7 +487,7 @@ export const RelatedSection = ({
   const splitFrom = glob.split !== undefined && glob.split.part > 0 ? glob.split.source : null;
   const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length;
   const decision = isHumanCategory(glob.category);
-  const count = groups === null ? 0 : holding + groups.holdsBack.length + groups.done.length + groups.supersedes.length + groups.suggestions.length + (groups.supersededBy === null ? 0 : 1);
+  const count = groups === null ? 0 : holding + groups.holdsBack.length + groups.weak.length + groups.done.length + groups.supersedes.length + groups.suggestions.length + (groups.supersededBy === null ? 0 : 1);
   // Starts open while something holds the glob back, until the viewer toggles it.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const [adding, setAdding] = useState(false);
@@ -473,6 +520,13 @@ export const RelatedSection = ({
         <Group name="Decisions" testId="related-decisions">
           {groups.decisions.map((r) => (
             <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} />
+          ))}
+        </Group>
+      )}
+      {groups !== null && groups.weak.length > 0 && (
+        <Group name="May relate" testId="related-weak">
+          {groups.weak.map((r) => (
+            <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} onPromote={onPromote ?? null} />
           ))}
         </Group>
       )}

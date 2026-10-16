@@ -11,6 +11,7 @@ import { BoardGroup } from '@/components/settings/board-group';
 import { EnvironmentsGroup } from '@/components/settings/environments-group';
 import { useSettingsForm } from '@/components/settings/form';
 import { MembersGroup } from '@/components/settings/members-group';
+import { RelationsGroup } from '@/components/settings/relations-group';
 import { ReportsGroup, SystemGroup } from '@/components/settings/reports-system-groups';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
@@ -44,6 +45,7 @@ export const SettingsPage = () => {
       <EnvironmentsGroup admin={admin} form={form} boardId={boardId} savedManual={board.environments.filter((e) => e.deployKnown === 'manual').map((e) => e.name)} />
       {admin && <AtfRunnersGroup boardId={boardId} environments={board.environments} />}
       <AutomationGroup admin={admin} form={form} />
+      <RelationsGroup boardId={boardId} admin={admin} />
       <RelationScanSpend boardId={boardId} />
       <ReportsGroup boardId={boardId} />
       <SystemGroup boardId={boardId} admin={admin} />

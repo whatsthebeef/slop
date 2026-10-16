@@ -73,6 +73,16 @@ A relation holds one glob back until another reaches a state. Each relation has 
 
 Use a start relation when order matters, such as a glob that builds on another's code. Relations come from people, agents, and slop's own inference from the plans (which you can dismiss). Start now overrides inferred start holds only; it never overrides a merge or sign-off gate.
 
+### What slop learns about relations
+
+Slop keeps score of how often each kind of relation was right on your board, over the last 90 days. A relation was **needed** when the check after the merge finds the glob used code from the other one, a failed run says so, or you made a weak link a gate. It was **not needed** when someone forced it through (Start, Merge or Sign off anyway), dismissed it before it was met, or the post-merge check found nothing shared. A dependency was **missed** when a person added a relation later, two globs without one collided (a conflict, or a red main caused by both), or a run failed for code that was not merged yet.
+
+From those counts slop works out precision (how many relations were needed) and recall (how many dependencies had a relation). If relations from **mentions** or **inference** are needed less than half the time, once there are at least five cases, slop stops making them hold anything back: they appear in Related under **May relate**, and **Make it a gate** turns one into a real relation in one click. If inference misses too many dependencies, it also suggests weak links for globs that touch the same modules. Relations from people, agents and failed runs always hold. With too little data slop keeps gating and says "not enough data".
+
+Board settings, **Relations**, shows each source's numbers, window and posture, and why. Admins can pin a source to always gate or always make weak links, change the thresholds, the window or the minimum number of cases, and reset the pins; everyone else sees the numbers.
+
+After a glob merges, slop checks each relation it had against the code and shows the verdict on the row in Related: "needed: uses `X` from s15t246", "not needed: no shared files, imports or symbols", or unsure. Git and the code index decide first; a model gives the verdict only when they cannot, at a small cost shown under the `relation_check` spend source.
+
 ## Breaking up a feature
 
 A group is a name shared by several globs, such as the parts of a split. It has no status, branch or sign-off of its own: everything on its page comes from its globs.
