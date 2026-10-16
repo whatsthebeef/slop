@@ -180,14 +180,14 @@ describe('cornerStatus', () => {
 
   it('says what it waits on once, with the chain in the tooltip and no "blocked by"', () => {
     const status = at(ahead(['s1t1', 's1t2', 's1t3', 's1t4']));
-    expect(status).toMatchObject({ kind: 'hold', icon: 'hourglass', text: 'waiting · s1t1 +3' });
+    expect(status).toMatchObject({ kind: 'hold', icon: 'hourglass', text: 's1t1' });
     expect(status?.tip).toContain('Waits for s1t1 to be merged and rolled out (Doing)');
     expect(JSON.stringify(status)).not.toMatch(/blocked by/i);
   });
 
   it('names a decision it waits on, with the reason in the tooltip', () => {
     const g = view({ status: 'planning', holding: [hold('s15k190', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'the store is not chosen' })] });
-    expect(at(g)).toMatchObject({ kind: 'hold', icon: 'human', text: 'waiting · decision s15k190' });
+    expect(at(g)).toMatchObject({ kind: 'hold', icon: 'human', text: 'decision s15k190' });
     expect(at(g)?.tip).toContain('Waits for decision s15k190 (Planning): the store is not chosen');
   });
 
@@ -283,8 +283,8 @@ describe('cornerStatus text stays a word or two', () => {
     ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'starting'],
     ['merge conflict stall', mergeConflictStall, ''],
     ['open conflict', openConflict, 'conflicts with main'],
-    ['waiting on prerequisites', () => ahead(['s1t1', 's1t2', 's1t3', 's1t4']), 'waiting · s1t1 +3'],
-    ['waiting on one prerequisite', () => ahead(['s1t1']), 'waiting · s1t1'],
+    ['waiting on prerequisites', () => ahead(['s1t1', 's1t2', 's1t3', 's1t4']), 's1t1'],
+    ['waiting on one prerequisite', () => ahead(['s1t1']), 's1t1'],
     ['escalated', escalated, 'needs a'],
     ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'Merge'],
     ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'running checks'],

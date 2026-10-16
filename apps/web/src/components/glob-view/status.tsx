@@ -51,7 +51,7 @@ export const HeaderStatus = ({ glob, state }: { glob: GlobView; state: NowState 
         <>
           <button
             type="button"
-            className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-medium hover:bg-muted', corner.tone)}
+            className={cn('inline-flex min-w-0 cursor-pointer items-center gap-1 rounded px-1 text-right text-sm font-normal hover:bg-muted', corner.tone)}
             aria-label={corner.kind === 'needs-human' ? corner.label : undefined}
             title={corner.tip}
             data-testid="header-status"

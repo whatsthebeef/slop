@@ -128,7 +128,7 @@ const IN_PROGRESS: Readonly<Partial<Record<Action, string>>> = {
   take_over: 'picking up',
   retrigger: 'retrying',
   retry_autofix: 'fixing CI',
-  resolve_conflict: 'fixing the conflict',
+  resolve_conflict: 'fixing conflict',
   start_again: 'discarding',
   merge: 'merging',
   merge_anyway: 'merging',
