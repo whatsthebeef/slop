@@ -87,7 +87,7 @@ export const deployExecutors = (
     };
     let lines: string;
     try {
-      lines = await logs.tail(board.deploy.region, deploy.logGroup, deploy.logStream);
+      lines = await logs.tail(board.deploy.region, deploy.logGroup, deploy.logStream, maskSecrets);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (error instanceof LogAccessDenied) return keepLink(reason);

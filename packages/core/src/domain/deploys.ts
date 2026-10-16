@@ -1,4 +1,5 @@
 import type { DomainEvent, Effect } from './events.js';
+import { maskSecrets } from './mask-secrets.js';
 import type { Board } from './types.js';
 
 /**
@@ -154,13 +155,17 @@ export const buildLogContent = (
   deploy: Pick<Deploy, 'environment' | 'sha' | 'state' | 'error' | 'finishedAt' | 'logUrl'>,
   tail: { readonly lines?: string; readonly reason?: string } = {},
 ): string => {
-  const status = deploy.state === 'succeeded' ? 'succeeded' : `failed${deploy.error === null ? '' : `: ${deploy.error}`}`;
+  const status = deploy.state === 'succeeded' ? 'succeeded' : `failed${deploy.error === null ? '' : `: ${maskSecrets(deploy.error)}`}`;
   const parts = [
     `# Build log: ${deploy.environment} at ${deploy.sha.slice(0, 7)}`,
     [`Build ${status}`, ...(deploy.finishedAt === null ? [] : [`Finished: ${deploy.finishedAt}`]), ...(deploy.logUrl === null ? [] : [`Log: ${deploy.logUrl}`])].join('\n'),
   ];
-  if (tail.lines !== undefined) parts.push(`## Last lines of the log\n\n\`\`\`text\n${tail.lines}\n\`\`\``);
-  if (tail.reason !== undefined) parts.push(`Last lines not attached: ${tail.reason}`);
+  if (tail.lines !== undefined) {
+    // A fence longer than any backtick run in the log, so the log can't close it early.
+    const fence = '`'.repeat(Math.max(3, ...[...tail.lines.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+    parts.push(`## Last lines of the log\n\n${fence}text\n${tail.lines}\n${fence}`);
+  }
+  if (tail.reason !== undefined) parts.push(`Last lines not attached: ${maskSecrets(tail.reason)}`);
   return parts.join('\n\n');
 };
 

@@ -12,25 +12,30 @@ export class LogNotReady extends Error {}
 
 /** Reads the end of a finished build's log. */
 export interface BuildLogReader {
-  tail(region: string, group: string, stream: string): Promise<string>;
+  /** `mask` runs over the whole text before it is cut, so a secret split by the cut can't survive. */
+  tail(region: string, group: string, stream: string, mask?: (text: string) => string): Promise<string>;
 }
 
 /** The last `LOG_MAX_LINES` lines of `lines`, cut again from the front to fit `LOG_MAX_BYTES`. */
-export const tailOf = (lines: readonly string[]): string => {
-  let kept = lines.slice(-LOG_MAX_LINES);
+export const tailOf = (lines: readonly string[], mask: (text: string) => string = (text) => text): string => {
+  // Masked first: a PEM block whose BEGIN line falls outside the cut would otherwise keep its body.
+  let kept = mask(lines.join('\n')).split('\n').slice(-LOG_MAX_LINES);
   let bytes = kept.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
   while (bytes > LOG_MAX_BYTES && kept.length > 1) {
     bytes -= Buffer.byteLength(kept[0] ?? '') + 1;
     kept = kept.slice(1);
   }
-  return kept.join('\n');
+  const text = kept.join('\n');
+  if (Buffer.byteLength(text) <= LOG_MAX_BYTES) return text;
+  // One line longer than the bound: keep its end, from a character boundary.
+  return Buffer.from(text).subarray(-LOG_MAX_BYTES).toString('utf8').replace(/^\uFFFD+/, '');
 };
 
 /** CloudWatch Logs: pages back from the stream's end (`GetLogEvents`, `startFromHead: false`) until it has enough lines. */
 export class CloudWatchBuildLogReader implements BuildLogReader {
   private readonly clients = new Map<string, CloudWatchLogsClient>();
 
-  async tail(region: string, group: string, stream: string): Promise<string> {
+  async tail(region: string, group: string, stream: string, mask?: (text: string) => string): Promise<string> {
     const client = this.client(region);
     let lines: string[] = [];
     let token: string | undefined;
@@ -55,7 +60,7 @@ export class CloudWatchBuildLogReader implements BuildLogReader {
       throw error;
     }
     if (lines.length === 0) throw new LogNotReady(`${group}/${stream} has no lines yet`);
-    return tailOf(lines);
+    return tailOf(lines, mask);
   }
 
   private client(region: string): CloudWatchLogsClient {
