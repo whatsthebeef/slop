@@ -3,9 +3,9 @@ import { KindMarker } from '@/components/glob-card';
 import { StatusIconView } from '@/components/status-icon';
 import type { GlobView } from '@/lib/api';
 import { moveOf, positionOf, stepsOf } from '@/lib/position';
-import { collapsed, isDismissed, turnKey } from '@/lib/dismissals';
+import { isDismissed, turnKey } from '@/lib/dismissals';
 import { cornerStatus, waitingOnOwn } from '@/lib/card-rows';
-import { isProblemLine, viewStatusLine } from '@/lib/status-line';
+import { isProblemLine, problemHandled, viewStatusLine } from '@/lib/status-line';
 import type { Waiting } from '@/lib/status-line';
 import { cn } from '@/lib/utils';
 import type { GlobActionsState } from './actions';
@@ -36,7 +36,7 @@ export const shownElsewhere = (glob: GlobView, problem: { readonly kind: string 
 
 export const capitalised = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** The small × ("Got it") beside a message: the viewer has read it, so its long text collapses. */
+/** The small × ("Got it") beside the Your turn headline's reason: the viewer has read it, so it collapses. Problem blocks have none. */
 export const GotIt = ({ onClick, disabled }: { onClick: () => void; disabled: boolean }) => (
   <button
     type="button"
@@ -76,18 +76,19 @@ export const useNowState = (glob: GlobView, decision: boolean, disabled: readonl
   const steps = decision ? [] : stepsOf(glob).filter((s) => s.state !== 'done');
   const turn = move?.holder === 'you' ? move : null;
   const yours = turn !== null;
+  const handled = problemHandled(glob);
   // The handover brief is for whoever holds the ball: the viewer's turn, or a stall handed to them.
   // Not when its only cause is rollout steps due, which the due steps block already shows.
   const brief =
+    !handled &&
     actions.brief !== null && (yours || move?.holder === 'stalled') && status?.kind !== 'rollout'
       ? actions.brief
       : null;
   // Only a real problem gets the red block: a normal state (merging, rollout steps due, base red) stays in the corner status.
-  const problem = status !== null && isProblemLine(status) ? status : null;
-  // Dismissed (per person), the long text collapses to the short label; the main action is untouched.
-  const seen = problem === null ? null : collapsed(glob, problem);
+  // Problem blocks have no dismiss: one shows only while nobody is on the problem, and goes by itself once someone acts or it is fixed.
+  const problem = status !== null && isProblemLine(status) && !handled ? status : null;
   const turnDismissed = turn !== null && turn.reason !== '' && isDismissed(glob, turnKey(turn));
-  return { now, viewer: actions.viewer, base, position, move, turn, steps, yours, brief, problem, seen, turnDismissed };
+  return { now, viewer: actions.viewer, base, position, move, turn, steps, yours, brief, problem, turnDismissed };
 };
 
 export type NowState = ReturnType<typeof useNowState>;

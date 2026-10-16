@@ -24,7 +24,6 @@ import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action
 import type { PendingAction } from '@/lib/pending-action';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { handoverConfirmation, handoverToShow } from '@/lib/handover';
-import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
@@ -110,19 +109,16 @@ export const useGlobActions = ({
   const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | null>(null);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
-  // "Why you're needed": the full box until the viewer acknowledges it, then one line.
+  // "Why you're needed": shown in the problem block while nobody is on the problem.
   const brief = handoverToShow(glob);
-  const briefRead = brief !== null && isDismissed(glob, handoverKey(brief));
-  const [briefOpen, setBriefOpen] = useState(false);
   useEffect(() => {
     setConfirmingAgain(false);
     setConfirmingTakeOver(false);
     setTypeFailure(null);
     setConfirmingOversized(null);
-    setBriefOpen(false);
     setFinishing(null);
   }, [glob.id]);
-  // Dismissing a message is stored per person on the server; the page reloads the glob afterwards.
+  // Dismissing the Your turn reason is stored per person on the server; the page reloads the glob afterwards.
   const dismiss = (key: string, on: boolean) =>
     run(async () => {
       await onDismiss(key, on);
@@ -241,10 +237,7 @@ export const useGlobActions = ({
     typeFailure,
     changeType,
     brief,
-    briefRead,
     dismiss,
-    briefOpen,
-    setBriefOpen,
     confirmDelete,
     setConfirmDelete,
     confirmingAgain,
