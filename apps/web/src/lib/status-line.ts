@@ -473,6 +473,7 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
   ) {
     const head = glob.pr?.headSha ?? null;
     const checks = glob.headChecks;
+    const mergeHolds = appliedHolding(glob, glob.holding ?? []).filter((h) => h.gate === 'merge');
     const wait: Pick<Waiting, 'tip' | 'why' | 'running'> =
       head === null
         ? { tip: 'Waiting for the PR head', why: 'for the PR head', running: true }
@@ -489,6 +490,11 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
                   : `${checks.inheritedFrom.base} is red`,
               why: failedWhy(glob, head),
             }
+          : checks?.sha === head && checks.state === 'passed' && mergeHolds.length > 0
+            ? {
+                tip: `Held for ${mergeHolds.map(waitsForWords).join(', ')}: Merge anyway merges it now`,
+                why: `for ${mergeHolds.map(waitsForWords).join(', ')} (Merge anyway skips it)`,
+              }
           : {
               tip: `Waiting for the checks on ${head.slice(0, 7)} to pass`,
               why: `for the checks on ${head.slice(0, 7)}`,
