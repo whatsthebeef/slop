@@ -12,15 +12,15 @@ import type { Board } from './types.js';
 /** The stage key of steps due after the merge (they are named after the board's base branch for people). */
 export const AFTER_MERGE_STAGE = 'after_merge';
 
-/** The stage a step belongs to: `after_merge`, or the environment of an `after_deploy:<env>` step. A step due now counts as after the merge. */
+/** The stage a step belongs to: `after_merge`, or the environment of an `after_deploy:<env>` step. A step due now, or once, counts as after the merge. */
 export const stageOf = (due: HumanStepDue): string => (due.startsWith('after_deploy:') ? due.slice('after_deploy:'.length) : AFTER_MERGE_STAGE);
 
 /** The stages in promotion order: after the merge, then each of the board's environments. */
 export const rolloutStages = (board: Pick<Board, 'environments'>): string[] => [AFTER_MERGE_STAGE, ...board.environments.map((e) => e.name)];
 
 /** When a step written in a `## Rollout` section falls due and what it holds back: its `env` and `blocks`, else the defaults for its due. */
-export const rolloutWhen = (step: Pick<RolloutStep, 'env' | 'blocks'>): { readonly due: HumanStepDue; readonly blocks: readonly HumanStepBlock[] } => {
-  const due: HumanStepDue = step.env === null ? 'after_merge' : `after_deploy:${step.env}`;
+export const rolloutWhen = (step: Pick<RolloutStep, 'env' | 'blocks'> & { readonly once?: boolean }): { readonly due: HumanStepDue; readonly blocks: readonly HumanStepBlock[] } => {
+  const due: HumanStepDue = step.once === true ? 'once' : step.env === null ? 'after_merge' : `after_deploy:${step.env}`;
   return { due, blocks: step.blocks ?? defaultStepBlocks(due) };
 };
 

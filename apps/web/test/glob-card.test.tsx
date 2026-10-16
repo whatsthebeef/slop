@@ -369,10 +369,48 @@ describe('card rows', () => {
 
   it('keeps chip text on one line', () => {
     const root = dom(markup(view({ status: 'planning', group: 'a-rather-long-group-name', clash: { with: 's1t2', paths: ['a.ts'] } })));
-    expect(root.querySelector('[data-testid="clash-chip"]')?.className).toContain('whitespace-nowrap');
     expect(root.querySelector('[data-testid="card-chips"]')?.className).toContain('flex-wrap');
-    // The clash's paths live in the glob view, not in the card's tooltip.
+    // A clash shows no chip on the card, and its paths live in the glob view.
+    expect(root.querySelector('[data-testid="clash-chip"]')).toBeNull();
+    expect(root.textContent).not.toContain('clashes with');
     expect(root.innerHTML).not.toContain('a.ts');
+  });
+});
+
+describe('question and branch lines on the card', () => {
+  const asked = { id: 'q1', text: 'Is prod in scope?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'none', raisedAt: NOW } as const;
+  const corner = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"]');
+
+  it('shows an open question as the "question" corner status with the human icon, and no question line', () => {
+    const root = dom(markup(view({ status: 'planning', questions: [asked] })));
+    expect(root.querySelector('[data-testid="question-chip"]')).toBeNull();
+    expect(root.textContent).not.toMatch(/Question \d/);
+    expect(root.querySelector('[data-testid="card-corner"]')?.textContent).toContain('question');
+    expect(root.innerHTML).toContain('Is prod in scope?');
+    expect(corner(view({ status: 'planning', questions: [asked, { ...asked, id: 'q2' }] }))?.textContent).toContain('questions');
+  });
+
+  it('shows no branch line for a behind or clashing glob', () => {
+    const behind = view({ status: 'planning', behind: { base: 'main', behindBy: 2, files: ['a.ts'], at: NOW }, clash: { with: 's1t2', paths: ['a.ts'] } });
+    expect(dom(markup(behind)).textContent).not.toMatch(/behind main|clashes with/);
+  });
+});
+
+describe('environment and deploy labels on the card', () => {
+  it('shows no environment, deploy or branch label for a glob deployed to demo and on int', () => {
+    const deployed = {
+      deploy: { environment: 'demo', state: 'live', sha: 'abc1234def', waiting: false },
+      environments: [{ environment: 'int', role: 'integration', production: false, sha: 'abc1234def', since: NOW, warning: 'before_sign_off' }],
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} {...(deployed as object)} moves={[]} glob={view({ status: 'pr_open', branch: 's1t1' })} repo='a/b' />
+      </MemoryRouter>,
+    );
+    const root = dom(html);
+    expect(root.querySelector('[data-testid="deploy-chip"]')).toBeNull();
+    expect(root.querySelector('[data-testid="environment-chip"]')).toBeNull();
+    expect(html).not.toMatch(/demo|\bint\b|before sign-off/);
   });
 });
 

@@ -38,6 +38,7 @@ import { SectionToggle } from './section-toggle';
 import { StepDetail } from './step-detail';
 import { InlineMarkdown, MarkdownView } from './markdown-view';
 import { stripMarkdown } from '@/lib/markdown-text';
+import { blocksReadOnly } from '@/lib/blocking-item';
 import { Button } from './ui/button';
 import { Input, Label, Select } from './ui/input';
 
@@ -99,6 +100,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
           {predicted ? PREDICTED_ROLLOUT_TEXT : stripMarkdown(step.title)}
         </span>
         <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
+        {step.due === 'once' && <OnceMarker />}
         {mine && !predicted && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
       <div className='flex flex-wrap gap-x-3 break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]'>
@@ -106,6 +108,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         <span data-testid='step-state'>{stateText(step)}</span>
         {step.check != null && step.check !== '' && <span data-testid='step-check'>checked by slop: {step.check}</span>}
       </div>
+      {step.unknownEnvironment !== undefined && <UnknownEnvironment environment={step.unknownEnvironment} />}
       {step.detail != null && step.detail !== '' && <StepDetail detail={step.detail} />}
       <StepFields glob={glob} step={step} source={source} showDetail={false} />
       {work && open && !dismissing && (
@@ -117,6 +120,20 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
     </li>
   );
 };
+
+/** Marks a once step: a one-shot command inside the change, done once and never reopened. */
+const OnceMarker = () => (
+  <span className='rounded-sm border px-1 font-mono text-[10px] text-muted-foreground' data-testid='step-once' title='A one-shot command: due when its script is on the branch, done once and never reopened'>
+    once
+  </span>
+);
+
+/** A step that waits for an environment the board doesn't define can never fall due: say so and point at the way out. */
+const UnknownEnvironment = ({ environment }: { environment: string }) => (
+  <span className='text-[11px] text-destructive' data-testid='step-unknown-environment'>
+    The board has no environment “{environment}”, so this step can never fall due. Dismiss it, then add it again for one of the board&apos;s environments.
+  </span>
+);
 
 /** One command in a monospace box with a copy button; `extra` sits beside the button (a link to the script's file). */
 const CommandBox = ({
@@ -384,6 +401,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
           {stripMarkdown(step.title)}
         </span>
         <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
+        {step.due === 'once' && <OnceMarker />}
         {mine && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
       <span className='text-xs text-muted-foreground' data-testid='step-who'>
@@ -395,7 +413,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
           waits for {step.check} to turn on; slop ticks this itself
         </span>
       )}
-      {!dismissing && !failing && (
+      {!dismissing && !failing && !blocksReadOnly(glob) && (
         <div className='flex flex-wrap gap-2'>
           <Button size='sm' disabled={busy || waits} data-testid='due-done' onClick={() => void actions.onComplete(step.id)}>
             Done
@@ -516,6 +534,7 @@ const AddStep = ({ busy, onAdd, onClose }: { busy: boolean; onAdd: StepActions['
           When
           <Select value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} data-testid='step-due-input'>
             <option value='after_merge'>After the merge</option>
+            <option value='once'>Once, when its script is on the branch</option>
             <option value='now'>Now</option>
           </Select>
         </Label>

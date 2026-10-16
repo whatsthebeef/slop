@@ -6,7 +6,8 @@ import { Link } from 'react-router';
 import { HumanIcon, MachineIcon, MatrixIcon } from '@/components/actor-icons';
 import { DiffView } from '@/components/diff-view';
 import { DocumentProposal, EffectCheckView, inPipeline, PIPELINE_POLL_MS, ProcessingState, SignalFigures, StaleNote } from '@/components/decision-learning';
-import { isLearning, OutcomeForms, Outcomes, Recommendation } from '@/components/decision-outcomes';
+import { blocksReadOnly } from '@/lib/blocking-item';
+import { isLearning, Outcomes, Recommendation } from '@/components/decision-outcomes';
 import type { DecideFlow } from '@/components/decision-outcomes';
 import { CollapsibleMarkdown, InlineMarkdown } from '@/components/markdown-view';
 import { Button } from '@/components/ui/button';
@@ -424,7 +425,7 @@ const ReplacementCard = ({ board, glob, attributes }: { board: BoardView; glob: 
           {outcome.reason !== undefined && outcome.kind !== 'closed' && <>: <InlineMarkdown text={outcome.reason} /></>}
         </p>
       )}
-      {open && deciders && (
+      {open && deciders && !blocksReadOnly(glob) && (
         <div className='flex flex-wrap gap-2' data-testid='replacement-outcomes'>
           <Tip text='The newer choice replaces the older one: the older one stops being in force'>
             <Button size='sm' disabled={decide.isPending} data-testid='replacement-confirm' onClick={() => decide.mutate('confirm')}>
@@ -579,9 +580,8 @@ export const DecisionSection = ({
         )}
 
         {open && decide !== null && decide.canSuggest && <Recommendation glob={glob} suggest={decide.suggest} />}
-        {/* A learning's outcome is the action row's main button; the body only holds the form that button opens. A hotspot keeps its buttons here. */}
-        {hasItem && open && decide !== null && (canDecide || deciders) && <OutcomeForms flow={decide} />}
-        {!hasItem && open && decide !== null && (canDecide || deciders) && <Outcomes flow={decide} />}
+        {/* The outcomes live in this block, not in the action row. Not in Planning: Pick up / Start is the only action there. */}
+        {open && !blocksReadOnly(glob) && (!hasItem || learning === null || learning.status === 'open') && decide !== null && (canDecide || deciders) && <Outcomes flow={decide} />}
         {showScope && <AppliesTo glob={glob} attributes={attributes} busy={busy} onUpdate={onUpdate} />}
         <WhereFrom attributes={attributes} />
         {hasItem && <EvidenceAndHistory glob={glob} attributes={attributes} deciders={deciders} />}

@@ -62,7 +62,7 @@ describe('supersedes: one glob makes another obsolete', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 

@@ -24,8 +24,12 @@ const step = (over: Partial<ListedHumanStep> & Pick<ListedHumanStep, 'id' | 'sta
   ...over,
 });
 
-const show = (humanSteps: ListedHumanStep[], handlers = { onComplete: vi.fn(() => Promise.resolve(true)), onDismiss: vi.fn(() => Promise.resolve(true)) }) => {
-  const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+const show = (
+  humanSteps: ListedHumanStep[],
+  handlers = { onComplete: vi.fn(() => Promise.resolve(true)), onDismiss: vi.fn(() => Promise.resolve(true)) },
+  status: GlobView['status'] = 'in_progress',
+) => {
+  const glob = { ...coreGlob(), status, list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
   render(
     <MemoryRouter>
       <HumanSteps glob={glob} canAdd onAdd={vi.fn(() => Promise.resolve(true))} {...handlers} />
@@ -58,6 +62,14 @@ describe('due steps block', () => {
     await userEvent.type(screen.getByTestId('dismiss-reason'), 'wrong');
     await userEvent.click(screen.getByTestId('dismiss-confirm'));
     expect(h.onDismiss).toHaveBeenCalledWith('a', 'wrong');
+  });
+
+  it('shows a due step in Planning as read-only text: no Done, Dismiss or It failed', () => {
+    show([step({ id: 'a', state: 'due' })], undefined, 'planning');
+    expect(screen.getByTestId('due-step')).toBeTruthy();
+    expect(screen.queryByTestId('due-done')).toBeNull();
+    expect(screen.queryByTestId('due-dismiss')).toBeNull();
+    expect(screen.queryByTestId('due-failed')).toBeNull();
   });
 
   it('lays a structured step out as Why, Before you start, Run (script command once, then each command in a copy box) and Check it worked', async () => {
@@ -196,6 +208,21 @@ describe('steps grouped by stage', () => {
     expect(screen.getAllByTestId('due-step')).toHaveLength(1);
     expect(screen.getByTestId('due-steps').textContent).toContain('A step needs you');
     expect(screen.getAllByTestId('quiet-toggle').map((el) => el.textContent)).toEqual(['After the deploy to production: 1 step, not due yet ▸']);
+  });
+
+  it('marks a due once step with a once marker in the needs-you block', () => {
+    showWith([step({ id: 'a', state: 'due', due: 'once' }), step({ id: 'b', state: 'due' })]);
+    const cards = screen.getAllByTestId('due-step');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.querySelector('[data-testid="step-once"]')?.textContent).toBe('once');
+    expect(cards[1]?.querySelector('[data-testid="step-once"]')).toBeNull();
+  });
+
+  it('flags a step whose environment the board no longer has, with Dismiss still on offer', async () => {
+    showWith([step({ id: 'a', state: 'pending', due: 'after_deploy:prod', unknownEnvironment: 'prod' })]);
+    await userEvent.click(screen.getAllByTestId('quiet-toggle')[0] as HTMLElement);
+    expect(screen.getByTestId('step-unknown-environment').textContent).toContain('no environment “prod”');
+    expect(screen.getByTestId('step-dismiss')).toBeTruthy();
   });
 
   it('shows an empty due block while the glob is merging with an after-merge step pending', () => {

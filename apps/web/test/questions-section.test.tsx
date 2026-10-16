@@ -2,9 +2,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { OpenQuestion } from '@slop/core';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { QuestionChip } from '../src/components/glob-card';
 import type { GlobViewContext } from '../src/components/glob-view/context';
 import { QuestionsSection } from '../src/components/glob-view/questions';
 import type { GlobView } from '../src/lib/api';
@@ -31,6 +29,9 @@ const view = (questions: OpenQuestion[], patch: Partial<GlobView> = {}): GlobVie
   questions,
   ...patch,
 });
+
+/** An open question needs a picked-up glob: in Planning the block is read-only. */
+const active = (questions: OpenQuestion[]): GlobView => view(questions, { status: 'in_progress', list: 'doing' });
 
 const setup = (glob: GlobView, busy = false) => {
   const ctx: GlobViewContext = {
@@ -67,14 +68,14 @@ describe('QuestionsSection', () => {
   });
 
   it('answers with an option in one request', async () => {
-    const { onAnswer } = setup(view([question({ options: ['Yes', 'No'] })]));
+    const { onAnswer } = setup(active([question({ options: ['Yes', 'No'] })]));
     await userEvent.setup().click(screen.getByRole('button', { name: 'Yes' }));
     expect(onAnswer).toHaveBeenCalledTimes(1);
     expect(onAnswer).toHaveBeenCalledWith('q1', { answer: 'Yes', option: 'Yes' });
   });
 
   it('answers with free text', async () => {
-    const { onAnswer } = setup(view([question()]));
+    const { onAnswer } = setup(active([question()]));
     const user = userEvent.setup();
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Answer' }).disabled).toBe(true);
     await user.type(screen.getByLabelText('Answer q1'), 'Yes, include prod');
@@ -83,7 +84,7 @@ describe('QuestionsSection', () => {
   });
 
   it('dismisses with and without a note', async () => {
-    const { onDismiss } = setup(view([question(), question({ id: 'q2', text: 'Second?' })]));
+    const { onDismiss } = setup(active([question(), question({ id: 'q2', text: 'Second?' })]));
     const user = userEvent.setup();
     await user.click(dismissButton(0));
     await user.type(screen.getByLabelText('Dismiss note q1'), 'fine as is');
@@ -92,6 +93,16 @@ describe('QuestionsSection', () => {
     await user.click(dismissButton(1));
     await user.click(screen.getByRole('button', { name: 'Go ahead as is' }));
     expect(onDismiss).toHaveBeenLastCalledWith('q2', undefined);
+  });
+
+  it('shows an open question in Planning as read-only text: no options, answer form or Dismiss', () => {
+    setup(view([question({ options: ['Yes', 'No'] })]));
+    expect(screen.getByTestId('question-q1').textContent).toContain('Is prod in scope?');
+    expect(screen.queryByTestId('question-options')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull();
+    expect(screen.queryByLabelText('Answer q1')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Answer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 
   it('folds answered and dismissed questions under the open ones', () => {
@@ -111,24 +122,7 @@ describe('QuestionsSection', () => {
   });
 
   it('disables the controls while busy', () => {
-    setup(view([question({ options: ['Yes'] })]), true);
+    setup(active([question({ options: ['Yes'] })]), true);
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Yes' }).disabled).toBe(true);
-  });
-});
-
-describe('QuestionChip', () => {
-  it('shows the open count and describes itself with the first question', () => {
-    const html = renderToStaticMarkup(
-      <QuestionChip glob={view([question(), question({ id: 'q2', text: 'Other' })])} onOpen={() => undefined} />,
-    );
-    expect(html).toContain('Question 2');
-    expect(html).toContain('Is prod in scope?');
-    expect(html).toContain('aria-describedby');
-  });
-
-  it('is absent when nothing is open', () => {
-    const answered = question({ answer: { text: 'Yes', by: 'a', at: NOW } });
-    expect(renderToStaticMarkup(<QuestionChip glob={view([answered])} />)).toBe('');
-    expect(renderToStaticMarkup(<QuestionChip glob={{ ...view([]), questions: undefined }} />)).toBe('');
   });
 });
