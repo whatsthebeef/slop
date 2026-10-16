@@ -41,7 +41,7 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   // Board-wide effects have no glob.
   'refresh_base_checks',
   'recheck_overlaps',
-  'check_environment',
+  'refresh_base_branch',
   'start_atf',
   'deliver_atf_webhook',
   // The KB pipeline's jobs name a KB item; the executor re-checks the item itself.
@@ -157,7 +157,7 @@ export class OutboxRunner {
     } else {
       const executor = this.executors[effect.kind];
       if (executor === undefined) {
-        // Not wired up in this slice; keep it for when the integration exists.
+        // Not wired up, or a kind since removed (a release-check row queued before this deploy): dropped, never a crash.
         state = 'dropped';
         lastError = `No executor for ${effect.kind} yet`;
       } else {

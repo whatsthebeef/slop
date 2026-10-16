@@ -33,9 +33,7 @@ import type {
   BaseChecks,
   Board,
   BoardJobResult,
-  AtfBatchGrep,
   AtfRunnerConfig,
-  AtfBatchSpec,
   AtfIntegration,
   DeployIntegration,
   DomainEvent,
@@ -1064,52 +1062,6 @@ export const globOutcomes = pgTable(
   (t) => [index('glob_outcomes_board_idx').on(t.boardId)],
 );
 
-/** Deploys pipelines report to release and integration environments (`slop.ci` events): the commit each one ran. */
-export const environmentDeploys = pgTable(
-  'environment_deploys',
-  {
-    id: bigserial('id', { mode: 'number' }).primaryKey(),
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    environment: text('environment').notNull(),
-    sha: text('sha').notNull(),
-    ref: text('ref'),
-    succeeded: boolean('succeeded').notNull(),
-    url: text('url'),
-    eventId: text('event_id').notNull(),
-    at: timestamp('at', { withTimezone: true }).notNull(),
-    /** When the containment check for this deploy finished; the ATF spec list waits for it. */
-    checkedAt: timestamp('checked_at', { withTimezone: true }),
-  },
-  (t) => [
-    // A redelivered event is recorded once per board.
-    uniqueIndex('environment_deploys_event_idx').on(t.boardId, t.eventId),
-    index('environment_deploys_board_env_at_idx').on(t.boardId, t.environment, t.at),
-  ],
-);
-
-/** Whether a release or integration environment held a glob's merge commit when last checked (containment). */
-export const globEnvironments = pgTable(
-  'glob_environments',
-  {
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    globId: text('glob_id').notNull(),
-    environment: text('environment').notNull(),
-    mergeSha: text('merge_sha').notNull(),
-    contained: boolean('contained').notNull(),
-    checkedSha: text('checked_sha').notNull(),
-    checkedAt: timestamp('checked_at', { withTimezone: true }).notNull(),
-    since: timestamp('since', { withTimezone: true }),
-  },
-  (t) => [
-    primaryKey({ columns: [t.globId, t.environment] }),
-    index('glob_environments_board_env_idx').on(t.boardId, t.environment, t.contained),
-  ],
-);
-
 /**
  * A board's registered ATF runners (spec, ATF runners). `config` holds the method's settings (issuer and claim rules, role
  * ARNs, Cognito client ID...) so a new identity method needs no migration; secrets are never stored here. A revoked
@@ -1182,23 +1134,6 @@ export const testRunSpecs = pgTable(
     durationMs: integer('duration_ms'),
   },
   (t) => [primaryKey({ columns: [t.testRunId, t.spec] })],
-);
-
-/** The specs one deploy should run (the union of the newly deployed globs' test plans), stored on first request. */
-export const atfBatches = pgTable(
-  'atf_batches',
-  {
-    id: bigserial('id', { mode: 'number' }).primaryKey(),
-    boardId: integer('board_id')
-      .notNull()
-      .references(() => boards.id, { onDelete: 'cascade' }),
-    environment: text('environment').notNull(),
-    sha: text('sha').notNull(),
-    specs: jsonb('specs').$type<AtfBatchSpec[]>().notNull(),
-    greps: jsonb('greps').$type<AtfBatchGrep[]>().notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-  },
-  (t) => [uniqueIndex('atf_batches_deploy_idx').on(t.boardId, t.environment, t.sha)],
 );
 
 /** Board notifications: board-wide incidents that need a person, one per board and source. No version. */
