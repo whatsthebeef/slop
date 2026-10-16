@@ -282,3 +282,20 @@ export interface CommitGraph {
   /** Whether `descendant` contains `ancestor` (or is it); null when the host doesn't know either commit. */
   contains(repo: Repo, descendant: string, ancestor: string, signal?: AbortSignal): Promise<boolean | null>;
 }
+
+/** A release tag and the commit it points at. */
+export interface ReleaseTag {
+  readonly name: string;
+  readonly sha: string;
+}
+
+/**
+ * Refs on the code host, apart from `CodeHost` so its test fakes don't need it: a person recording a release by hand
+ * names a branch, tag or commit, and slop needs the commit it means (and recent tags to offer).
+ */
+export interface ReleaseRefs {
+  /** The commit `ref` (a branch, tag or sha) points at; null when the host doesn't know it. */
+  resolveRef(repo: Repo, ref: string): Promise<string | null>;
+  /** The repo's most recent tags, newest first. */
+  recentTags(repo: Repo, limit: number): Promise<ReleaseTag[]>;
+}

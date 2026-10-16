@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GlobHeader, HEADER_HEIGHT_VAR } from '../src/components/glob-view/header';
@@ -174,15 +174,17 @@ describe('GlobHeader', () => {
       expect(corner.querySelector('.lucide-user-round')).toBeNull();
     });
 
-    it('shows the type and the list in the same quiet style', () => {
-      const { getByTestId } = renderBar(view({ status: 'in_progress' }));
-      const type = getByTestId('glob-type');
+    it('shows identity and status only: no type control, Arm system label or environments', () => {
+      const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
+      const { getByTestId, queryByTestId } = renderBar(view({ status: 'in_progress', type: 'same', humanSteps: [step], group: 'g' }));
       const list = getByTestId('glob-list');
-      expect(type.className).toContain('text-sm');
-      expect(type.className).toContain('text-muted-foreground');
-      expect(type.className).not.toContain('font-medium');
       expect(list.className).toContain('text-muted-foreground');
       expect(list.className).not.toContain('font-medium');
+      const bar = getByTestId('glob-header');
+      expect(queryByTestId('glob-type')).toBeNull();
+      expect(queryByTestId('arm-system-label')).toBeNull();
+      expect(queryByTestId('environment-chip')).toBeNull();
+      expect(bar.textContent).not.toMatch(/same|Arm system/);
     });
 
     it('agrees with the card on the human outline: your turn, awaiting sign-off, escalated Planning', () => {
@@ -304,25 +306,6 @@ describe('GlobHeader', () => {
       expect(corner.children[2]?.className).toContain('ml-1.5');
       expect(getByTestId('header-status').textContent).not.toContain('Doing');
       expect(getByTestId('glob-list').textContent).toContain('Doing');
-    });
-
-    it('shows the Arm system label by the list', () => {
-      const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
-      const { getByTestId, queryByTestId } = renderBar(view({ status: 'planning', humanSteps: [step] }));
-      expect(getByTestId('arm-system-label').textContent).toBe('Arm system');
-      const section = document.createElement('div');
-      section.setAttribute('data-section', 'human-steps');
-      section.append(document.createElement('span'));
-      document.body.append(section);
-      const scroll = vi.fn();
-      section.scrollIntoView = scroll;
-      fireEvent.click(getByTestId('arm-system-label'));
-      expect(scroll).toHaveBeenCalledTimes(1);
-      section.remove();
-      cleanup();
-      const none = renderBar(view({ status: 'planning', humanSteps: [] }));
-      expect(none.queryByTestId('arm-system-label')).toBeNull();
-      expect(queryByTestId('arm-system-label')).toBeNull();
     });
   });
 });

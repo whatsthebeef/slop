@@ -282,3 +282,33 @@ describe('the two parts of the Human steps', () => {
     expect(screen.getByTestId('add-step')).not.toBeNull();
   });
 });
+
+describe('three kinds of step (s15t246)', () => {
+  it("s14b3's shape: a due merge beside a question and a rollout shows only the question and the rollout as blocks", () => {
+    show([
+      step({ id: 'machine:merge', kind: 'merge', title: 'Merge and continue', who: 'anyone', due: 'now', state: 'due', blocks: ['reviewing'] }),
+      step({ id: 'machine:answer:q1', kind: 'answer', title: 'Answer: which env?', who: 'anyone', due: 'now', state: 'due', blocks: [] }),
+      step({ id: 'r1', kind: 'rollout', state: 'due' }),
+    ]);
+    const kinds = screen.getAllByTestId('step-group').map((n) => n.textContent);
+    expect(kinds).toEqual(expect.arrayContaining(['Answer', 'Do']));
+    expect(kinds).not.toContain('merge');
+    expect(screen.queryByText('Merge and continue')).toBeNull();
+  });
+
+  it('shows no step block for a conflict, an upload, a stuck run or pairing', () => {
+    show(
+      ['resolve_conflict', 'upload_file', 'unstick', 'pair'].map((kind) =>
+        step({ id: `machine:${kind}`, kind: kind as ListedHumanStep['kind'], who: 'anyone', due: 'now', state: 'due', blocks: [] }),
+      ),
+    );
+    expect(screen.queryAllByTestId('human-step')).toHaveLength(0);
+    expect(screen.queryByTestId('due-steps')).toBeNull();
+    expect(hasDueSteps([step({ id: 'machine:resolve_conflict', kind: 'resolve_conflict', state: 'due' })])).toBe(false);
+  });
+
+  it('labels a review label as Decide', () => {
+    show([step({ id: 'machine:rl', kind: 'review_label', who: 'qa', due: 'now', state: 'due', blocks: [] })]);
+    expect(screen.getByTestId('step-group').textContent).toBe('Decide');
+  });
+});

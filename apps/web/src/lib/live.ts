@@ -314,6 +314,8 @@ export const useLiveBoard = (boardId: number): LiveState => {
       // An environment's ATF run (or the check that placed globs at its commit): it shows on every glob held there.
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: ['glob-environments'] });
+    void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
+      void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
       void client.invalidateQueries({ queryKey: ['glob-tests'] });
       return;
     }
@@ -339,6 +341,7 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: globDeploysKey(id) });
       void client.invalidateQueries({ queryKey: globEnvironmentsKey(id) });
+      void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
       void client.invalidateQueries({ queryKey: globTestsKey(id) });
       return;
     }

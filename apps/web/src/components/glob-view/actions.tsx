@@ -1,6 +1,6 @@
 import { decisionOf, isHumanCategory, machine } from '@slop/core';
 import { isLearning } from '../decision-outcomes';
-import type { Action, EditFailure } from '@slop/core';
+import type { Action, EditFailure, EnvironmentIndicator } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ChevronDown, Ellipsis, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -29,8 +29,13 @@ import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-l
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
-import { GroupChip } from '../glob-card';
-import { boardGroupPath } from '@/lib/group-page';
+import { ArmSystemLabel } from '../glob-card';
+import { armLabel } from '@/lib/rollout-stages';
+import { api } from '@/lib/api';
+import { globEnvironmentsKey } from '@/lib/live';
+import { useQuery } from '@tanstack/react-query';
+import { META } from './tag-style';
+import { Dot } from './status';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
 import { splittable } from './size';
@@ -293,7 +298,7 @@ const ActionContent = ({
   );
 };
 
-/** The type chip in the header: its popover says what follows before it changes the type. */
+/** The type chip beside the group tag: its popover says what follows before it changes the type. */
 export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) =>
   ctx.glob.type === null ? null : (
     <TypePopover
@@ -305,6 +310,75 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
       compact
     />
   );
+
+/** The environments the glob is in, as chips; nothing until the board observes environments and the glob is in one. */
+const EnvironmentLine = ({ ctx }: { ctx: GlobViewContext }) => {
+  const { glob } = ctx;
+  const query = useQuery({ queryKey: globEnvironmentsKey(glob.id), queryFn: () => api.globEnvironments(glob.id) });
+  const held = (query.data ?? []).flatMap((env): EnvironmentIndicator[] => {
+    const presence = env.presence;
+    if (presence?.contained !== true) return [];
+    return [
+      {
+        environment: env.environment,
+        role: env.role,
+        production: env.production,
+        sha: presence.checkedSha,
+        since: presence.since,
+        ...(env.production && glob.status !== 'signed_off' && { warning: 'before_sign_off' as const }),
+      },
+    ];
+  });
+  return (
+    <>
+      {held.map((env) => {
+        const warned = env.warning === 'before_sign_off';
+        const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}`;
+        return (
+          <Tip key={env.environment} text={tip}>
+            <span
+              className={`${META} whitespace-nowrap ${warned ? 'text-required' : 'text-signal-strong'}`}
+              data-testid="environment-chip"
+              data-warning={env.warning}
+            >
+              {env.environment} ✓
+            </span>
+          </Tip>
+        );
+      })}
+    </>
+  );
+};
+
+/**
+ * Beside the action row (under it on narrow widths): the Arm system label, the branch and the environments, one quiet mono line.
+ * Human work has no branch, deploy or environments.
+ */
+const actionLine = ({ glob, board }: GlobViewContext) => {
+  if (isHumanCategory(glob.category)) return null;
+  const arming = armLabel(glob);
+  const observed = board.environments.some((e) => e.role !== undefined);
+  return { arming, observed };
+};
+
+const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable<ReturnType<typeof actionLine>> }) => {
+  const { glob } = ctx;
+  const { arming, observed } = line;
+  return (
+    <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="action-line-info">
+      {arming !== null && (
+        <>
+          <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
+          <Dot />
+        </>
+      )}
+      <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
+        {glob.branch}
+      </span>
+      {observed && <EnvironmentLine ctx={ctx} />}
+    </div>
+  );
+};
 
 /** Pick up from a live machine run: what happens to the run and the branch, and the command that carries on. */
 const TakeOverConfirmation = ({
@@ -534,15 +608,11 @@ export const GlobActions = ({
       </DropdownMenuContent>
     </DropdownMenu>
   ) : undefined;
-  const group =
-    glob.group === null ? null : (
-      <span className="ml-auto min-w-0 max-w-full" data-testid="glob-group">
-        <GroupChip name={glob.group} to={boardGroupPath(glob.boardId, glob.group)} />
-      </span>
-    );
+  const line = actionLine(ctx);
+  const info = line === null ? null : <ActionLineInfo ctx={ctx} line={line} />;
   return (
     <>
-      {(hasMain || escapes.length > 0 || group !== null) && (
+      {(hasMain || escapes.length > 0 || info !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {lead !== null && (
@@ -616,7 +686,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
-            {group}
+            {info}
           </div>
           <FinishAction ctx={ctx} state={state} />
           {state.confirmingReady && (

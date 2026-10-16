@@ -133,6 +133,29 @@ describe('Settings page', () => {
     expect(screen.getByTestId('environment-hints').textContent).toContain('subs created without an environment get this one');
   });
 
+  it("shows how each observed environment's deploys are known, and Record a deploy for a manual one (s15t239)", async () => {
+    api.board.mockResolvedValue({
+      ...board('admin'),
+      environments: [
+        { name: 'dev', allowBranchDeploy: true },
+        { name: 'staging', allowBranchDeploy: false, role: 'integration' },
+        { name: 'prod', allowBranchDeploy: false, role: 'release', production: true, deployKnown: 'manual' },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId('environments');
+    const known = (name: string) => screen.getByLabelText<HTMLSelectElement>(`How ${name}'s deploys are known`);
+    // No role, nothing to report or record.
+    expect(known('dev').disabled).toBe(true);
+    expect(known('staging').value).toBe('pipeline');
+    expect(known('prod').value).toBe('manual');
+    const hints = screen.getAllByTestId('deploy-known-hint').map((h) => h.textContent);
+    expect(hints[0]).toContain('report-deploy.sh');
+    expect(hints[1]).toContain("You record each release in slop; its globs' after-deploy steps fall due");
+    expect(screen.getAllByRole('button', { name: 'Record a deploy' })).toHaveLength(1);
+    expect(screen.getByTestId('record-deploy-prod')).toBeTruthy();
+  });
+
   it('remembers which groups are open, for this viewer', async () => {
     const user = userEvent.setup();
     const first = renderPage();
