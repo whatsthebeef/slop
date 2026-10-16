@@ -2,9 +2,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { OpenQuestion } from '@slop/core';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { QuestionChip } from '../src/components/glob-card';
 import type { GlobViewContext } from '../src/components/glob-view/context';
 import { QuestionsSection } from '../src/components/glob-view/questions';
 import type { GlobView } from '../src/lib/api';
@@ -113,22 +111,5 @@ describe('QuestionsSection', () => {
   it('disables the controls while busy', () => {
     setup(view([question({ options: ['Yes'] })]), true);
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Yes' }).disabled).toBe(true);
-  });
-});
-
-describe('QuestionChip', () => {
-  it('shows the open count and describes itself with the first question', () => {
-    const html = renderToStaticMarkup(
-      <QuestionChip glob={view([question(), question({ id: 'q2', text: 'Other' })])} onOpen={() => undefined} />,
-    );
-    expect(html).toContain('Question 2');
-    expect(html).toContain('Is prod in scope?');
-    expect(html).toContain('aria-describedby');
-  });
-
-  it('is absent when nothing is open', () => {
-    const answered = question({ answer: { text: 'Yes', by: 'a', at: NOW } });
-    expect(renderToStaticMarkup(<QuestionChip glob={view([answered])} />)).toBe('');
-    expect(renderToStaticMarkup(<QuestionChip glob={{ ...view([]), questions: undefined }} />)).toBe('');
   });
 });

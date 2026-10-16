@@ -11,7 +11,6 @@ import { kindOf } from '@/lib/board-filters';
 import type { Kind } from '@/lib/board-filters';
 import { cornerStatus, hasBlocker } from '@/lib/card-rows';
 import type { CornerStatus } from '@/lib/card-rows';
-import { openQuestionsOf, questionChipTip } from '@/lib/questions';
 import { armLabel } from '@/lib/rollout-stages';
 import type { ArmLabel } from '@/lib/rollout-stages';
 import { StatusIconView } from '@/components/status-icon';
@@ -302,20 +301,6 @@ const CardButton = ({
     {children}
   </button>
 );
-
-/** "Question 2": the glob has open questions; the first one's text is in the tooltip. Nothing when none is open. */
-export const QuestionChip = ({ glob, onOpen }: { glob: GlobView; onOpen?: () => void }) => {
-  const tip = questionChipTip(glob);
-  if (tip === null) return null;
-  const count = openQuestionsOf(glob).length;
-  return (
-    <Tip text={tip}>
-      <ChipButton onOpen={onOpen} className='inline-flex items-center gap-1 font-mono text-[11px] text-required' testId='question-chip'>
-        Question {String(count)}
-      </ChipButton>
-    </Tip>
-  );
-};
 
 /** A chip that opens the glob view at its section. Without `onOpen` (a chip shown outside the board) it is plain text. */
 export const ChipButton = ({
@@ -732,14 +717,6 @@ export const GlobCard = ({
             ) : (
               <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
             )}
-            {glob.clash != null && (
-              <Tip text={`${glob.clash.with} also changes some of the same files; whichever merges second will conflict. Opens the conflict`}>
-                <ChipButton onOpen={() => onOpenSection(cardTargets.conflict())} className='font-mono text-[11px] text-required' testId='clash-chip'>
-                  clashes with {glob.clash.with}
-                </ChipButton>
-              </Tip>
-            )}
-            <QuestionChip glob={glob} onOpen={() => onOpenSection(cardTargets.questions())} />
             {deploy !== undefined && <DeployChip deploy={deploy} onOpen={() => onOpenSection(cardTargets.deploys())} />}
             {environments !== undefined && <EnvironmentChips environments={environments} />}
             {atf !== undefined && <AtfChip runs={atf} />}
