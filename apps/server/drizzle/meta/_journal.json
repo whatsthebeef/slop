@@ -603,6 +603,13 @@
       "when": 1792176446111,
       "tag": "0085_dev_environments_only",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1792176456111,
+      "tag": "0086_drop_default_project",
+      "breakpoints": true
     }
   ]
 }
