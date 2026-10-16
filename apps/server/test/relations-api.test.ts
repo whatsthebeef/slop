@@ -1,4 +1,4 @@
-import { ArtifactService, BoardService, GlobService, machine, IntakeService, LlmUnavailable, SpendService } from '@slop/core';
+import { ArtifactService, BoardService, FindingsService, GlobService, KnowledgeService, LearningJobService, machine, MiningService, IntakeService, LlmUnavailable, RelationLearningService, SpendService } from '@slop/core';
 import type { Glob, Result } from '@slop/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -10,12 +10,14 @@ import { PgStore } from '../src/db/store.js';
 import type { Database } from '../src/db/store.js';
 import { createApp } from '../src/http/app.js';
 import type { Env } from '../src/http/app.js';
+import { mountKnowledge } from '../src/http/knowledge.js';
 import { OutboxRunner } from '../src/jobs/outbox.js';
 import { buildServer } from '../src/mcp/server.js';
 import type { McpDeps } from '../src/mcp/server.js';
 import { HintHub } from '../src/notifier.js';
 import { SignedLinks } from '../src/signed-links.js';
 import { createTestDatabase } from './support/database.js';
+import { fakeCodeHost } from './support/fake-codehost.js';
 
 const DEV = 'dev@example.com';
 const ADMIN = 'admin@example.com';
@@ -102,8 +104,9 @@ describe('relations over REST and MCP (Postgres)', () => {
     const notifier = new HintHub();
     const clock = { now: () => new Date().toISOString() };
     const deps = { store, notifier, clock };
-    globs = new GlobService({ ...deps, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) } });
-    const artifacts = new ArtifactService(deps);
+    const relationLearning = new RelationLearningService({ ...deps, ids: { runId: () => crypto.randomUUID() } });
+    globs = new GlobService({ ...deps, ids: { runId: () => crypto.randomUUID() }, routines: { hasRoutine: () => Promise.resolve(true) }, relationLearning });
+    const artifacts = new ArtifactService({ ...deps, relationLearning });
     const boards = new BoardService(deps);
     await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
@@ -125,6 +128,19 @@ describe('relations over REST and MCP (Postgres)', () => {
       outbox,
       spend: new SpendService({ store, clock }),
       onBoardCreated: () => Promise.resolve(),
+    });
+    const mining = new MiningService(deps);
+    mountKnowledge(app, {
+      knowledge: new KnowledgeService({ ...deps, catalog: { kbEntries: () => Promise.resolve([]), agentSet: () => Promise.resolve({ hash: 'empty', files: [] }) }, signals: mining }),
+      artifacts,
+      findings: new FindingsService(deps),
+      catalog: { kbEntries: () => Promise.resolve([]), agentSet: () => Promise.resolve({ hash: 'empty', files: [] }) },
+      intake: new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('off', 'none')) } }),
+      boards,
+      host: fakeCodeHost({ configured: false }),
+      jobs: new LearningJobService({ ...deps, mining, manifests: null }),
+      relationLearning,
+      logError: () => undefined,
     });
     const server = buildServer({ artifacts, globs, intake: new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('off', 'none')) } }), outbox, boards, deploys: { history: () => Promise.resolve({ ok: true as const, value: [] }) } } as unknown as McpDeps, DEV, 'http://localhost');
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -386,5 +402,108 @@ describe('relations over REST and MCP (Postgres)', () => {
     unwrap(await globs.applyEvent(first.id, (x, c) => machine.merged(x, { sha: 'f00' }, c)));
     await globs.releaseDependents(first.id, boardId);
     expect((await globs.peek(g.id))?.status).toBe('merging');
+  });
+
+  describe('relation learning (s15t251)', () => {
+    interface LearningBody {
+      thresholds: { windowDays: number; precision: number; recall: number; minSamples: number };
+      sources: { source: string; precision: number | null; posture: { posture: string; pinned: boolean } }[];
+      pins: { minSamples?: number; postures?: Record<string, string> };
+      code?: string;
+    }
+    const learning = async (method: string, body?: unknown, as = DEV, query = ''): Promise<{ status: number; body: LearningBody }> => {
+      const res = await rest(method, `/api/boards/${String(boardId)}/relation-learning${query}`, body, as);
+      return { status: res.status, body: res.body as unknown as LearningBody };
+    };
+    const weakRow = (from: string, to: string, gate: 'start' | 'merge' = 'merge') => ({
+      id: `rel_weak_${from}_${to}`,
+      boardId,
+      from,
+      to,
+      gate,
+      until: 'merged' as const,
+      reason: `mentions ${to}`,
+      evidence: [],
+      source: 'mention' as const,
+      kind: 'may_relate' as const,
+      group: null,
+      dismissedAt: null,
+      dismissedPlanHash: null,
+      overriddenAt: null,
+      createdAt: '2026-10-05T12:00:00.000Z',
+    });
+
+    it('GET shows each source with thresholds and posture to members; only admins pin (PUT) and reset (DELETE)', async () => {
+      const view = await learning('GET');
+      expect(view.status).toBe(200);
+      expect(view.body.thresholds).toEqual({ windowDays: 90, precision: 0.5, recall: 0.5, minSamples: 5 });
+      expect(view.body.sources.map((s) => s.source)).toEqual(['mention', 'inferred', 'agent', 'person', 'learned', 'split']);
+
+      expect((await learning('PUT', { postures: { mention: 'weak' } }, DEV)).status).toBe(403);
+      const pinned = await learning('PUT', { postures: { mention: 'weak' }, minSamples: 8 }, ADMIN);
+      expect(pinned.status).toBe(200);
+      expect(pinned.body.thresholds.minSamples).toBe(8);
+      expect(pinned.body.sources.find((s) => s.source === 'mention')?.posture).toMatchObject({ posture: 'weak', pinned: true });
+      expect((await learning('PUT', { postures: { person: 'weak' } }, ADMIN)).status).toBe(422);
+      expect((await learning('PUT', { windowDays: 1 }, ADMIN)).status).toBe(422);
+
+      expect((await learning('DELETE', undefined, DEV)).status).toBe(403);
+      expect((await learning('DELETE', undefined, ADMIN, '?what=mention')).body.sources.find((s) => s.source === 'mention')?.posture.pinned).toBe(false);
+      const cleared = await learning('DELETE', undefined, ADMIN);
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.thresholds.minSamples).toBe(5);
+    });
+
+    it('a weak link shows in relations.weak and holds nothing; promote makes it a gate and counts for its source', async () => {
+      const a = await make('Weak A');
+      const b = await make('Weak B');
+      await store.transaction((tx) => tx.insertRelation(weakRow(a.id, b.id)));
+      const read = await rest('GET', `/api/globs/${a.id}`);
+      const weak = (read.body.relations as unknown as { weak?: { relationId: string; to: string; toTitle: string; source: string; state: string }[] }).weak;
+      expect(weak).toMatchObject([{ relationId: `rel_weak_${a.id}_${b.id}`, to: b.id, toTitle: 'Weak B', source: 'mention' }]);
+      expect(read.body.relations?.holding).toEqual([]);
+      expect(read.body.holding ?? []).toEqual([]);
+
+      const promoted = await rest('POST', `/api/globs/${a.id}/relations/rel_weak_${a.id}_${b.id}/promote`, { version: await version(a.id) });
+      expect(promoted.status).toBe(200);
+      expect(promoted.body.relations?.holding).toMatchObject([{ to: b.id, gate: 'merge', source: 'mention' }]);
+      expect((promoted.body.relations as unknown as { weak?: unknown }).weak).toBeUndefined();
+      const signals = await store.transaction((tx) => tx.listRelationSignals(boardId));
+      expect(signals.filter((s) => s.from === a.id).map((s) => [s.source, s.signal])).toEqual([['mention', 'tp_promoted']]);
+      // Nothing left to promote: a second call, an unknown id and a stale version are refused.
+      expect((await rest('POST', `/api/globs/${a.id}/relations/rel_weak_${a.id}_${b.id}/promote`, { version: await version(a.id) })).status).toBe(422);
+      expect((await rest('POST', `/api/globs/${a.id}/relations/rel_nope/promote`, { version: await version(a.id) })).status).toBe(422);
+      expect((await rest('POST', `/api/globs/${a.id}/relations/rel_nope/promote`, {})).status).toBe(422);
+    });
+
+    it('promote refuses a weak link that would make a cycle, and MCP promote_relation does the same job', async () => {
+      const a = await make('Cycle A');
+      const b = await make('Cycle B');
+      unwrap(await globs.addRelation(DEV, b.id, null, { to: a.id, gate: 'merge' }));
+      await store.transaction((tx) => tx.insertRelation(weakRow(a.id, b.id)));
+      const refused = await rest('POST', `/api/globs/${a.id}/relations/rel_weak_${a.id}_${b.id}/promote`, { version: await version(a.id) });
+      expect(refused.status).toBe(422);
+      expect(refused.body.message).toContain('cycle');
+
+      const c = await make('Tool C');
+      const d = await make('Tool D');
+      await store.transaction((tx) => tx.insertRelation(weakRow(c.id, d.id, 'start')));
+      const done = await tool('promote_relation', { id: c.id, version: await version(c.id), relationId: `rel_weak_${c.id}_${d.id}` });
+      expect(done.error).toBe(false);
+      expect(done.body.relations?.holding).toMatchObject([{ to: d.id, gate: 'start' }]);
+      expect((await tool('promote_relation', { id: c.id, version: await version(c.id), relationId: 'rel_nope' })).error).toBe(true);
+    });
+
+    it('get_context carries relationLearning for the agent, mention and inferred sources', async () => {
+      const g = await make('Context glob');
+      const reply = await client.callTool({ name: 'get_context', arguments: { id: g.id } });
+      const text = (reply.content as { type: string; text: string }[])[0]?.text ?? '{}';
+      const context = JSON.parse(text) as { relationLearning?: { source: string; precision: number | null; samples: number; windowDays: number; posture: string; note: string }[] };
+      expect(context.relationLearning?.map((s) => s.source)).toEqual(['agent', 'mention', 'inferred']);
+      // Earlier tests on this board left a signal or two: under the sample minimum the posture stays a gate.
+      expect(context.relationLearning?.[0]).toMatchObject({ source: 'agent', windowDays: 90, posture: 'gate' });
+      expect(context.relationLearning?.[0]?.samples).toBeLessThan(5);
+      expect(context.relationLearning?.[0]?.note).toContain('concrete dependency');
+    });
   });
 });

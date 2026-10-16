@@ -162,6 +162,13 @@ export const RELATION_SCAN_SCHEMA = named(
   }),
 );
 
+export const RELATION_CHECK_SCHEMA = named(
+  'relation_check',
+  object({
+    verdicts: array(object({ id: str, verdict: oneOf('needed', 'not_needed', 'unsure'), reason: str })),
+  }),
+);
+
 export const INTAKE_GROUP_SCHEMA = named('intake_group', object({ group: nullable(str) }));
 
 export const SIZE_JUDGE_SCHEMA = named(

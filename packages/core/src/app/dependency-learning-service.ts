@@ -23,6 +23,7 @@ import { MAX_RELATIONS, hasMerged, isActive, relationUniverse, wouldCycle } from
 import type { Catalog, IdGenerator, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import { readMergePolicy } from './knowledge-service.js';
+import type { RelationLearningService } from './relation-learning-service.js';
 
 /** What the board's dependency rules say, for predicting overlaps: the patterns, their weights and the catalog defaults. */
 export interface DependencyPrediction {
@@ -68,6 +69,9 @@ export class DependencyLearningService {
       ids: IdGenerator;
       /** Absent: no defaults, so only the board's merge policy is predicted from. */
       catalog?: Catalog;
+      /** Told which relations a failed run confirms and which dependency had none (relation precision and recall); absent: nothing is recorded. */
+      relationLearning?: RelationLearningService;
+      log?: (task: string, message: string) => void;
     },
   ) {}
 
@@ -215,8 +219,10 @@ export class DependencyLearningService {
       const now = this.deps.clock.now();
       for (const id of ids) {
         const evidence = `${glob.id} failed: ${reason.slice(0, 160)}`;
-        if (board.some((r) => r.from === glob.id && r.to === id && r.gate === 'start')) {
+        const existing = board.find((r) => r.from === glob.id && r.to === id && r.gate === 'start');
+        if (existing !== undefined) {
           // Already a need: the failure confirms it (and keeps a later start now from downgrading it).
+          await this.learn(() => this.deps.relationLearning?.confirmed(tx, existing, `${glob.id} failed because ${id} was not merged: the relation was needed`));
           await tx.insertDependencyRuleChange({ boardId: glob.boardId, at: now, pattern: `edge ${glob.id} -> ${id}`, from: 1, to: 1, cause: 'unmerged_prerequisite', globId: glob.id, evidence });
           continue;
         }
@@ -243,6 +249,14 @@ export class DependencyLearningService {
           createdAt: now,
         };
         await tx.insertRelation(relation);
+        // A weak link to the same glob was right and gives way to the gate; with no relation of any kind slop's relations missed it.
+        const weak = (await tx.listWeakRelationsFrom([glob.id])).find((r) => r.to === id);
+        if (weak !== undefined) {
+          await tx.deleteRelation(weak.id);
+          await this.learn(() => this.deps.relationLearning?.confirmed(tx, weak, `${glob.id} failed because ${id} was not merged: the weak link was right`));
+        } else {
+          await this.learn(() => this.deps.relationLearning?.failedRun(tx, glob, relation));
+        }
         board.push(relation);
         await tx.appendEvents([{ type: 'RelationAdded', globId: glob.id, actor: null, at: now, data: { to: id, gate: 'start', until: 'merged', source: 'learned', reason: evidence } }]);
         next = { ...next, impliedAfter: (next.impliedAfter ?? []).filter((i) => i.id !== id) };
@@ -261,6 +275,15 @@ export class DependencyLearningService {
       if (boardId !== null) this.deps.notifier.publish({ kind: 'board.changed', boardId });
     }
     return learned;
+  }
+
+  /** Records a relation signal; learning never fails the failure report it rides on. */
+  private async learn(run: () => Promise<void> | undefined): Promise<void> {
+    try {
+      await run();
+    } catch (e) {
+      this.deps.log?.('relation learning', e instanceof Error ? e.message : String(e));
+    }
   }
 
   /** The board's rules (learned over default) and their history, for members. */

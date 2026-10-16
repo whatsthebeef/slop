@@ -8,6 +8,11 @@ import type {
   RelationScanState,
   RelationSource,
   RelationUntil,
+  RelationVerdictBy,
+  RelationVerdictValue,
+  RelationLearningSettings,
+  RelationSignalKind,
+  RelationSignalSource,
   HumanStepScript,
   GlobOutcome,
   SizeEstimate,
@@ -45,7 +50,7 @@ import type {
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, RELATION_GATES, RELATION_KINDS, RELATION_SCAN_DECISIONS, RELATION_SCAN_KINDS, RELATION_SCAN_STATES, RELATION_SOURCES, RELATION_UNTILS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, RELATION_GATES, RELATION_KINDS, RELATION_SCAN_DECISIONS, RELATION_SCAN_KINDS, RELATION_SCAN_STATES, RELATION_SOURCES, RELATION_UNTILS, RELATION_VERDICTS, RELATION_VERDICT_BY, RELATION_SIGNAL_KINDS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -397,7 +402,7 @@ export const relations = pgTable(
     reason: text('reason'),
     evidence: jsonb('evidence').$type<readonly string[]>().notNull().default(sql`'[]'::jsonb`),
     source: text('source', { enum: RELATION_SOURCES }).$type<RelationSource>().notNull(),
-    /** `waits`, or `superseded_by` (`from` is superseded by `to`; gate and until are inert placeholders). */
+    /** `waits`, `superseded_by` (`from` is superseded by `to`; gate and until are inert placeholders) or `may_relate` (a weak link: holds nothing). */
     kind: text('kind', { enum: RELATION_KINDS }).$type<RelationKind>().notNull().default('waits'),
     /** The group a group-wide relation was set for (its name as then spelled). */
     group: text('group'),
@@ -405,6 +410,11 @@ export const relations = pgTable(
     dismissedPlanHash: text('dismissed_plan_hash'),
     overriddenAt: timestamp('overridden_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    /** The post-merge check's verdict on whether the relation was needed, with its reason, who reached it and when. */
+    verdict: text('verdict', { enum: RELATION_VERDICTS }).$type<RelationVerdictValue>(),
+    verdictReason: text('verdict_reason'),
+    verdictBy: text('verdict_by', { enum: RELATION_VERDICT_BY }).$type<RelationVerdictBy>(),
+    verdictAt: timestamp('verdict_at', { withTimezone: true }),
   },
   (t) => [
     uniqueIndex('relations_from_to_gate_kind_idx').on(t.fromGlob, t.toGlob, t.gate, t.kind),
@@ -413,6 +423,37 @@ export const relations = pgTable(
     index('relations_to_idx').on(t.toGlob),
   ],
 );
+
+/**
+ * What happened to a relation (or to two globs that had none), for learning how readily to create relations: once per board and
+ * `key`. Precision and recall are computed from these over a rolling window; nothing is stored as a learned value.
+ */
+export const relationSignals = pgTable(
+  'relation_signals',
+  {
+    id: text('id').primaryKey(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    fromGlob: text('from_glob').notNull(),
+    toGlob: text('to_glob').notNull(),
+    relationId: text('relation_id'),
+    source: text('source').$type<RelationSignalSource>().notNull(),
+    signal: text('signal', { enum: RELATION_SIGNAL_KINDS }).$type<RelationSignalKind>().notNull(),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    evidence: text('evidence').notNull(),
+    key: text('key').notNull(),
+  },
+  (t) => [uniqueIndex('relation_signals_board_key_idx').on(t.boardId, t.key), index('relation_signals_board_at_idx').on(t.boardId, t.at)],
+);
+
+/** What an admin pinned for a board's relation learning (thresholds, a source's posture) and the history of the pins. No row: nothing pinned. */
+export const relationLearning = pgTable('relation_learning', {
+  boardId: integer('board_id')
+    .primaryKey()
+    .references(() => boards.id, { onDelete: 'cascade' }),
+  settings: jsonb('settings').$type<RelationLearningSettings>().notNull(),
+});
 
 /**
  * The automatic relation pass's memory, one row per (glob, mentioned glob or step, sentence): what the pass decided about a

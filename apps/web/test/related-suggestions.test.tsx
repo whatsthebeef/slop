@@ -49,7 +49,8 @@ const hold = (to: string, patch: Partial<Holding> = {}): Holding => ({
 });
 const related = (patch: Partial<RelationsView> = {}): RelationsView => ({ holding: [], holdsBack: [], done: [], ...patch });
 
-const renderRelated = (glob: GlobView, onSuggestion?: SuggestionHandler) => {
+const renderRelated = (glob: GlobView, onSuggestion?: SuggestionHandler, withPromote = false) => {
+  const onPromote = vi.fn<(relationId: string) => Promise<boolean>>(() => Promise.resolve(true));
   const onDismissEdge = vi.fn(() => Promise.resolve(true));
   const onAddRelation = vi.fn<(input: AddRelationInput) => Promise<boolean>>(() => Promise.resolve(true));
   const ctx = { board, glob, groups: [], busy: false, onAction: vi.fn(), onUpdate: vi.fn(), onOpenSection: vi.fn() };
@@ -57,11 +58,11 @@ const renderRelated = (glob: GlobView, onSuggestion?: SuggestionHandler) => {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} {...(onSuggestion === undefined ? {} : { onSuggestion })} />
+        <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} {...(onSuggestion === undefined ? {} : { onSuggestion })} {...(withPromote ? { onPromote } : {})} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onDismissEdge, onAddRelation };
+  return { onDismissEdge, onAddRelation, onPromote };
 };
 
 describe('Related: reasons', () => {
@@ -363,5 +364,52 @@ describe('board settings: automatic relations cost', () => {
   it('reads zero when the pass has not run, and labels the source in the breakdown', () => {
     expect(relationScanLine({})).toBe('Automatic relations: $0.0000 this month');
     expect(spendBreakdown({ bySource: { relation_scan: 0.5 }, unpricedCalls: 0 })).toBe('relation_scan (automatic relations) $0.50');
+  });
+});
+
+describe('Related: verdicts and weak links', () => {
+  it('shows the post-merge verdict on a done row, and on a holding row', () => {
+    renderRelated(
+      view({
+        relations: related({
+          holding: [hold('s1t7', { verdict: 'unsure' })],
+          done: [
+            { relationId: 'rel_a', to: 's1t4', toTitle: 'A', gate: 'start', until: 'merged', reason: null, source: 'agent', how: 'met', verdict: 'needed', verdictReason: 'uses `parseRow` from s1t4', verdictBy: 'git' },
+            { relationId: 'rel_b', to: 's1t5', toTitle: 'B', gate: 'start', until: 'merged', reason: null, source: 'mention', how: 'met', verdict: 'not_needed', verdictReason: 'no shared files, imports or symbols', verdictBy: 'model' },
+            { relationId: 'rel_c', to: 's1t6', toTitle: 'C', gate: 'start', until: 'merged', reason: null, source: 'agent', how: 'met' },
+          ],
+        }),
+      }),
+    );
+    expect(screen.getByTestId('verdict-s1t4').textContent).toContain('needed: uses `parseRow` from s1t4');
+    expect(screen.getByTestId('verdict-s1t5').textContent).toContain('not needed: no shared files, imports or symbols');
+    expect(screen.getByTestId('verdict-s1t7').textContent).toContain('unsure');
+    expect(screen.queryByTestId('verdict-s1t6')).toBeNull();
+    // The source still shows as before.
+    expect(screen.getByTestId('related-row-s1t4').textContent).toContain('added by an agent');
+    expect(screen.getByTestId('mention-badge-s1t5').textContent).toBe('from a mention');
+  });
+
+  it('lists weak links under "May relate" with a one-click gate and a dismiss, and they do not count as holding', async () => {
+    const user = userEvent.setup();
+    const weak = { relationId: 'rel_w', to: 's1t8', toTitle: 'Weak one', gate: 'start' as const, until: 'merged' as const, reason: null, source: 'mention' as const, state: 'open' as const };
+    const { onPromote, onDismissEdge } = renderRelated(view({ relations: related({ weak: [weak] }) }), undefined, true);
+    await user.click(screen.getByTestId('related-toggle'));
+    const group = screen.getByTestId('related-weak');
+    expect(group.textContent).toContain('May relate');
+    expect(screen.getByTestId('related-row-s1t8').textContent).toContain('may relate');
+    expect(screen.queryByTestId('related-holding')).toBeNull();
+    await user.click(screen.getByTestId('promote-s1t8'));
+    expect(onPromote).toHaveBeenCalledWith('rel_w');
+    await user.click(screen.getByTestId('dismiss-edge-s1t8'));
+    expect(onDismissEdge).toHaveBeenCalledWith('rel_w');
+  });
+
+  it('shows no gate button without the promote callback, nor on a gate row', () => {
+    const weak = { relationId: 'rel_w', to: 's1t8', toTitle: 'Weak one', gate: 'start' as const, until: 'merged' as const, reason: null, source: 'inferred' as const, state: 'open' as const };
+    renderRelated(view({ relations: related({ weak: [weak], holding: [hold('s1t7')] }) }), undefined, false);
+    expect(screen.queryByTestId('promote-s1t8')).toBeNull();
+    expect(screen.queryByTestId('promote-s1t7')).toBeNull();
+    expect(screen.getByTestId('related-weak')).toBeTruthy();
   });
 });

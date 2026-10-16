@@ -65,6 +65,8 @@ export interface SectionProps {
   onFailStep?: (stepId: string, note: string) => Promise<boolean>;
   /** Accept (with the fix glob for a failed step) or dismiss a card suggestion; without it the suggestions show without buttons. */
   onSuggestion?: SuggestionHandler;
+  /** "Make it a gate" on a weak link in Related; without it the button is absent. */
+  onPromoteRelation?: (relationId: string) => Promise<boolean>;
 }
 
 /** Renders one section of the glob page (the content inside its anchor). */
@@ -82,8 +84,14 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.human && reviewOpen(ctx.glob) && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  related: ({ ctx, onDismissEdge, onAddRelation, onSuggestion }) => (
-    <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} {...(onSuggestion === undefined ? {} : { onSuggestion })} />
+  related: ({ ctx, onDismissEdge, onAddRelation, onSuggestion, onPromoteRelation }) => (
+    <RelatedSection
+      ctx={ctx}
+      onDismissEdge={onDismissEdge}
+      onAddRelation={onAddRelation}
+      {...(onSuggestion === undefined ? {} : { onSuggestion })}
+      {...(onPromoteRelation === undefined ? {} : { onPromote: onPromoteRelation })}
+    />
   ),
   size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection

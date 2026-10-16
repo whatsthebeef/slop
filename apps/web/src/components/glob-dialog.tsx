@@ -47,6 +47,7 @@ export const GlobDetail = ({
   onDismissStep,
   onFailStep,
   onSuggestion,
+  onPromoteRelation,
   onAction,
   onReviewLabel,
   onDismissEdge,
@@ -87,6 +88,8 @@ export const GlobDetail = ({
   onFailStep?: (stepId: string, note: string) => Promise<boolean>;
   /** Accept or dismiss a card suggestion. */
   onSuggestion?: SuggestionHandler;
+  /** "Make it a gate" on a "may relate" row. */
+  onPromoteRelation?: (relationId: string) => Promise<boolean>;
   /** Resolves false when the action failed. */
   /** `anyway` goes ahead of unmerged prerequisites (Retry). */
   onAction: (action: Action, anyway?: boolean, text?: string) => Promise<boolean>;
@@ -196,6 +199,7 @@ export const GlobDetail = ({
     onDismissStep,
     ...(onFailStep === undefined ? {} : { onFailStep }),
     ...(onSuggestion === undefined ? {} : { onSuggestion }),
+    ...(onPromoteRelation === undefined ? {} : { onPromoteRelation }),
   };
 
   return (

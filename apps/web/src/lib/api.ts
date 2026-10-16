@@ -72,6 +72,8 @@ import type {
   DependencyRulesView,
   RelationGate,
   RelationUntil,
+  RelationLearningView,
+  PinInput,
   TargetChange,
   PresentableGlob,
 } from '@slop/core';
@@ -685,6 +687,8 @@ export interface KnowledgePageView {
   readonly feedback?: readonly KnowledgePageFeedback[];
 }
 
+/** The board's relation learning (settings, Relations). */
+export const relationLearningKey = (boardId: number) => ['relation-learning', boardId] as const;
 export const atfRunnersKey = (boardId: number) => ['atf-runners', boardId] as const;
 
 export const api = {
@@ -717,6 +721,12 @@ export const api = {
   updateSettings: (id: number, version: number, settings: Partial<Board>) =>
     request<Board>('PATCH', `/api/boards/${id}/settings`, { ...settings, version }),
   /** This month's LLM spend (every board model call, by source) in the board's time zone. */
+  relationLearning: (id: number) => request<RelationLearningView>('GET', `/api/boards/${id}/relation-learning`),
+  /** Admin: pins thresholds, the window, the sample minimum or a source's posture; answers the new view. */
+  pinRelationLearning: (id: number, pins: PinInput) => request<RelationLearningView>('PUT', `/api/boards/${id}/relation-learning`, pins),
+  /** Admin: drops every pin, or the one named (a threshold name or a source). */
+  resetRelationLearning: (id: number, what?: string) =>
+    request<RelationLearningView>('DELETE', `/api/boards/${id}/relation-learning${what === undefined ? '' : `?what=${encodeURIComponent(what)}`}`),
   spend: (id: number) => request<MonthSpendView>('GET', `/api/boards/${id}/spend`),
   members: (id: number) => request<Member[]>('GET', `/api/boards/${id}/members`),
   setMember: (id: number, email: string, role: Role) =>
@@ -1019,6 +1029,9 @@ export const api = {
   dismissSuggestion: (id: string, suggestionId: string) =>
     request<GlobView>('POST', `/api/globs/${id}/suggestions/${encodeURIComponent(suggestionId)}/dismiss`, {}),
   /** Adds a relation: `to` holds this glob back (needs its version), or `holdsBack` is held back by this one (a decision's "Holds back"). */
+  /** "Make it a gate" on a weak link ("may relate"): it becomes a relation that holds the glob back. */
+  promoteRelation: (id: string, relationId: string, version: number) =>
+    request<GlobView>('POST', `/api/globs/${id}/relations/${relationId}/promote`, { version }),
   addRelation: (id: string, relation: AddRelationInput) => request<GlobView>('POST', `/api/globs/${id}/relations`, relation),
   /** Answers an open question (an option, free text, or both); writes the Clarifications attachment and releases what it held. */
   answerQuestion: (id: string, questionId: string, input: AnswerQuestionInput) =>
