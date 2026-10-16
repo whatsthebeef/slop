@@ -582,7 +582,7 @@ mountSkillZip(app, {
   skillsDir: config.SKILLS_DIR,
   uploadHost: config.ATTACHMENTS_BUCKET === undefined ? null : `${config.ATTACHMENTS_BUCKET}.s3.${config.ATTACHMENTS_REGION}.amazonaws.com`,
 });
-mountDeploys(app, { deploys, environments, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
+mountDeploys(app, { deploys, environments, testRuns, boards, links, refs: github, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 // ATF runners (spec, ATF runners): each identity method adds a verifier here; the board's integration token is the legacy way in.
 // Client credentials need slop's own Cognito pool; without its settings (local development) that method can't authenticate or be issued.
 const cognitoClients =
