@@ -41,7 +41,7 @@ export const SettingsPage = () => {
     <main className='mx-auto grid max-w-2xl gap-4 p-6'>
       <BoardGroup board={board} admin={admin} form={form} readinessLinked={hash === '#readiness'} />
       <MembersGroup boardId={boardId} admin={admin} />
-      <EnvironmentsGroup admin={admin} form={form} />
+      <EnvironmentsGroup admin={admin} form={form} boardId={boardId} savedManual={board.environments.filter((e) => e.deployKnown === 'manual').map((e) => e.name)} />
       {admin && <AtfRunnersGroup boardId={boardId} environments={board.environments} />}
       <AutomationGroup admin={admin} form={form} />
       <RelationScanSpend boardId={boardId} />

@@ -458,4 +458,54 @@ describe('deploy results and executors', () => {
     const parsed = new URL(url(d));
     expect(links.verify(parsed.pathname, Number(parsed.searchParams.get('expires')), parsed.searchParams.get('sig') ?? '')).toBe(true);
   });
+  it('records a manual environment deploy from a branch, tag or commit and lists recent tags (s15t239)', async () => {
+    await store.transaction(async (tx) => {
+      const current = await tx.getBoard(board.id);
+      if (current === null) throw new Error('no board');
+      // Earlier tests change the board's environments: set exactly the ones this one needs.
+      const environments: Board['environments'] = [
+        { name: 'dev1', allowBranchDeploy: true },
+        { name: 'prod', allowBranchDeploy: false, role: 'release', production: true, deployKnown: 'manual' },
+      ];
+      await tx.updateBoard({ ...current, environments, version: current.version + 1 }, current.version);
+    });
+    const known: Record<string, string> = { main: 'm'.repeat(40), 'v1.2': 't'.repeat(40) };
+    const manual = new Hono<Env>();
+    manual.use('/api/*', async (c, next) => {
+      c.set('email', c.req.header('x-test-email') ?? DEV);
+      await next();
+    });
+    mountDeploys(manual, {
+      deploys,
+      environments,
+      testRuns,
+      boards: new BoardService({ store, notifier: { publish: () => undefined } }),
+      links,
+      refs: {
+        resolveRef: (_repo, ref) => Promise.resolve(known[ref] ?? null),
+        recentTags: () => Promise.resolve([{ name: 'v1.2', sha: 't'.repeat(40) }]),
+      },
+      awsWebhookKeys: [],
+      log: () => undefined,
+    });
+    const post = (env: string, body: unknown, email = DEV) =>
+      manual.request(`/api/boards/${String(board.id)}/environments/${env}/deploys`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-email': email },
+        body: JSON.stringify(body),
+      });
+    expect(((await (await manual.request(`/api/boards/${String(board.id)}/release-tags`)).json()) as { value: unknown[] }).value).toHaveLength(1);
+    expect((await post('prod', { ref: 'v1.2' }, 'stranger@example.com')).status).toBe(403);
+    expect((await post('prod', { ref: 'nope' })).status).toBe(404);
+    expect((await post('dev1', {})).status).toBe(422);
+    // After every deploy the earlier tests reported, so these are the newest.
+    clock = Date.parse('2026-10-06T12:00:00.000Z');
+    expect((await post('prod', { ref: 'v1.2' })).status).toBe(200);
+    // Blank means the base branch's head.
+    expect((await post('prod', {})).status).toBe(200);
+    const list = (await (await manual.request(`/api/boards/${String(board.id)}/environments`)).json()) as {
+      value: { environment: string; deployKnown: string; latest: { sha: string; ref: string } | null; recordedBy: string | null }[];
+    };
+    expect(list.value.find((e) => e.environment === 'prod')).toMatchObject({ deployKnown: 'manual', latest: { sha: 'm'.repeat(40), ref: 'main' }, recordedBy: DEV });
+  });
 });
