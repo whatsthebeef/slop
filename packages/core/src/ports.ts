@@ -33,6 +33,7 @@ import type { NewSubLimitChange, SubLimitChange } from './domain/sub-limit.js';
 import type { NewTypeCorrection, TypeCorrection } from './domain/type-learning.js';
 import type { DependencyDefaults, DependencyRule, DependencyRuleChange, NewDependencyRuleChange } from './domain/dependency-rules.js';
 import type { RelationScanPatch, RelationScanRow } from './domain/relation-scan.js';
+import type { RelationLearningSettings, RelationSignal } from './domain/relation-learning.js';
 import type { AtfIntegration, BaseChecks, Board, Glob, Member, Relation, RelationPatch, Role, Status, SlopType, User } from './domain/types.js';
 
 import type { GlobInclude } from './domain/types.js';
@@ -266,6 +267,19 @@ export interface Tx {
   listSupersessions(globIds: readonly string[]): Promise<Relation[]>;
   /** The `superseded_by` rows that point at these globs (they are the superseders: `to` is in the list), oldest first; none for an empty list. */
   listSupersededBy(globIds: readonly string[]): Promise<Relation[]>;
+  /** Every weak link (`may_relate`) of a board, oldest first. The gate code never reads them. */
+  listWeakRelations(boardId: number): Promise<Relation[]>;
+  /** The weak links that start at these globs, oldest first; none for an empty list. */
+  listWeakRelationsFrom(globIds: readonly string[]): Promise<Relation[]>;
+  /** One relation of any kind by ID, or null. */
+  getRelation(id: string): Promise<Relation | null>;
+  /** Records a relation signal once per board and key; false when it was already recorded. */
+  insertRelationSignal(signal: RelationSignal): Promise<boolean>;
+  /** A board's relation signals recorded at or after `since` (all when absent), oldest first. */
+  listRelationSignals(boardId: number, since?: string): Promise<RelationSignal[]>;
+  /** What an admin pinned for the board's relation learning (an empty object when nothing). */
+  getRelationLearning(boardId: number): Promise<RelationLearningSettings>;
+  setRelationLearning(boardId: number, settings: RelationLearningSettings): Promise<void>;
   /** Inserts a relation (`kind` absent: `waits`); false when the glob already has one to the same glob for the same gate and kind. */
   insertRelation(relation: Relation): Promise<boolean>;
   /** Changes a relation's dismissal, override, reason, evidence or until; the rest of it stays. */

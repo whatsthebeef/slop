@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   health: vi.fn(),
   chatTestCases: vi.fn(),
   atfRunners: vi.fn(),
+  relationLearning: vi.fn(),
 }));
 vi.mock('../src/lib/api', async (original) => ({ ...(await original<typeof import('../src/lib/api')>()), api: { ...api } }));
 
@@ -51,6 +52,12 @@ beforeEach(() => {
   api.health.mockResolvedValue({ capabilities: {} });
   api.chatTestCases.mockResolvedValue([]);
   api.atfRunners.mockResolvedValue([]);
+  api.relationLearning.mockResolvedValue({
+    thresholds: { windowDays: 90, precision: 0.5, recall: 0.5, minSamples: 5 },
+    defaults: { windowDays: 90, precision: 0.5, recall: 0.5, minSamples: 5 },
+    sources: [],
+    pins: {},
+  });
 });
 
 afterEach(() => {
@@ -79,7 +86,7 @@ const groups = () => screen.getAllByTestId(/^settings-group-[a-z]+$/).map((el) =
 const toggle = (id: string) => screen.getByTestId(`settings-group-${id}-toggle`);
 
 describe('Settings page', () => {
-  it('holds only the seven groups a person chooses from, with System collapsed at the bottom', async () => {
+  it('holds only the eight groups a person chooses from, with System collapsed at the bottom', async () => {
     renderPage();
     await screen.findByTestId('settings-group-board');
     expect(groups()).toEqual(SETTINGS_GROUP_IDS.map((id) => `settings-group-${id}`));
@@ -89,10 +96,11 @@ describe('Settings page', () => {
       'Environments and deploys',
       'ATF runners',
       'Automation',
+      'Relations',
       'Reports',
       'System',
     ]);
-    expect(SETTINGS_GROUP_IDS.map((id) => toggle(id).getAttribute('aria-expanded'))).toEqual(['true', 'true', 'true', 'true', 'true', 'true', 'false']);
+    expect(SETTINGS_GROUP_IDS.map((id) => toggle(id).getAttribute('aria-expanded'))).toEqual(['true', 'true', 'true', 'true', 'true', 'true', 'true', 'false']);
     for (const id of SETTINGS_GROUP_IDS) expect(screen.getByTestId(`settings-group-${id}`).textContent).toContain(SETTINGS_GROUPS[id].blurb);
   });
 
@@ -170,7 +178,7 @@ describe('Settings page', () => {
 
     renderPage();
     await screen.findByTestId('settings-group-board');
-    expect(SETTINGS_GROUP_IDS.map((id) => toggle(id).getAttribute('aria-expanded'))).toEqual(['false', 'true', 'true', 'true', 'true', 'true', 'true']);
+    expect(SETTINGS_GROUP_IDS.map((id) => toggle(id).getAttribute('aria-expanded'))).toEqual(['false', 'true', 'true', 'true', 'true', 'true', 'true', 'true']);
   });
 
   it('still works when the browser will not store anything', async () => {

@@ -50,7 +50,7 @@ export const spendLine = (spend: {
 };
 
 /** What the tooltip calls a source whose name is not plain words. */
-const SOURCE_LABELS: Readonly<Record<string, string>> = { relation_scan: 'relation_scan (automatic relations)' };
+const SOURCE_LABELS: Readonly<Record<string, string>> = { relation_scan: 'relation_scan (automatic relations)', relation_check: 'relation_check (post-merge relation check)' };
 
 /**
  * The board settings' line for the automatic relation pass: "Automatic relations: $0.0123 this month", with the calls that had no

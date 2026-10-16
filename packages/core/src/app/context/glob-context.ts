@@ -13,6 +13,7 @@ import type { ActionState } from '../../domain/action-glob.js';
 import type { Glob, Mode, WorkActor, WorkKind } from '../../domain/types.js';
 import type { ArtifactListing } from './artifact-listing.js';
 import type { GlobHotspot } from './hotspot-section.js';
+import type { RelationLearningContext } from './relation-learning-section.js';
 import type { InboxContextItem } from './inbox-section.js';
 import type { InvestigationSummary } from './investigation-section.js';
 import type { SizeContext } from './size-section.js';
@@ -104,6 +105,12 @@ export interface GlobContext {
    * hottest first, with their counts. Empty when none; absent when hotspots are not configured.
    */
   readonly hotspots?: readonly GlobHotspot[];
+  /**
+   * How reliable relations from each source have been on this board (agent first, then mention and inferred): precision over the
+   * window, how many outcomes it rests on and whether slop now makes that source's relations weak. Add a relation only for a
+   * concrete dependency. Absent when relation learning is not configured.
+   */
+  readonly relationLearning?: readonly RelationLearningContext[];
   /**
    * Present when the glob's group has other open or recently merged globs, or open decisions: what the neighbours do (ID, title,
    * status, one line of plan) and the decisions still open, so a run needn't read their plans. Absent otherwise.

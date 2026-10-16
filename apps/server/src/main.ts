@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, ContextTuningService, ContextReportService, DependencyLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, RelationCheckService, ContextTuningService, ContextReportService, DependencyLearningService, RelationLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -24,6 +24,7 @@ import { kbExecutors } from './kb-executors.js';
 import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { suggestExecutors } from './suggest-executors.js';
 import { relationScanExecutors } from './relation-scan-executors.js';
+import { relationCheckExecutors } from './relation-check-executors.js';
 import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { mergeGate, readyGate } from './ready-gate.js';
@@ -119,17 +120,24 @@ const routines =
 const hub = new HintHub();
 const auth = new Auth(db, config);
 const atfPolicy = { projects: config.ATF_PUSH_ALLOWED_PROJECTS, roleAccounts: config.ATF_PUSH_ALLOWED_ROLE_ACCOUNTS };
-const boards = new BoardService({ store, notifier: hub, atfPolicy, serverAdmins: config.SLOP_SERVER_ADMINS });
+// How readily slop creates gating relations per source, learned from overrides, dismissals and collisions (weak links below a precision threshold).
+const relationLearning = new RelationLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() },
+  // Red-main blame uses the post-merge check's test: does the culprit's diff use what the other glob added? `relationCheck` is built below.
+  uses: (a, b): Promise<boolean> => relationCheck.uses(a, b),
+  log: logError,
+});
+const boards = new BoardService({ store, notifier: hub, atfPolicy, serverAdmins: config.SLOP_SERVER_ADMINS, onBaseRed: (boardId) => relationLearning.onBaseRed(boardId) });
 // The board's merge policy reads which files a branch changes; `github` exists by the time this is first called.
 const branchFiles = new HostBranchFiles(() => github, logError);
 const catalog = new FsCatalog(config.CATALOG_DIR);
 // Which dependency edges are real on each board: predicts shared files (internal) from learned weights, learns relations from failed runs.
-const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, catalog });
+const dependencyLearning = new DependencyLearningService({ store, notifier: hub, clock: { now: () => new Date().toISOString() }, ids: { runId: () => randomUUID() }, catalog, relationLearning, log: logError });
 // File attachments live in a private bucket; without one configured the feature (routes and job) is off.
 const attachmentObjects = config.ATTACHMENTS_BUCKET === undefined ? null : new S3ObjectStore(new S3Client({ region: config.ATTACHMENTS_REGION }), config.ATTACHMENTS_BUCKET);
 const globs = new GlobService({
   store,
   dependencyLearning,
+  relationLearning,
   log: (task, message) => logError(task, message),
   notifier: hub,
   clock: { now: () => new Date().toISOString() },
@@ -238,6 +246,8 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   ...suggestExecutors({ run: (globId) => suggestService.run(globId) }),
   // The automatic relation pass (the `llm` lane); `relationScan` is built below and only called once a job runs.
   ...relationScanExecutors({ run: (globId) => relationScan.run(globId) }),
+  // The post-merge relation check (the `llm` lane); `relationCheck` is built below and only called once a job runs.
+  ...relationCheckExecutors({ run: (globId) => relationCheck.run(globId) }),
   // The agent set's commit to its glob's branch; `agentSetCommit` is built below and only called once a job runs.
   ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id)), (id) =>
     globs.applyEvent(id, (g, ctx) => machine.readyRequested(g, null, ctx)),
@@ -377,6 +387,8 @@ const dependencyInference = new DependencyInferenceService({
   llm: intakeLlm,
   apply: (globId, edges, planHash): Promise<void> => globs.applyInferred(globId, edges, planHash),
   release: (globId): Promise<unknown> => globs.release(globId),
+  // Bolder where inference has missed dependencies: it also proposes globs that touch the same modules.
+  bold: async (boardId): Promise<boolean> => (await relationLearning.posture(boardId, 'inferred')).bold,
   log: logError,
 });
 // The automatic relation pass: one batched intake-model call per debounced job, written through GlobService.applyAutomatic; the call's `spend` tag is its only ledger row.
@@ -385,6 +397,17 @@ const relationScan = new RelationScanService({
   clock,
   llm: intakeLlm,
   automatic: { applyAutomatic: (globId, planHash, adds, actorEmail) => globs.applyAutomatic(globId, planHash, adds, actorEmail) },
+  model: config.INTAKE_MODEL,
+  log: logError,
+});
+// Each merged glob's relations are judged from its diff and the code index; the model (spend `relation_check`) only settles what they cannot.
+const relationCheck = new RelationCheckService({
+  store,
+  clock,
+  changes: new CodeHostChanges(github, logError),
+  learning: relationLearning,
+  index: { importEdges: (boardId, from, to) => codeIndex.importEdges(boardId, from, to) },
+  llm: intakeLlm,
   model: config.INTAKE_MODEL,
   log: logError,
 });
@@ -469,7 +492,7 @@ const workInference = {
     }
   },
 };
-const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), workInference, relationScan, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
+const artifacts = new ArtifactService({ store, clock, notifier: hub, related: (tx, glob) => search.related(tx, glob), sizeCheck, dependencyInference, investigation, hotspots: (board, now) => hotspots.hotspots(board, now, false), relationLearning, workInference, relationScan, rollout: (email, id, record, source) => globs.reconcileRollout(email, id, record, source) });
 const attachments =
   attachmentObjects === null
     ? null
@@ -612,7 +635,7 @@ mountAtfSpecs(app, { testRuns, boards, authenticate: authenticateRunner, runners
 mountAtfResults(app, { testRuns, runners: atfRunners, authenticate: authenticateRunner, log: logError });
 mountAtfRunners(app, { runners: atfRunners });
 mountReadiness(app, { boards, globs, store, host: github, notifications, log: logError });
-mountKnowledge(app, { dependencyLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, contextTuning, hotspots, contextReport, knowledgePage, agentSetCommit, logError });
+mountKnowledge(app, { dependencyLearning, relationLearning, knowledge, artifacts, findings, catalog, intake, boards, host: github, jobs: learningJobs, subLimit, riskAreas, escalations, typeLearning, intakeLearning, sizeCheck, contextTuning, hotspots, contextReport, knowledgePage, agentSetCommit, logError });
 // The in-app AWS sign-in exists only where the server runs on an SSO profile (local development); production uses its IAM role.
 const ssoSession = await readSsoSession(process.env.AWS_PROFILE);
 const awsSignIn =

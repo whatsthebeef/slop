@@ -177,6 +177,8 @@ export class BoardService {
       readonly serverAdmins?: readonly string[];
       readonly newExternalId?: () => string;
       readonly clock?: { now(): string };
+      /** Told when the base branch turned red because of a merged glob, so relation learning can look for the glob it collided with (best effort). */
+      readonly onBaseRed?: (boardId: number) => Promise<void>;
     },
   ) {}
 
@@ -318,6 +320,10 @@ export class BoardService {
       return { checks: change.next, change };
     });
     if (recorded?.change.changed === true) this.deps.notifier.publish({ kind: 'board.changed', boardId });
+    if (recorded?.change.changed === true && recorded.checks.state === 'failed' && recorded.checks.since !== null) {
+      // Off the critical path: it reads the code host, logs its own failures and never throws.
+      void this.deps.onBaseRed?.(boardId).catch(() => undefined);
+    }
     return recorded;
   }
 

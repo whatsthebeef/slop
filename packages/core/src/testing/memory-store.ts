@@ -8,6 +8,7 @@ import type { EnvironmentDeploy, GlobPresence } from '../domain/environments.js'
 import { RELATION_SCAN_DEBOUNCE_MS } from '../domain/events.js';
 import type { DomainEvent, Effect, OutboxJob } from '../domain/events.js';
 import type { RelationScanRow } from '../domain/relation-scan.js';
+import type { RelationLearningSettings, RelationSignal } from '../domain/relation-learning.js';
 import { sameCommit } from '../domain/signals.js';
 import type { AtfRunner } from '../domain/atf-runners.js';
 import type { AtfBatch, StoredRunSpec, TestRun } from '../domain/test-runs.js';
@@ -84,6 +85,10 @@ interface State {
   relations: Map<string, Relation>;
   /** The automatic relation pass's decisions, by glob, mentioned ID and sentence hash. */
   relationScans: Map<string, RelationScanRow>;
+  /** Relation learning signals by board and key. */
+  relationSignals: Map<string, RelationSignal>;
+  /** What an admin pinned for a board's relation learning. */
+  relationLearning: Map<number, RelationLearningSettings>;
   /** Status dismissals by user, glob and message key. */
   statusDismissals: Map<string, { email: string; globId: string; key: string; at: string }>;
   reviewSources: ReviewSource[];
@@ -190,6 +195,8 @@ const clone = (state: State): State => ({
   humanSteps: new Map(state.humanSteps),
   relations: new Map(state.relations),
   relationScans: new Map(state.relationScans),
+  relationSignals: new Map(state.relationSignals),
+  relationLearning: new Map(state.relationLearning),
   statusDismissals: new Map(state.statusDismissals),
   reviewSources: [...state.reviewSources],
   findings: [...state.findings],
@@ -269,6 +276,8 @@ export class MemoryStore implements Store {
     humanSteps: new Map(),
     relations: new Map(),
     relationScans: new Map(),
+    relationSignals: new Map(),
+    relationLearning: new Map(),
     statusDismissals: new Map(),
     reviewSources: [],
     findings: [],
@@ -719,8 +728,24 @@ export class MemoryStore implements Store {
       listRelations: (boardId) => Promise.resolve([...s.relations.values()].filter((r) => r.boardId === boardId && waitsKind(r))),
       listRelationsFrom: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from) && waitsKind(r))),
       listRelationsTo: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to) && waitsKind(r))),
-      listSupersessions: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from) && !waitsKind(r))),
-      listSupersededBy: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to) && !waitsKind(r))),
+      listSupersessions: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from) && r.kind === 'superseded_by')),
+      listSupersededBy: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.to) && r.kind === 'superseded_by')),
+      listWeakRelations: (boardId) => Promise.resolve([...s.relations.values()].filter((r) => r.boardId === boardId && r.kind === 'may_relate')),
+      listWeakRelationsFrom: (globIds) => Promise.resolve([...s.relations.values()].filter((r) => globIds.includes(r.from) && r.kind === 'may_relate')),
+      getRelation: (id) => Promise.resolve(s.relations.get(id) ?? null),
+      insertRelationSignal: (signal) => {
+        const key = `${signal.boardId}:${signal.key}`;
+        if (s.relationSignals.has(key)) return Promise.resolve(false);
+        s.relationSignals.set(key, signal);
+        return Promise.resolve(true);
+      },
+      listRelationSignals: (boardId, since) =>
+        Promise.resolve([...s.relationSignals.values()].filter((g) => g.boardId === boardId && (since === undefined || g.at >= since)).sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))),
+      getRelationLearning: (boardId) => Promise.resolve(s.relationLearning.get(boardId) ?? {}),
+      setRelationLearning: (boardId, settings) => {
+        s.relationLearning.set(boardId, settings);
+        return Promise.resolve();
+      },
       insertRelation: (relation) => {
         const kind = relation.kind ?? 'waits';
         if ([...s.relations.values()].some((r) => r.from === relation.from && r.to === relation.to && r.gate === relation.gate && (r.kind ?? 'waits') === kind)) return Promise.resolve(false);

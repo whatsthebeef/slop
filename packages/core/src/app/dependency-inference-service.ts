@@ -4,6 +4,7 @@ import { isDecisionAttributes } from '../domain/attributes.js';
 import { parseInvestigation } from '../domain/investigation.js';
 import type { InvestigationRelation } from '../domain/investigation.js';
 import { MAX_AFTER, hasMerged, toState } from '../domain/relations.js';
+import { moduleOf } from '../domain/code-view.js';
 import type { Glob } from '../domain/types.js';
 import type { Store } from '../ports.js';
 import type { Llm } from './intake-service.js';
@@ -26,6 +27,8 @@ const MAX_REASON_CHARS = 240;
 /** A need below this confidence is not recorded: it would block a start on a guess. */
 export const MIN_NEED_CONFIDENCE = 0.8;
 const MAX_SYMBOL_CHARS = 120;
+/** A bold board proposes at most this many module-overlap relations for one glob. */
+const MAX_BOLD_EDGES = 5;
 
 const SYSTEM = `You work out what one piece of software work has to wait for: the other open work on the same board, and the open decisions on it.
 For each other glob or decision decide whether this glob depends on it:
@@ -65,6 +68,8 @@ export interface InferredEdge {
   readonly kind: 'needs' | 'decision';
   readonly reason: string;
   readonly files: readonly string[];
+  /** A proposal from shared modules alone (inference is bold on this board), not a proven need: written as a weak link unless precision earns it a gate. */
+  readonly bold?: true;
 }
 
 /** What each candidate's plan and files say, to check that a need's symbol is really added there; `own` is this glob's plan. */
@@ -243,6 +248,8 @@ export class DependencyInferenceService {
       apply: (globId: string, edges: readonly InferredEdge[], planHash: string) => Promise<void>;
       /** Starts a held glob whose last relation was lifted (as a person's dismissal does); used by the learning cleanup. */
       release?: (globId: string) => Promise<unknown>;
+      /** Whether inference is bold on this board (its recall is low): it then also proposes globs that touch the same modules. */
+      bold?: (boardId: number) => Promise<boolean>;
       log?: (what: string, message: string) => void;
     },
   ) {}
@@ -308,8 +315,30 @@ export class DependencyInferenceService {
     }
   }
 
-  /** The model's edges; null when it gave no usable answer (no model, too short a plan, an unparseable reply), so nothing is changed. */
+  /** The edges for a plan, plus (on a board where inference misses dependencies) the globs that touch the same modules; null when there is no usable answer. */
   private async ask(input: InferenceInput): Promise<InferredEdge[] | null> {
+    const edges = await this.askEdges(input);
+    if (edges === null || this.deps.bold === undefined || (input.files ?? []).length === 0 || !(await this.deps.bold(input.boardId))) return edges;
+    return [...edges, ...(await this.moduleEdges(input, edges))].slice(0, MAX_AFTER);
+  }
+
+  /** The open work whose investigated files fall in the same modules as this glob's, not already an edge: proposals, not proven needs. */
+  private async moduleEdges(input: InferenceInput, edges: readonly InferredEdge[]): Promise<InferredEdge[]> {
+    const own = new Set((input.files ?? []).map(moduleOf));
+    const taken = new Set(edges.map((e) => e.id));
+    const found: InferredEdge[] = [];
+    for (const c of await this.candidates(input.boardId, input.selfId, new Set())) {
+      if (c.glob.category === 'decision' || taken.has(c.glob.id)) continue;
+      const shared = [...new Set(c.files.map(moduleOf).filter((m) => own.has(m)))];
+      if (shared.length === 0) continue;
+      found.push({ id: c.glob.id, kind: 'needs', reason: `Touches the same modules (${shared.slice(0, 3).join(', ')}); not a proven dependency`, files: c.files.filter((f) => shared.includes(moduleOf(f))).slice(0, 5), bold: true });
+      if (found.length >= MAX_BOLD_EDGES) break;
+    }
+    return found;
+  }
+
+  /** The model's edges; null when it gave no usable answer (no model, too short a plan, an unparseable reply), so nothing is changed. */
+  private async askEdges(input: InferenceInput): Promise<InferredEdge[] | null> {
     const findings = input.findings;
     if ((this.deps.llm === undefined && findings === undefined) || input.plan.trim().length < MIN_PLAN_CHARS) return null;
     const candidates = await this.candidates(input.boardId, input.selfId, new Set((input.recorded ?? []).map((e) => e.id)));

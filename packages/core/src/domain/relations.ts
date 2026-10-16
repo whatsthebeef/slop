@@ -10,7 +10,7 @@ import type { Result } from './errors.js';
 import type { MentionOrigin } from './relation-scan.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
 import { RELATION_GATES, RELATION_UNTILS, isFromMention } from './types.js';
-import type { Glob, Relation, RelationGate, RelationKind, RelationPatch, RelationSource, RelationUntil } from './types.js';
+import type { Glob, Relation, RelationGate, RelationKind, RelationPatch, RelationSource, RelationUntil, RelationVerdictBy, RelationVerdictValue } from './types.js';
 
 /**
  * Where the glob a relation points at stands. `merged`: Reviewing (a super that merged and continues is still `open`).
@@ -436,8 +436,22 @@ export interface TitleInfo {
   readonly action?: boolean;
 }
 
+/** The post-merge verdict on a relation (absent until the check ran), as every relation view carries it. */
+export interface VerdictFields {
+  readonly verdict?: RelationVerdictValue;
+  readonly verdictReason?: string;
+  readonly verdictBy?: RelationVerdictBy;
+  readonly verdictAt?: string;
+}
+
+/** The verdict fields a relation has, for a view row (none when it has no verdict). */
+export const verdictOf = (r: Pick<Relation, 'verdict' | 'verdictReason' | 'verdictBy' | 'verdictAt'>): VerdictFields =>
+  r.verdict === undefined
+    ? {}
+    : { verdict: r.verdict, ...(r.verdictReason === undefined ? {} : { verdictReason: r.verdictReason }), ...(r.verdictBy === undefined ? {} : { verdictBy: r.verdictBy }), ...(r.verdictAt === undefined ? {} : { verdictAt: r.verdictAt }) };
+
 /** One unmet relation of a glob, with where `to` stands: the board list and the glob read carry these as `holding`. */
-export interface Holding {
+export interface Holding extends VerdictFields {
   readonly relationId: string;
   readonly to: string;
   /** The title of `to`; null when it was deleted (a deleted `to` doesn't hold, so this is rare) or unknown. */
@@ -477,6 +491,7 @@ export const holdingOf = (
       state,
       reason: r.reason,
       source: r.source,
+      ...verdictOf(r),
     };
   });
 };
@@ -514,7 +529,7 @@ export const checkRelationShape = (
 // The grouped view of a glob's relations (the glob read, `get_glob`)
 
 /** A relation of another glob that waits for this one: what this glob holds back. */
-export interface HeldBack {
+export interface HeldBack extends VerdictFields {
   readonly relationId: string;
   readonly from: string;
   readonly fromTitle: string | null;
@@ -530,7 +545,7 @@ export interface HeldBack {
 export type DoneHow = 'met' | 'deleted' | 'dismissed' | 'overridden';
 
 /** A relation of this glob that no longer holds. */
-export interface DoneRelation {
+export interface DoneRelation extends VerdictFields {
   readonly relationId: string;
   readonly to: string;
   readonly toTitle: string | null;
@@ -539,6 +554,24 @@ export interface DoneRelation {
   readonly reason: string | null;
   readonly source: RelationSource;
   readonly how: DoneHow;
+}
+
+/**
+ * A weak link ("may relate"): a relation slop is not sure enough of to hold anything back. It sits in Related until a person makes
+ * it a gate (`promote`) or dismisses it. It is never in `holding`, `holdsBack` or any gate.
+ */
+export interface WeakRelation {
+  readonly relationId: string;
+  readonly to: string;
+  readonly toTitle: string | null;
+  readonly gate: RelationGate;
+  readonly until: RelationUntil;
+  readonly reason: string | null;
+  readonly source: RelationSource;
+  /** Where `to` stands now (a weak link to a settled glob still shows, as history). */
+  readonly state: ToState;
+  /** Set when `to` is on another board (see `Holding.external`). */
+  readonly external?: ExternalGlob;
 }
 
 /** One side of a supersession: the glob that supersedes this one, or one this glob supersedes. */
@@ -559,6 +592,8 @@ export interface RelationsView {
   readonly holding: readonly Holding[];
   readonly holdsBack: readonly HeldBack[];
   readonly done: readonly DoneRelation[];
+  /** Weak links ("may relate"): they hold nothing back and can be made a gate (absent from older servers). */
+  readonly weak?: readonly WeakRelation[];
   /** The glob that supersedes this one (absent from older servers; null: none). */
   readonly supersededBy?: Supersession | null;
   /** The globs this one supersedes. */
@@ -576,5 +611,5 @@ export const doneOf = (
     const state = facts.states.get(r.to) ?? 'missing';
     const how: DoneHow | null = r.dismissedAt !== null ? 'dismissed' : r.overriddenAt !== null ? 'overridden' : !isMet(r, state) ? null : state === 'missing' ? 'deleted' : 'met';
     if (how === null) return [];
-    return [{ relationId: r.id, to: r.to, toTitle: titles.get(r.to)?.title ?? null, gate: r.gate, until: r.until, reason: r.reason, source: r.source, how }];
+    return [{ relationId: r.id, to: r.to, toTitle: titles.get(r.to)?.title ?? null, gate: r.gate, until: r.until, reason: r.reason, source: r.source, how, ...verdictOf(r) }];
   });
