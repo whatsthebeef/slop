@@ -9,6 +9,7 @@ import type { GroupContext } from '../../domain/group-view.js';
 import type { HumanStep } from '../../domain/human-steps.js';
 import type { SearchHit } from '../../domain/search.js';
 import type { OpenQuestion } from '../../domain/questions.js';
+import type { ActionState } from '../../domain/action-glob.js';
 import type { Glob, Mode, WorkActor, WorkKind } from '../../domain/types.js';
 import type { ArtifactListing } from './artifact-listing.js';
 import type { GlobHotspot } from './hotspot-section.js';
@@ -22,6 +23,8 @@ export interface GlobContext {
     readonly mode: Mode;
     readonly fix: boolean;
     readonly workKind: WorkKind;
+    /** An action only: where it stands (see `actionState`); absent on any other glob. */
+    readonly actionState?: ActionState;
   };
   readonly board: { readonly id: number; readonly repo: string | null; readonly baseBranch: string };
   /** plan.md: the latest version. */

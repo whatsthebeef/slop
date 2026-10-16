@@ -39,6 +39,7 @@ const NEXT_STEPS: readonly Action[] = [
   'merge',
   'mark_ready',
   'start',
+  'prepare_action',
   'pick_up',
   'decide',
   'sign_off',

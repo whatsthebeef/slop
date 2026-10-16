@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_DEPLOY_KNOWN, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_DEPLOY_KNOWN, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -166,6 +166,10 @@ export const createGlobSchema = z.object({
   inferenceReason: z.string().max(500).nullable().optional(),
   /** Actions only: who is meant to do it. */
   assignee: z.string().trim().min(1).max(200).nullable().optional(),
+  /** Actions only: a routine prepares what the person runs (script, policy file, document) before they do. */
+  prepare: z.boolean().optional(),
+  /** Actions with `prepare`: where the preparation is kept (default `branch`). */
+  record: z.enum(ACTION_RECORD_KINDS).optional(),
   /** Omitted: slop chooses one from the title and plan. Null or empty: none. */
   group: z.string().nullable().optional(),
   environment: z.string().min(1).nullable().default(null),
@@ -282,6 +286,8 @@ const actionSchema = versionSchema.extend({
   note: z.string().max(OUTCOME_REASON_MAX).optional(),
   /** Dismiss: why the action is not needed (required by the action). Start now: optional. Merge anyway and Sign off anyway: required. */
   reason: z.string().max(OUTCOME_REASON_MAX).optional(),
+  /** Failed…: the output of the run that failed (secrets are masked; required by the action). */
+  output: z.string().max(100_000).optional(),
 });
 type ActionBody = z.infer<typeof actionSchema>;
 
@@ -758,6 +764,10 @@ export const createApp = (deps: AppDeps) => {
     // Action globs: a person did it (optional note), or it is not needed (reason required).
     done: (email: string, id: string, b: ActionBody) => globs.completeAction(email, id, b.version, b.note),
     dismiss: (email: string, id: string, b: ActionBody) => globs.dismissAction(email, id, b.version, b.reason ?? ''),
+    // Prepared actions: start or retry the machine preparation, or report that the person's run failed (another round starts).
+    prepare: (email: string, id: string, b: ActionBody) => globs.prepareAction(email, id, b.version),
+    fail: async (email: string, id: string, b: ActionBody) =>
+      b.output === undefined || b.output.trim() === '' ? invalidInput('Say what failed: the output of the run is needed') : globs.failAction(email, id, b.output, b.version),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
@@ -798,6 +808,10 @@ export const createApp = (deps: AppDeps) => {
     'pick-up',
     'take-over',
     'start-again',
+    // A prepared action's round provisions its branch and fires a routine; Done queues the merge of its record.
+    'prepare',
+    'fail',
+    'done',
   ]);
 
   app.post('/api/globs/:id/actions/:action', async (c) => {

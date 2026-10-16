@@ -851,6 +851,46 @@ describe('an action glob card', () => {
     expect(dom(markup(dismissed)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('dismissed');
   });
 
+  describe('prepared', () => {
+    const prepared = (patch: Partial<GlobView>, rounds = 1) =>
+      action({ attributes: { assignee: null, outcome: null, preparation: { record: 'branch', rounds } }, ...patch });
+    const corner = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"]');
+    const statusText = (g: GlobView) => corner(g)?.querySelector('.truncate')?.textContent;
+
+    it('shows the machine spinning while it prepares', () => {
+      const g = prepared({ status: 'implementing', actionState: 'preparing' });
+      expect(statusText(g)).toBe('preparing');
+      expect(corner(g)?.querySelector('svg.lucide-bot')?.getAttribute('class')).toContain('animate-spin');
+    });
+
+    it('shows a person with ready to run', () => {
+      const g = prepared({ status: 'pr_open', actionState: 'ready', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'passed' } });
+      expect(statusText(g)).toBe('ready to run');
+      expect(corner(g)?.querySelector('svg.lucide-user-round')).not.toBeNull();
+    });
+
+    it('shows recording once Done is recorded and the branch merges', () => {
+      const g = prepared({
+        status: 'merging',
+        actionState: 'recording',
+        pr: { number: 7, state: 'ready', headSha: head },
+        headChecks: { sha: head, state: 'passed' },
+        attributes: { assignee: null, outcome: { kind: 'done', by: 'a@b.c', at: NOW }, preparation: { record: 'branch', rounds: 1 } },
+      });
+      expect(statusText(g)).toMatch(/^recording/);
+    });
+
+    it('shows a failed preparation in red text', () => {
+      const g = prepared({ status: 'failed', actionState: 'preparation_failed', failure: { reason: 'timed out', at: NOW } });
+      expect(statusText(g)).toContain('Preparation failed');
+    });
+
+    it('keeps the assignee chip', () => {
+      const g = prepared({ status: 'implementing', actionState: 'preparing', attributes: { assignee: 'sam@example.com', outcome: null, preparation: { record: 'branch', rounds: 1 } } });
+      expect(dom(markup(g)).querySelector('[data-testid="action-chip"]')?.textContent).toBe('sam@example.com');
+    });
+  });
+
   it('writes the mode beside the ID and shows a kind icon on every card', () => {
     const icon = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"] [role="img"]');
     const plain = dom(markup(view({ category: 'feature', type: 'sub' })));

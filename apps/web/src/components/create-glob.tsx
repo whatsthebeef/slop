@@ -1,5 +1,5 @@
 import { canChooseType, SLOP_TYPES } from '@slop/core';
-import type { SlopType, WorkActor } from '@slop/core';
+import type { ActionRecordKind, SlopType, WorkActor } from '@slop/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { useState } from 'react';
@@ -39,12 +39,25 @@ export const withActor = (form: NewGlob, actor: WorkActor): NewGlob => {
     delete next.inferenceReason;
     return next;
   }
-  return { ...form, actor, mode: 'same' };
+  const next: NewGlob = { ...form, actor, mode: 'same' };
+  delete next.prepare;
+  delete next.record;
+  return next;
 };
 
 /** A mode change keeps the fix flag valid: a fix is never a super. */
 export const withMode = (form: NewGlob, mode: NewGlob['mode']): NewGlob =>
   mode === 'super' && form.fix === true ? { ...form, mode, fix: false, fixSource: 'person' } : { ...form, mode };
+
+/** Preparing an action: a routine writes what the person runs; `record` defaults to a branch, so it is only sent once chosen. */
+export const withPrepare = (form: NewGlob, prepare: boolean): NewGlob => {
+  const next: NewGlob = { ...form, prepare };
+  if (!prepare) {
+    delete next.prepare;
+    delete next.record;
+  }
+  return next;
+};
 
 const empty = (): NewGlob => ({
   title: '',
@@ -280,6 +293,39 @@ export const CreateGlobDialog = ({
                   data-testid='assignee'
                   onChange={(e) => setForm({ ...form, assignee: e.target.value })}
                 />
+              </Label>
+            )}
+            {!human && insight?.suggestedAction !== undefined && (
+              <p className='col-span-2 text-xs text-muted-foreground' data-testid='suggest-action'>
+                This looks like something a person does, not code that deploys: {insight.suggestedAction.reason}{' '}
+                <button type='button' className='underline' onClick={() => setForm(withPrepare(withActor(form, 'human'), true))}>
+                  Make it an action, prepared for me
+                </button>
+              </p>
+            )}
+            {human && (
+              <Label className='col-span-2 flex items-center gap-2' data-testid='prepare-label'>
+                <input
+                  type='checkbox'
+                  checked={form.prepare === true}
+                  data-testid='prepare'
+                  onChange={(e) => setForm(withPrepare(form, e.target.checked))}
+                />
+                Prepare it for me: a routine writes the script or document, you run it
+              </Label>
+            )}
+            {human && form.prepare === true && (
+              <Label className='col-span-2'>
+                Keep what is prepared as
+                <Select
+                  value={form.record ?? 'branch'}
+                  data-testid='record'
+                  onChange={(e) => setForm({ ...form, record: e.target.value as ActionRecordKind })}
+                >
+                  <option value='branch'>A branch and PR in the repo (merged after Done)</option>
+                  <option value='artifact'>A script saved on the glob (nothing to merge)</option>
+                  <option value='attachment'>A document attached to the glob (nothing to merge)</option>
+                </Select>
               </Label>
             )}
             <Label>

@@ -1,6 +1,6 @@
 import type { Relation, SlopType, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, NewQuestion, StoredHumanStep } from '@slop/core';
 import { cleanFileName, inferenceReasonOf, invalidInput, isHumanCategory, machine, notFound, openQuestions, relationQuestion, startIds, startQuestions, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, MAX_QUESTION_ANSWER, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, OUTCOME_REASON_MAX, QUESTION_BLOCKING, QUESTION_SOURCES, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
+import { ACTION_RECORD_KINDS, ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, MAX_QUESTION_ANSWER, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, OUTCOME_REASON_MAX, QUESTION_BLOCKING, QUESTION_SOURCES, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -152,7 +152,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'create_glob',
     {
       description:
-        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. An action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. A create that is checked (no `mode`) may come back held in Planning with `questions` when slop is unsure of something material (the type, the environment, the scope): relay them to the person, who answers on the card or glob view; do not answer them yourself. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Prerequisites: pass `needs`/`after` (globs this one waits for until they have merged and rolled out; a glob that merged but still has rollout steps due keeps holding it) with a `reason` (required for agents: one line, applied to every id), or `relations` for other gates. A sub with unmerged prerequisites waits in Planning with no run, whatever way it was created (with or without `type`); the reply says what it waits for (`waitingFor`), what was ignored (`ignoredAfter`: already merged and rolled out, deleted) and, when you are not an admin and left `type` unset, that it became a same (`typeNote`). `holds` (alias `follows_up`) and `supersedes` cover globs created because of another one. Returns its ID and branch once provisioned, with `after` (the stored start relations), `waitingFor`, `ignoredAfter`, `holds`, `supersedes` and `typeNote` where they apply. Pass an idempotency key so a retry never creates a second glob.',
+        'Create a glob (a unit of work) on a board. Say who works on it with `actor` (`machine`: agents; `human`: a person) and how with `mode` (machine: `sub`, `same` or `super`; human: `action`); decision globs are created by slop from learnings, never here. Nobody picks a category: slop infers whether the work fixes something broken (`fix`) and whether its time counts as R&D or maintenance (`workKind`), and you may pass either to override it (a person\'s choice sticks). The old `type` and `category` (feature, task, bug) are still accepted as aliases for one release: `type` is the machine mode, `bug` means `fix`, `feature` means R&D (and is stored as a task: no new glob is a feature), `task` means maintenance. For something a person must do (rotate a token, protect a branch, set up a board, any work that is about another repo or board or is optional setup: if this glob were reverted the work would still be needed), create an action glob: `actor` human (`mode` action), a `title`, an optional `plan` (default: Why / Do this / Permissions / Check it worked; in Do this give the script path and the run command) and an optional `assignee`. A plain action has no type, intake, branch or run; it is open until a person marks it done (`complete_action`) or dismisses it (`dismiss_action`), and `needs`/`relations` on other globs may wait for it. Work takes effect by deploying it (code through the pipeline: a sub, same or super) or by doing it (someone applies it to a live thing: an AWS account, GitHub settings, a tax office; the code is only how it was applied and its record): the second is an action. Pass `prepare: true` when an agent should write what the person runs (a script, policy file or document): it creates the action with a preparation run (`record` says where it is kept: `branch`, `artifact` or `attachment`), the person runs it and reports Done or Failed (`fail_action`: another preparation round on the same branch), and a branch record is merged by slop after Done. Use the revert test: work that would still be needed if the change were reverted is its own action. An action whose script another open glob writes waits for that glob: pass `needs` (or a start `relations` entry, until merged, reason "builds its script") and a line `script: <repo path>` under Do this; it cannot be marked done until that glob has merged and the script is on the base branch. Pass the request as `input` and slop proposes the title, plan, mode, fix flag, work kind and group (intake); explicit fields win. Create it as a sub unless the request says same, it clearly needs a human decision before work starts, or it is clearly a big task (an oversized flag only advises and never holds a glob; a person can cut its scope into independent globs if each could ship alone); an explicit `mode` (or `type`) always wins. A create that is checked (no `mode`) may come back held in Planning with `questions` when slop is unsure of something material (the type, the environment, the scope): relay them to the person, who answers on the card or glob view; do not answer them yourself. Only board admins can create a sub or a super: if the person you work for is not an admin, create a same (leave `type` unset and slop makes it a same; an explicit sub or super is refused with `forbidden`) and an admin can change its type. A running sub the agents find needs a human is escalated to a same by `escalate_to_same`. Prerequisites: pass `needs`/`after` (globs this one waits for until they have merged and rolled out; a glob that merged but still has rollout steps due keeps holding it) with a `reason` (required for agents: one line, applied to every id), or `relations` for other gates. A sub with unmerged prerequisites waits in Planning with no run, whatever way it was created (with or without `type`); the reply says what it waits for (`waitingFor`), what was ignored (`ignoredAfter`: already merged and rolled out, deleted) and, when you are not an admin and left `type` unset, that it became a same (`typeNote`). `holds` (alias `follows_up`) and `supersedes` cover globs created because of another one. Returns its ID and branch once provisioned, with `after` (the stored start relations), `waitingFor`, `ignoredAfter`, `holds`, `supersedes` and `typeNote` where they apply. Pass an idempotency key so a retry never creates a second glob.',
       inputSchema: {
         board: z.number().int(),
         idempotencyKey: z.string().min(1),
@@ -169,6 +169,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         type: z.enum(SLOP_TYPES).optional().describe('Alias of `mode` for a machine glob'),
         category: z.enum([...WORK_CATEGORIES, 'action']).optional().describe('Old alias: bug sets `fix`, feature means R&D (stored as a task), task means maintenance; action means actor human'),
         assignee: z.string().min(1).max(200).optional().describe('Action only: the email of the person meant to do it (default: anyone on the board)'),
+        prepare: z.boolean().optional().describe('Action only: a routine prepares what the person runs (a script, a policy file, a document) before they do, and prepares again when their run fails. The first round starts at once, or when the start relations (`needs`) have merged'),
+        record: z.enum(ACTION_RECORD_KINDS).optional().describe('Action with `prepare` only: where the preparation is kept. `branch` (default): files on the action\'s own branch, which slop merges after the person\'s Done; `artifact`: one script stored with put_artifact(rollout_script), no branch; `attachment`: a document or checklist attached to the glob, no branch. Chosen here, not by the routine'),
         group: z.string().nullable().optional().describe('The glob\'s group; omit it to let slop choose one from the title and plan, pass null or an empty string for none'),
         environment: z
           .string()
@@ -241,7 +243,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         const refused = (message: string) => ({ ...json({ code: 'invalid_input', message }), isError: true });
         if (input.title === undefined || input.title.trim() === '') return refused('An action needs a title');
         if (askedType !== undefined) return refused('An action has no type');
-        if (input.environment !== undefined || input.start !== undefined || input.autoTrigger === true) return refused('An action has no environment, start or autoTrigger: nothing runs for it');
+        if (input.environment !== undefined || input.start !== undefined || input.autoTrigger === true) return refused('An action has no environment, start or autoTrigger: nothing runs for it unless it is prepared (`prepare`)');
+        if (input.record !== undefined && input.prepare !== true) return refused('`record` needs `prepare: true`');
         if ((input.files ?? []).length > 0 || input.inboxItem !== undefined) return refused('An action takes no files or inbox item: put them in the plan or attach them afterwards');
         const made = await globs.createWithNotes(email, {
           boardId: input.board,
@@ -252,6 +255,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           environment: null,
           autoTrigger: false,
           ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+          ...(input.prepare === true ? { prepare: true, ...(input.record === undefined ? {} : { record: input.record }) } : {}),
           ...(input.plan === undefined ? {} : { plan: input.plan }),
           planBy: 'sessionator',
           source: 'mcp',
@@ -259,6 +263,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           ...relationFields,
         });
         if (!made.ok) return reply(made);
+        // A prepared action provisions its branch and fires its routine from the outbox: drain it now, as the board's create does.
+        if (input.prepare === true) void deps.outbox.drain(made.value.glob.id).catch(() => undefined);
         return reply(await globs.get(email, made.value.glob.id), ({ glob, relations, waitingFor }) => ({
           ...relationReply(made.value.notes, relations, waitingFor),
           id: glob.id,
@@ -295,6 +301,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
       // Intake's guesses: files the work changes (they can hold it for the merge policy) and globs the request waits for (only reported).
       let files: readonly string[] = [];
       let suggestedAfter: readonly string[] = [];
+      let suggestedAction: { readonly reason: string } | null = null;
       // Questions intake raised instead of guessing: they hold a new glob's start until a person answers.
       let intakeQuestions: readonly NewQuestion[] = [];
       // The write-up intake made from the request: plan.md v1 unless the caller gave a plan.
@@ -337,6 +344,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         };
         files = proposal.value.files;
         suggestedAfter = proposal.value.suggestedAfter;
+        suggestedAction = proposal.value.suggestedAction ?? null;
         // A glob the request says to wait for is suggested, never applied: leave a notice to add the relation or not.
         const applied = new Set([
           ...(input.needs ?? []),
@@ -405,6 +413,8 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
               questions: openQuestions(glob).map((q) => ({ id: q.id, text: q.text, ...(q.options === undefined ? {} : { options: q.options }), blocking: q.blocking })),
             }),
         ...(glob.status === 'planning' && startQuestions(glob).length > 0 ? { held: true } : {}),
+        // Never applied: intake thinks this takes effect by doing, not deploying. Say so; a person decides whether to recreate it as a prepared action.
+        ...(suggestedAction === null ? {} : { suggestedAction: { ...suggestedAction, how: 'create it again with actor human, mode action and prepare: true if a person applies it to a live thing' } }),
         // Not applied: pass `after` to wait for them.
         ...(suggestedAfter.filter((id) => !startIds(relations).includes(id)).length === 0
           ? {}
@@ -731,7 +741,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'mark_ready',
     {
       description:
-        "Mark the glob's draft PR ready for review when the work is pushed. slop does it through its GitHub App; the glob moves to pr_open when GitHub confirms. Routines pass their run ID. Refused, with the files, while the branch conflicts with its base: merge the base, resolve, run the checks, push and call it again. A branch only behind its base is marked, with a warning to merge it.",
+        "Mark the glob's draft PR ready for review when the work is pushed. slop does it through its GitHub App; the glob moves to pr_open when GitHub confirms. Routines pass their run ID. Refused, with the files, while the branch conflicts with its base: merge the base, resolve, run the checks, push and call it again. A branch only behind its base is marked, with a warning to merge it. For a prepared action (a `prepare` run) it says the preparation is done and the person's turn starts: with a branch record the PR is marked ready (no review, labels or environment); with an artifact record it needs the script stored first (put_artifact kind rollout_script), and with an attachment record the document attached; the action then shows \"ready to run\".",
       inputSchema: { id: z.string(), runId: z.string().optional() },
     },
     async ({ id, runId }) => {
@@ -835,7 +845,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'complete_action',
     {
       description:
-        "Mark an action glob done: a person did the work. Optionally note what was checked. Anyone on the board may do it; it records who and when, and globs waiting for the action are released. A repeat on a done action changes nothing. Only call it for work the person has actually done or confirmed. Pass the version you read.",
+        "Mark an action glob done: a person did the work. Optionally note what was checked. Anyone on the board may do it; it records who and when, and globs waiting for the action are released. A repeat on a done action changes nothing. Only call it for work the person has actually done or confirmed. A prepared action must be ready to run (prepared, not failed); its Done records who and when, then slop merges the branch record itself once the board's checks pass (nobody merges it by hand) and the action closes; an action without a branch closes at once. Pass the version you read.",
       inputSchema: { id: z.string(), version: z.number().int(), note: z.string().max(OUTCOME_REASON_MAX).optional().describe('What was checked (optional)') },
     },
     async ({ id, version, note }) => {
@@ -849,13 +859,42 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'dismiss_action',
     {
       description:
-        'Dismiss an action glob as not needed, with the reason. It ends the action like done does, so globs waiting for it are released: say why in the reason. Pass the version you read.',
+        'Dismiss an action glob as not needed, with the reason. It ends the action like done does, so globs waiting for it are released: say why in the reason. A prepared action in any open state can be dismissed (a live run is ended, its PR closed and branch deleted); after Done it cannot. Pass the version you read.',
       inputSchema: { id: z.string(), version: z.number().int(), reason: z.string().min(1).max(OUTCOME_REASON_MAX) },
     },
     async ({ id, version, reason }) => {
       const dismissed = await globs.dismissAction(email, id, version, reason);
       if (dismissed.ok) await deps.outbox.drain(id);
       return reply(dismissed, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'prepare_action',
+    {
+      description:
+        "Start the machine preparation of a prepared action that has not started (it waited for a start relation or for a person), or retry one whose preparation run failed: a routine investigates, writes the script, policy or document the person needs, checks it (dry run, `--check`) and calls mark_ready. A branch record is provisioned first. Refused while a start relation (`needs`) has not merged. Another round after the person's run failed is `fail_action`, not this. Pass the version you read.",
+      inputSchema: { id: z.string(), version: z.number().int() },
+    },
+    async ({ id, version }) => {
+      const prepared = await globs.prepareAction(email, id, version);
+      // The branch is provisioned and the routine fired from the outbox, in the background as the board's route does.
+      if (prepared.ok) void deps.outbox.drain(id).catch(() => undefined);
+      return reply(prepared, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
+    'fail_action',
+    {
+      description:
+        "Report that the person's run of a prepared action failed (a command errored, a check did not pass). Pass the failure output as `note`; strip credentials, tokens and keys first: slop masks what it recognises and cannot unmask. The action goes back to preparing: a new round on the same branch (no new generation: nothing has merged) with the masked note as the attachment `Action run failed (round N)`, read as in-scope feedback by `get_context`. Only for an action that is ready to run and not yet done. Members only; pass the version you read.",
+      inputSchema: { id: z.string(), note: z.string().min(1).max(100_000), version: z.number().int().optional() },
+    },
+    async ({ id, note, version }) => {
+      const failed = await globs.failAction(email, id, note, version ?? null);
+      if (failed.ok) void deps.outbox.drain(id).catch(() => undefined);
+      return reply(failed, (g) => globView(g));
     },
   );
 
@@ -1320,7 +1359,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'get_artifact',
     {
       description:
-        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'test_plan', 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label; a stored file comes with a fresh `downloadUrl`: fetch it with curl).",
+        "The latest version of one artifact of a glob in full: kind is 'implementation_plan' (the implementation record), 'test_plan', 'local_review', 'independent_review' (the independent reviewer's findings) or 'attachment' (with its label; a stored file comes with a fresh `downloadUrl`: fetch it with curl) or 'rollout_script' (the script of a prepared action, with its label `action: <slug>`; `slop get-artifact` saves it for the person who runs it).",
       inputSchema: { id: z.string(), kind: z.enum(ARTIFACT_KINDS), label: z.string().optional() },
     },
     async ({ id, kind, label }) => {
@@ -1534,10 +1573,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'put_artifact',
     {
       description:
-        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review, a test plan (kind test_plan: the matrix and the ```atf-specs block; text with problems is stored and the reply carries `validation`) or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`; the same holds for a record with its fenced ```workstreams block) as a new version. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
+        'Store the implementation record (kind implementation_plan; postplan is an alias that writes it), a local review, a test plan (kind test_plan: the matrix and the ```atf-specs block; text with problems is stored and the reply carries `validation`) or an investigation (the investigator\'s output ending in a fenced ```investigation JSON block; a block that does not validate is stored as text and the reply carries `validation`; the same holds for a record with its fenced ```workstreams block) as a new version. kind `rollout_script` stores the script a prepared action with record `artifact` has the person run (needs `label`, e.g. `action: <slug>`; the person fetches it with `slop get-artifact <id> rollout_script --label <label>`); it is refused on any other glob. Routines pass their run ID (results from a superseded run are ignored); pass the agent-set version from .claude/slop-agent-set.json. With a local review, pass reviewStats (risk tier, review rounds run and allowed, tester FAIL → fix loops) when you know them.',
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan', 'rollout_script']),
+        label: z.string().min(1).max(200).optional().describe('rollout_script only: its label, `action: <slug>` (required for that kind)'),
         content: z.string().min(1),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
@@ -1552,7 +1592,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .optional(),
       },
     },
-    async ({ id, kind, content, commitSha, runId, agentSetVersion, reviewStats }) => {
+    async ({ id, kind, label, content, commitSha, runId, agentSetVersion, reviewStats }) => {
       if (runId !== undefined) {
         // A routine's slop call is progress for its run (and marks a queued run active).
         await deps.globs.applyEvent(id, (g, ctx) => machine.runProgress(g, runId, ctx));
@@ -1562,7 +1602,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         runId: runId ?? null,
         agentSetVersion: agentSetVersion ?? null,
         reviewStats: reviewStats ?? null,
-      });
+      }, label);
       // An investigate-only run ends with its investigation; one whose block didn't validate stays open for the fix.
       if (stored.ok && !('ignored' in stored.value) && kind === 'investigation' && runId !== undefined && stored.value.provenance.validation === undefined) {
         await globs.applyEvent(id, (g, ctx, facts) => machine.investigationPushed(g, runId, ctx, facts.relations), { relations: true });
@@ -1583,10 +1623,11 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'artifact_upload_url',
     {
       description:
-        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review, a test plan or an investigation from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
+        "A URL for uploading the implementation record (implementation_plan; postplan is an alias), a local review, a test plan, an investigation or an action's rollout_script (with `label`) from a file without putting its text in a tool call: `curl --data-binary @<file> '<url>'` (POST the file as the body; at most 1 MiB of UTF-8 text). It is single use, expires in 5 minutes and stores exactly like put_artifact with the fields given here. Prefer it to put_artifact for anything over a few KB; use `slop put-artifact --file` where the CLI is installed.",
       inputSchema: {
         id: z.string(),
-        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan']),
+        kind: z.enum(['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan', 'rollout_script']),
+        label: z.string().min(1).max(200).optional().describe('rollout_script only: its label, `action: <slug>`'),
         commitSha: z.string().optional(),
         runId: z.string().optional(),
         agentSetVersion: z.number().int().nonnegative().optional(),
@@ -1600,7 +1641,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .optional(),
       },
     },
-    async ({ id, kind, commitSha, runId, agentSetVersion, reviewStats }) => {
+    async ({ id, kind, label, commitSha, runId, agentSetVersion, reviewStats }) => {
       // Only a member of the glob's board gets a link.
       const found = await globs.get(email, id);
       if (!found.ok) return reply(found);
@@ -1608,7 +1649,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         issueUploadUrl(
           deps.links,
           origin,
-          { id, kind, email, commitSha: commitSha ?? null, runId: runId ?? null, agentSetVersion: agentSetVersion ?? null, reviewStats: reviewStats ?? null },
+          { id, kind, label: label ?? null, email, commitSha: commitSha ?? null, runId: runId ?? null, agentSetVersion: agentSetVersion ?? null, reviewStats: reviewStats ?? null },
           randomUUID(),
         ),
       );

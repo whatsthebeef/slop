@@ -22,6 +22,7 @@ import {
   readyCommand,
   type GlobDeps,
 } from './globs.js';
+import { GET_ARTIFACT_USAGE, getArtifactCommand } from './get-artifact.js';
 import { GROUP_BACKFILL_USAGE, groupBackfillCommand } from './group-backfill.js';
 import { IMPORT_USAGE, importCommand } from './import.js';
 import { PUT_ARTIFACT_USAGE, putArtifactCommand } from './put-artifact.js';
@@ -226,6 +227,16 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       putArtifactCommand(args, {
         client: clientFor(context),
         readInput: context.readInput ?? readInputDefault,
+        stdout: context.stdout,
+      }),
+  },
+  'get-artifact': {
+    usage: GET_ARTIFACT_USAGE,
+    summary: "Print or save (--out) a glob's latest artifact text, e.g. the rollout_script a prepared action has you run",
+    run: (args, context) =>
+      getArtifactCommand(args, {
+        client: clientFor(context),
+        writeFile: context.writeFile ?? ((path, text) => writeFile(path, text, 'utf8')),
         stdout: context.stdout,
       }),
   },

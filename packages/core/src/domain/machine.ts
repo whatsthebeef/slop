@@ -21,6 +21,7 @@ import {
   validateAttributes,
   validateScopeEdit,
 } from './attributes.js';
+import { actionOf, actionState, hasBranchRecord, preparationOf } from './action-glob.js';
 import type {
   ActionAttributes,
   ActionOutcome,
@@ -163,6 +164,10 @@ export type Action =
   | 'complete_action'
   /** Action globs: not needed after all; ends the action with a reason. */
   | 'dismiss_action'
+  /** Prepared action globs: start (or retry) a preparation round: a routine writes what the person will run. */
+  | 'prepare_action'
+  /** Prepared action globs: the person ran it and it failed; another preparation round starts on the same branch with the output. */
+  | 'fail_action'
   | 'delete';
 
 /**
@@ -328,8 +333,8 @@ class Builder {
 
   /** A glob gets its branch and draft PR when it enters Doing; queued before any routine run. */
   ensureProvisioned(): this {
-    // Human work (a decision, an action) never gets a branch or a PR.
-    if (isHumanCategory(this.glob.category) || this.glob.provisioning !== 'none') return this;
+    // Human work (a decision, an action) never gets a branch or a PR, except an action whose preparation is written on a branch.
+    if ((isHumanCategory(this.glob.category) && !hasBranchRecord(this.glob)) || this.glob.provisioning !== 'none') return this;
     this.set({ provisioning: 'pending' });
     return this.effect({
       kind: 'provision',
@@ -576,6 +581,8 @@ export interface CreateInput {
   readonly start?: boolean;
   /** Questions raised with the glob (intake's doubts): a start-blocking one creates it held, whatever its type. */
   readonly questions?: readonly NewQuestion[];
+  /** A prepared action: the globs it waits for (start relations not yet met). It is created in Planning, waiting, and prepares when they merge. */
+  readonly waitingFor?: readonly string[];
 }
 
 /** The stored fix and work kind of a new glob: what was given, else the category's defaults; human work is never a fix and counts as maintenance. */
@@ -933,6 +940,11 @@ export const released = (
   // A Start waiting for an investigation is released when that run ends, not by what the glob starts after.
   if (startQueued(glob)) return unchanged(glob);
   if (startHoldsOf(glob, relations).length > 0) return unchanged(glob);
+  // A prepared action starts its first preparation round, as a sub starts its run.
+  if (glob.category === 'action') {
+    if (preparationOf(glob) === null) return unchanged(glob);
+    return startRound(new Builder(glob, ctx).set({ waiting: null }).event('Released', { after: startIds(relations.relations) }), glob.creator).done();
+  }
   return new Builder(glob, ctx)
     .set({
       waiting: null,
@@ -946,7 +958,7 @@ export const released = (
 
 /** Sames and supers are started, retried and picked up by developers and admins; QA and PO members only do that for subs. */
 const restrictedFrom = (actor: Actor, glob: Glob): boolean =>
-  (actor.role === 'qa' || actor.role === 'po') && glob.type !== 'sub';
+  (actor.role === 'qa' || actor.role === 'po') && glob.type !== 'sub' && glob.category !== 'action';
 
 export interface PickUpOptions {
   readonly takeOver: boolean;
@@ -967,8 +979,13 @@ export const pickUp = (
 ): Result<Transition> => {
   if (glob.category === 'decision') return pickUpDecision(glob, ctx);
   const actor = requireActor(ctx);
-  // An action has no branch, run or implementer: it is only ever done or dismissed.
-  if (glob.category === 'action') return invalidTransition(glob, actor, 'An action is not picked up: mark it done or dismiss it');
+  if (glob.category === 'action') {
+    // Row A10: a prepared action's branch is read, not worked on: no implementer, no brief. The person opens a worktree on it to run
+    // the prepared script. Any other action has no branch, run or implementer: it is only ever done or dismissed.
+    const state = actionState(glob);
+    if ((state === 'ready' || state === 'recording') && hasBranchRecord(glob) && glob.pr !== null) return unchanged(glob);
+    return invalidTransition(glob, actor, 'An action is not picked up: mark it done or dismiss it');
+  }
   if (restrictedFrom(actor, glob)) {
     return forbidden(`QA and PO members cannot pick up ${glob.type}s`);
   }
@@ -1106,7 +1123,11 @@ export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
   if (!canRetryAutofix(glob))
     return invalidTransition(glob, actor, 'Only a ready PR whose auto-fix ended can retry it');
-  return new Builder(glob, ctx).set({ failure: null }).queueRun(actor.email).done();
+  // On an action's record the run is a preparation round's kind: it fixes the branch and ends at `mark_ready`, nothing watches.
+  return new Builder(glob, ctx)
+    .set({ failure: null })
+    .queueRun(actor.email, undefined, false, glob.category === 'action' ? 'prepare' : undefined)
+    .done();
 };
 
 /** Row 20: retry a failed sub or same on its existing branch. */
@@ -1249,6 +1270,7 @@ export const behindChecked = (
  * pushed head has no conflict, nothing else brings it back to pr_open, so the machine does.
  */
 const backToReview = (glob: Glob): boolean =>
+  glob.category !== 'action' &&
   glob.status === 'in_progress' &&
   glob.type !== 'super' &&
   glob.pr?.state === 'ready' &&
@@ -1519,6 +1541,8 @@ export const ROLLOUT_MERGE_REFUSAL = 'Has rollout steps: use Merge and continue,
 const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
   if (glob.status !== 'pr_open' || glob.type === 'sub')
     return 'Only a same or super with a ready PR can be merged';
+  // An action's record merges only after the person's run: Done arms it.
+  if (glob.category === 'action' && actionOf(glob)?.outcome == null) return 'Mark the action done first: its record merges after the run';
   if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
   const held = mergeGate(relations);
   if (held.length > 0) return gateText(held);
@@ -2271,8 +2295,13 @@ export const commitPushed = (
   if (!superseded && run !== null && run.state !== 'ended' && push.runId === run.id) {
     b.updateRun({ lastProgressAt: ctx.now, state: run.state === 'queued' ? 'active' : run.state });
   }
-  // A new head is a different commit from the one the person armed the merge on: they press Merge again.
-  if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'new push' });
+  // A new head is a different commit from the one the person armed the merge on: they press Merge again. An action's record
+  // is the exception: Done armed it for whatever the branch holds, so a fix pushed after Done keeps the merge armed.
+  const recording = glob.category === 'action' && actionState(glob) === 'recording';
+  if (isMergeArmed(glob) && !recording) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'new push' });
+  else if (recording && (glob.status === 'pr_open' || recovers) && glob.mergeMode !== 'when_green' && glob.pr?.state === 'ready') {
+    b.set({ mergeMode: 'when_green' }).event('MergeArmed', { sha: push.sha });
+  }
   // A failed-checks run failure ("Auto-fix didn't respond …") is about the head that was red; a new head replaces it, so
   // the glob reads as waiting on the new head's checks instead of staying on Resume until it merges. Failures of another
   // kind (needs_pairing, merge, provisioning, reverted) are not about a head and stay.
@@ -2289,6 +2318,7 @@ export const commitPushed = (
   // A push while the PR is ready (before the developer merges) is reviewed again; the older commit's review is cancelled.
   if (
     glob.type !== 'sub' &&
+    glob.category !== 'action' &&
     glob.pr?.state === 'ready' &&
     (glob.status === 'pr_open' || recovers) &&
     !superseded &&
@@ -2577,9 +2607,10 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
   return new Builder(glob, ctx)
     .updateRun({
       // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first, unless the conflict already cleared.
+      // A preparation run never watches checks: it ends at `mark_ready`.
       state:
         run.state === 'queued'
-          ? glob.status === 'pr_open' && (run.purpose !== 'resolve_conflict' || glob.conflict == null)
+          ? glob.status === 'pr_open' && run.purpose !== 'prepare' && (run.purpose !== 'resolve_conflict' || glob.conflict == null)
             ? 'watching'
             : 'active'
           : run.state,
@@ -2605,6 +2636,17 @@ export const prReadyForReview = (
       ...(glob.mergeMode === 'when_green' && { mergeMode: null }),
     })
     .event('PRReadyForReview', { number: pr.number, sha: pr.headSha });
+  if (glob.category === 'action') {
+    // Row A5 (branch record): the preparation is on the branch and the person's turn has come. The run ends completed: nothing
+    // watches the checks or gets reviewed, a person's run decides whether the record is right.
+    return b
+      .endRun('completed')
+      .set({ failure: null })
+      .event('ActionPrepared', { round: preparationOf(glob)?.rounds ?? 0, record: 'branch' })
+      .status('pr_open')
+      .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
+      .done();
+  }
   const run = currentRun(glob);
   if (run !== null && (run.state === 'active' || run.state === 'queued')) {
     b.updateRun({
@@ -2880,6 +2922,7 @@ export const readyRequested = (
   ctx: Context,
   source: ReadySource = { from: 'tool' },
 ): Result<Transition> => {
+  if (glob.category === 'action') return actionReadyRequested(glob, runId, ctx, source);
   if (glob.status !== 'implementing' && glob.status !== 'in_progress') {
     return invalidTransition(
       glob,
@@ -2907,6 +2950,35 @@ export const readyRequested = (
   return new Builder(glob, ctx)
     .effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation })
     .done();
+};
+
+/**
+ * `mark_ready` on a prepared action (row A5): a branch record asks slop to mark the PR ready (the PR event then makes the action ready
+ * to run), an artifact or attachment record is ready at once. A run on a PR already ready or recording (a fix of the record) just ends:
+ * its push re-armed the merge, and the checks are read again.
+ */
+const actionReadyRequested = (glob: Glob, runId: string | null, ctx: Context, source: ReadySource): Result<Transition> => {
+  const preparation = preparationOf(glob);
+  if (preparation === null) return invalidTransition(glob, ctx.actor, 'Only a prepared action is marked ready');
+  if (source.from === 'board') return invalidTransition(glob, ctx.actor, 'A prepared action is marked ready by its routine');
+  if (preparation.record !== 'branch') return actionPrepared(glob, runId, ctx);
+  if (glob.status === 'pr_open') {
+    const run = currentRun(glob);
+    if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
+      return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
+    }
+    return new Builder(glob, ctx)
+      .endRun('completed')
+      .effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation })
+      .done();
+  }
+  if (glob.status !== 'implementing') return invalidTransition(glob, ctx.actor, `A glob in ${glob.status} has no draft PR to mark ready`);
+  if (glob.pr === null) return invalidTransition(glob, ctx.actor, 'The glob has no PR yet');
+  const run = currentRun(glob);
+  if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
+    return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
+  }
+  return new Builder(glob, ctx).effect({ kind: 'mark_pr_ready', globId: glob.id, generation: glob.generation }).done();
 };
 
 /** The `sub-gate` check finished: on success, slop applies the board's policy before merging. */
@@ -3196,6 +3268,8 @@ export const merged = (
 ): Result<Transition> => {
   // GitHub is the source of truth for merges, so any status before merging moves to reviewing.
   if (glob.status === 'reviewing' || glob.status === 'signed_off') return unchanged(glob);
+  // An action's record has no labels, review or rollout: it is signed off once the person has said Done (row A8).
+  if (glob.category === 'action') return glob.pr?.state === 'merged' ? unchanged(glob) : actionMerged(glob, merge, ctx);
   // A PR already landed with Merge and continue: its second observation.
   if (merge.number !== undefined && glob.prs.some((p) => p.number === merge.number))
     return unchanged(glob);
@@ -3504,7 +3578,7 @@ export const reportFailure = (
       .done();
   }
   if (
-    run.purpose === 'resolve_conflict' &&
+    (run.purpose === 'resolve_conflict' || (run.purpose === 'prepare' && glob.category === 'action')) &&
     (glob.status === 'pr_open' || glob.status === 'in_progress')
   ) {
     // A conflict-resolving run gave up: the conflict stays flagged and Resolve conflict is offered again, with the reason.
@@ -3799,10 +3873,17 @@ const createDecision = (input: CreateInput, ctx: Context, actor: Actor): Result<
 };
 
 // ---------------------------------------------------------------------------
-// Action globs (rows A1-A3)
+// Action globs (rows A1-A10)
 //
-// An action is something a person does: it never has a branch, PR, run, label or deploy. It is open in Planning and ends
-// Signed off, done or dismissed (the outcome says which). Anyone on the board may complete or dismiss it.
+// An action is work that takes effect by being done: a person applies it to the live thing. A plain action never has a branch, PR,
+// run, label or deploy: it is open in Planning and ends Signed off, done or dismissed (the outcome says which). Anyone on the board
+// may complete or dismiss it.
+//
+// A prepared action (`preparation` in its attributes) has machine preparation first: a routine writes the script, policy or document
+// the person runs (a `prepare` run). It then waits for the person: Done records who and when, Failed starts another preparation round
+// in the same glob. A branch record (a repo file later work edits) lives on the action's own branch and slop merges it after Done;
+// an artifact or attachment record has no branch and closes at Done. No labels, environments, deploys, rollout steps or review of
+// any kind apply: the board's checks gate the record's merge, and the person's run is what makes the action real.
 
 /** The attributes of an action glob; an action without them is a broken record, never a state to handle. */
 export const actionAttributesOf = (glob: Glob): ActionAttributes => {
@@ -3811,14 +3892,21 @@ export const actionAttributesOf = (glob: Glob): ActionAttributes => {
   return attributes;
 };
 
-/** Row A1: an action enters Planning with no run, no provisioning and no labels. */
+/** Row A1: a plain action enters Planning with no run, no provisioning and no labels; a prepared one starts its first round at once. */
 const createAction = (input: CreateInput, ctx: Context, actor: Actor): Result<Transition> => {
   const attributes = validateAttributes('action', input.attributes ?? { assignee: null, outcome: null });
   if (!attributes.ok) return attributes;
   if (!isActionAttributes(attributes.value) || attributes.value.outcome !== null) {
     return invalidInput('A new action has no outcome yet');
   }
+  const preparation = attributes.value.preparation;
+  if (preparation !== undefined && preparation.rounds !== 0) return invalidInput('A new action has had no preparation rounds yet');
   if (input.environment !== null) return invalidInput('An action has no environment');
+  const waitingFor = input.waitingFor ?? [];
+  // A prepared action with nothing to wait for starts preparing now; one held by a start relation waits in Planning until released.
+  const first = preparation !== undefined && waitingFor.length === 0 ? { ...preparation, rounds: 1 } : undefined;
+  const starts = first !== undefined;
+  const waits = preparation !== undefined && !starts;
   const glob: Glob = {
     id: input.id,
     boardId: input.boardId,
@@ -3826,10 +3914,10 @@ const createAction = (input: CreateInput, ctx: Context, actor: Actor): Result<Tr
     type: null,
     category: 'action',
     ...inferenceFields({ category: 'action' }, false),
-    attributes: attributes.value,
+    attributes: first === undefined ? attributes.value : { ...attributes.value, preparation: first },
     group: input.group,
     environment: null,
-    status: 'planning',
+    status: starts ? 'implementing' : 'planning',
     version: 0,
     generation: 1,
     creator: actor.email,
@@ -3847,20 +3935,22 @@ const createAction = (input: CreateInput, ctx: Context, actor: Actor): Result<Tr
     createdAt: ctx.now,
     updatedAt: ctx.now,
     signedOffAt: null,
-    doingSince: null,
+    doingSince: starts ? ctx.now : null,
     listSince: ctx.now,
+    ...(waits && { waiting: { since: ctx.now } }),
   };
-  return new Builder(glob, ctx)
-    .event('GlobCreated', {
-      type: null,
-      category: glob.category,
-      fix: false,
-      workKind: 'maintenance',
-      group: glob.group,
-      environment: null,
-      status: glob.status,
-    })
-    .done();
+  const b = new Builder(glob, ctx).event('GlobCreated', {
+    type: null,
+    category: glob.category,
+    fix: false,
+    workKind: 'maintenance',
+    group: glob.group,
+    environment: null,
+    status: glob.status,
+  });
+  if (starts) b.ensureProvisioned().queueRun(actor.email, undefined, false, 'prepare');
+  else if (waits) b.event('Waiting', { for: [...waitingFor], note: `waiting for ${waitingFor.join(', ')}` });
+  return b.done();
 };
 
 const notAction = (glob: Glob, actor: Actor | null): Result<never> =>
@@ -3875,9 +3965,15 @@ const assigneeEdit = (glob: Glob, value: unknown): Result<string | null | undefi
   return ok(assignee.value === attributes.assignee ? undefined : assignee.value);
 };
 
-/** An open action ends: done or dismissed. What waited for it is released either way. */
-const finishAction = (glob: Glob, outcome: ActionOutcome, ctx: Context, event: DomainEventType): Result<Transition> =>
-  releaseWaiting(new Builder(glob, ctx), glob)
+/** An open action ends: done or dismissed. What waited for it is released either way. `b` carries what the caller already did. */
+const finishAction = (
+  glob: Glob,
+  outcome: ActionOutcome,
+  ctx: Context,
+  event: DomainEventType,
+  b: Builder = new Builder(glob, ctx),
+): Result<Transition> =>
+  releaseWaiting(b, glob)
     .set({ attributes: { ...actionAttributesOf(glob), outcome }, signedOffAt: ctx.now })
     .status('signed_off')
     .event(event, {
@@ -3887,7 +3983,21 @@ const finishAction = (glob: Glob, outcome: ActionOutcome, ctx: Context, event: D
     })
     .done();
 
-/** Row A2: a person did the action's work. A repeat on a finished action changes nothing. */
+/** A new preparation round: the count goes up, the action is Doing, and a `prepare` run is queued (the branch is cut on the first). */
+const startRound = (b: Builder, by: string): Builder => {
+  const attributes = actionAttributesOf(b.current);
+  const preparation = attributes.preparation;
+  if (preparation === undefined) return b;
+  return b
+    .set({ attributes: { ...attributes, preparation: { ...preparation, rounds: preparation.rounds + 1 } } })
+    .status('implementing')
+    .queueRun(by, undefined, false, 'prepare');
+};
+
+/**
+ * Row A2: a person did the action's work. A repeat on a finished action changes nothing. A prepared action is done only once its
+ * preparation is ready to run; with a branch record, slop then arms and starts the merge itself.
+ */
 export const completeAction = (glob: Glob, input: { readonly note?: string }, ctx: Context, facts: ActionFacts = {}): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'action') return notAction(glob, actor);
@@ -3895,14 +4005,48 @@ export const completeAction = (glob: Glob, input: { readonly note?: string }, ct
   if (outcome !== null) {
     return outcome.kind === 'done' ? unchanged(glob) : invalidTransition(glob, actor, 'This action was dismissed');
   }
+  const note = input.note?.trim() ?? '';
+  const done: ActionOutcome = { kind: 'done', by: actor.email, at: ctx.now, ...(note === '' ? {} : { note }) };
+  if (preparationOf(glob) !== null) return completePrepared(glob, done, ctx);
   if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
   const held = actionHeld(facts);
   if (held !== null) return invalidTransition(glob, actor, held);
-  const note = input.note?.trim() ?? '';
-  return finishAction(glob, { kind: 'done', by: actor.email, at: ctx.now, ...(note === '' ? {} : { note }) }, ctx, 'ActionDone');
+  return finishAction(glob, done, ctx, 'ActionDone');
 };
 
-/** Row A3: the action is not needed. Needs a reason; a repeat on a dismissed action changes nothing. */
+/**
+ * Row A7: Done on a prepared action in its ready state. The person's run is recorded whatever the checks say: Done is never refused
+ * for red checks or a conflict, which only keep the record from merging until they are fixed. An artifact or attachment record, and a
+ * branch whose PR was merged by hand, close at once.
+ */
+const completePrepared = (glob: Glob, done: ActionOutcome, ctx: Context): Result<Transition> => {
+  if (actionState(glob) !== 'ready') {
+    return invalidTransition(glob, ctx.actor, 'This action is not ready to run: it is Done once the preparation has finished');
+  }
+  const pr = glob.pr;
+  if (!hasBranchRecord(glob) || pr === null || pr.state === 'merged') return finishAction(glob, done, ctx, 'ActionDone');
+  const head = pr.headSha ?? '';
+  const b = releaseWaiting(new Builder(glob, ctx), glob)
+    .set({ attributes: { ...actionAttributesOf(glob), outcome: done } })
+    .event('ActionDone', { by: done.by, ...(done.note === undefined ? {} : { note: done.note }) });
+  // A conflicted or red head merges after it is fixed (Fix conflict, Fix checks); the push that fixes it arms the merge again.
+  if (glob.conflict != null || headChecksFailed(glob)) return b.done();
+  if (headChecksPassed(glob)) {
+    return b
+      .set({ mergeMode: null, mergeUpdates: 0, ...leavesQueue(glob) })
+      .status('merging')
+      .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
+      .done();
+  }
+  b.set({ mergeMode: 'when_green' }).event('MergeArmed', { sha: head });
+  if (glob.headChecks?.sha !== head) b.effect({ kind: 'refresh_checks', globId: glob.id, generation: glob.generation });
+  return b.done();
+};
+
+/**
+ * Row A3 (and A9 for a prepared action): the action is not needed. Needs a reason; a repeat on a dismissed action changes nothing.
+ * A prepared action can be dismissed in any open state: a live run ends, and its PR is closed and its branch deleted (never merged).
+ */
 export const dismissAction = (glob: Glob, input: { readonly reason: string }, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.category !== 'action') return notAction(glob, actor);
@@ -3910,10 +4054,104 @@ export const dismissAction = (glob: Glob, input: { readonly reason: string }, ct
   if (outcome !== null) {
     return outcome.kind === 'dismissed' ? unchanged(glob) : invalidTransition(glob, actor, 'This action is already done');
   }
-  if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
+  const prepared = preparationOf(glob) !== null;
+  if (glob.status !== 'planning' && !prepared) return invalidTransition(glob, actor, 'This action is not open');
+  if (glob.status === 'signed_off') return invalidTransition(glob, actor, 'This action is not open');
   const reason = input.reason.trim();
   if (reason === '') return invalidInput('Dismissing needs a reason');
-  return finishAction(glob, { kind: 'dismissed', by: actor.email, at: ctx.now, reason }, ctx, 'ActionDismissed');
+  const dismissed: ActionOutcome = { kind: 'dismissed', by: actor.email, at: ctx.now, reason };
+  if (!prepared) return finishAction(glob, dismissed, ctx, 'ActionDismissed');
+  const b = new Builder(glob, ctx).endRun('superseded', null, { cause: 'dismissed' });
+  if (hasBranchRecord(glob) && glob.provisioning !== 'none') {
+    b.set({
+      ...(glob.pr === null ? {} : { pr: { ...glob.pr, state: 'closed' as const } }),
+      mergeMode: null,
+      ...leavesQueue(glob),
+      failure: null,
+    })
+      .effect({ kind: 'close_pr', globId: glob.id, generation: glob.generation, prNumber: glob.pr?.number ?? null })
+      .effect({ kind: 'delete_branch', globId: glob.id, generation: glob.generation });
+  }
+  return finishAction(glob, dismissed, ctx, 'ActionDismissed', b.set({ waiting: null }));
+};
+
+/**
+ * Row A4: start (from Planning) or retry (from a failed round) the preparation of an action. Not while a start relation is unmet:
+ * the glob that builds what it prepares against has to merge first.
+ */
+export const prepareAction = (glob: Glob, ctx: Context, relations: RelationFacts = NO_RELATIONS): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'action') return notAction(glob, actor);
+  const attributes = actionAttributesOf(glob);
+  if (attributes.preparation === undefined) return invalidTransition(glob, actor, 'This action has no machine preparation');
+  if (attributes.outcome !== null) return invalidTransition(glob, actor, 'This action is finished');
+  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  if (glob.status === 'planning') {
+    const awaited = awaitedOf(relations);
+    if (awaited.length > 0) return invalidTransition(glob, actor, `${waitSummary(awaited)} (it can be prepared when ${awaited.length === 1 ? 'it has' : 'they have'} merged)`);
+    return startRound(new Builder(glob, ctx).set({ waiting: null }), actor.email).done();
+  }
+  if (glob.status === 'failed') return startRound(new Builder(glob, ctx).set({ failure: null }), actor.email).done();
+  return invalidTransition(glob, actor, 'Only an action that has not started, or whose preparation failed, can be prepared');
+};
+
+/**
+ * Row A5 (artifact or attachment record): the routine says the preparation is done. The action is ready to run, with no PR; the run
+ * ends completed (nothing watches). A branch record becomes ready through `prReadyForReview`. A repeat on a ready action changes nothing.
+ */
+export const actionPrepared = (glob: Glob, runId: string | null, ctx: Context): Result<Transition> => {
+  if (glob.category !== 'action' || preparationOf(glob) === null) return notAction(glob, ctx.actor);
+  if (glob.status === 'in_progress') return unchanged(glob);
+  if (glob.status !== 'implementing') return invalidTransition(glob, ctx.actor, `A glob in ${glob.status} is not being prepared`);
+  const run = currentRun(glob);
+  if (runId !== null && (run === null || run.id !== runId || run.state === 'ended')) {
+    return invalidTransition(glob, ctx.actor, `Run ${runId} is not the glob's current run`);
+  }
+  return new Builder(glob, ctx)
+    .endRun('completed')
+    .set({ failure: null })
+    .status('in_progress')
+    .event('ActionPrepared', { round: preparationOf(glob)?.rounds ?? 0, record: preparationOf(glob)?.record ?? 'attachment' })
+    .done();
+};
+
+/**
+ * Row A6: the person ran what was prepared and it failed (the output is stored by the service as an attachment the next round reads).
+ * Another round starts on the same branch and PR: nothing has merged, so no new generation. Not after Done.
+ */
+export const failAction = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'action') return notAction(glob, actor);
+  const attributes = actionAttributesOf(glob);
+  if (attributes.preparation === undefined) return invalidTransition(glob, actor, 'This action has no machine preparation');
+  if (attributes.outcome !== null) return invalidTransition(glob, actor, 'This action is already finished: report the failure on a new glob');
+  if (actionState(glob) !== 'ready') return invalidTransition(glob, actor, 'This action is not ready to run');
+  if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
+  const b = new Builder(glob, ctx).set({ failure: null, mergeMode: null, headChecks: null, ...leavesQueue(glob) });
+  return startRound(b, actor.email)
+    .event('ActionRunFailed', { by: actor.email, round: attributes.preparation.rounds })
+    .done();
+};
+
+/**
+ * Row A8: the merge of an action's branch record was observed. After Done the action is signed off (no labels, no review, no
+ * rollout): only the waiters are released. Merged by hand before Done, it is only recorded; Done then closes it.
+ */
+const actionMerged = (glob: Glob, merge: { sha: string }, ctx: Context): Result<Transition> => {
+  const { outcome } = actionAttributesOf(glob);
+  const b = new Builder(glob, ctx)
+    .endRun('completed')
+    .set({
+      failure: null,
+      mergeMode: null,
+      ...(glob.mergeHold == null ? {} : { mergeHold: null }),
+      ...leavesQueue(glob),
+      pr: glob.pr === null ? null : { ...glob.pr, state: 'merged' },
+      ...(glob.conflict == null ? {} : { conflict: null }),
+    })
+    .event('Merged', { sha: merge.sha });
+  if (outcome?.kind !== 'done') return b.done();
+  return releaseWaiting(b.set({ signedOffAt: ctx.now }).status('signed_off'), glob).done();
 };
 
 /**
@@ -3926,9 +4164,39 @@ const actionHeld = (facts: ActionFacts): string | null => {
   return facts.script == null ? null : scriptMissingText(facts.script, facts.baseBranch ?? 'main');
 };
 
-/** What a person can do with an action: finish it while it is open (and nothing holds it), dismiss it, and delete it. */
-const actionActions = (glob: Glob, facts: ActionFacts): Action[] =>
-  glob.status !== 'planning' ? ['delete'] : actionHeld(facts) === null ? ['complete_action', 'dismiss_action', 'delete'] : ['dismiss_action', 'delete'];
+/**
+ * What a person can do with an action. A plain action: finish it while it is open (and nothing holds it), dismiss it, delete it.
+ * A prepared one: prepare (start or retry), Done and Failed once it is ready to run, the PR actions its record needs (Fix checks, Fix
+ * conflict, Merge and Cancel merge after Done), pick up (to read the branch), dismiss and delete.
+ */
+const actionActions = (glob: Glob, facts: ActionFacts): Action[] => {
+  const state = actionState(glob);
+  if (preparationOf(glob) === null) {
+    return glob.status !== 'planning' ? ['delete'] : actionHeld(facts) === null ? ['complete_action', 'dismiss_action', 'delete'] : ['dismiss_action', 'delete'];
+  }
+  const actions: Action[] = [];
+  const held = facts.relations !== undefined && awaitedOf(facts.relations).length > 0;
+  if (state === 'waiting' && !held) actions.push('prepare_action');
+  if (state === 'preparation_failed' && !hasLiveRun(glob)) actions.push('prepare_action');
+  if (state === 'ready') {
+    actions.push('complete_action', 'fail_action');
+    if (hasBranchRecord(glob) && glob.pr !== null) actions.push('pick_up');
+  }
+  if (state === 'recording' && hasBranchRecord(glob)) {
+    if (isMergeArmed(glob) || isMergeQueued(glob)) actions.push('cancel_merge');
+    else if (mergeBlocker(glob, facts.relations) === null) actions.push('merge');
+    if (canRetryMerge(glob) && !hasLiveRun(glob)) actions.push('retry_merge');
+    if (glob.pr !== null) actions.push('pick_up');
+  }
+  if ((state === 'ready' || state === 'recording') && !hasLiveRun(glob)) {
+    if (canRetryAutofix(glob)) actions.push('retry_autofix');
+    if (canRequestConflictFix(glob)) actions.push('resolve_conflict');
+  }
+  // Done is final for a prepared action: after it only the record's merge is left.
+  if (state !== 'closed' && state !== 'recording') actions.push('dismiss_action');
+  actions.push('delete');
+  return actions;
+};
 
 /** A scope edit on a decision (admins and POs): null when it changes nothing. */
 const scopeEdit = (glob: Glob, value: unknown, actor: Actor): Result<DecisionScope | null> => {
