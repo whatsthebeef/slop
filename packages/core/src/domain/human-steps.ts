@@ -1,3 +1,5 @@
+import { actionState } from './action-glob.js';
+import { doThisCommands, fetchCommandFor } from './action-script.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
 import type { Action } from './machine.js';
 import { listOf } from './matrix.js';
@@ -178,6 +180,9 @@ export interface HumanStepFacts {
    * couldn't answer): a once step is then due, since a person isn't held up by a check slop could not make.
    */
   readonly scriptsOnBranch?: ReadonlySet<string>;
+  /** A prepared action ready to run: its plan.md (the commands come from `## Do this`) and its script's artifact label, when it has one. */
+  readonly actionPlan?: string | null;
+  readonly actionArtifactLabel?: string | null;
 }
 
 /** The person looking: their email and role on the board. */
@@ -233,8 +238,15 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   const steps: HumanStep[] = [];
   if (glob.category === 'action') {
     const attributes = glob.attributes !== undefined && isActionAttributes(glob.attributes) ? glob.attributes : null;
-    if (glob.status === 'planning' && attributes?.outcome === null) {
+    if (glob.status === 'planning' && attributes?.outcome === null && attributes.preparation === undefined) {
       steps.push(derived('action', `Do: ${glob.title}`, attributes.assignee ?? 'anyone', { id: 'machine:action' }));
+    }
+    // A prepared action in its ready state: the person runs what the routine prepared. The block shows the commands, one per line,
+    // the fetch of the script first. Preparing and recording are the machine's turn and have no human step.
+    if (attributes?.preparation !== undefined && actionState(glob) === 'ready') {
+      const fetch = fetchCommandFor(glob.id, attributes.preparation.record, facts.actionArtifactLabel);
+      const commands = [...(fetch === null ? [] : [fetch]), ...doThisCommands(facts.actionPlan ?? '')];
+      steps.push({ ...derived('action', `Run: ${glob.title}`, attributes.assignee ?? 'anyone', { id: 'machine:action' }), commands });
     }
     return steps;
   }

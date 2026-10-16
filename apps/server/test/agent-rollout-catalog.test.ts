@@ -237,3 +237,52 @@ describe('catalog agents: when a step falls due (once, per environment, after th
     expect(text).toContain('commands for a branch-deploy environment held back until after the merge');
   });
 });
+
+describe('catalog agents: actions that take effect by doing', () => {
+  it('has the orchestrator prepare an action: write it, dry run, review, push to the action record, mark ready, never run it', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('## Preparing an action');
+    expect(text).toContain('with purpose `prepare`');
+    expect(text).toContain('a dry run (`--check` or `--dry-run`, read-only)');
+    expect(text).toContain("commit and push only to the action's own branch");
+    expect(text).toContain("put_artifact(id, kind: 'rollout_script'");
+    expect(text).toContain('**Never run a command that changes paid infrastructure or IAM, and never run the script itself**');
+    expect(text).toContain('Call `mark_ready(id, runId)`. That ends the run');
+    expect(text).toContain('Action run failed (round N)');
+    expect(text).toContain('treat it as in-scope feedback');
+    expect(text).toContain('labels, environments, rollout steps, after-deploy steps and Arm label');
+  });
+
+  it('has the orchestrator say work that takes effect by doing is a prepared action, and when a once step stays', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('**Takes effect by deploying or by doing.**');
+    expect(text).toContain('`prepare: true`');
+    expect(text).toContain('a `once` step stays for work that ships with a change');
+  });
+
+  it('has the investigator recommend an action rather than a same when the change takes effect by doing', async () => {
+    const text = await agent('investigator');
+    expect(text).toContain('## Takes effect by');
+    expect(text).toContain('recommend an **action**');
+    expect(text).toContain('rather than a `same`');
+    expect(text).toContain('A shipped change that also needs one one-shot command afterwards stays a `same` with a `once` step');
+  });
+
+  it('has the implementer and change reviewer each carry one line about prepared actions', async () => {
+    expect(await agent('implementer')).toContain('**A prepared action is written, never run.**');
+    expect(await agent('change_reviewer')).toContain('should be a prepared action');
+  });
+
+  it('keeps board-specific names out of the new text', async () => {
+    const orchestrator = await agent('orchestrator');
+    const investigator = await agent('investigator');
+    const sections = [
+      orchestrator.slice(orchestrator.indexOf('## Preparing an action'), orchestrator.indexOf('## Investigate-only runs')),
+      investigator.slice(investigator.indexOf('## Takes effect by'), investigator.indexOf('## Human steps')),
+    ];
+    for (const text of sections) {
+      expect(text.length).toBeGreaterThan(200);
+      expect(text).not.toMatch(/\bs\d+[a-z]\d+\b|pocketlab/i);
+    }
+  });
+});

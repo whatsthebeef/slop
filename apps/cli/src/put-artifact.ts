@@ -4,9 +4,9 @@ import type { ToolCaller } from './init.js';
 import { parseJsonOrUndefined } from './util.js';
 
 export const PUT_ARTIFACT_USAGE =
-  'put-artifact <id> --kind implementation_plan|postplan|local_review|investigation|test_plan --file <path|-> [--commit <sha>] [--agent-set <n>] [--review-stats <json>] [--run <runId>]';
+  'put-artifact <id> --kind implementation_plan|postplan|local_review|investigation|test_plan|rollout_script --file <path|-> [--label <label>] [--commit <sha>] [--agent-set <n>] [--review-stats <json>] [--run <runId>]';
 
-const KINDS = ['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan'] as const;
+const KINDS = ['implementation_plan', 'postplan', 'local_review', 'investigation', 'test_plan', 'rollout_script'] as const;
 
 export interface PutArtifactDeps {
   readonly client: ToolCaller;
@@ -25,6 +25,7 @@ const reviewStatsSchema = z.object({
 const VALUE_FLAGS = [
   '--kind',
   '--file',
+  '--label',
   '--commit',
   '--agent-set',
   '--review-stats',
@@ -59,6 +60,13 @@ export async function putArtifactCommand(
   if (file === undefined) throw new UsageError(`--file is required\n${usage}`);
 
   const toolArgs: Record<string, unknown> = { id, kind };
+  const label = values.get('--label');
+  if (label !== undefined) {
+    if (kind !== 'rollout_script') throw new UsageError('--label is only for --kind rollout_script');
+    toolArgs.label = label;
+  } else if (kind === 'rollout_script') {
+    throw new UsageError(`--kind rollout_script needs --label "action: <slug>"\n${usage}`);
+  }
   const commit = values.get('--commit');
   if (commit !== undefined) toolArgs.commitSha = commit;
   const run = values.get('--run');

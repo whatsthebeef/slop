@@ -1,7 +1,7 @@
 import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
-import { conflictInstructions, fireRoutine, investigateInstructions, runInstructions } from './routines.js';
+import { conflictInstructions, fireRoutine, investigateInstructions, prepareInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { isRepoAccessFailure, isSetupFailure, machine, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
+import { hasBranchRecord, isOpenAction, isRepoAccessFailure, isSetupFailure, machine, preparationOf, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -379,8 +379,9 @@ export const codeHostExecutors = (
     },
 
     release_waiting: async (effect, glob, { globs, decisions }) => {
-      // Only a glob that really merged releases others (a Merge and continue never queues this).
-      if (effect.kind !== 'release_waiting' || glob === null || (glob.status !== 'reviewing' && glob.status !== 'signed_off')) {
+      // Only a glob that really merged releases others (a Merge and continue never queues this). An action releases at its Done,
+      // while a branch record is still merging.
+      if (effect.kind !== 'release_waiting' || glob === null || (glob.status !== 'reviewing' && glob.status !== 'signed_off' && (glob.category !== 'action' || isOpenAction(glob)))) {
         return 'dropped';
       }
       // Each release is its own version-checked write that queues the provision and the run; a repeat changes nothing.
@@ -636,7 +637,9 @@ export const codeHostExecutors = (
       // base branch of a glob in Planning, which has no branch yet.
       // Provisioning in flight is a wait, not a failure: look again shortly without spending an attempt. Any other state
       // (failed, never queued) keeps throwing, so the job's attempts run out instead of it polling for ever.
-      if (effect.purpose !== 'investigate' && glob.provisioning !== 'ok') {
+      // A prepared action whose record is an artifact or attachment has no branch: its provisioning stays `none` and nothing waits.
+      const branchless = effect.purpose === 'prepare' && preparationOf(glob) !== null && !hasBranchRecord(glob);
+      if (effect.purpose !== 'investigate' && !branchless && glob.provisioning !== 'ok') {
         if (glob.provisioning === 'pending') return { state: 'pending', retryAfterMs: PROVISION_POLL_MS, reason: 'Waiting for the branch' };
         throw new Error(`${glob.id} is not provisioned yet`);
       }
@@ -655,6 +658,8 @@ export const codeHostExecutors = (
       const text =
         effect.purpose === 'investigate'
           ? investigateInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null)
+          : effect.purpose === 'prepare'
+            ? prepareInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null, preparationOf(glob))
           : effect.purpose === 'resolve_conflict'
             ? conflictInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null, glob.conflict ?? null)
             : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null);

@@ -66,12 +66,37 @@ describe('intake', () => {
     });
   });
 
+  describe('takes effect by deploying or by doing', () => {
+    const base = '"title":"Scope it","plan":"P","type":"sub","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null,"files":[]';
+
+    it('asks the model how the work takes effect, with the revert test, and only suggests', () => {
+      expect(INTAKE_SYSTEM).toMatch(/takesEffect/);
+      expect(INTAKE_SYSTEM).toMatch(/by doing|"doing"/);
+      expect(INTAKE_SYSTEM).toMatch(/revert/i);
+      expect(INTAKE_SYSTEM).toMatch(/only SUGGESTS an action/);
+    });
+
+    it('suggests an action with the reason, and never changes the type or category itself', async () => {
+      answer = `{${base},"takesEffect":"doing","doingReason":"Applies an IAM permission set in the account"}`;
+      const p = await propose('add the apigateway permission to the PocketlabNonProd permission set');
+      expect(p.suggestedAction).toEqual({ reason: 'Applies an IAM permission set in the account' });
+      expect(p).toMatchObject({ type: 'sub', category: 'task' });
+    });
+
+    it('suggests nothing for deploying work, for doing without a reason, or for an answer without the field', async () => {
+      for (const extra of ['"takesEffect":"deploying","doingReason":null', '"takesEffect":"doing","doingReason":" "', '"takesEffect":"doing"', '"doingReason":"x"']) {
+        answer = `{${base},${extra}}`;
+        expect('suggestedAction' in (await propose('Change the retry delay'))).toBe(false);
+      }
+    });
+  });
+
   describe('questions', () => {
     const base = '"title":"T","plan":"P","type":"sub","category":"task","group":null,"autoTrigger":false,"autoTriggerQuote":null,"files":[]';
     const withQuestions = (qs: unknown) => `{${base},"questions":${JSON.stringify(qs)}}`;
 
-    it('the prompt version is 10 and the prompt asks for narrow questions', () => {
-      expect(INTAKE_PROMPT_VERSION).toBe(10);
+    it('the prompt version is 11 and the prompt asks for narrow questions', () => {
+      expect(INTAKE_PROMPT_VERSION).toBe(11);
       expect(INTAKE_SYSTEM).toMatch(/- questions: usually an empty list/);
       expect(INTAKE_SYSTEM).toMatch(/Never ask about style/);
     });

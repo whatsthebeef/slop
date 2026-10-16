@@ -9,7 +9,7 @@ import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
 import { heldByQuestion, openQuestionsOf, questionChipTip, questionText } from './questions';
 import type { Position } from './position';
-import { blockedParts, holdLine, relationTips, statusLine, workstreamLine } from './status-line';
+import { actionLine, blockedParts, holdLine, isProblemLine, relationTips, statusLine, workstreamLine } from './status-line';
 import type { StatusLine } from './status-line';
 
 /**
@@ -116,8 +116,11 @@ const feedbackTip = (glob: GlobView): string =>
  * sign-off, an escalation in Planning). A decision glob's turn is the status line's.
  */
 export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
-  // An action waits for a person until it is done or dismissed.
-  if (glob.category === 'action') return glob.status === 'planning';
+  // An action waits for a person until it is done or dismissed; a prepared one while the machine prepares or records is the machine's.
+  if (glob.category === 'action') {
+    const line = actionLine(glob);
+    return glob.status === 'planning' || line?.state === 'ready' || line?.state === 'preparation_failed' || (line?.state === 'recording' && line.icon === 'human');
+  }
   if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
   const icon = cornerStatus(glob, now, viewer)?.icon;
   return icon === 'human' || icon === 'needs-human';
@@ -168,6 +171,22 @@ export const cornerStatus = (
   if (decision !== null) return decision.outcome === null ? null : decidedStatus(glob, decision);
   // An open action's one status is what it waits for (the glob that builds its script); otherwise an action has none.
   if (glob.category === 'action') {
+    const acting = actionLine(glob);
+    if (acting !== null) {
+      // The line is the action's own, or a real problem on its PR (failed checks, a conflict) that outranks it.
+      const line = statusLine(glob, now, viewer, base);
+      const text = line?.text ?? acting.text;
+      const problem = line !== null && line.kind !== 'action';
+      return {
+        kind: problem ? line.kind : 'action',
+        icon: problem ? (isProblemLine(line) ? 'alert' : 'machine') : acting.icon,
+        text,
+        label: text,
+        tip: line?.tip ?? acting.tip,
+        tone: line?.tone ?? acting.tone,
+        click: { kind: 'section', target: cardTargets.actions() },
+      };
+    }
     const held = holdLine(glob);
     return held === null
       ? null
