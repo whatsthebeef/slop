@@ -38,3 +38,39 @@ export interface ScriptCheck {
   readonly script: ActionScript;
   readonly baseBranch: string;
 }
+
+/**
+ * The commands a person runs for an action: the lines of the first fenced block under the plan's `## Do this` heading (a leading
+ * `$ ` prompt is dropped, blank lines and comments-only lines stay out of the way). Empty when the plan has no such block.
+ */
+export const doThisCommands = (plan: string): string[] => {
+  const lines = plan.split('\n');
+  const start = lines.findIndex((l) => /^##\s+do this\s*$/i.test(l.trim()));
+  if (start < 0) return [];
+  let fence: string | null = null;
+  const commands: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker !== undefined) {
+      if (fence === null) {
+        fence = marker.charAt(0);
+        continue;
+      }
+      if (fence === marker.charAt(0)) return commands;
+    }
+    if (fence === null) {
+      if (/^##\s/.test(line)) return commands;
+      continue;
+    }
+    const text = line.replace(/^\s*\$\s+/, '').trimEnd();
+    if (text.trim() !== '') commands.push(text);
+  }
+  return commands;
+};
+
+/** The line that fetches what a prepared action runs: the branch for a branch record, the stored script for an artifact record. */
+export const fetchCommandFor = (id: string, record: 'branch' | 'artifact' | 'attachment', label?: string | null): string | null => {
+  if (record === 'branch') return `sstor --glob ${id}`;
+  if (record === 'artifact') return `slop get-artifact ${id} rollout_script${label == null || label === '' ? '' : ` --label ${JSON.stringify(label)}`} --out ${id}-run.sh`;
+  return null;
+};

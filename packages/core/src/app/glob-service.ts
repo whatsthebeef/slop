@@ -3,6 +3,7 @@ import type { Result } from '../domain/errors.js';
 import { canChooseType, CHOOSE_TYPE_REFUSAL } from './access.js';
 import { isLearning } from '../domain/learning.js';
 import { validateScopeEdit } from '../domain/attributes.js';
+import type { ActionRecordKind } from '../domain/attributes.js';
 import { groupFromTitle, normaliseGroup } from '../domain/group.js';
 import { inGroup } from '../domain/group-view.js';
 import { formatId, letterFor } from '../domain/ids.js';
@@ -32,7 +33,7 @@ import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRo
 import type { DomainEvent } from '../domain/events.js';
 import type { PendingEffect } from '../domain/machine-steps.js';
 import { areasMatching, defaultAreas, matchRiskAreas, splitEvidence, subSafe } from '../domain/risk-area.js';
-import { scriptPathOf } from '../domain/action-script.js';
+import { doThisCommands, scriptPathOf } from '../domain/action-script.js';
 import type { ActionScript, ScriptCheck } from '../domain/action-script.js';
 import type { CodeView } from './code-view.js';
 import { CodeViewUnavailable } from '../domain/code-view.js';
@@ -47,7 +48,7 @@ import type { InboxItem } from '../domain/inbox.js';
 import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js';
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
-import { ACTION_PLAN_TEMPLATE } from '../domain/action-glob.js';
+import { ACTION_PLAN_TEMPLATE, actionOf, actionState, preparationOf } from '../domain/action-glob.js';
 import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, storedCategory, workKindOf } from '../domain/types.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { readMergePolicy } from './knowledge-service.js';
@@ -159,6 +160,9 @@ const SCRIPT_CACHE_MS = 5 * 60 * 1000;
 const SCRIPT_MISSING_CACHE_MS = 15 * 1000;
 
 /** The facts the machine reads about an action's script. */
+/** The label prefix of the attachment a failed action run is kept in (`Action run failed (round N)`): the next round reads it. */
+export const ACTION_FAILURE_LABEL = 'Action run failed';
+
 const scriptFacts = (check: ScriptCheck | null): { readonly script?: ActionScript; readonly baseBranch?: string } =>
   check === null ? {} : { script: check.script, baseBranch: check.baseBranch };
 
@@ -241,6 +245,13 @@ export interface CreateGlobInput {
   readonly environment: string | null;
   /** Actions: who is meant to do it (default: anyone). */
   readonly assignee?: string | null;
+  /**
+   * Actions: a routine prepares what the person runs (a script, a policy file, a document) before they do. The first preparation
+   * round starts at creation, or when the start relations it waits for have merged.
+   */
+  readonly prepare?: boolean;
+  /** Actions with `prepare`: where the record lives (default `branch`); chosen here, because the routine can't change it mid-run. */
+  readonly record?: ActionRecordKind;
   readonly autoTrigger: boolean;
   /** Accepted for compatibility and ignored: a super always waits in Planning until a person picks it up to pair. */
   readonly start?: boolean;
@@ -608,8 +619,11 @@ interface CommandOptions {
   readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<null>>;
   /** A system step that starts a run on someone's behalf: the glob's creator triggers it. */
   readonly triggeredByCreator?: boolean;
-  /** Which globs the step applies to: work globs (the default), decision globs only, or either (pick-up, field edits). */
-  readonly applies?: 'work' | 'decision' | 'action' | 'any';
+  /**
+   * Which globs the step applies to: work globs (the default), decision globs only, or either (pick-up, field edits). `prepared`:
+   * work globs and prepared actions (the PR commands an action's branch record uses); a plain action or a decision is refused.
+   */
+  readonly applies?: 'work' | 'prepared' | 'decision' | 'action' | 'any';
   /** Runs in the transaction after the glob was updated, only when the step changed it: `before` is the glob as it was. */
   readonly record?: (tx: Tx, before: Glob, next: Glob, actor: Actor | null) => Promise<void>;
 }
@@ -654,7 +668,11 @@ export class GlobService implements AutomaticRelations {
       const board = await tx.getBoard(glob.boardId);
       const known = (board?.environments ?? []).map((e) => e.name);
       // A step that waits for an environment the board doesn't define can never fall due: flag it so the view offers to dismiss it.
-      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts), rolloutSteps, ...(onBranch === undefined ? {} : { scriptsOnBranch: onBranch }) }, stored).map((step) => {
+      // A prepared action ready to run shows the plan's commands (and its stored script's name) in the step the person acts on.
+      const readyAction = actionState(glob) === 'ready';
+      const actionPlan = readyAction ? ((await tx.listArtifacts(glob.id, 'plan'))[0]?.content ?? null) : null;
+      const actionArtifactLabel = readyAction ? ((await tx.listArtifacts(glob.id, ROLLOUT_SCRIPT_KIND))[0]?.label ?? null) : null;
+      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts), rolloutSteps, ...(onBranch === undefined ? {} : { scriptsOnBranch: onBranch }), ...(readyAction ? { actionPlan, actionArtifactLabel } : {}) }, stored).map((step) => {
         const environment = step.state === 'done' || step.state === 'dismissed' ? null : environmentOf(step.due);
         return environment !== null && board !== null && !known.includes(environment) ? { ...step, unknownEnvironment: environment } : step;
       });
@@ -692,7 +710,8 @@ export class GlobService implements AutomaticRelations {
   async scriptCheckFor(id: string): Promise<ScriptCheck | null> {
     const read = await this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(id);
-      if (glob?.category !== 'action' || glob.status !== 'planning') return null;
+      // A prepared action runs its own script from its branch or artifact: only a plain action waits for a script another glob builds.
+      if (glob?.category !== 'action' || glob.status !== 'planning' || preparationOf(glob) !== null) return null;
       const board = await tx.getBoard(glob.boardId);
       return board === null ? null : { glob, baseBranch: board.baseBranch, plan: (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '' };
     });
@@ -728,7 +747,7 @@ export class GlobService implements AutomaticRelations {
   async scriptChecksOf(boardId: number): Promise<Map<string, ScriptCheck>> {
     const read = await this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
-      const open = (await tx.listGlobs(boardId, { status: ['planning'], include: 'all' })).filter((g) => g.category === 'action');
+      const open = (await tx.listGlobs(boardId, { status: ['planning'], include: 'all' })).filter((g) => g.category === 'action' && preparationOf(g) === null);
       return { board, plans: await Promise.all(open.map(async (g) => ({ id: g.id, plan: (await tx.listArtifacts(g.id, 'plan'))[0]?.content ?? '' }))) };
     });
     const found = new Map<string, ScriptCheck>();
@@ -768,7 +787,7 @@ export class GlobService implements AutomaticRelations {
     const prefix = `${String(boardId)}|`;
     const before = new Map([...this.scriptCache].filter(([k]) => k.startsWith(prefix)));
     for (const key of before.keys()) this.scriptCache.delete(key);
-    const open = (await this.peekAll(boardId, { status: ['planning'], include: 'all' })).filter((g) => g.category === 'action');
+    const open = (await this.peekAll(boardId, { status: ['planning'], include: 'all' })).filter((g) => g.category === 'action' && preparationOf(g) === null);
     for (const glob of open) {
       const path = scriptPathOf(await this.peekPlan(glob.id));
       if (path !== null && before.get(`${prefix}${path}`)?.onBase !== true) this.publish(glob);
@@ -1910,6 +1929,8 @@ export class GlobService implements AutomaticRelations {
     // form's own flow, so they are not refused here: the MCP tool refuses `inboxItem` on its own.)
     if ((input.files ?? []).length > 0) return invalidInput('An action takes no files: put them in the plan or attach them afterwards');
     const plan = input.plan?.trim() ? input.plan : ACTION_PLAN_TEMPLATE.replace('<What a person needs to do>', input.title.trim());
+    if (input.prepare !== true && input.record !== undefined) return invalidInput('An action has a record kind only when a routine prepares it: pass prepare: true');
+    const preparation = input.prepare === true ? { record: input.record ?? 'branch', rounds: 0 } : undefined;
     let ignored: { id: string; why: string }[] = [];
     const crossBoard: Glob[] = [];
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Transition>> => {
@@ -1923,26 +1944,6 @@ export class GlobService implements AutomaticRelations {
         const existing = await tx.findGlobByCreationKey(board.id, input.idempotencyKey);
         if (existing !== null) return ok({ glob: existing, changed: false, events: [], effects: [] });
       }
-      const letter = letterFor({ actor: 'human', mode: 'action', fix: false, workKind: 'maintenance' });
-      const n = await tx.nextNumber(board.id, letter);
-      const ctx = await this.context(actor.value, board);
-      const created = machine.create(
-        {
-          id: formatId(board.id, letter, n),
-          boardId: board.id,
-          title: input.title,
-          type: null,
-          category: 'action',
-          attributes: { assignee: input.assignee ?? null, outcome: null },
-          group: input.group,
-          environment: null,
-          autoTrigger: false,
-        },
-        board,
-        ctx,
-      );
-      if (!created.ok) return created;
-      const glob = { ...created.value.glob, version: 1 };
       // What it waits for: the globs named in `after` and `relations`, those that merged already left out. Nothing points at the new
       // action yet, so no cycle is possible.
       const by = input.by ?? input.relationsBy ?? 'person';
@@ -1965,12 +1966,36 @@ export class GlobService implements AutomaticRelations {
         const target = targets.get(w.to.trim());
         if (target !== undefined && target.boardId !== board.id) crossBoard.push(target);
       }
+      const letter = letterFor({ actor: 'human', mode: 'action', fix: false, workKind: 'maintenance' });
+      const n = await tx.nextNumber(board.id, letter);
+      const ctx = await this.context(actor.value, board);
+      const created = machine.create(
+        {
+          id: formatId(board.id, letter, n),
+          boardId: board.id,
+          title: input.title,
+          type: null,
+          category: 'action',
+          attributes: { assignee: input.assignee ?? null, outcome: null, ...(preparation === undefined ? {} : { preparation }) },
+          group: input.group,
+          environment: null,
+          autoTrigger: false,
+          // A prepared action held by a start relation waits in Planning and starts preparing when it is released.
+          waitingFor: open.filter((w) => (w.gate ?? 'start') === 'start').map((w) => w.to.trim()),
+        },
+        board,
+        ctx,
+      );
+      if (!created.ok) return created;
+      const glob = { ...created.value.glob, version: 1 };
       const planned = await this.planRelations(tx, glob, [], open, by, email);
       if (!planned.ok) return planned;
       if (planned.value.add.length > MAX_AFTER) return invalidInput(`A glob can wait for at most ${MAX_AFTER} others`);
       const written = applyWrite([], planned.value, { boardId: board.id, from: glob.id, now: ctx.now, newId: () => this.relationId() });
       if (!(await tx.insertGlob(glob, input.idempotencyKey))) throw new Error(`Glob ID collision for ${glob.id}`);
       await tx.appendEvents(created.value.events);
+      // A prepared action provisions its branch and fires its first preparation round: the outbox carries both.
+      await tx.enqueueEffects(created.value.effects);
       await this.writeNew(tx, glob, written.inserted, email, ctx.now);
       const artifact = await tx.insertArtifact({
         globId: glob.id,
@@ -3075,7 +3100,7 @@ export class GlobService implements AutomaticRelations {
   }
 
   retryAutofix(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx));
+    return this.command(email, id, version, (glob, ctx) => machine.retryAutofix(glob, ctx), { applies: 'prepared' });
   }
 
   /** Refused while prerequisites are unmerged, unless `anyway` (a person's choice). */
@@ -3086,7 +3111,7 @@ export class GlobService implements AutomaticRelations {
   }
 
   resolveConflict(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.resolveConflict(glob, ctx));
+    return this.command(email, id, version, (glob, ctx) => machine.resolveConflict(glob, ctx), { applies: 'prepared' });
   }
 
   startAgain(email: string, id: string, version: number) {
@@ -3106,18 +3131,18 @@ export class GlobService implements AutomaticRelations {
       id,
       version,
       (glob, ctx, _board, facts) => machine.requestMerge(glob, ctx, { continue: continueAfter, facts }),
-      { facts: true, relations: true, rollout: true },
+      { facts: true, relations: true, rollout: true, applies: 'prepared' },
     );
   }
 
   /** Cancel merge: disarms "merge when checks pass". */
   cancelMerge(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx));
+    return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx), { applies: 'prepared' });
   }
 
   /** Retry merge: a failed merge (not a conflict) goes back to merging at the head, which already passed. */
   retryMerge(email: string, id: string, version: number) {
-    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retryMerge(glob, ctx, facts.relations), { relations: true });
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retryMerge(glob, ctx, facts.relations), { relations: true, applies: 'prepared' });
   }
 
   /** Sign-off labels and their review checklists: submit items, approve, tick, resubmit, re-open. */
@@ -3162,7 +3187,68 @@ export class GlobService implements AutomaticRelations {
 
   /** `mark_ready`: ask slop to mark the glob's draft PR ready for review. */
   requestReady(email: string, id: string, runId: string | null) {
-    return this.command(email, id, null, (glob, ctx) => machine.readyRequested(glob, runId, ctx));
+    return this.command(email, id, null, (glob, ctx) => machine.readyRequested(glob, runId, ctx), {
+      applies: 'prepared',
+      // An action whose record is not a branch is ready once what the person runs is stored: the script, or the document.
+      prepare: async (tx, glob) => {
+        const record = preparationOf(glob)?.record;
+        if (record === undefined || record === 'branch') return ok(null);
+        const stored = await tx.listArtifacts(glob.id);
+        if (record === 'artifact' && !stored.some((a) => a.kind === ROLLOUT_SCRIPT_KIND)) {
+          return invalidInput('Store the script first: put_artifact(kind: rollout_script, label: "action: <slug>") with the run ID, then mark ready');
+        }
+        if (record === 'attachment' && !stored.some((a) => a.kind === 'attachment' && !a.label.startsWith(ACTION_FAILURE_LABEL))) {
+          return invalidInput('Attach the document first (attach), then mark ready');
+        }
+        return ok(null);
+      },
+    });
+  }
+
+  /**
+   * Prepared actions: start the first preparation round, or retry a failed one. Refused while a start relation is unmet. The caller
+   * drains the outbox (the branch is provisioned and the routine fired from there).
+   */
+  prepareAction(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.prepareAction(glob, ctx, facts.relations), {
+      applies: 'action',
+      relations: true,
+    });
+  }
+
+  /**
+   * Prepared actions: the person ran what was prepared and it failed. Another preparation round starts on the same branch and PR (no
+   * new generation: nothing has merged). The output is masked and capped (`maskedNote`), and kept with the commands as the attachment
+   * `Action run failed (round N)`, which the next round reads as in-scope feedback.
+   */
+  async failAction(email: string, id: string, note: string, version: number | null) {
+    const masked = maskedNote(note);
+    const result = await this.command(email, id, version, (glob, ctx) => machine.failAction(glob, ctx), {
+      applies: 'action',
+      record: async (tx, before, next) => {
+        const round = actionOf(before)?.preparation?.rounds ?? 0;
+        const plan = (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '';
+        const commands = doThisCommands(plan).map((c) => maskSecrets(c));
+        await addArtifact(tx, this.deps.clock, next, email, {
+          kind: 'attachment',
+          label: `${ACTION_FAILURE_LABEL} (round ${round})`,
+          content: [
+            `# The run failed: ${before.title}`,
+            `${email} ran what round ${round} prepared and reported it failing. Round ${round + 1} starts on the same branch (or artifact): change what is needed so the run passes, and do not repeat the failed attempt. Nothing has merged.`,
+            '## What was reported',
+            masked === '' ? '(no note)' : masked,
+            ...(commands.length === 0 ? [] : ["## The run's commands", ...commands.map((c) => `    ${c}`)]),
+          ].join('\n\n'),
+          link: null,
+          commitSha: null,
+          runId: null,
+          agentSetVersion: null,
+          reviewStats: null,
+        });
+      },
+    });
+    if (result.ok) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId: id });
+    return result;
   }
 
   /** The board's Ready for review on a super: allowed once the latest implementation record is at the PR head. */
@@ -3233,7 +3319,7 @@ export class GlobService implements AutomaticRelations {
   ) {
     return this.command(email, id, null, (glob, ctx, _board, facts) =>
       machine.reportFailure(glob, { reason, runId, agentSetVersion, ...(pairing === undefined ? {} : pairing) }, ctx, facts.relations),
-    { relations: true }).then(async (result) => {
+    { relations: true, applies: 'prepared' }).then(async (result) => {
       // A run that failed for unmerged prerequisites teaches the board a need; the report itself never fails on it.
       if (result.ok) await this.deps.dependencyLearning?.onFailed(id, reason).catch((e: unknown) => this.deps.log?.('dependency learning', e instanceof Error ? e.message : String(e)));
       return result;
@@ -3328,7 +3414,8 @@ export class GlobService implements AutomaticRelations {
     /** `relations`: read the glob's relations into the step's facts (checks and the sub gate wait for `merge` relations). */
     options: { readonly relations?: boolean } = {},
   ) {
-    return this.command(null, id, null, (glob, ctx, _board, facts) => step(glob, ctx, facts), options.relations === true ? { relations: true } : {});
+    // Webhooks and routines report on work globs and on a prepared action's branch (a plain action has no PR).
+    return this.command(null, id, null, (glob, ctx, _board, facts) => step(glob, ctx, facts), { applies: 'prepared', ...(options.relations === true ? { relations: true } : {}) });
   }
 
   /**
@@ -3350,9 +3437,13 @@ export class GlobService implements AutomaticRelations {
     });
     const released: string[] = [];
     for (const glob of dependants) {
-      // An action has no start to release: its Done is offered again by what it reads, so the row is only told to reload.
+      // A plain action has no start to release: its Done is offered again by what it reads, so the row is only told to reload.
+      // A prepared action held in Planning starts its first preparation round once what it waited for is done.
       if (glob.category === 'action') {
-        this.publish(glob);
+        if (glob.status === 'planning' && glob.waiting != null && preparationOf(glob) !== null) {
+          const result = await this.release(glob.id);
+          if (result.ok && result.value.status !== 'planning') released.push(glob.id);
+        } else this.publish(glob);
         continue;
       }
       // A start relation: a glob held in Planning starts once everything it waits for has merged.
@@ -3599,6 +3690,7 @@ export class GlobService implements AutomaticRelations {
     return this.command(null, id, null, (glob, ctx, _board, facts) => machine.released(glob, ctx, facts.relations, holds), {
       relations: true,
       triggeredByCreator: true,
+      applies: 'prepared',
     });
   }
 
@@ -3978,7 +4070,15 @@ export class GlobService implements AutomaticRelations {
       if (board === null) return notFound(`No board ${glob.boardId}`);
       // No work command (start, merge, labels, retrigger...) may run on human work, and no decision or action step on anything else.
       const applies = options.applies ?? 'work';
-      if (applies !== 'any' && (applies === 'work' ? isHumanCategory(glob.category) : glob.category !== applies)) {
+      const refused =
+        applies === 'any'
+          ? false
+          : applies === 'work'
+            ? isHumanCategory(glob.category)
+            : applies === 'prepared'
+              ? isHumanCategory(glob.category) && preparationOf(glob) === null
+              : glob.category !== applies;
+      if (refused) {
         return err({
           code: 'invalid_transition',
           message: isHumanCategory(glob.category)
