@@ -7,8 +7,9 @@
  */
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
+import type { MentionOrigin } from './relation-scan.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
-import { RELATION_GATES, RELATION_UNTILS } from './types.js';
+import { RELATION_GATES, RELATION_UNTILS, isFromMention } from './types.js';
 import type { Glob, Relation, RelationGate, RelationKind, RelationPatch, RelationSource, RelationUntil } from './types.js';
 
 /**
@@ -227,6 +228,8 @@ export interface RelationWrite {
   readonly remove: readonly string[];
   /** Notes for the log (an inferred need dropped for a cycle), with the plan hash the inference was made on. */
   readonly notes?: { readonly lines: readonly string[]; readonly planHash: string };
+  /** Where the sentence of the `mention` relations added was read from; the log says "from a mention in the <origin>". */
+  readonly origin?: MentionOrigin;
 }
 
 export const NO_WRITE: RelationWrite = { add: [], update: [], remove: [] };
@@ -286,8 +289,20 @@ export interface RelationEdit {
 
 export const overrideEdits = (relations: readonly Relation[], now: string): RelationEdit[] =>
   relations
-    .filter((r) => r.gate === 'start' && !lifted(r) && (r.source === 'inferred' || r.source === 'learned'))
+    .filter((r) => r.gate === 'start' && !lifted(r) && (r.source === 'inferred' || r.source === 'learned' || isFromMention(r.source)))
     .map((r) => ({ id: r.id, overriddenAt: now }));
+
+/** What Merge anyway and Sign off anyway change: every relation still holding that gate, of any source, is overridden. */
+export const gateOverrideEdits = (held: readonly Unmet[], now: string): RelationEdit[] => held.map((u) => ({ id: u.relation.id, overriddenAt: now }));
+
+/** The facts as they read once `edits` are written: the overridden rows no longer hold. */
+export const withEdits = (facts: RelationFacts, edits: readonly RelationEdit[]): RelationFacts => ({
+  ...facts,
+  relations: facts.relations.map((r) => {
+    const edit = edits.find((e) => e.id === r.id);
+    return edit === undefined ? r : { ...r, overriddenAt: edit.overriddenAt };
+  }),
+});
 
 // ---------------------------------------------------------------------------
 // Cycles

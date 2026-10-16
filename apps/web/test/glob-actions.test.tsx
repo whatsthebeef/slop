@@ -1087,3 +1087,108 @@ describe('glob view: split moves in the action ▾', () => {
     });
   });
 });
+
+describe('glob view: Start now, Merge anyway and Sign off anyway', () => {
+  const holding = (gate: 'start' | 'merge' | 'sign_off') => ({
+    relationId: 'rel_1',
+    to: 's1t9',
+    toTitle: 'The prerequisite',
+    toIsDecision: false,
+    gate,
+    until: 'merged' as const,
+    state: 'open' as const,
+    reason: 'only after s1t9 is in place',
+    source: 'mention' as const,
+  });
+  const relations = (gate: 'start' | 'merge' | 'sign_off') => ({ holding: [holding(gate)], holdsBack: [], done: [] });
+  const held = () =>
+    view({
+      status: 'pr_open',
+      list: 'reviewing',
+      implementer: null,
+      pr: { number: 7, state: 'ready', headSha: 'aaa' },
+      headChecks: { sha: 'aaa', state: 'passed' },
+      allowedActions: ['merge_anyway', 'pick_up', 'start_again', 'delete'],
+      relations: relations('merge'),
+    });
+  const reviewing = () =>
+    view({ status: 'reviewing', list: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'aaa' }, allowedActions: ['sign_off_anyway', 'delete'], relations: relations('sign_off') });
+
+  it('puts Merge anyway in the ▾ menu with its description, not on the main button', async () => {
+    const user = userEvent.setup();
+    renderGlob(held());
+    expect(mainButton()?.textContent).toBe('Pick up');
+    await user.click(screen.getByTestId('more-actions'));
+    const item = await screen.findByTestId('more-merge_anyway');
+    expect(item.textContent).toContain('Merge anyway');
+    expect(item.textContent).toContain('relation is marked overridden');
+  });
+
+  it('asks why and names what the merge is held for; the confirm stays off until a reason is typed, then one request is sent', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(held());
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-merge_anyway'));
+    expect(cb.onAction).not.toHaveBeenCalled();
+    const dialog = screen.getByTestId('anyway-confirmation');
+    expect(dialog.getAttribute('data-action')).toBe('merge_anyway');
+    expect(within(dialog).getByTestId('anyway-says').textContent).toContain("It can't merge until s1t9 is merged and rolled out.");
+    const confirm = within(dialog).getByTestId<HTMLButtonElement>('confirm-anyway');
+    expect(confirm.disabled).toBe(true);
+    await user.type(within(dialog).getByTestId('anyway-reason'), '   ');
+    expect(confirm.disabled).toBe(true);
+    await user.clear(within(dialog).getByTestId('anyway-reason'));
+    await user.type(within(dialog).getByTestId('anyway-reason'), 'Only a comment changes');
+    expect(confirm.disabled).toBe(false);
+    await user.dblClick(confirm);
+    expect(cb.onAction).toHaveBeenCalledTimes(1);
+    expect(cb.onAction).toHaveBeenCalledWith('merge_anyway', undefined, 'Only a comment changes');
+    await waitFor(() => expect(screen.queryByTestId('anyway-confirmation')).toBeNull());
+  });
+
+  it('Cancel closes the confirmation without a request', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(held());
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-merge_anyway'));
+    await user.click(within(screen.getByTestId('anyway-confirmation')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('anyway-confirmation')).toBeNull();
+    expect(cb.onAction).not.toHaveBeenCalled();
+  });
+
+  it('keeps Sign off anyway reachable when it is the only action, and asks for a required reason', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(reviewing());
+    // Nothing else leads, so it is promoted rather than left with no way to reach it.
+    expect(mainButton()?.textContent).toBe('Sign off anyway');
+    await user.click(mainButton() as HTMLElement);
+    const dialog = screen.getByTestId('anyway-confirmation');
+    expect(within(dialog).getByTestId('anyway-says').textContent).toContain("It can't sign off until s1t9 is merged and rolled out.");
+    expect(within(dialog).getByTestId<HTMLButtonElement>('confirm-anyway').disabled).toBe(true);
+    await user.type(within(dialog).getByTestId('anyway-reason'), 'It is a nice-to-have');
+    await user.click(within(dialog).getByTestId('confirm-anyway'));
+    expect(cb.onAction).toHaveBeenCalledWith('sign_off_anyway', undefined, 'It is a nice-to-have');
+  });
+
+  it('Start now asks for an optional reason and names the start hold', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(view({ type: 'sub', allowedActions: ['start_anyway', 'pick_up', 'delete'], relations: relations('start') }));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-start_anyway'));
+    const dialog = screen.getByTestId('anyway-confirmation');
+    expect(within(dialog).getByTestId('anyway-says').textContent).toContain("It can't start until s1t9 is merged and rolled out.");
+    const confirm = within(dialog).getByTestId<HTMLButtonElement>('confirm-anyway');
+    expect(confirm.disabled).toBe(false);
+    await user.click(confirm);
+    expect(cb.onAction).toHaveBeenCalledWith('start_anyway', undefined, '');
+  });
+
+  it('hands a picked-up glob to the machine with Start, with no reason asked (nothing is overridden)', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(view({ status: 'in_progress', list: 'doing', implementer: 'dev@example.com', allowedActions: ['start_anyway', 'pick_up', 'delete'] }));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-start_anyway'));
+    expect(screen.queryByTestId('anyway-confirmation')).toBeNull();
+    expect(cb.onAction).toHaveBeenCalledWith('start_anyway');
+  });
+});

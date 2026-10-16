@@ -40,6 +40,8 @@ import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
   awaitedNames,
+  gateOverrideEdits,
+  withEdits,
   OTHER_BOARD_GLOB,
   awaitedOf,
   holdWords,
@@ -128,6 +130,10 @@ export type Action =
   | 'review_now'
   /** A glob held for another glob to merge starts now, before it has. */
   | 'start_anyway'
+  /** A same, super or sub with a ready PR that `merge` relations hold back merges now (or goes on as armed), with a reason. */
+  | 'merge_anyway'
+  /** A merged glob with approved labels that `sign_off` relations hold back is signed off now, with a reason. */
+  | 'sign_off_anyway'
   | 'pick_up'
   | 'take_over'
   | 'retrigger'
@@ -868,6 +874,8 @@ export const startAnyway = (
   glob: Glob,
   ctx: Context,
   relations: RelationFacts = NO_RELATIONS,
+  /** Why, in the person's words; recorded on the event (optional: older callers send none). */
+  reason?: string,
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
@@ -907,6 +915,7 @@ export const startAnyway = (
     .relationEdits(overrideEdits(relations.relations, ctx.now))
     .event('HoldOverridden', {
       for: awaitedNames(awaited),
+      ...(reason === undefined || reason.trim() === '' ? {} : { reason: reason.trim() }),
       ...(overriding.length === 0 ? {} : { questions: overriding.map((q) => q.id) }),
     });
   // An investigation is still running: the start waits for it, with the hold already overridden.
@@ -1536,6 +1545,11 @@ const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
   if (glob.mergeMode === 'when_green') return 'Merge is already waiting for the checks to pass';
   const held = mergeGate(relations);
   if (held.length > 0) return gateText(held);
+  return mergeBlockerBesidesRelations(glob);
+};
+
+/** What else stops a merge once no relation holds it: an open merge question, a conflict, no head, failed checks (or null). */
+const mergeBlockerBesidesRelations = (glob: Glob): string | null => {
   const asks = questionGateText(mergeQuestions(glob));
   if (asks !== null) return asks;
   // Passing checks say nothing about mergeability once the base has moved: GitHub would refuse and fail the glob.
@@ -3621,7 +3635,7 @@ export const prClosed = (glob: Glob, ctx: Context): Result<Transition> => {
 // What a person can do next (drives the glob view's buttons and error messages)
 
 export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
-  if (glob.category === 'decision') return decisionActions(glob, actor);
+  if (glob.category === 'decision') return decisionActions(glob, actor, facts);
   if (glob.category === 'action') return actionActions(glob, facts);
   if (isAgentSetGlob(glob)) return agentSetActions(glob, actor);
   const actions: Action[] = [];
@@ -3689,6 +3703,16 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     if (!hasRolloutSteps(glob, facts) || headChecksPassed(glob)) actions.push('merge');
     if (glob.type === 'super' && headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
   }
+  // A `merge` relation is all that holds a ready PR back (a sub, or a merge already armed, too): it can be forced through.
+  if (!restricted && facts.relations !== undefined && !isMergeQueued(glob) && mergeHeldOnlyByRelations(glob, facts, mergeGate(facts.relations), facts.relations) === null)
+    actions.push('merge_anyway');
+  // Labels approved and rolled out, and only a `sign_off` relation holds the glob in Reviewing.
+  if (
+    facts.relations !== undefined &&
+    unmet(facts.relations, 'sign_off').length > 0 &&
+    signOffBlockerBesidesRelations(glob, facts.rollout ?? null) === null
+  )
+    actions.push('sign_off_anyway');
   if (
     !restricted &&
     glob.status === 'in_progress' &&
@@ -4407,6 +4431,103 @@ export const gateReleased = (
   return releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).event('SignOffReleased', {}).status('signed_off').done();
 };
 
+/** The event an "anyway" action logs: who (the actor), which globs held it and why. */
+const overrideEvent = (
+  type: 'MergeOverridden' | 'SignOffOverridden',
+  glob: Glob,
+  ctx: Context,
+  held: readonly Unmet[],
+  reason: string,
+): DomainEvent => ({
+  type,
+  globId: glob.id,
+  actor: ctx.actor?.email ?? null,
+  at: ctx.now,
+  data: { for: held.map((u) => (u.external === true ? OTHER_BOARD_GLOB : u.relation.to)), reason },
+});
+
+/** An "anyway" transition: the inner one (the normal path run on the lifted gate) with the override event first and the relation rows overridden. */
+const overriding = (inner: Result<Transition>, event: DomainEvent, edits: readonly RelationEdit[]): Result<Transition> =>
+  inner.ok
+    ? ok({ ...inner.value, events: [event, ...inner.value.events], relationEdits: [...(inner.value.relationEdits ?? []), ...edits] })
+    : inner;
+
+/** Whether a `merge` relation is the only thing between this glob's PR and its merge (the rest of `mergeAnyway`'s checks hold). */
+const mergeHeldOnlyByRelations = (glob: Glob, facts: ActionFacts | undefined, held: readonly Unmet[], relations: RelationFacts): string | null => {
+  if (glob.status !== 'pr_open') return 'Only a glob with a ready PR can be merged anyway';
+  if (held.length === 0) return 'Nothing holds this merge; use Merge';
+  // As Merge: a same with rollout steps is merged (and kept open for them) once the checks have passed, never armed.
+  if (hasRolloutSteps(glob, facts) && !headChecksPassed(glob)) return 'Required checks have not passed on the current head';
+  const lifted = withEdits(relations, gateOverrideEdits(held, ''));
+  // A same or super asks for Merge; a sub, or a merge already armed, only waits for its gate (`gateReleased`).
+  return glob.type === 'sub' || isMergeArmed(glob) ? mergeBlockerBesidesRelations(glob) : mergeBlocker(glob, lifted);
+};
+
+/**
+ * Merge anyway: a glob whose PR is ready but whose `merge` relations hold it merges now, as Merge would have (or, for a merge
+ * already armed or a sub waiting for its gate, goes on without waiting for them). Every unmet `merge` relation is overridden, whatever
+ * its source, and the actor and reason are logged (`MergeOverridden`). It skips nothing else: an open merge question, a conflict and
+ * failed checks still refuse it. Refused when nothing holds the merge or no reason is given.
+ */
+export const mergeAnyway = (glob: Glob, reason: string, ctx: Context, options: MergeOptions = { continue: false }): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot merge ${glob.type}s anyway`);
+  const why = reason.trim();
+  if (why === '') return invalidTransition(glob, actor, 'Say why you are merging anyway');
+  const relations = options.facts?.relations ?? NO_RELATIONS;
+  const held = mergeGate(relations);
+  const refused = mergeHeldOnlyByRelations(glob, options.facts, held, relations);
+  if (refused !== null) return invalidTransition(glob, actor, refused);
+  const edits = gateOverrideEdits(held, ctx.now);
+  const lifted = withEdits(relations, edits);
+  const event = overrideEvent('MergeOverridden', glob, ctx, held, why);
+  if (glob.type === 'sub' || isMergeArmed(glob)) {
+    const resumed = gateReleased(glob, lifted, null, ctx);
+    if (!resumed.ok) return resumed;
+    // The merge is not ready to go (checks pending, a sub's gate not passed yet): it carries on by itself, no longer held.
+    if (!resumed.value.changed && glob.mergeHold != null)
+      return overriding(new Builder(glob, ctx).set({ mergeHold: null }).done(), event, edits);
+    return overriding(resumed, event, edits);
+  }
+  return overriding(requestMerge(glob, ctx, { ...options, facts: { ...options.facts, relations: lifted } }), event, edits);
+};
+
+/** Why a glob can't be signed off anyway besides its relations (labels, rollout), or null. */
+const signOffBlockerBesidesRelations = (glob: Glob, rollout: BlockProgress | null): string | null => {
+  if (glob.status !== 'reviewing') return 'Only a glob in Reviewing can be signed off';
+  if (rollout !== null && rollout.open > 0) return rolloutPending(rollout);
+  if (glob.category !== 'decision' && !Object.values(glob.labels).every((s) => s === 'approved')) return 'Every label must be approved before the glob can be signed off';
+  return null;
+};
+
+/**
+ * Sign off anyway: a merged glob (or an accepted decision) whose `sign_off` relations hold it is signed off now. Every unmet
+ * `sign_off` relation is overridden, whatever its source, and the actor and reason are logged (`SignOffOverridden`). Labels and
+ * rollout steps are never skipped. Refused when nothing holds the sign-off or no reason is given.
+ */
+export const signOffAnyway = (
+  glob: Glob,
+  reason: string,
+  ctx: Context,
+  rollout: BlockProgress | null = null,
+  relations: RelationFacts = NO_RELATIONS,
+): Result<Transition> => {
+  const actor = requireActor(ctx);
+  // No role check for a work glob on purpose (QA approves the labels, so QA signs off too; spec row 21c); a decision needs mayDecide.
+  if (isHumanCategory(glob.category) && glob.category !== 'decision') return invalidTransition(glob, actor, 'Only a work glob or a decision can be signed off anyway');
+  if (glob.category === 'decision' && !mayDecide(actor)) return forbidden('Only admins and POs can sign off a decision');
+  const why = reason.trim();
+  if (why === '') return invalidTransition(glob, actor, 'Say why you are signing off anyway');
+  const held = unmet(relations, 'sign_off');
+  if (held.length === 0) return invalidTransition(glob, actor, 'Nothing holds this sign-off');
+  const blocked = signOffBlockerBesidesRelations(glob, rollout);
+  if (blocked !== null) return invalidTransition(glob, actor, blocked);
+  const edits = gateOverrideEdits(held, ctx.now);
+  const event = overrideEvent('SignOffOverridden', glob, ctx, held, why);
+  if (glob.category === 'decision') return overriding(signOffDecision(glob, ctx, rollout, withEdits(relations, edits)), event, edits);
+  return overriding(releaseWaiting(new Builder(glob, ctx), glob).set({ signedOffAt: ctx.now }).status('signed_off').done(), event, edits);
+};
+
 /** Row D9: an accepted decision goes back to Doing, its outcome cleared, to be chosen again. */
 export const reopenDecision = (glob: Glob, ctx: Context): Result<Transition> => {
   const actor = requireActor(ctx);
@@ -4587,7 +4708,7 @@ export const decisionConflicts = (
 };
 
 /** What a person can do with a decision (drives the glob view's buttons): there is no start, merge, retrigger or labels. */
-const decisionActions = (glob: Glob, actor: Actor): Action[] => {
+const decisionActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}): Action[] => {
   const actions: Action[] = [];
   if (mayDecide(actor)) {
     if (
@@ -4602,7 +4723,13 @@ const decisionActions = (glob: Glob, actor: Actor): Action[] => {
           : null;
       if (outcome === null || outcome.kind === 'needs_work') actions.push('decide');
     }
-    if (glob.status === 'reviewing') actions.push('sign_off', 'reopen');
+    if (glob.status === 'reviewing') {
+      actions.push('sign_off');
+      // Held by a `sign_off` relation (or an open rollout step): Sign off anyway forces the relation through, never the steps.
+      if (facts.relations !== undefined && unmet(facts.relations, 'sign_off').length > 0 && signOffBlockerBesidesRelations(glob, facts.rollout ?? null) === null)
+        actions.push('sign_off_anyway');
+      actions.push('reopen');
+    }
     const attributes =
       glob.attributes !== undefined && isDecisionAttributes(glob.attributes)
         ? glob.attributes

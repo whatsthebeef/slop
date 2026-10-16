@@ -313,10 +313,14 @@ export const RELATION_UNTILS = ['merged', 'decided', 'done', 'signed_off'] as co
 export type RelationUntil = (typeof RELATION_UNTILS)[number];
 /**
  * Who set a relation: a person, slop's inference, slop's learning from outcomes, an agent, or (old rows only; nothing creates it now) a split.
- * `auto`: slop's automatic pass read the glob's text and added it (shown "added automatically", dismissible); reason rules treat it like `agent`.
+ * `mention`: slop's automatic pass read the glob's text, found a mentioned glob and added it (shown "from a mention" with the sentence,
+ * dismissible, never asked about); reason rules treat it like `agent`. `auto` is the old name of the same thing, kept for stored rows.
  */
-export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent', 'auto'] as const;
+export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent', 'auto', 'mention'] as const;
 export type RelationSource = (typeof RELATION_SOURCES)[number];
+
+/** Whether the relation was added by the automatic pass from a mention (`mention`, or its old name `auto`). */
+export const isFromMention = (source: RelationSource): boolean => source === 'mention' || source === 'auto';
 /**
  * What a relation row means. `waits`: `from` can't pass `gate` until `to` reaches `until`. `superseded_by`: `from` is superseded by
  * `to` (gate and until are inert placeholders). The list methods the gate code reads return only `waits` rows.

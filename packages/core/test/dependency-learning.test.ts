@@ -268,6 +268,19 @@ describe('dependency learning', () => {
     expect(history.map((h) => h.cause)).toEqual(['start_anyway_succeeded']);
   });
 
+  it('Start now on a mention relation, then a merge, leaves the row and teaches nothing', async () => {
+    const prerequisite = await create({ type: 'same' });
+    const waiter = await create({ type: 'same' });
+    const row = inferNeed(waiter.id, prerequisite.id, { source: 'mention' });
+    unwrap(await globs.startAnyway(DEV, waiter.id, waiter.version));
+    expect(store.state.relations.get(row.id)?.overriddenAt).not.toBeNull();
+    await merge(waiter.id);
+    expect(relationsOf(waiter.id)).toMatchObject([{ to: prerequisite.id, source: 'mention' }]);
+    expect((await current(waiter.id)).impliedAfter ?? []).toEqual([]);
+    expect(await store.transaction((tx) => tx.listDependencyRuleChanges(boardId))).toEqual([]);
+    expect(store.state.events.some((e) => e.globId === waiter.id && e.type === 'RelationReleased')).toBe(false);
+  });
+
   it('Start now leaves a need a person set as it was, and a merge never downgrades it', async () => {
     const prerequisite = await create({ type: 'same' });
     const waiter = await create({ after: [prerequisite.id] });
