@@ -3221,6 +3221,11 @@ export class GlobService implements AutomaticRelations {
     return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx), { applies: 'prepared' });
   }
 
+  /** Retry checks: re-runs the failed jobs of the head's checks (agent-set globs, or a failure the base explains). */
+  retryChecks(email: string, id: string, version: number) {
+    return this.command(email, id, version, (glob, ctx) => machine.retryChecks(glob, ctx), { applies: 'prepared' });
+  }
+
   /** Retry merge: a failed merge (not a conflict) goes back to merging at the head, which already passed. */
   retryMerge(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx, _board, facts) => machine.retryMerge(glob, ctx, facts.relations), { relations: true, applies: 'prepared' });

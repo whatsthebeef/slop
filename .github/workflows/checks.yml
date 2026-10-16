@@ -29,7 +29,7 @@ jobs:
   # Decides what to run. A PR runs only the workspaces it changes plus their dependents (`pnpm --filter "...[origin/<base>]"`);
   # a push to the base branch, a merge_group entry, or a change to a root file (package.json, the lockfile, base configs, this
   # workflow) runs everything. A change outside the workspaces runs the tests that read
-  # repo files (core, server, cli, infra), plus the catalog shell tests when it is under catalog/.
+  # repo files (core, server, cli, infra; only core for .claude/, catalog/agents/, docs/ and *.md), plus the catalog shell tests when it is under catalog/.
   changes:
     if: ${{ github.event_name == 'push' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
@@ -76,13 +76,18 @@ jobs:
           core=$(has packages/core); server=$(has apps/server); cli=$(has apps/cli); infra=$(has infra)
           # Files outside the workspaces (catalog, .claude, scripts, docs, integrations, skills, e2e, Dockerfile) are read by
           # core, server, cli and infra tests; apps/web's tests only read its own sources.
-          if grep -Eqv '^(apps|packages|infra)/' <<<"$changed"; then core=true; server=true; cli=true; infra=true; fi
+          # Agent files and docs (.claude/, catalog/agents/, docs/, *.md) are read only by core's agent-set tests (and the catalog
+          # shell tests, below): an agent-set glob takes a minute, not the server, cli and infra suites.
+          outside=$(grep -Ev '^(apps|packages|infra)/' <<<"$changed" || true)
+          heavy=$(grep -Ev '^(\.claude/|catalog/agents/|docs/)|\.md$' <<<"$outside" || true)
+          if [ -n "$heavy" ]; then core=true; server=true; cli=true; infra=true
+          elif [ -n "$outside" ]; then core=true; fi
           out core "$core"; out server "$server"; out web "$(has apps/web)"; out cli "$cli"; out infra "$infra"
           out catalog "$catalog"
           # Lint the affected workspaces whole (type-aware rules can break in an unchanged dependent), plus the changed
           # lint-able files outside the workspaces that still exist. One path per line.
           lint_paths=$affected
-          outside=$(grep -Ev '^(apps|packages|infra)/' <<<"$changed" | grep -E '\.(ts|tsx|js|mjs|cjs|mts|cts)$' || true)
+          outside=$(grep -E '\.(ts|tsx|js|mjs|cjs|mts|cts)$' <<<"$outside" || true)
           while IFS= read -r f; do
             if [ -n "$f" ] && [ -f "$f" ]; then lint_paths+=$'\n'"$f"; fi
           done <<<"$outside"

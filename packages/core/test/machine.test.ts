@@ -5,6 +5,7 @@ import { behindWarning, currentBehind } from '../src/domain/readiness.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { NOW, admin, board, ctx, dev, glob, other, po, relationFacts, run } from './fixtures.js';
+import { derivedSteps } from '../src/domain/human-steps.js';
 import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
@@ -530,6 +531,22 @@ describe('PR and merge events (rows 11–16)', () => {
     const conflicted = { ...failed, failure: { ...failed.failure, conflict: { base: 'main', files: ['a'] } } };
     expect(m.allowedActions(conflicted, dev)).not.toContain('retry_merge');
     expect(errorCode(m.retryMerge(conflicted, ctx()))).toBe('invalid_transition');
+  });
+
+  it('Retry checks: an agent-set glob with failed head checks re-runs them, re-arms the merge and has no Resolve conflict step', () => {
+    const failed = {
+      ...glob({ title: 'Agent set v125', category: 'task', type: 'same', implementer: 'slop', status: 'failed', pr: { number: 7, state: 'ready', headSha: 'bbb' } }),
+      headChecks: { sha: 'bbb', state: 'failed' as const },
+      failure: { reason: 'Required checks failed', at: 'x', kind: 'merge' as const },
+    };
+    expect(m.allowedActions(failed, dev)).toContain('retry_checks');
+    const t = value(m.retryChecks(failed, ctx()));
+    expect(t.glob).toMatchObject({ status: 'pr_open', failure: null, mergeMode: 'when_green' });
+    expect(t.effects).toEqual([{ kind: 'rerun_checks', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    expect(derivedSteps(failed).map((step) => step.kind)).not.toContain('resolve_conflict');
+    const passed = { ...failed, headChecks: { sha: 'bbb', state: 'passed' as const } };
+    expect(m.allowedActions(passed, dev)).not.toContain('retry_checks');
+    expect(errorCode(m.retryChecks(passed, ctx()))).toBe('invalid_transition');
   });
 
   it('row 14: Merge with passing checks on the current head merges now', () => {
