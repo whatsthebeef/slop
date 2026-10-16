@@ -24,8 +24,12 @@ const step = (over: Partial<ListedHumanStep> & Pick<ListedHumanStep, 'id' | 'sta
   ...over,
 });
 
-const show = (humanSteps: ListedHumanStep[], handlers = { onComplete: vi.fn(() => Promise.resolve(true)), onDismiss: vi.fn(() => Promise.resolve(true)) }) => {
-  const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+const show = (
+  humanSteps: ListedHumanStep[],
+  handlers = { onComplete: vi.fn(() => Promise.resolve(true)), onDismiss: vi.fn(() => Promise.resolve(true)) },
+  status: GlobView['status'] = 'in_progress',
+) => {
+  const glob = { ...coreGlob(), status, list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
   render(
     <MemoryRouter>
       <HumanSteps glob={glob} canAdd onAdd={vi.fn(() => Promise.resolve(true))} {...handlers} />
@@ -58,6 +62,14 @@ describe('due steps block', () => {
     await userEvent.type(screen.getByTestId('dismiss-reason'), 'wrong');
     await userEvent.click(screen.getByTestId('dismiss-confirm'));
     expect(h.onDismiss).toHaveBeenCalledWith('a', 'wrong');
+  });
+
+  it('shows a due step in Planning as read-only text: no Done, Dismiss or It failed', () => {
+    show([step({ id: 'a', state: 'due' })], undefined, 'planning');
+    expect(screen.getByTestId('due-step')).toBeTruthy();
+    expect(screen.queryByTestId('due-done')).toBeNull();
+    expect(screen.queryByTestId('due-dismiss')).toBeNull();
+    expect(screen.queryByTestId('due-failed')).toBeNull();
   });
 
   it('lays a structured step out as Why, Before you start, Run (script command once, then each command in a copy box) and Check it worked', async () => {
