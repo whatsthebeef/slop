@@ -44,6 +44,8 @@ export interface QuestionAnswer {
   readonly option?: string;
   readonly by: string;
   readonly at: string;
+  /** A plan-changed question answered Re-run: the PR head when it was answered (null: no PR yet). The merge stays held until the head moves. */
+  readonly rerunFrom?: string | null;
 }
 
 export interface QuestionDismissal {
@@ -95,9 +97,21 @@ export const holdsStart = (q: OpenQuestion): boolean => isOpenQuestion(q) && q.b
 
 export const startQuestions = (glob: Pick<Glob, 'questions'>): OpenQuestion[] => questionsOf(glob).filter(holdsStart);
 
-/** Open questions that hold the merge. */
-export const mergeQuestions = (glob: Pick<Glob, 'questions'>): OpenQuestion[] =>
-  questionsOf(glob).filter((q) => isOpenQuestion(q) && q.blocking === 'merge');
+/** The answer option of a plan-changed question (`plan:vN`) that asks for a new run on the new plan. */
+export const RERUN_OPTION = 'Re-run';
+
+export const isPlanChangedQuestion = (q: Pick<OpenQuestion, 'key'>): boolean => q.key?.startsWith('plan:v') === true;
+
+/**
+ * A plan-changed question answered Re-run holds the merge after it is answered, until the run it starts has pushed a new head
+ * (the checks on that head are the merge's own condition). Dismissing or any other option releases the hold at once.
+ */
+const holdsAfterRerun = (q: OpenQuestion, head: string | null): boolean =>
+  q.blocking === 'merge' && q.answer?.rerunFrom !== undefined && (head === null || head === q.answer.rerunFrom);
+
+/** Questions that hold the merge: the open ones, and a Re-run answer whose new run has not pushed a new head. */
+export const mergeQuestions = (glob: Pick<Glob, 'questions' | 'pr'>): OpenQuestion[] =>
+  questionsOf(glob).filter((q) => (isOpenQuestion(q) && q.blocking === 'merge') || holdsAfterRerun(q, glob.pr?.headSha ?? null));
 
 /** The next free question ID on a glob: one more than the highest `q<n>`. */
 export const nextQuestionId = (existing: readonly Pick<OpenQuestion, 'id'>[]): string => {
