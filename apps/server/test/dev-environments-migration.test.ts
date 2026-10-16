@@ -26,7 +26,7 @@ describe('dev environments only (migration 0085)', () => {
   let admin: Database;
   let database: Database;
 
-  const run = (q: ReturnType<typeof sql>) => database.db.execute<Record<string, unknown>>(q);
+  const run = (q: ReturnType<typeof sql>) => database.db.execute(q);
   const step = async (id: string, boardId: number, globId: string, title: string, due: string, state = 'open', blocks: string[] = ['sign_off']) => {
     await run(sql`insert into human_steps (id, board_id, glob_id, kind, title, who, due, state, blocks, origin, created_by, created_at)
       values (${id}, ${boardId}, ${globId}, 'rollout', ${title}, 'admin', ${due}, ${state}, ${JSON.stringify(blocks)}::jsonb, 'plan', 'x', now())`);
