@@ -298,6 +298,13 @@ describe('pick up (rows 6–10)', () => {
     expect(t.changed).toBe(false);
   });
 
+  it('does not offer Pick up to the person who already holds the glob, but still does to someone else', () => {
+    const held = glob({ status: 'in_progress', implementer: dev.email });
+    expect(m.allowedActions(held, dev)).not.toContain('pick_up');
+    expect(m.allowedActions(held, dev)).not.toContain('take_over');
+    expect(m.allowedActions(held, other)).toContain('pick_up');
+  });
+
   it('row 9: someone else picking up changes the implementer', () => {
     const t = value(
       m.pickUp(glob({ status: 'in_progress', implementer: dev.email }), ctx(other), board, { takeOver: false }),

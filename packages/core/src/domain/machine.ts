@@ -3762,8 +3762,11 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
       glob.status === 'pr_open' ||
       // A merged glob stays open while its rollout steps do (row 9a): a person runs them from a session.
       (glob.status === 'reviewing' && (facts.rolloutSteps ?? 0) > 0));
-  // The glob's own implementer is offered it too (row 8: a no-op that reopens their session), so their own glob is never a dead end.
-  if (canPickUp) actions.push('pick_up');
+  // Not to the person who already holds the glob: for them it is a no-op (rows 8 and 9a), and the status already says "picked up".
+  const holdsIt =
+    glob.implementer === actor.email &&
+    (glob.status === 'reviewing' || ((glob.status === 'in_progress' || glob.status === 'pr_open') && (!hasLiveRun(glob) || liveInvestigation(glob) !== null)));
+  if (canPickUp && !holdsIt) actions.push('pick_up');
   if (
     !restricted &&
     glob.type !== 'super' &&

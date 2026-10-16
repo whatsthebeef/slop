@@ -803,12 +803,12 @@ export const createApp = (deps: AppDeps) => {
   ]);
 
   // The clicks whose effect shows later (a queued run, a merge, a provisioning job): the glob keeps them as pending until it moves on.
+  // Pick up and take over are not among them: they apply in the request, so the glob returned already shows the effect and a pending
+  // click recorded after it would never see a later change (and time out as "had no effect").
   const PENDING_ACTIONS = {
     start: 'start',
     'start-anyway': 'start_anyway',
     investigate: 'investigate',
-    'pick-up': 'pick_up',
-    'take-over': 'take_over',
     retrigger: 'retrigger',
     'retry-autofix': 'retry_autofix',
     'resolve-conflict': 'resolve_conflict',
