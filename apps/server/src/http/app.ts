@@ -952,10 +952,23 @@ export const createApp = (deps: AppDeps) => {
     return raised.ok ? send(c, await globs.get(email, id), globViewOf) : send(c, raised);
   });
 
+  // Answering or dismissing a question can release a queued run (a held start, a merge waiting for the answer): the glob then reads as in progress
+  // until the run reports, like any click that queues one.
+  const recordQueuedRun = async (email: string, glob: Glob): Promise<void> => {
+    try {
+      const run = machine.currentRun(glob);
+      if (run?.state !== 'queued') return;
+      await globs.recordRequested(email, glob.id, glob.runs.length === 1 ? 'start' : 'retrigger', glob.version, run.id);
+    } catch {
+      /* the answer is the click's result; a stale version leaves it unrecorded */
+    }
+  };
+
   app.post('/api/globs/:id/questions/:qid/answer', async (c) => {
     const body = await parse(c, answerQuestionSchema);
     if (body instanceof Response) return body;
     const result = await globs.answerQuestion(c.get('email'), c.req.param('id'), c.req.param('qid'), { answer: body.answer ?? '', option: body.option ?? null });
+    if (result.ok) await recordQueuedRun(c.get('email'), result.value);
     if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
     return withView(c, result);
   });
@@ -964,6 +977,7 @@ export const createApp = (deps: AppDeps) => {
     const body = await parse(c, dismissQuestionSchema);
     if (body instanceof Response) return body;
     const result = await globs.dismissQuestion(c.get('email'), c.req.param('id'), c.req.param('qid'), { note: body.note ?? null });
+    if (result.ok) await recordQueuedRun(c.get('email'), result.value);
     if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
     return withView(c, result);
   });

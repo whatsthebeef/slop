@@ -353,10 +353,20 @@ export const presentGlob = (facts: PresentationFacts): Presentation => {
   const blocking = blockingItem(glob, role, viewer, facts.learningOpen ?? true);
   const lead = pending !== null ? null : leadAction(glob, viewer);
   // A decision's outcomes live in its block, so Decide is never the row's button; while a block holds the glob its buttons are the way forward.
+  // A block that holds a gate with an override (a question holding the merge) leaves that override as the primary: Merge anyway.
+  const overridable: Action | null =
+    blocking?.kind === 'question' &&
+    pending === null &&
+    glob.status !== 'planning' &&
+    (glob.allowedActions ?? []).includes('merge_anyway')
+      ? 'merge_anyway'
+      : null;
   const primary =
-    lead === null || blocking !== null || (decisionOf(glob) !== null && lead === 'decide')
-      ? null
-      : lead;
+    overridable !== null
+      ? overridable
+      : lead === null || blocking !== null || (decisionOf(glob) !== null && lead === 'decide')
+        ? null
+        : lead;
   const status =
     pending !== null
       ? pendingStatus(glob, pending)
