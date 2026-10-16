@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { KnowledgeService } from '../src/app/knowledge-service.js';
-import { appendOverlay, composeAgentSet, composeFile, lineDiff, mergeJson, overlayProblem } from '../src/domain/agent-set.js';
+import { appendOverlay, composeAgentSet, composeFile, lineDiff, mergeHookSettings, mergeJson, overlayProblem, registeredHookCommands, unregisteredHooks } from '../src/domain/agent-set.js';
 import type { Result } from '../src/domain/errors.js';
 import type { KnowledgeKind, KnowledgeLayer } from '../src/domain/knowledge.js';
 import type { Catalog, CatalogAgentSet } from '../src/ports.js';
@@ -309,5 +309,39 @@ describe('layered agent set on a board', () => {
     const refused = await knowledge.approve(ADMIN, id, 2, { as: 'draft' });
     expect(errorCode(refused)).toBe('not_found');
     expect(await row('agent', 'agents/tester.md')).toMatchObject({ content: '- Rule one.\n', version: 1 });
+  });
+});
+
+describe('merging the catalog hooks into the repo settings', () => {
+  const catalog = JSON.stringify({
+    permissions: { allow: ['x'] },
+    hooks: {
+      PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/slop_after_push.sh' }] }],
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/pre_push_checks.sh' }] }],
+    },
+  });
+  const repo = JSON.stringify({
+    permissions: { allow: ['mine'] },
+    hooks: { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/slop_after_push.sh' }] }] },
+  });
+
+  it('registers both hooks and keeps the repo own keys', () => {
+    const merged = JSON.parse(mergeHookSettings(repo, catalog)) as { permissions: unknown; hooks: Record<string, unknown[]> };
+    expect(merged.permissions).toEqual({ allow: ['mine'] });
+    expect(merged.hooks.PostToolUse).toHaveLength(1);
+    expect(merged.hooks.PreToolUse).toHaveLength(1);
+    expect(registeredHookCommands(JSON.stringify(merged))).toHaveLength(2);
+  });
+
+  it('is idempotent and builds the file when the repo has none', () => {
+    const once = mergeHookSettings(repo, catalog);
+    expect(mergeHookSettings(once, catalog)).toBe(once);
+    expect(JSON.parse(mergeHookSettings(null, catalog))).toHaveProperty('hooks.PreToolUse');
+  });
+
+  it('flags a hook script without a registration', () => {
+    const files = ['.claude/agents/a.md', '.claude/hooks/pre_push_checks.sh', '.claude/hooks/slop_after_push.sh'];
+    expect(unregisteredHooks(files, repo)).toEqual(['.claude/hooks/pre_push_checks.sh']);
+    expect(unregisteredHooks(files, mergeHookSettings(repo, catalog))).toEqual([]);
   });
 });
