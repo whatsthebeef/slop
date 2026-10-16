@@ -18,7 +18,6 @@ export const GLOB_VIEW_SECTIONS: readonly GlobSection[] = [
   'action',
   'plan',
   'deploys',
-  'environments',
   'tests',
   'artifacts',
   'related',
@@ -43,7 +42,6 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
   'actions',
   'plan',
   'deploys',
-  'environments',
   'tests',
   'artifacts',
   'choices',
@@ -55,7 +53,7 @@ export const DECISION_VIEW_SECTIONS: readonly GlobSection[] = [
 /**
  * A learning's order: the same blocks above the actions as every other glob (conflict, problem, the decision block, labels,
  * escalation), then the action row (its outcome is the main button), then the information blocks. The work-glob sections
- * (Plan, Artifacts, Deploys, Environments, Tests, Findings, Size) have nothing to show for a learning. The Activity log and
+ * (Plan, Artifacts, Deploys, Tests, Findings, Size) have nothing to show for a learning. The Activity log and
  * edit fields that follow the actions come last (see `GlobDetail`).
  */
 export const LEARNING_VIEW_SECTIONS: readonly GlobSection[] = [

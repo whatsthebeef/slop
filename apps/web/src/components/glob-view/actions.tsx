@@ -1,6 +1,6 @@
 import { decisionOf, isHumanCategory, machine } from '@slop/core';
 import { isLearning } from '../decision-outcomes';
-import type { Action, EditFailure, EnvironmentIndicator } from '@slop/core';
+import type { Action, EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { ChevronDown, Ellipsis, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -30,9 +30,6 @@ import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { ArmSystemLabel } from '../glob-card';
 import { armLabel } from '@/lib/rollout-stages';
-import { api } from '@/lib/api';
-import { globEnvironmentsKey } from '@/lib/live';
-import { useQuery } from '@tanstack/react-query';
 import { META } from './tag-style';
 import { Dot } from './status';
 import { TypePopover } from '../type-popover';
@@ -304,59 +301,19 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
     />
   );
 
-/** The environments the glob is in, as chips; nothing until the board observes environments and the glob is in one. */
-const EnvironmentLine = ({ ctx }: { ctx: GlobViewContext }) => {
-  const { glob } = ctx;
-  const query = useQuery({ queryKey: globEnvironmentsKey(glob.id), queryFn: () => api.globEnvironments(glob.id) });
-  const held = (query.data ?? []).flatMap((env): EnvironmentIndicator[] => {
-    const presence = env.presence;
-    if (presence?.contained !== true) return [];
-    return [
-      {
-        environment: env.environment,
-        role: env.role,
-        production: env.production,
-        sha: presence.checkedSha,
-        since: presence.since,
-        ...(env.production && glob.status !== 'signed_off' && { warning: 'before_sign_off' as const }),
-      },
-    ];
-  });
-  return (
-    <>
-      {held.map((env) => {
-        const warned = env.warning === 'before_sign_off';
-        const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}`;
-        return (
-          <Tip key={env.environment} text={tip}>
-            <span
-              className={`${META} whitespace-nowrap ${warned ? 'text-required' : 'text-signal-strong'}`}
-              data-testid="environment-chip"
-              data-warning={env.warning}
-            >
-              {env.environment} ✓
-            </span>
-          </Tip>
-        );
-      })}
-    </>
-  );
-};
-
 /**
- * Beside the action row (under it on narrow widths): the Arm system label, the branch and the environments, one quiet mono line.
- * Human work has no branch, deploy or environments.
+ * Beside the action row (under it on narrow widths): the Arm system label and the branch, one quiet mono line.
+ * Human work has no branch or deploy.
  */
-const actionLine = ({ glob, board }: GlobViewContext) => {
+const actionLine = ({ glob }: GlobViewContext) => {
   if (isHumanCategory(glob.category)) return null;
   const arming = armLabel(glob);
-  const observed = board.environments.some((e) => e.role !== undefined);
-  return { arming, observed };
+  return { arming };
 };
 
 const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable<ReturnType<typeof actionLine>> }) => {
   const { glob } = ctx;
-  const { arming, observed } = line;
+  const { arming } = line;
   return (
     <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="action-line-info">
       {arming !== null && (
@@ -368,7 +325,6 @@ const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable
       <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
         {glob.branch}
       </span>
-      {observed && <EnvironmentLine ctx={ctx} />}
     </div>
   );
 };
