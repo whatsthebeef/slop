@@ -308,14 +308,20 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
   const glob = await getGlob(deps, id);
   // A merged glob is refused by slop with what is left (its steps, labels) and how to follow up: show that, with its links made full.
   if (MERGED_STATUSES.has(glob.status)) {
+    let accepted: GlobView;
     try {
-      await deps.client.call('pick_up', { id, version: glob.version });
+      accepted = parseGlob(await deps.client.call('pick_up', { id, version: glob.version }), 'pick_up');
     } catch (e) {
       const base = deps.settings.SLOP_URL?.replace(/\/+$/, '');
       if (e instanceof SlopError && base !== undefined) throw new SlopError(e.message.replace(/(^|\s)(\/globs\/)/g, `$1${base}$2`));
       throw e;
     }
-    throw new SlopError(`${id} is already merged (${glob.status})`);
+    // slop accepts a pick-up of a merged glob that still has open rollout steps: report it as a rollout pick-up. The glob's
+    // branch may be gone after the merge, so don't wait for it; sstor works on the base branch.
+    deps.log(`slop: picked up ${accepted.id} (${accepted.status}, merged: rollout steps)`);
+    if (flags.has('--json')) printJson(deps, { ...globJson(accepted), rollout: true });
+    else deps.stdout(`${accepted.branch}\n`);
+    return;
   }
   const run = liveRun(glob);
   if (run !== null && !takeOver) {
