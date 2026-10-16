@@ -54,7 +54,7 @@ describe('services', () => {
       for (const email of [ADMIN, DEV, PO]) await tx.upsertUser({ email, name: email, active: true });
     });
     boardId = unwrap(
-      await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] }),
     ).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await boards.setMember(ADMIN, boardId, PO, 'po'));
@@ -215,6 +215,9 @@ describe('services', () => {
     const stale = await globs.merge(DEV, passing.id, passing.version - 1);
     expect(!stale.ok && stale.error.code).toBe('version_conflict');
     expect(unwrap(await globs.merge(DEV, passing.id, passing.version)).status).toBe('merging');
+    expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'advance_merge_line', globId: 'board-1' });
+    // The line's turn makes it head, and the head's merge is queued.
+    expect((await globs.advanceMergeLine(glob.boardId))?.id).toBe(glob.id);
     expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'squash_merge', globId: glob.id, sha: 'abc' });
   });
 
@@ -356,50 +359,41 @@ describe('services', () => {
     expect((await boards.memberships(DEV)).map((m) => m.role)).toEqual(['dev']);
   });
 
-  it("allows at most one subs' default environment, and only one that allows branch deploys", async () => {
-    const two = await boards.updateSettings(ADMIN, boardId, 1, {
-      environments: [
-        { name: 'a', allowBranchDeploy: true, subDefault: true },
-        { name: 'b', allowBranchDeploy: true, subDefault: true },
-      ],
-    });
-    expect(two.ok).toBe(false);
-    const locked = await boards.updateSettings(ADMIN, boardId, 1, {
-      environments: [{ name: 'a', allowBranchDeploy: false, subDefault: true }],
-    });
-    expect(locked.ok).toBe(false);
+  it('holds only dev environments: the settings type has no role, production, deploy-known or sub default', async () => {
     const board = unwrap(
       await boards.updateSettings(ADMIN, boardId, 1, {
-        environments: [{ name: 'a', allowBranchDeploy: true, subDefault: true }, { name: 'b', allowBranchDeploy: true }],
+        environments: [{ name: 'dev', allowBranchDeploy: true }, { name: 'danzig', allowBranchDeploy: true }],
       }),
     );
-    expect(board.environments[0]?.subDefault).toBe(true);
+    expect(board.environments).toEqual([{ name: 'dev', allowBranchDeploy: true }, { name: 'danzig', allowBranchDeploy: true }]);
+    expect(Object.keys(board.environments[0] ?? {}).sort()).toEqual(['allowBranchDeploy', 'name']);
   });
 
-  it('allows one production environment, and only a release one', async () => {
-    const two = await boards.updateSettings(ADMIN, boardId, 1, {
-      environments: [
-        { name: 'a', allowBranchDeploy: false, role: 'release', production: true },
-        { name: 'b', allowBranchDeploy: false, role: 'release', production: true },
-      ],
-    });
-    expect(two.ok).toBe(false);
-    const integration = await boards.updateSettings(ADMIN, boardId, 1, {
-      environments: [{ name: 'a', allowBranchDeploy: false, role: 'integration', production: true }],
-    });
-    expect(integration.ok).toBe(false);
-    const board = unwrap(
-      await boards.updateSettings(ADMIN, boardId, 1, {
-        environments: [
-          { name: 'dev', allowBranchDeploy: true, role: 'integration' },
-          { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
-        ],
-      }),
-    );
-    expect(board.environments.map((e) => [e.role, e.production])).toEqual([
-      ['integration', undefined],
-      ['release', true],
+  it('a new glob gets a free dev environment and never a sub default', async () => {
+    unwrap(await boards.updateSettings(ADMIN, boardId, 1, { environments: [{ name: 'dev', allowBranchDeploy: true }, { name: 'danzig', allowBranchDeploy: true }] }));
+    const first = unwrap(await globs.create(ADMIN, input({ type: 'sub' })));
+    const second = unwrap(await globs.create(ADMIN, input({ type: 'sub' })));
+    expect([first.environment, second.environment]).toEqual(['dev', 'danzig']);
+  });
+
+  it('create takes no base branch and queues a base-branch refresh when the board has a repo', async () => {
+    const withRepo = unwrap(await boards.create(ADMIN, { name: 'r', repo: 'acme/app', timeZone: 'UTC', environments: [] }));
+    expect(withRepo.baseBranch).toBe('main');
+    expect(store.state.outbox.filter((e) => e.kind === 'refresh_base_branch')).toEqual([
+      { kind: 'refresh_base_branch', globId: `board-${String(withRepo.id)}`, boardId: withRepo.id },
     ]);
+    const noRepo = unwrap(await boards.create(ADMIN, { name: 'n', repo: null, timeZone: 'UTC', environments: [] }));
+    expect(store.state.outbox.filter((e) => e.kind === 'refresh_base_branch' && e.boardId === noRepo.id)).toEqual([]);
+  });
+
+  it('a repo change in settings queues a base-branch refresh, other changes do not', async () => {
+    const before = () => store.state.outbox.filter((e) => e.kind === 'refresh_base_branch').length;
+    unwrap(await boards.updateSettings(ADMIN, boardId, 1, { timeZone: 'Europe/London' }));
+    expect(before()).toBe(0);
+    unwrap(await boards.updateSettings(ADMIN, boardId, 2, { repo: 'acme/app' }));
+    expect(before()).toBe(1);
+    unwrap(await boards.updateSettings(ADMIN, boardId, 3, { repo: 'acme/app' }));
+    expect(before()).toBe(1);
   });
 
   it('pick-up takes an optional environment and keeps the current one when it is left out', async () => {

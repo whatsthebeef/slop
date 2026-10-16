@@ -17,7 +17,8 @@ export const mergeOutcomeText = (
     action !== 'merge' &&
     action !== 'merge_anyway' &&
     action !== 'merge_continue' &&
-    action !== 'retry_merge'
+    action !== 'retry_merge' &&
+    action !== 'retry_checks'
   )
     return null;
   const after = hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : '';

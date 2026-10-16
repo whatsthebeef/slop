@@ -1,11 +1,10 @@
-import { fixOf, isValidCombination, WORK_KINDS } from '@slop/core';
-import type { EditFailure, WorkKind } from '@slop/core';
+import { fixOf, isValidCombination } from '@slop/core';
+import type { EditFailure } from '@slop/core';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { GroupInput } from '@/components/group-input';
 import { Label, Select } from '@/components/ui/input';
 import type { GlobChanges } from '@/lib/api';
-import { canBeFix, currentWorkKind, saveFix, saveWorkKind } from '@/lib/type-change';
 import type { GlobViewContext } from './context';
 
 /** The edits being typed into the view (group, environment, waits-for) and the server's refusal of the last save. */
@@ -35,7 +34,7 @@ export const useGlobEdits = (globId: string) => {
 
 export type GlobEdits = ReturnType<typeof useGlobEdits>;
 
-/** The fix flag and work kind (saved when they change, with an Undo), group and environment (saved together with Save). */
+/** Group and environment (saved together with Save). */
 export const EditFieldsSection = ({
   ctx: { board, glob, groups, busy, onUpdate },
   decision,
@@ -55,71 +54,9 @@ export const EditFieldsSection = ({
   const merged = { ...glob, ...draft };
   const dirty = Object.keys(draft).length > 0;
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
-  // The fix flag and work kind save when they change, and say so with an Undo.
-  const [kindNote, setKindNote] = useState<{ undo: { fix: boolean } | { workKind: WorkKind } } | null>(null);
-  useEffect(() => setKindNote(null), [glob.id]);
-  const fix = fixOf(glob);
-  const workKind = currentWorkKind(glob);
-  const changeFix = async (to: boolean, from: boolean) => {
-    const result = await saveFix(onUpdate, from, to);
-    if (result.saved) {
-      setFailure(null);
-      setKindNote({ undo: { fix: result.undo } });
-    } else {
-      setFailure(result.failure);
-      setKindNote(null);
-    }
-  };
-  const changeWorkKind = async (to: WorkKind, from: WorkKind) => {
-    const result = await saveWorkKind(onUpdate, from, to);
-    if (result.saved) {
-      setFailure(null);
-      setKindNote({ undo: { workKind: result.undo } });
-    } else {
-      setFailure(result.failure);
-      setKindNote(null);
-    }
-  };
-  // The work kind feeds the time report: only board admins correct it.
-  const canEditWorkKind = board.role === 'admin';
   return (
     <div className="grid gap-3">
       <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-4">
-        {!decision && (
-          <Label>
-            Fix
-            <Select
-              value={fix ? 'yes' : 'no'}
-              disabled={busy}
-              title={glob.fixSource === 'person' ? 'Set by a person' : 'Inferred from the plan: choose to correct it'}
-              data-testid="fix"
-              onChange={(e) => void run(() => changeFix(e.target.value === 'yes', fix))}
-            >
-              <option value="no">Not a fix</option>
-              <option value="yes" disabled={!canBeFix(glob)}>
-                Fix
-              </option>
-            </Select>
-          </Label>
-        )}
-        {!decision && canEditWorkKind && (
-          <Label>
-            Work kind
-            <Select
-              value={workKind}
-              disabled={busy}
-              title={glob.workKindSource === 'person' ? 'Set by a person' : 'Inferred from the plan'}
-              data-testid="work-kind"
-              onChange={(e) => void run(() => changeWorkKind(e.target.value as WorkKind, workKind))}
-            >
-              {WORK_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k === 'rnd' ? 'R&D' : 'Maintenance'}
-                </option>
-              ))}
-            </Select>
-          </Label>
-        )}
         <Label>
           Group
           <GroupInput
@@ -143,27 +80,6 @@ export const EditFieldsSection = ({
           </Label>
         )}
       </div>
-      {kindNote !== null && failure === null && (
-        <div
-          role="status"
-          className="flex items-center justify-end gap-2 text-xs text-muted-foreground"
-          data-testid="kind-saved"
-        >
-          <span>Saved</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              void run(() =>
-                ('fix' in kindNote.undo ? changeFix(kindNote.undo.fix, fix) : changeWorkKind(kindNote.undo.workKind, workKind)).then(() => setKindNote(null)),
-              )
-            }
-          >
-            Undo
-          </Button>
-        </div>
-      )}
       {failure !== null && (
         <div
           role="alert"

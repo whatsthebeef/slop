@@ -230,7 +230,7 @@ describe('suggest', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     workId = unwrap(await globs.create(ADMIN, { boardId, title: 'Existing work', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null })).id;
     unwrap(await knowledge.importDocuments(ADMIN, boardId, [{ fileName: 'build_test_lint.md', content: BUILD_DOC }], 'upload'));

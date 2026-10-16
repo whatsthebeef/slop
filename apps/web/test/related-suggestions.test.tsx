@@ -296,7 +296,7 @@ describe('card tips', () => {
     const tip = (h: Holding) => holdLine(view({ status: 'planning', holding: [h] }));
     expect(tip(hold('s15t220', { external: { boardId: 15, boardName: 'Ops', hidden: false }, reason: 'rollout' }))?.tip).toContain('s15t220 (board Ops)');
     const hidden = tip(hold('another board', { toTitle: null, reason: 'x', external: { boardId: 9, boardName: null, hidden: true } }));
-    expect(hidden?.text).toBe('waiting · a glob on another board');
+    expect(hidden?.text).toBe('a glob on another board');
     expect(hidden?.tip).not.toContain('another board (');
   });
 

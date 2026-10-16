@@ -1,16 +1,13 @@
 # Slop checks for slop's own repo (from catalog/scripts/checks.yml): lint, type check and tests on
 # the head of every ready PR (sub, same or super), including the head after slop updates the
-# branch from main, and on every merge queue entry (`merge_group`). A PR runs only the workspaces it affects, in
-# parallel jobs; pushes to main and merge queue entries run everything. The final `checks` job is the required check:
+# branch from main (the head of the merge line). A PR runs only the workspaces it affects, in
+# parallel jobs; pushes to main run everything. The final `checks` job is the required check:
 # make it required on main so nothing merges without it.
 name: checks
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # Merge queue entries: tested on the base plus the PRs ahead of it. The queue needs a `checks` result on each.
-  merge_group:
-    types: [checks_requested]
   # After every merge: a sub merges as soon as it's ready, so its checks run here, and a red result reverts it.
   push:
     branches: [main]
@@ -19,17 +16,17 @@ permissions:
   contents: read
   packages: read
 
-# One run per PR: a newer push cancels the one in progress. A merge_group run has no pull_request object, so the
-# `if:` below passes (it only skips draft PRs) and the group falls back to github.sha, one run per queue entry.
+# One run per PR: a newer push cancels the one in progress. A push to main has no pull_request object, so it
+# falls back to github.sha, one run per commit.
 concurrency:
   group: checks-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   # Decides what to run. A PR runs only the workspaces it changes plus their dependents (`pnpm --filter "...[origin/<base>]"`);
-  # a push to the base branch, a merge_group entry, or a change to a root file (package.json, the lockfile, base configs, this
+  # a push to the base branch, or a change to a root file (package.json, the lockfile, base configs, this
   # workflow) runs everything. A change outside the workspaces runs the tests that read
-  # repo files (core, server, cli, infra), plus the catalog shell tests when it is under catalog/.
+  # repo files (core, server, cli, infra; only core for .claude/, catalog/agents/, docs/ and *.md), plus the catalog shell tests when it is under catalog/.
   changes:
     if: ${{ github.event_name == 'push' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
@@ -76,13 +73,18 @@ jobs:
           core=$(has packages/core); server=$(has apps/server); cli=$(has apps/cli); infra=$(has infra)
           # Files outside the workspaces (catalog, .claude, scripts, docs, integrations, skills, e2e, Dockerfile) are read by
           # core, server, cli and infra tests; apps/web's tests only read its own sources.
-          if grep -Eqv '^(apps|packages|infra)/' <<<"$changed"; then core=true; server=true; cli=true; infra=true; fi
+          # Agent files and docs (.claude/, catalog/agents/, docs/, *.md) are read only by core's agent-set tests (and the catalog
+          # shell tests, below): an agent-set glob takes a minute, not the server, cli and infra suites.
+          outside=$(grep -Ev '^(apps|packages|infra)/' <<<"$changed" || true)
+          heavy=$(grep -Ev '^(\.claude/|catalog/agents/|docs/)|\.md$' <<<"$outside" || true)
+          if [ -n "$heavy" ]; then core=true; server=true; cli=true; infra=true
+          elif [ -n "$outside" ]; then core=true; fi
           out core "$core"; out server "$server"; out web "$(has apps/web)"; out cli "$cli"; out infra "$infra"
           out catalog "$catalog"
           # Lint the affected workspaces whole (type-aware rules can break in an unchanged dependent), plus the changed
           # lint-able files outside the workspaces that still exist. One path per line.
           lint_paths=$affected
-          outside=$(grep -Ev '^(apps|packages|infra)/' <<<"$changed" | grep -E '\.(ts|tsx|js|mjs|cjs|mts|cts)$' || true)
+          outside=$(grep -E '\.(ts|tsx|js|mjs|cjs|mts|cts)$' <<<"$outside" || true)
           while IFS= read -r f; do
             if [ -n "$f" ] && [ -f "$f" ]; then lint_paths+=$'\n'"$f"; fi
           done <<<"$outside"
@@ -161,11 +163,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: timeout 12m pnpm --filter ./packages/core test
 
+  # Two shards in separate jobs, each with its own Postgres, so the suite doesn't fight itself (and the other jobs) for a
+  # 2-4 core runner: vitest runs at most 2 workers in CI (apps/server/vitest.config.ts) and retries a failed test once.
   test-server:
     needs: changes
     if: ${{ needs.changes.outputs.server == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/2', '2/2']
     services:
       # The server tests create throwaway databases next to this one.
       postgres:
@@ -179,7 +187,9 @@ jobs:
           POSTGRES_PASSWORD: slop
           POSTGRES_DB: slop
         ports: ['5432:5432']
+        # The data directory is on tmpfs (a throwaway database needs no disk); the next step turns durability off.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U slop" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
@@ -189,7 +199,34 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: timeout 17m pnpm --filter ./apps/server test
+      # A test database: fsync, synchronous_commit and full_page_writes off (all take effect on reload).
+      - name: Tune Postgres for tests
+        env:
+          PGPASSWORD: slop
+        run: |
+          set -euo pipefail
+          psql -h localhost -U slop -d slop -v ON_ERROR_STOP=1 \
+            -c "alter system set fsync = off" \
+            -c "alter system set synchronous_commit = off" \
+            -c "alter system set full_page_writes = off" \
+            -c "select pg_reload_conf()"
+      # CI=true gives vitest the capped pool and `retry: 1`; the JSON report keeps the failures of a retried test, so a test that failed
+      # and then passed shows up as flaky (below) instead of being hidden.
+      - name: Test server (shard ${{ matrix.shard }})
+        run: timeout 17m pnpm --filter ./apps/server test --shard=${{ matrix.shard }} --reporter=default --reporter=json --outputFile.json=report.json
+      - name: List tests that passed on retry
+        if: ${{ always() }}
+        run: |
+          [ -f apps/server/report.json ] || exit 0
+          node scripts/flaky-tests.mjs apps/server/report.json > flaky-tests.json || true
+          cat flaky-tests.json
+      - name: Upload flaky-test list
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-tests-${{ strategy.job-index }}
+          path: flaky-tests.json
+          if-no-files-found: ignore
 
   test-other:
     needs: changes

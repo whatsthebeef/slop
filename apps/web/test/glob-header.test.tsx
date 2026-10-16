@@ -148,7 +148,8 @@ describe('GlobHeader', () => {
     });
 
     it.each([
-      ['a feature', { category: 'feature', type: 'same' }, 'task', 'lucide-list-checks'],
+      ['an R&D task', { category: 'task', type: 'same', workKind: 'rnd' }, 'feature', 'lucide-sparkles'],
+      ['a maintenance task', { category: 'task', type: 'same', workKind: 'maintenance' }, 'task', 'lucide-list-checks'],
       ['a task', { category: 'task', type: 'super' }, 'task', 'lucide-list-checks'],
       ['a bug', { category: 'bug', type: 'same' }, 'bug', 'lucide-bug'],
       ['a decision', { category: 'decision', type: null }, 'decision', 'lucide-scale'],
@@ -269,8 +270,8 @@ describe('GlobHeader', () => {
           <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
-      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');
-      expect(header).toBe('rollout');
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('do');
+      expect(header).toBe('do');
     });
 
     it('shows "ID · list" on the left and, with nothing happening, only the kind marker on the right', () => {

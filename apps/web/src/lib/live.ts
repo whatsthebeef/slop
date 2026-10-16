@@ -15,7 +15,6 @@ interface Hint {
     | 'glob.decisions'
     | 'board.changed'
     | 'board.kb'
-    | 'board.tests'
     | 'board.health'
     | 'board.notifications'
     | 'board.inbox';
@@ -37,10 +36,7 @@ export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
 /** One glob's deploy history in the glob view. */
 export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as const;
 
-/** The release and integration environments in the glob view; invalidated by `glob.deploys` hints and on reconnect. */
-export const globEnvironmentsKey = (globId: string) => ['glob-environments', globId] as const;
-
-/** One glob's ATF runs in the glob view; invalidated by `glob.deploys` and `board.tests` hints and on reconnect. */
+/** One glob's ATF runs in the glob view; invalidated by `glob.deploys` hints and on reconnect. */
 export const globTestsKey = (globId: string) => ['glob-tests', globId] as const;
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
@@ -310,15 +306,6 @@ export const useLiveBoard = (boardId: number): LiveState => {
       void client.invalidateQueries({ queryKey: ['glob-diff'] });
       return;
     }
-    if (hint.kind === 'board.tests') {
-      // An environment's ATF run (or the check that placed globs at its commit): it shows on every glob held there.
-      void client.invalidateQueries({ queryKey: deploysKey(boardId) });
-      void client.invalidateQueries({ queryKey: ['glob-environments'] });
-    void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
-      void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
-      void client.invalidateQueries({ queryKey: ['glob-tests'] });
-      return;
-    }
     if (hint.kind === 'board.notifications') {
       void client.invalidateQueries({ queryKey: notificationsKey(boardId) });
       return;
@@ -340,8 +327,6 @@ export const useLiveBoard = (boardId: number): LiveState => {
       // Deploys live beside the glob, not on it: refresh the board's indicators and the glob's history.
       void client.invalidateQueries({ queryKey: deploysKey(boardId) });
       void client.invalidateQueries({ queryKey: globDeploysKey(id) });
-      void client.invalidateQueries({ queryKey: globEnvironmentsKey(id) });
-      void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
       void client.invalidateQueries({ queryKey: globTestsKey(id) });
       return;
     }
@@ -390,7 +375,6 @@ export const useLiveBoard = (boardId: number): LiveState => {
     // Deploys and readiness live beside the globs, so missed deploy hints need their own refresh.
     void client.invalidateQueries({ queryKey: deploysKey(boardId) });
     void client.invalidateQueries({ queryKey: ['glob-deploys'] });
-    void client.invalidateQueries({ queryKey: ['glob-environments'] });
     void client.invalidateQueries({ queryKey: ['glob-tests'] });
     void client.invalidateQueries({ queryKey: ['readiness', boardId] });
     void client.invalidateQueries({ queryKey: notificationsKey(boardId) });

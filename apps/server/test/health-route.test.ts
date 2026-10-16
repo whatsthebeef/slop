@@ -67,7 +67,7 @@ describe('GET /api/health', () => {
     });
     mountHealth(app, { metrics, outboxBacklog: () => Promise.resolve({ default: 2, llm: 0 }), llm: health, boards, integrations: registry, signIn, capabilities: { read: () => Promise.resolve({ fileAttachments: true, attachmentEvents: false, slack: false }), reasons: () => Promise.resolve({ slack: 'not set' }) } });
     await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
-    const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create('member@example.com', { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
     boardId = created.value.id;
     await store.transaction((tx) => tx.upsertUser({ email: 'viewer@example.com', name: 'Viewer', active: true }));

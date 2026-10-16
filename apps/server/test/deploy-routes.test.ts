@@ -1,4 +1,4 @@
-import { BoardService, DeployService, EnvironmentService, GlobService, TestRunService } from '@slop/core';
+import { BoardService, DeployService, GlobService, TestRunService } from '@slop/core';
 import type { Board, Effect, Glob } from '@slop/core';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -58,7 +58,6 @@ describe('deploy results and executors', () => {
   let drop: () => Promise<void>;
   let store: PgStore;
   let deploys: DeployService;
-  let environments: EnvironmentService;
   let testRuns: TestRunService;
   let globs: GlobService;
   let board: Board;
@@ -99,11 +98,6 @@ describe('deploy results and executors', () => {
       clock: { now: () => new Date((clock += 1000)).toISOString() },
       newDeployId: () => `dep-${++n}`,
     });
-    environments = new EnvironmentService({
-      store,
-      notifier: { publish: () => undefined },
-      clock: { now: () => new Date(clock).toISOString() },
-    });
     testRuns = new TestRunService({
       store,
       notifier: { publish: () => undefined },
@@ -125,12 +119,11 @@ describe('deploy results and executors', () => {
     });
     mountDeploys(app, {
       deploys,
-      environments,
       testRuns,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
       awsWebhookKeys: ['other-stack-key', KEY],
-      log: () => undefined,
+      log: (_task, message) => logged.push(message),
     });
     board = await store.transaction(async (tx) => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
@@ -142,13 +135,13 @@ describe('deploy results and executors', () => {
         defaultRoutineOwner: null,
         environments: [
           { name: 'dev1', allowBranchDeploy: true },
-          { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
+          { name: 'prod', allowBranchDeploy: false },
         ],
         sensitivePaths: [],
       });
       const withDeploy: Board = {
         ...inserted,
-        deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: 'sandbox-deploy', projects: {} },
+        deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev1: 'sandbox-deploy', dev2: 'sandbox-deploy' } },
         version: inserted.version + 1,
       };
       await tx.updateBoard(withDeploy, inserted.version);
@@ -276,7 +269,6 @@ describe('deploy results and executors', () => {
     const bare = new Hono<Env>();
     mountDeploys(bare, {
       deploys,
-      environments,
       testRuns,
       boards: new BoardService({ store, notifier: { publish: () => undefined } }),
       links,
@@ -291,7 +283,7 @@ describe('deploy results and executors', () => {
     expect(response.status).toBe(404);
   });
 
-  /** A `slop.ci` event as `catalog/scripts/report-deploy.sh` puts it on the bus and EventBridge delivers it. */
+  /** A `slop.ci` event as a pipeline puts it on the bus and EventBridge delivers it. */
   const ciEvent = (id: string, detail: Record<string, unknown>, key = KEY, detailType = 'Slop Environment Deployed') =>
     app.request('/webhooks/aws', {
       method: 'POST',
@@ -318,92 +310,31 @@ describe('deploy results and executors', () => {
     url: 'https://console.aws.amazon.com/codesuite/codebuild/projects/x/build/y',
   };
 
-  const latestProdDeploy = () => store.transaction((tx) => tx.latestEnvironmentDeploy(board.id, 'prod'));
-
-  it('records a release deploy from a slop.ci event once, however often it is delivered', async () => {
-    expect((await ciEvent('ev-1', deployed)).status).toBe(202);
-    expect(await (await ciEvent('ev-1', deployed)).json()).toEqual({ ok: true, ignored: true });
-    expect(await latestProdDeploy()).toMatchObject({
-      environment: 'prod',
-      sha: 'abcdef1234567',
-      ref: 'release/2026.10',
-      succeeded: true,
-      at: '2026-10-05T12:30:00.000Z',
-      eventId: 'aws:ev-1',
-    });
-  });
-
-  it('refuses slop.ci events without the key, and ignores malformed or unknown ones', async () => {
-    expect((await ciEvent('ev-2', deployed, 'wrong')).status).toBe(401);
-    for (const detail of [
-      { ...deployed, sha: 'not-a-sha' },
-      { ...deployed, url: 'javascript:alert(1)' },
-      { ...deployed, url: 'http://insecure.example' },
-      { ...deployed, repo: 'nope' },
-      { ...deployed, repo: 'acme/elsewhere' },
-      { ...deployed, environment: 'dev1' },
-    ]) {
-      const response = await ciEvent('ev-3', detail);
+  it('acknowledges the retired "Slop Environment Deployed" event, logs it once and records nothing', async () => {
+    expect((await ciEvent('ev-0', deployed, 'wrong')).status).toBe(401);
+    for (const id of ['ev-1', 'ev-1', 'ev-2']) {
+      const response = await ciEvent(id, deployed);
       expect(response.status).toBe(202);
       expect(await response.json()).toEqual({ ok: true, ignored: true });
     }
-    expect((await latestProdDeploy())?.eventId).toBe('aws:ev-1');
+    // A malformed detail is no different: the detail is never read.
+    expect(await (await ciEvent('ev-3', { sha: 'not-a-sha' })).json()).toEqual({ ok: true, ignored: true });
+    expect(logged.filter((m) => m.includes('Slop Environment Deployed'))).toHaveLength(1);
   });
 
-  it("serves each glob's environments with the board's deploy state", async () => {
-    await store.transaction((tx) =>
-      tx.saveGlobPresence([
-        {
-          boardId: board.id,
-          globId: 's9f2',
-          environment: 'prod',
-          mergeSha: 'm2',
-          contained: true,
-          checkedSha: 'abcdef1234567',
-          checkedAt: '2026-10-05T12:31:00.000Z',
-          since: '2026-10-05T12:31:00.000Z',
-        },
-      ]),
-    );
-    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json();
-    expect(state).toMatchObject({
-      environments: {
-        s9f2: [{ environment: 'prod', role: 'release', production: true, sha: 'abcdef1234567', warning: 'before_sign_off' }],
-      },
-    });
-    const view = await app.request('/api/globs/s9f2/environments');
-    expect(await view.json()).toMatchObject({ value: [{ environment: 'prod', presence: { contained: true }, latest: { sha: 'abcdef1234567' } }] });
-    expect((await app.request('/api/globs/s9f2/environments', { headers: { 'x-test-email': 'stranger@example.com' } })).status).toBe(403);
+  it('serves the board deploy state without environment indicators or release routes', async () => {
+    const state = z.record(z.string(), z.unknown()).parse(await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json());
+    expect(Object.keys(state).sort()).toEqual(['atf', 'indicators', 'running']);
+    for (const path of [`/api/boards/${String(board.id)}/environments`, `/api/boards/${String(board.id)}/release-tags`, '/api/globs/s9f2/environments']) {
+      expect((await app.request(path)).status).toBe(404);
+    }
+    expect((await app.request(`/api/boards/${String(board.id)}/environments/prod/deploys`, { method: 'POST', body: '{}' })).status).toBe(404);
   });
 
   /** A `slop.ci` "Slop ATF Completed" event as `catalog/scripts/atf-report.sh` sends it. */
   const atfEvent = (id: string, detail: Record<string, unknown>, key = KEY) => ciEvent(id, detail, key, 'Slop ATF Completed');
 
   const atf = { repo: 'acme/sandbox', passed: 40, failed: 0, skipped: 2, url: 'https://console.aws.amazon.com/codesuite/codebuild/x/report/y' };
-
-  it("records an environment ATF run once and shows it on the globs the environment's commit holds", async () => {
-    // s9f2 is held by prod at abcdef1234567 (the previous test); the run reports the full commit.
-    const full = 'abcdef1234567890abcdef1234567890abcdef12';
-    expect((await atfEvent('atf-1', { ...atf, environment: 'prod', sha: full.toUpperCase(), failed: 3 })).status).toBe(202);
-    expect(await (await atfEvent('atf-1', { ...atf, environment: 'prod', sha: full })).json()).toEqual({ ok: true, ignored: true });
-    // Without a commit it takes what the environment runs now.
-    expect(await (await atfEvent('atf-2', { ...atf, environment: 'prod' })).json()).toEqual({ ok: true });
-    const runs = await store.transaction((tx) => tx.listTestRuns(board.id, { commits: [{ environment: 'prod', sha: 'abcdef1234567' }] }));
-    expect(runs.map((r) => [r.eventId, r.sha, r.globId, r.failed, r.finishedAt])).toEqual([
-      // Newest first: the same finish time, so the later one recorded.
-      ['aws:atf-2', 'abcdef1234567', null, 0, '2026-10-05T12:30:00.000Z'],
-      ['aws:atf-1', full, null, 3, '2026-10-05T12:30:00.000Z'],
-    ]);
-    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json();
-    // The card shows the environment's latest run.
-    expect(state).toMatchObject({ atf: { s9f2: [{ scope: 'environment', environment: 'prod', failing: false }] } });
-    const view = await app.request('/api/globs/s9f2/tests');
-    const listed = z.object({ value: z.array(z.object({ id: z.number(), scope: z.string() })) }).parse(await view.json());
-    expect(listed.value.map((r) => r.scope)).toEqual(['environment', 'environment']);
-    // Each run carries its own ID (the glob view keys its rows by it).
-    expect(new Set(listed.value.map((r) => r.id)).size).toBe(2);
-    expect((await app.request('/api/globs/s9f2/tests', { headers: { 'x-test-email': 'stranger@example.com' } })).status).toBe(403);
-  });
 
   it("records a branch ATF run on the glob named by the branch, logged on it", async () => {
     expect((await atfEvent('atf-3', { ...atf, branch: 'refs/heads/s9f1', sha: 'a1b2c3d4e5f6', environment: 'dev1' })).status).toBe(202);
@@ -417,6 +348,27 @@ describe('deploy results and executors', () => {
     ]);
   });
 
+  it('records an environment ATF run on the glob whose succeeded branch deploy put the commit there, and ignores one nobody deployed', async () => {
+    const requested = await deploys.requestFromPush('s9f2', 'e2e2e2e2e2e2');
+    const deploy = requested.ok ? requested.value : null;
+    expect(deploy?.state).toBe('running');
+    // Not deployed yet: the run has no glob to belong to.
+    const early = await atfEvent('atf-env-0', { ...atf, environment: 'dev1', sha: 'e2e2e2e2e2e2' });
+    expect(await early.json()).toEqual({ ok: true, ignored: true });
+    await deploys.finished(deploy?.id ?? '', { succeeded: true, error: null });
+    expect(await (await atfEvent('atf-env-1', { ...atf, environment: 'dev1', sha: 'E2E2E2E2E2E2', failed: 3 })).json()).toMatchObject({ ok: true });
+    const state: unknown = await (await app.request(`/api/boards/${String(board.id)}/deploys?globs=s9f1,s9f2`)).json();
+    expect(state).toMatchObject({ atf: { s9f2: [{ scope: 'environment', environment: 'dev1', sha: 'e2e2e2e2e2e2', failing: true }] } });
+    // The other glob keeps only its earlier branch run: nothing of this deploy's run.
+    expect(state).toMatchObject({ atf: { s9f1: [{ scope: 'branch', sha: 'a1b2c3d4e5f6' }] } });
+    // A commit no branch deploy put in the environment, and an environment that deployed nothing.
+    for (const detail of [{ environment: 'dev1', sha: '999999999999' }, { environment: 'prod', sha: 'e2e2e2e2e2e2' }]) {
+      expect(await (await atfEvent('atf-env-2', { ...atf, ...detail })).json()).toEqual({ ok: true, ignored: true });
+    }
+    const view = z.object({ value: z.array(z.object({ scope: z.string(), environment: z.string().nullable() })) }).parse(await (await app.request('/api/globs/s9f2/tests')).json());
+    expect(view.value.map((r) => [r.scope, r.environment])).toEqual([['environment', 'dev1']]);
+  });
+
   it('ignores malformed ATF events', async () => {
     for (const detail of [
       { ...atf },
@@ -424,7 +376,7 @@ describe('deploy results and executors', () => {
       { ...atf, environment: 'prod', failed: 1.5 },
       { ...atf, environment: 'prod', sha: 'zzz' },
       { ...atf, environment: 'prod', url: 'javascript:alert(1)' },
-      { ...atf, environment: 'dev1' },
+      { ...atf, environment: 'dev1', sha: '999999999999' },
       { ...atf, branch: 's9f404', sha: 'a1b2c3d4e5f6' },
     ]) {
       const response = await atfEvent('atf-bad', detail);
@@ -457,55 +409,5 @@ describe('deploy results and executors', () => {
     expect(url(d)).toBe(url(d));
     const parsed = new URL(url(d));
     expect(links.verify(parsed.pathname, Number(parsed.searchParams.get('expires')), parsed.searchParams.get('sig') ?? '')).toBe(true);
-  });
-  it('records a manual environment deploy from a branch, tag or commit and lists recent tags (s15t239)', async () => {
-    await store.transaction(async (tx) => {
-      const current = await tx.getBoard(board.id);
-      if (current === null) throw new Error('no board');
-      // Earlier tests change the board's environments: set exactly the ones this one needs.
-      const environments: Board['environments'] = [
-        { name: 'dev1', allowBranchDeploy: true },
-        { name: 'prod', allowBranchDeploy: false, role: 'release', production: true, deployKnown: 'manual' },
-      ];
-      await tx.updateBoard({ ...current, environments, version: current.version + 1 }, current.version);
-    });
-    const known: Record<string, string> = { main: 'm'.repeat(40), 'v1.2': 't'.repeat(40) };
-    const manual = new Hono<Env>();
-    manual.use('/api/*', async (c, next) => {
-      c.set('email', c.req.header('x-test-email') ?? DEV);
-      await next();
-    });
-    mountDeploys(manual, {
-      deploys,
-      environments,
-      testRuns,
-      boards: new BoardService({ store, notifier: { publish: () => undefined } }),
-      links,
-      refs: {
-        resolveRef: (_repo, ref) => Promise.resolve(known[ref] ?? null),
-        recentTags: () => Promise.resolve([{ name: 'v1.2', sha: 't'.repeat(40) }]),
-      },
-      awsWebhookKeys: [],
-      log: () => undefined,
-    });
-    const post = (env: string, body: unknown, email = DEV) =>
-      manual.request(`/api/boards/${String(board.id)}/environments/${env}/deploys`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-test-email': email },
-        body: JSON.stringify(body),
-      });
-    expect(((await (await manual.request(`/api/boards/${String(board.id)}/release-tags`)).json()) as { value: unknown[] }).value).toHaveLength(1);
-    expect((await post('prod', { ref: 'v1.2' }, 'stranger@example.com')).status).toBe(403);
-    expect((await post('prod', { ref: 'nope' })).status).toBe(404);
-    expect((await post('dev1', {})).status).toBe(422);
-    // After every deploy the earlier tests reported, so these are the newest.
-    clock = Date.parse('2026-10-06T12:00:00.000Z');
-    expect((await post('prod', { ref: 'v1.2' })).status).toBe(200);
-    // Blank means the base branch's head.
-    expect((await post('prod', {})).status).toBe(200);
-    const list = (await (await manual.request(`/api/boards/${String(board.id)}/environments`)).json()) as {
-      value: { environment: string; deployKnown: string; latest: { sha: string; ref: string } | null; recordedBy: string | null }[];
-    };
-    expect(list.value.find((e) => e.environment === 'prod')).toMatchObject({ deployKnown: 'manual', latest: { sha: 'm'.repeat(40), ref: 'main' }, recordedBy: DEV });
   });
 });

@@ -66,8 +66,6 @@ export interface ReadinessFacts {
   readonly branchRules: {
     readonly requiredChecks: readonly string[];
     readonly integrationBypasses: boolean | null;
-    /** Whether the base branch has a merge queue rule; absent when the host can't say. */
-    readonly mergeQueue?: boolean;
   } | null;
   /** Whether a workflow on the base branch runs `anthropics/claude-code-action`; null when slop can't read the repo. */
   readonly claudeWorkflow: boolean | null;
@@ -85,6 +83,8 @@ export interface ReadinessFacts {
    * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
    */
   readonly committedAgentSetVersion: number | null | 'unreadable' | 'unknown';
+  /** The committed agent set's hook scripts (`.claude/hooks/*`) that the committed `.claude/settings.json` doesn't register; empty when none or unread. */
+  readonly unregisteredHooks: readonly string[];
   /** The core areas no knowledge document has (see `missingCoreAreas`). */
   readonly missingCoreAreas: readonly CoreDocArea[];
   readonly ticks: ReadinessTicks;
@@ -230,12 +230,6 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   const rules = facts.branchRules;
   const gateRequired = rules?.requiredChecks.includes(facts.gateCheck) ?? null;
   const setupCommand = `catalog/scripts/setup-repo.sh ${repo ?? '<owner/repo>'} --app <slop-app-slug> --protect ${facts.gateCheck}`;
-  const queueNote =
-    rules?.mergeQueue === undefined
-      ? ''
-      : rules.mergeQueue
-        ? '; merge queue is on'
-        : `; merge queue is off (${setupCommand} turns it on): subs wait for an up-to-date head instead`;
   const rulesNote =
     rules === null || gateRequired === null
       ? `; make \`${facts.gateCheck}\` a required status check on ${board.baseBranch} so merges honour it (${setupCommand} creates the \`slop\` ruleset; slop can't read the branch's rules yet)`
@@ -243,7 +237,7 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
         ? `; \`${facts.gateCheck}\` is not a required status check on ${board.baseBranch}: run ${setupCommand} to create the \`slop\` ruleset`
         : rules.integrationBypasses === false
           ? `; \`${facts.gateCheck}\` is required on ${board.baseBranch} but slop's App can't bypass it, so subs that merge before their checks finish are refused: add the App to the ruleset's bypass list (${setupCommand} does)`
-          : `; \`${facts.gateCheck}\` is a required status check on ${board.baseBranch}${rules.integrationBypasses === true ? ", and slop's App can bypass the ruleset" : ''}${queueNote}`;
+          : `; \`${facts.gateCheck}\` is a required status check on ${board.baseBranch}${rules.integrationBypasses === true ? ", and slop's App can bypass the ruleset" : ''}`;
   const gateTitle = 'Checks workflow';
   items.push(
     facts.checksWorkflow === null
@@ -353,13 +347,24 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
                   label: 'Agent set',
                 },
               )
-            : item(
-                'agent_set',
-                'Agent set in the repo',
-                'ok',
-                `Version ${String(committed)}`,
-                null,
-              ),
+            : facts.unregisteredHooks.length > 0
+              ? item(
+                  'agent_set',
+                  'Agent set in the repo',
+                  'missing',
+                  `${facts.unregisteredHooks.map((hook) => `Hook ${hook} is installed but not registered`).join('; ')} in .claude/settings.json on ${board.baseBranch}: routines never run it. The next agent-set commit registers it, or run slop init ${String(board.id)}`,
+                  {
+                    kind: 'knowledge',
+                    label: 'Agent set',
+                  },
+                )
+              : item(
+                  'agent_set',
+                  'Agent set in the repo',
+                  'ok',
+                  `Version ${String(committed)}`,
+                  null,
+                ),
   );
 
   const knowledge: ReadinessFix = { kind: 'knowledge', label: 'Knowledge' };
@@ -407,7 +412,6 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   );
 
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
-  const subDefault = board.environments.find((e) => e.subDefault === true);
   items.push(
     deployable.length === 0
       ? item(
@@ -417,21 +421,13 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
           'No environment takes branch deploys',
           settings,
         )
-      : subDefault === undefined
-        ? item(
-            'environments',
-            'Environments',
-            'missing',
-            'No environment is the default for subs',
-            settings,
-          )
-        : item(
-            'environments',
-            'Environments',
-            'ok',
-            `${deployable.map((e) => e.name).join(', ')}; subs default to ${subDefault.name}`,
-            null,
-          ),
+      : item(
+          'environments',
+          'Environments',
+          'ok',
+          deployable.map((e) => e.name).join(', '),
+          null,
+        ),
   );
 
   const MANUAL: Record<ManualReadinessKey, string> = {

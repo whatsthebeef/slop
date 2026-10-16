@@ -140,7 +140,7 @@ describe('card rows', () => {
       ['queued', () => view({ status: 'in_progress', ...live('queued') }), 'machine', 'starting', 'Machine run queued'],
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob.'],
-      ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 to be merged and rolled out (Doing)'],
+      ['waiting on prerequisites', waitingOn, 'hourglass', 's1t1', 'Waits for s1t1 to be merged and rolled out (Doing)'],
       ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'running checks', 'Checks are running on d16d563'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
@@ -203,7 +203,7 @@ describe('card rows', () => {
       ...patch,
     });
     const decisionHeld = dom(markup(view({ status: 'planning', holding: [hold('s1k9', { toIsDecision: true, until: 'decided', state: 'planning' })] })));
-    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('waiting · decision s1k9');
+    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('decision s1k9');
     // A start relation holds nothing once the glob has started, and nothing relation-shaped is left on the card.
     const started = dom(markup(view({ status: 'in_progress', holding: [hold('s1t1')] })));
     expect(started.textContent).not.toContain('waiting on');
@@ -254,6 +254,13 @@ describe('card rows', () => {
       expect(bottom?.lastElementChild?.textContent).toContain('JB');
       expect(bottom?.className).toContain('justify-between');
       expect(bottom?.textContent).toContain('Implementer: john.bower@x.com');
+    });
+    it('shares the group tag row on the right, with no avatar in the bottom row, for a grouped glob', () => {
+      const root = dom(markup(prOpen({ group: 'glob-groups', implementer: 'john.bower@x.com' })));
+      const row = root.querySelector('[data-testid="card-group-row"]');
+      expect(row?.querySelector('[data-testid="group-chip"], [data-testid="card-chips"]')).not.toBeNull();
+      expect(row?.lastElementChild?.textContent).toContain('JB');
+      expect(root.querySelector('[data-testid="card-bottom"]')?.textContent ?? '').not.toContain('JB');
     });
     it('shows the planner while unassigned', () => {
       const g = view({ implementer: null, planner: 'ann@x.com', runs: [] });
@@ -321,7 +328,7 @@ describe('card rows', () => {
     const html = markup(waitingOn());
     const root = dom(html);
     const status = root.querySelector('[data-testid="card-status"]');
-    expect(status?.querySelector('.truncate')?.textContent).toBe('waiting · s1t1 +3');
+    expect(status?.querySelector('.truncate')?.textContent).toBe('s1t1');
     expect(root.querySelector('[data-testid="card-header"] a')).toBeNull();
     expect(root.querySelector('[data-testid="waiting-on"]')).toBeNull();
     expect(html).not.toMatch(/blocked by/i);
@@ -528,12 +535,54 @@ describe('card actions: one primary button, bottom left', () => {
   });
 });
 
+describe('card in the merge line', () => {
+  const fresh = new Date().toISOString();
+  const r = run({ state: 'watching', queuedAt: fresh, startedAt: fresh, lastProgressAt: fresh });
+  const inLine = (patch: Partial<GlobView> = {}) =>
+    prOpen({
+      status: 'merging',
+      list: 'doing',
+      allowedActions: ['cancel_merge', 'take_over'],
+      mergeLine: { joinedAt: fresh },
+      runs: [r],
+      currentRun: r,
+      ...patch,
+    });
+  const corner = (html: string) => dom(html).querySelector('[data-testid="card-status"]');
+  const text = (html: string) => corner(html)?.querySelector('.truncate')?.textContent;
+  const nothingBottomLeft = (html: string) => {
+    expect(html).not.toContain('data-testid="move-');
+    expect(html).not.toContain('card-actions');
+    expect(html).not.toContain('Cancel merge');
+    expect(bottomLeft(html)?.textContent ?? '').not.toMatch(/merging|merge line|next to merge|queued/i);
+  };
+
+  it('shows "N ahead in the merge line" top right, with the hourglass, and nothing bottom left', () => {
+    const html = markup(inLine({ mergeLinePlace: { position: 4, ahead: ['s1t1', 's1t2', 's1t3'] } }));
+    expect(text(html)).toBe('3 ahead in the merge line');
+    expect(corner(html)?.querySelector('.sr-only')?.textContent).toContain('s1t2');
+    nothingBottomLeft(html);
+  });
+
+  it('shows "next to merge" for the second glob', () => {
+    const html = markup(inLine({ mergeLinePlace: { position: 2, ahead: ['s1t1'] } }));
+    expect(text(html)).toBe('next to merge');
+    nothingBottomLeft(html);
+  });
+
+  it('shows "merging" for the head, with nothing bottom left', () => {
+    const html = markup(inLine({ mergeLine: { joinedAt: fresh, head: { since: fresh } }, mergeLinePlace: { position: 1, ahead: [] } }));
+    expect(text(html)).toBe('merging');
+    nothingBottomLeft(html);
+  });
+});
+
 describe('card in progress: after a click', () => {
   const statusText = (root: HTMLElement) => root.querySelector('[data-testid="card-status"] .truncate')?.textContent;
 
   it.each([
     ['Merge', () => mergeable(), 'merge', 'merging'],
-    ['Fix conflict', () => fixable(), 'resolve_conflict', 'fixing the conflict'],
+    ['Fix conflict', () => fixable(), 'resolve_conflict', 'fixing conflict'],
     ['Start', () => planning({ allowedActions: ['start'] }), 'start', 'starting'],
   ] as const)('%s: the button is gone, the status says what is happening, and nothing is left bottom left', (_name, make, action, text) => {
     const g = make();
@@ -577,14 +626,14 @@ describe('card in progress: after a click', () => {
 });
 
 describe('the merged globs, in line with the layout rules', () => {
-  it('s15t217: a Fix conflict click shows "fixing the conflict" top right, never a "Fixing conflict…" label in the actions area', () => {
+  it('s15t217: a Fix conflict click shows "fixing conflict" top right, never a "Fixing conflict…" label in the actions area', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <GlobCard {...base()} glob={fixable()} repo='a/b' pending={clickOf('resolve_conflict', 'dev@example.com')} />
       </MemoryRouter>,
     );
     expect(html).not.toContain('Fixing conflict…');
-    expect(dom(html).querySelector('[data-testid="card-corner"]')?.textContent).toContain('fixing the conflict');
+    expect(dom(html).querySelector('[data-testid="card-corner"]')?.textContent).toContain('fixing conflict');
   });
 
   it('s15b158: Merge is a bottom-left button, its confirm label is on the button only, and no pending label follows the click', async () => {
@@ -854,15 +903,15 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
 
   it('a hold by a decision says so with the human icon, and a hold by a glob with the hourglass', () => {
     const decision = corner(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'store not chosen' })] }));
-    expect(decision).toMatchObject({ text: 'waiting · decision s1k1', icon: 'human' });
+    expect(decision).toMatchObject({ text: 'decision s1k1', icon: 'human' });
     expect(decision.html).toContain('store not chosen');
-    expect(corner(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 'waiting · s1t1', icon: 'hourglass' });
+    expect(corner(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 's1t1', icon: 'hourglass' });
   });
 
   it('a merge gate says "merge held" and several holds are the first plus the others', () => {
     const g = view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [hold('s1k1', { gate: 'merge', toIsDecision: true, until: 'decided', state: 'planning' })] });
     expect(corner(g)).toMatchObject({ text: 'merge held · decision s1k1', icon: 'human' });
-    expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('waiting · s1t1 +2');
+    expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('s1t1');
   });
 
   it('the tooltip lists every hold with its reason, and a click opens the Related section', async () => {
@@ -900,7 +949,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
 
   it('rollout replaces sign off with the human icon, with no upcoming-steps chip lower on the card', () => {
     const g = mergedWith([step({ id: 'a', state: 'done' }), step({ id: 'b' }), step({ id: 'c', state: 'pending' })]);
-    expect(corner(g)).toMatchObject({ text: 'rollout', icon: 'human' });
+    expect(corner(g)).toMatchObject({ text: 'do', icon: 'human' });
     expect(dom(markup(g)).querySelector('[data-testid="upcoming-steps-chip"]')).toBeNull();
   });
 
@@ -928,16 +977,23 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(label(view({ status: 'planning', humanSteps: [] }))).toBeNull();
   });
 
-  it('the Arm system label names the stage from arm, stays after sign-off, and its tooltip is the first open step', () => {
+  it('the Arm system label is always plain, stays after sign-off, and its tooltip is the first open step', () => {
     const label = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="arm-system-label"]');
-    const main = view({ status: 'reviewing', humanSteps: [step()], arm: { stage: 'main', title: 'Run the **migration**' } });
-    expect(label(main)?.textContent).toBe('Arm system · main');
-    const prod = view({ status: 'signed_off', humanSteps: [step()], arm: { stage: 'production', title: 'Roll out the host stack' } });
-    expect(label(prod)?.textContent).toBe('Arm system · production');
+    const main = view({ status: 'reviewing', humanSteps: [step()], arm: { title: 'Run the **migration**' } });
+    expect(label(main)?.textContent).toBe('Arm system');
+    const prod = view({ status: 'signed_off', humanSteps: [step()], arm: { title: 'Roll out the host stack' } });
+    expect(label(prod)?.textContent).toBe('Arm system');
     expect(armLabel(prod)?.tip).toBe('Roll out the host stack');
     expect(armLabel(view({ humanSteps: [step()] }))).toMatchObject({ text: 'Arm system' });
-    expect(armLabel(main)).toEqual({ text: 'Arm system · main', tip: 'Run the migration' });
+    expect(armLabel(main)).toEqual({ text: 'Arm system', tip: 'Run the migration' });
     expect(label(view({ status: 'signed_off', humanSteps: [] }))).toBeNull();
+  });
+
+  it('a signed-off glob with only an open downstream step shows plain Arm system, and none once it is ticked', () => {
+    const label = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="arm-system-label"]');
+    const downstream = (state: 'due' | 'done') => step({ id: 'hs_d', due: 'downstream', blocks: [], state });
+    expect(label(view({ status: 'signed_off', humanSteps: [downstream('due')] }))?.textContent).toBe('Arm system');
+    expect(label(view({ status: 'signed_off', humanSteps: [downstream('done')] }))).toBeNull();
   });
 
   it('the Arm system label is a rocket and text in the primary action colour, at the bottom right beside the avatar, with its tooltip', () => {
@@ -1033,8 +1089,9 @@ describe('an action glob card', () => {
     const icon = (g: GlobView) => dom(markup(g)).querySelector('[data-testid="card-corner"] [role="img"]');
     const plain = dom(markup(view({ category: 'feature', type: 'sub' })));
     expect(plain.querySelector('[data-testid="card-type"]')?.textContent).toBe('sub');
-    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('aria-label')).toBe('task');
-    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('class')).toContain('lucide-list-checks');
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('aria-label')).toBe('feature');
+    expect(icon(view({ category: 'feature', type: 'sub' }))?.getAttribute('class')).toContain('lucide-sparkles');
+    expect(icon(view({ category: 'task', type: 'sub', workKind: 'maintenance' }))?.getAttribute('class')).toContain('lucide-list-checks');
     expect(icon(view({ category: 'task', type: 'super' }))?.getAttribute('aria-label')).toBe('task');
     const fix = dom(markup(view({ category: 'task', type: 'same', fix: true })));
     expect(fix.querySelector('[data-testid="card-type"]')?.textContent).toBe('same');

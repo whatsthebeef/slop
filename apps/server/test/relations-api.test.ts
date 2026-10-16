@@ -112,10 +112,10 @@ describe('relations over REST and MCP (Postgres)', () => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       await tx.upsertUser({ email: ADMIN, name: 'Admin', active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
+    other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, timeZone: 'UTC', environments: [] })).id;
     // A board only the admin is on: its globs are invisible to DEV.
-    solo = unwrap(await boards.create(ADMIN, { name: 'solo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    solo = unwrap(await boards.create(ADMIN, { name: 'solo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await boards.setMember(ADMIN, other, DEV, 'dev'));
     const outbox = new OutboxRunner(database.db, { globs }, {}, () => undefined);

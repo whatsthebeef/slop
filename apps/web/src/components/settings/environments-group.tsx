@@ -1,16 +1,14 @@
-import { ENVIRONMENT_ROLES } from '@slop/core';
-import { RecordDeployButton } from '@/components/board-environments';
 import type { AtfIntegration, DeployIntegration } from '@slop/core';
 import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
 import { Field, SaveButton, SettingBlock, SettingsGroup } from './group';
 import type { SettingsForm } from './form';
 
-const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', defaultProject: '', projects: {} };
+const CODEBUILD_DEFAULT: DeployIntegration = { provider: 'codebuild', region: 'us-east-1', projects: {} };
 const GITHUB_DEFAULT: DeployIntegration = { provider: 'github_actions', workflow: 'slop-deploy.yml' };
 
 /**
- * How branch deploys run: none, CodeBuild (a project per environment, with a default) or GitHub
+ * How branch deploys run: none, CodeBuild (a project per environment) or GitHub
  * Actions (a workflow file). Either runs the repo's `.sstor/deploy.sh <env>`.
  */
 const DeploySettings = ({
@@ -43,18 +41,11 @@ const DeploySettings = ({
     </Field>
     {deploy?.provider === 'codebuild' && (
       <>
-        <div className='grid gap-3 sm:grid-cols-2'>
-          <Field label='Region' hint='The AWS region the CodeBuild projects are in.'>
-            {(props) => <Input {...props} value={deploy.region} disabled={disabled} onChange={(e) => onChange({ ...deploy, region: e.target.value })} />}
-          </Field>
-          <Field label='Default project' hint='The project used by every environment that has none of its own.'>
-            {(props) => (
-              <Input {...props} value={deploy.defaultProject} disabled={disabled} onChange={(e) => onChange({ ...deploy, defaultProject: e.target.value })} />
-            )}
-          </Field>
-        </div>
+        <Field label='Region' hint='The AWS region the CodeBuild projects are in.'>
+          {(props) => <Input {...props} value={deploy.region} disabled={disabled} onChange={(e) => onChange({ ...deploy, region: e.target.value })} />}
+        </Field>
         {environments.map((env) => (
-          <Field key={env} label={`Project for ${env}`} hint='Leave blank to use the default project.'>
+          <Field key={env} label={`Project for ${env}`} hint='The CodeBuild project that deploys this environment.'>
             {(props) => (
               <Input
                 {...props}
@@ -147,7 +138,7 @@ const AtfSettings = ({
           )}
         </Field>
         <p className='text-xs text-muted-foreground'>
-          After each checked deploy slop starts the project with <code>SLOP_ATF_SPECS</code>, <code>SLOP_ATF_GREP</code>,{' '}
+          When started, slop gives the project <code>SLOP_ATF_SPECS</code>, <code>SLOP_ATF_GREP</code>,{' '}
           <code>SLOP_ENVIRONMENT</code> and <code>SLOP_SHA</code>. Someone with AWS access must allow{' '}
           <code>codebuild:StartBuild</code> on the project for slop's role (or for the role above, which must trust slop's
           role for <code>sts:AssumeRole</code>). A failed start never blocks anything.
@@ -167,19 +158,14 @@ const AtfSettings = ({
   </SettingBlock>
 );
 
-export const EnvironmentsGroup = ({ admin, form, boardId, savedManual }: { admin: boolean; form: SettingsForm; boardId: number; savedManual: readonly string[] }) => {
+export const EnvironmentsGroup = ({ admin, form }: { admin: boolean; form: SettingsForm }) => {
   const { envs, setEnvs } = form;
-  // Record a deploy works on what is saved: a manual setting just chosen takes effect once it is.
-  const saved = new Set(savedManual);
   return (
     <SettingsGroup id='environments'>
-      <SettingBlock title='Environments' hint='The places this board deploys to. Each one can take branch deploys, be a default for subs and have a pipeline role.' testId='environments'>
+      <SettingBlock title='Environments' hint="The dev environments a glob's branch can be deployed to." testId='environments'>
         <ul className='grid gap-0.5 text-xs text-muted-foreground' data-testid='environment-hints'>
-          <li>Branch deploys: glob branches may be deployed to this environment.</li>
-          <li>Default for subs: subs created without an environment get this one (needs branch deploys).</li>
-          <li>Pipeline: integration means the base branch pipeline deploys here; release means release refs are deployed here. Slop shows which globs each one holds.</li>
-          <li>Deploys known by: a pipeline reports each deploy (<code>.sstor/report-deploy.sh &lt;env&gt;</code>), or you record each release in slop and its globs' after-deploy steps fall due.</li>
-          <li>Production: cards warn when a glob reaches production before sign-off (a release environment only).</li>
+          <li>Branch deploys: glob branches may be deployed to this environment. Each new code glob gets a free one.</li>
+          <li>Slop does not track the rest of the pipeline; a step that must also run there is ticked by a person.</li>
         </ul>
         {envs.map((env, i) => (
           <div key={i} className='flex flex-wrap items-center gap-2'>
@@ -195,92 +181,9 @@ export const EnvironmentsGroup = ({ admin, form, boardId, savedManual }: { admin
                 type='checkbox'
                 disabled={!admin}
                 checked={env.allowBranchDeploy}
-                onChange={(e) =>
-                  // An environment without branch deploys can't be the subs' default.
-                  setEnvs(
-                    envs.map((x, j) =>
-                      j !== i
-                        ? x
-                        : e.target.checked
-                          ? { ...x, allowBranchDeploy: true }
-                          : { ...x, allowBranchDeploy: false, subDefault: undefined },
-                    ),
-                  )
-                }
+                onChange={(e) => setEnvs(envs.map((x, j) => (j === i ? { ...x, allowBranchDeploy: e.target.checked } : x)))}
               />
               branch deploys
-            </label>
-            <label className='flex shrink-0 items-center gap-1 text-xs'>
-              <input
-                type='checkbox'
-                disabled={!admin || !env.allowBranchDeploy}
-                checked={env.subDefault === true}
-                onChange={(e) =>
-                  // At most one default: choosing one clears the others.
-                  setEnvs(
-                    envs.map((x, j) =>
-                      j === i && e.target.checked ? { ...x, subDefault: true } : { ...x, subDefault: undefined },
-                    ),
-                  )
-                }
-              />
-              default for subs
-            </label>
-            <Select
-              className='w-32 shrink-0 text-xs'
-              aria-label={`What deploys ${env.name || 'this environment'}`}
-              disabled={!admin}
-              value={env.role ?? ''}
-              onChange={(e) => {
-                const role = ENVIRONMENT_ROLES.find((r) => r === e.target.value);
-                // Only a release environment can be production.
-                // Without a role there is nothing to report or record.
-                setEnvs(
-                  envs.map((x, j) =>
-                    j !== i
-                      ? x
-                      : { ...x, role, production: role === 'release' ? x.production : undefined, deployKnown: role === undefined ? undefined : x.deployKnown },
-                  ),
-                );
-              }}
-            >
-              <option value=''>no pipeline</option>
-              <option value='integration'>integration</option>
-              <option value='release'>release</option>
-            </Select>
-            <Select
-              className='w-40 shrink-0 text-xs'
-              aria-label={`How ${env.name || 'this environment'}'s deploys are known`}
-              disabled={!admin || env.role === undefined}
-              value={env.deployKnown ?? 'pipeline'}
-              onChange={(e) => setEnvs(envs.map((x, j) => (j !== i ? x : { ...x, deployKnown: e.target.value === 'manual' ? 'manual' : undefined })))}
-            >
-              <option value='pipeline'>reported by pipeline</option>
-              <option value='manual'>recorded by hand</option>
-            </Select>
-            {env.role !== undefined && (
-              <span className='basis-full text-xs text-muted-foreground' data-testid='deploy-known-hint'>
-                {env.deployKnown === 'manual'
-                  ? "You record each release in slop; its globs' after-deploy steps fall due."
-                  : 'A pipeline reports each deploy with .sstor/report-deploy.sh.'}
-              </span>
-            )}
-            {env.deployKnown === 'manual' && saved.has(env.name) && <RecordDeployButton boardId={boardId} environment={env.name} />}
-            <label className='flex shrink-0 items-center gap-1 text-xs'>
-              <input
-                type='checkbox'
-                disabled={!admin || env.role !== 'release'}
-                checked={env.production === true}
-                onChange={(e) =>
-                  // At most one production environment: choosing one clears the others.
-                  setEnvs(
-                    envs.map((x, j) =>
-                      j === i && e.target.checked ? { ...x, production: true } : { ...x, production: undefined },
-                    ),
-                  )
-                }
-              />
-              production
             </label>
             {admin && (
               <Button variant='ghost' size='sm' onClick={() => setEnvs(envs.filter((_, j) => j !== i))}>

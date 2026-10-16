@@ -1,4 +1,4 @@
-import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationSuggestion, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import type { Arm, MergeLinePlace, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationSuggestion, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
 import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, storedBlockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, actionState, preparationOf, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -150,11 +150,11 @@ export const globView = (
   ...(holding === null ? {} : { holding }),
 });
 
-/** The Arm system stage on a view: the environment (or base branch) whose rollout step is next, and that step's title. Absent when no step is open. */
+/** Arm system on a view: the title of the open rollout step behind the plain label (it names no environment). Absent when no step is open. */
 export const armField = (arm: Arm | null) => (arm === null ? {} : { arm });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; rolloutSteps?: number; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null; suggestions?: readonly RelationSuggestion[] }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; rolloutSteps?: number; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null; suggestions?: readonly RelationSuggestion[]; mergeLinePlace?: MergeLinePlace }) =>
   ({
     ...globView(v.glob, v.allowedActions, v.artifacts, v, v.humanSteps ?? null, v.relations, v.holding),
     waitingFor: v.waitingFor,
@@ -165,6 +165,8 @@ export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; a
     script: v.script ?? null,
     // Open card questions (a failed step: link a glob?), only when there are some.
     ...(v.suggestions === undefined || v.suggestions.length === 0 ? {} : { suggestions: v.suggestions }),
+    // Where a merging glob stands in its board's merge line (the card reads it; absent when it isn't in the line).
+    ...(v.mergeLinePlace === undefined ? {} : { mergeLinePlace: v.mergeLinePlace }),
     // The glob's relations in groups: what holds it back (the same as `holding`), what it holds back, and what no longer holds.
     relations: v.relationGroups,
     // Why a person is needed and what to do first (null when nothing is wrong); the card and `sstor --glob` show it.

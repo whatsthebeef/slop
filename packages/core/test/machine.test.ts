@@ -5,6 +5,7 @@ import { behindWarning, currentBehind } from '../src/domain/readiness.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { NOW, admin, board, ctx, dev, glob, other, po, relationFacts, run } from './fixtures.js';
+import { derivedSteps } from '../src/domain/human-steps.js';
 import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
@@ -110,20 +111,11 @@ describe('create (rows 1–4)', () => {
     expect(errorCode(m.create(createInput({ environment: 'nope' }), board, ctx()))).toBe('invalid_input');
   });
 
-  it("gives a new sub without an environment the board's default for subs, and nothing else", () => {
-    const withDefault = {
-      ...board,
-      environments: [
-        { name: 'dev', allowBranchDeploy: true },
-        { name: 'qa', allowBranchDeploy: true, subDefault: true as const },
-      ],
-    };
+  it('leaves a new glob without an environment unset: the board has no default for subs', () => {
+    const twoDev = { ...board, environments: [{ name: 'dev', allowBranchDeploy: true }, { name: 'qa', allowBranchDeploy: true }] };
     const sub = createInput({ type: 'sub' });
-    expect(value(m.create(sub, withDefault, ctx())).glob.environment).toBe('qa');
-    expect(value(m.create({ ...sub, environment: 'dev' }, withDefault, ctx())).glob.environment).toBe('dev');
-    expect(value(m.create(createInput(), withDefault, ctx())).glob.environment).toBeNull();
-    expect(value(m.create(createInput({ type: 'super', category: 'feature' }), withDefault, ctx())).glob.environment).toBeNull();
-    expect(value(m.create(sub, board, ctx())).glob.environment).toBeNull();
+    expect(value(m.create(sub, twoDev, ctx())).glob.environment).toBeNull();
+    expect(value(m.create({ ...sub, environment: 'dev' }, twoDev, ctx())).glob.environment).toBe('dev');
   });
 });
 
@@ -468,8 +460,9 @@ describe('PR and merge events (rows 11–16)', () => {
   it('row 12: the sub gate passing on the current head merges', () => {
     const g = glob({ type: 'sub', status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'bbb' } });
     const t = value(m.subGateCompleted(g, { sha: 'bbb', passed: true, reason: null }, ctx(null)));
-    expect(t.glob.status).toBe('merging');
-    expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    expect(t.glob).toMatchObject({ status: 'merging', mergeLine: { joinedAt: NOW } });
+    // The glob joins the board's merge line; only its head merges, so no squash_merge yet.
+    expect(t.effects).toEqual([{ kind: 'advance_merge_line', globId: 'board-1', boardId: 1 }]);
   });
 
   it('row 12: results for an older commit are ignored', () => {
@@ -525,11 +518,27 @@ describe('PR and merge events (rows 11–16)', () => {
     };
     expect(m.allowedActions(failed, dev)).toContain('retry_merge');
     const t = value(m.retryMerge(failed, ctx()));
-    expect(t.glob).toMatchObject({ status: 'merging', failure: null });
-    expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    expect(t.glob).toMatchObject({ status: 'merging', failure: null, mergeLine: { joinedAt: NOW } });
+    expect(t.effects).toEqual([{ kind: 'advance_merge_line', globId: 'board-1', boardId: 1 }]);
     const conflicted = { ...failed, failure: { ...failed.failure, conflict: { base: 'main', files: ['a'] } } };
     expect(m.allowedActions(conflicted, dev)).not.toContain('retry_merge');
     expect(errorCode(m.retryMerge(conflicted, ctx()))).toBe('invalid_transition');
+  });
+
+  it('Retry checks: an agent-set glob with failed head checks re-runs them, re-arms the merge and has no Resolve conflict step', () => {
+    const failed = {
+      ...glob({ title: 'Agent set v125', category: 'task', type: 'same', implementer: 'slop', status: 'failed', pr: { number: 7, state: 'ready', headSha: 'bbb' } }),
+      headChecks: { sha: 'bbb', state: 'failed' as const },
+      failure: { reason: 'Required checks failed', at: 'x', kind: 'merge' as const },
+    };
+    expect(m.allowedActions(failed, dev)).toContain('retry_checks');
+    const t = value(m.retryChecks(failed, ctx()));
+    expect(t.glob).toMatchObject({ status: 'pr_open', failure: null, mergeMode: 'when_green' });
+    expect(t.effects).toEqual([{ kind: 'rerun_checks', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+    expect(derivedSteps(failed).map((step) => step.kind)).not.toContain('resolve_conflict');
+    const passed = { ...failed, headChecks: { sha: 'bbb', state: 'passed' as const } };
+    expect(m.allowedActions(passed, dev)).not.toContain('retry_checks');
+    expect(errorCode(m.retryChecks(passed, ctx()))).toBe('invalid_transition');
   });
 
   it('row 14: Merge with passing checks on the current head merges now', () => {
@@ -537,7 +546,7 @@ describe('PR and merge events (rows 11–16)', () => {
     const passing = { ...g, headChecks: { sha: 'bbb', state: 'passed' as const } };
     const t = value(m.requestMerge(passing, ctx()));
     expect(t.glob.status).toBe('merging');
-    expect(t.effects.map((e) => e.kind)).toEqual(['squash_merge']);
+    expect(t.effects.map((e) => e.kind)).toEqual(['advance_merge_line']);
     expect(m.allowedActions(passing, dev)).toContain('merge');
     const failed = { ...g, headChecks: { sha: 'bbb', state: 'failed' as const } };
     expect(errorCode(m.requestMerge(failed, ctx()))).toBe('invalid_transition');
@@ -588,7 +597,7 @@ describe('PR and merge events (rows 11–16)', () => {
       const armed = value(m.requestMerge(pending, ctx())).glob;
       const t = value(m.checksCompleted(armed, { sha: 'bbb', passed: true }, ctx()));
       expect(t.glob).toMatchObject({ status: 'merging', mergeMode: null });
-      expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
+      expect(t.effects).toEqual([{ kind: 'advance_merge_line', globId: 'board-1', boardId: 1 }]);
     });
 
     it('disarms when the checks fail or the PR conflicts, leaving the failure to show', () => {
@@ -1517,11 +1526,12 @@ describe('checks and merging (slice 2)', () => {
   });
 
   it('while merging, passing checks on the updated head merge it and failing ones fail it', () => {
-    const merging = { ...ready, status: 'merging' as const };
+    const merging = { ...ready, status: 'merging' as const, mergeLine: { joinedAt: NOW, head: { since: NOW } } };
     const pass = value(m.checksCompleted(merging, { sha: 'bbb', passed: true }, ctx(null)));
     expect(pass.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: 'bbb' }]);
     const fail = value(m.checksCompleted(merging, { sha: 'bbb', passed: false }, ctx(null)));
-    expect(fail.glob.status).toBe('failed');
+    expect(fail.glob).toMatchObject({ status: 'failed', mergeLine: null });
+    expect(fail.effects.map((e) => e.kind)).toEqual(['advance_merge_line']);
   });
 
   it('slop updating a behind branch is counted for the merge request, and a new Merge press starts the count again', () => {
@@ -2158,7 +2168,7 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
     const t = value(m.requestMerge(superReady, ctx(), { continue: true, facts: atHead }));
     expect(t.glob.status).toBe('merging');
     expect(t.glob.mergeMode).toBe('continue');
-    expect(t.effects).toEqual([{ kind: 'squash_merge', globId: 's1t1', generation: 1, sha: HEAD }]);
+    expect(t.effects).toEqual([{ kind: 'advance_merge_line', globId: 'board-1', boardId: 1 }]);
     expect(errorCode(m.requestMerge(superReady, ctx(), { continue: true, facts: { recordSha: 'ccccccc' } }))).toBe(
       'invalid_transition',
     );

@@ -98,7 +98,6 @@ describe('Type corrections in Postgres', () => {
       await boards.create(ADMIN, {
         name: 'b',
         repo: 'acme/app',
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

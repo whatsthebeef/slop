@@ -13,7 +13,7 @@ export interface AtfStartDeps {
 export const startAtf = async (effect: Effect, deps: AtfStartDeps): Promise<Outcome> => {
   if (effect.kind !== 'start_atf') return 'dropped';
   const board = await deps.boardOf(effect.boardId);
-  // The setting may have changed since the check: pull boards run what they fetch.
+  // The setting may have changed since the deploy: pull boards run what they fetch.
   const integration = board?.atf;
   if (integration?.mode !== 'push') return 'dropped';
   const result = await deps.testRuns.atfBatch(effect.boardId, effect.environment, effect.sha);
@@ -24,11 +24,11 @@ export const startAtf = async (effect: Effect, deps: AtfStartDeps): Promise<Outc
     );
     return 'dropped';
   }
-  // A newer deploy replaced this one: its own check starts the run.
+  // A newer deploy replaced this one: its own success starts the run.
   if (result.value.status === 'superseded') return 'dropped';
   if (result.value.status === 'pending')
-    throw new Error(`${effect.environment} at ${effect.sha} isn't checked yet`);
-  const { batch } = result.value;
+    throw new Error(`${effect.environment} at ${effect.sha} has no succeeded deploy yet`);
+  const batch = result.value;
   let started;
   try {
     started = await deps.starter.start({
@@ -53,7 +53,7 @@ export const startAtf = async (effect: Effect, deps: AtfStartDeps): Promise<Outc
 };
 
 /**
- * Outbox executors for push-mode ATF. After a deploy's containment check, the board's ATF project is started with the
+ * Outbox executors for push-mode ATF (nothing queues `start_atf` since ATF moved to the int pipeline). The board's ATF project is started with the
  * specs the newly held globs' test plans listed. The batch is the same stored one the pull endpoint serves, and CodeBuild's
  * idempotency token (per board, environment and commit) makes a repeated start return the build already running. Nothing
  * here blocks: a superseded deploy, a board switched back to pull, or a refused batch ends the effect, and a start that

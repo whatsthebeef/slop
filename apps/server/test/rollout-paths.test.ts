@@ -44,7 +44,7 @@ describe('check_rollout_paths: a merge touching rollout paths without a Rollout 
     });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
   });
 
   afterAll(() => drop());

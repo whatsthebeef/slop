@@ -13,12 +13,12 @@ import { REVIEW_SEVERITIES } from '../domain/independent-review.js';
 import { atfPushRefusal, samePushTarget } from '../domain/atf-policy.js';
 import type { AtfPushPolicy } from '../domain/atf-policy.js';
 import type { AtfIntegration, BaseChecks, Board, CheckFailure, Environment, Member, Role } from '../domain/types.js';
+import type { Effect } from '../domain/events.js';
 import type { Notifier, Store, Tx } from '../ports.js';
 
 export interface CreateBoardInput {
   readonly name: string;
   readonly repo: string | null;
-  readonly baseBranch: string;
   readonly timeZone: string;
   readonly environments: readonly Environment[];
 }
@@ -32,7 +32,6 @@ export type BoardSettings = {
     Board,
     | 'name'
     | 'repo'
-    | 'baseBranch'
     | 'timeZone'
     | 'defaultRoutineOwner'
     | 'environments'
@@ -59,6 +58,12 @@ export interface Membership {
   /** When the person last opened the board in the web app; null if never. */
   readonly lastViewedAt: string | null;
 }
+
+/** The base branch a board holds until the code host has named its repo's default branch. */
+export const DEFAULT_BASE_BRANCH = 'main';
+
+/** Board-wide, like refresh_base_checks: `globId` is `board-<id>`. */
+const refreshBaseBranch = (boardId: number): Effect => ({ kind: 'refresh_base_branch', globId: `board-${String(boardId)}`, boardId });
 
 export const DEFAULT_ENVIRONMENTS: readonly Environment[] = [{ name: 'main', allowBranchDeploy: false }];
 
@@ -112,6 +117,17 @@ const trimReview = (review: Partial<ReviewBoardSettings>): Partial<ReviewBoardSe
   ...(review.ignoredPaths === undefined ? {} : { ignoredPaths: review.ignoredPaths.map((p) => p.trim()) }),
 });
 
+/** With CodeBuild, every environment that takes branch deploys names its own deploy project. */
+const validateDeployProjects = (board: Pick<Board, 'environments' | 'deploy'>): Result<null> => {
+  const deploy = board.deploy;
+  if (deploy?.provider !== 'codebuild') return ok(null);
+  const missing = board.environments.filter((e) => e.allowBranchDeploy && (deploy.projects[e.name] ?? '').trim() === '');
+  if (missing.length > 0) {
+    return invalidInput(`CodeBuild deploys need a project for each environment: ${missing.map((e) => e.name).join(', ')}`);
+  }
+  return ok(null);
+};
+
 const validateSettings = (settings: BoardSettings): Result<null> => {
   if (settings.name?.trim() === '') return invalidInput('A board needs a name');
   if (settings.review !== undefined) {
@@ -137,23 +153,10 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
     const names = settings.environments.map((e) => e.name.trim());
     if (names.some((n) => n === '')) return invalidInput('Environments need names');
     if (new Set(names).size !== names.length) return invalidInput('Environment names must be unique');
-    const subDefaults = settings.environments.filter((e) => e.subDefault === true);
-    if (subDefaults.length > 1) return invalidInput('Only one environment can be the default for subs');
-    if (subDefaults.some((e) => !e.allowBranchDeploy)) {
-      return invalidInput("The subs' default environment must allow branch deploys");
-    }
-    const production = settings.environments.filter((e) => e.production === true);
-    if (production.length > 1) return invalidInput('Only one environment can be production');
-    if (production.some((e) => e.role !== 'release')) return invalidInput('Only a release environment can be production');
-    if (settings.environments.some((e) => e.deployKnown !== undefined && e.role === undefined)) {
-      return invalidInput('Only an environment with a pipeline role can have its deploys recorded by hand');
-    }
   }
   const deploy = settings.deploy;
   if (deploy?.provider === 'codebuild') {
-    if (deploy.region.trim() === '' || deploy.defaultProject.trim() === '') {
-      return invalidInput('CodeBuild deploys need a region and a default project');
-    }
+    if (deploy.region.trim() === '') return invalidInput('CodeBuild deploys need a region');
   }
   if (deploy?.provider === 'github_actions' && deploy.workflow.trim() === '') {
     return invalidInput('GitHub Actions deploys need a workflow file');
@@ -209,13 +212,15 @@ export class BoardService {
       const board = await tx.insertBoard({
         name: input.name.trim(),
         repo: input.repo,
-        baseBranch: input.baseBranch,
+        // The repo's default branch, read from the code host right after (refresh_base_branch); 'main' until it answers.
+        baseBranch: DEFAULT_BASE_BRANCH,
         timeZone: input.timeZone,
         defaultRoutineOwner: email,
         environments: input.environments.length > 0 ? input.environments : DEFAULT_ENVIRONMENTS,
         sensitivePaths: [],
       });
       await tx.upsertMember({ boardId: board.id, email, role: 'admin' });
+      if (board.repo !== null) await tx.enqueueEffects([refreshBaseBranch(board.id)]);
       return ok(board);
     });
   }
@@ -294,9 +299,15 @@ export class BoardService {
         review: settings.review === undefined ? board.review : mergeReviewSettings(board.review, trimReview(settings.review)),
         version: board.version + 1,
       };
+      if (settings.deploy !== undefined || settings.environments !== undefined) {
+        const projects = validateDeployProjects(next);
+        if (!projects.ok) return projects;
+      }
       if (!(await tx.updateBoard(next, version))) {
         return invalidInput('The board settings have changed; reload them');
       }
+      // A different repo has a different default branch.
+      if (next.repo !== null && next.repo !== board.repo) await tx.enqueueEffects([refreshBaseBranch(boardId)]);
       return ok(next);
     });
     if (result.ok) this.deps.notifier.publish({ kind: 'board.changed', boardId });
@@ -325,6 +336,22 @@ export class BoardService {
       void this.deps.onBaseRed?.(boardId).catch(() => undefined);
     }
     return recorded;
+  }
+
+  /**
+   * Integrations' write of the repo's default branch, cached as the board's base. True when it changed. Idempotent:
+   * the same name again changes nothing. Bumps the version like a settings save, so an open settings form reloads.
+   */
+  async recordBaseBranch(boardId: number, branch: string): Promise<boolean> {
+    const name = branch.trim();
+    if (name === '') return false;
+    const changed = await this.deps.store.transaction(async (tx) => {
+      const board = await tx.getBoard(boardId);
+      if (board === null || board.baseBranch === name) return false;
+      return tx.updateBoard({ ...board, baseBranch: name, version: board.version + 1 }, board.version);
+    });
+    if (changed) this.deps.notifier.publish({ kind: 'board.changed', boardId });
+    return changed;
   }
 
   async members(email: string, boardId: number): Promise<Result<Member[]>> {

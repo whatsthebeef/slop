@@ -240,6 +240,24 @@ describe('glob view: main button', () => {
     expect(screen.queryByTestId('more-cancel_merge')).toBeNull();
   });
 
+  it('a glob in the merge line has Cancel merge only in the ▾, never as the main button', async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'merging',
+        list: 'doing',
+        pr: { number: 7, state: 'ready', headSha: 'd16d563aaaa' },
+        headChecks: { sha: 'd16d563aaaa', state: 'passed' },
+        mergeLine: { joinedAt: new Date().toISOString() },
+        mergeLinePlace: { position: 3, ahead: ['s1t1', 's1t2'] },
+        allowedActions: ['cancel_merge', 'take_over', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent ?? '').not.toMatch(/Cancel merge/);
+    await user.click(screen.getByTestId('more-actions'));
+    expect((await screen.findByTestId('more-cancel_merge')).textContent).toContain('Cancel merge');
+  });
+
   it('is a split button: the main action with an icon-only ▾ joined to it', () => {
     renderGlob(view({ allowedActions: ['start', 'investigate', 'delete'] }));
     const split = screen.getByTestId('split-button');
@@ -850,6 +868,12 @@ describe('glob view: the notice beside the primary action', () => {
     expect(document.body.textContent).not.toContain('Also:');
   });
 
+  it('puts the notice above the primary button', () => {
+    renderGlob(conflicted());
+    const order = (notice() as HTMLElement).compareDocumentPosition(screen.getByTestId('glob-actions'));
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('does not repeat failed checks the conflict explains', () => {
     renderGlob(
       conflicted({
@@ -948,7 +972,7 @@ describe('glob view: the notice beside the primary action', () => {
     await user.click(mainButton() as HTMLElement);
     await waitFor(() => expect(mainButton()).toBeNull());
     expect(screen.queryByTestId('more-actions')).toBeNull();
-    expect(screen.getByTestId('header-status-text').textContent).toBe('fixing the conflict');
+    expect(screen.getByTestId('header-status-text').textContent).toBe('fixing conflict');
     sent.resolve(true);
   });
 });
@@ -1081,13 +1105,15 @@ describe('glob view: split moves in the action ▾', () => {
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
     });
 
-    it('shows the Arm system label and the branch on a quiet line beside the action row, not in the top bar', () => {
+    it('shows the Arm system label and the step title, with no branch or stage, on a quiet line beside the action row, not in the top bar', () => {
       const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
       renderGlob(view({ branch: 's1t1', humanSteps: [step] }));
       const row = screen.getByTestId('glob-actions');
       const info = within(row).getByTestId('action-line-info');
       expect(within(info).getByTestId('arm-system-label').textContent).toBe('Arm system');
-      expect(within(info).getByTestId('glob-branch').textContent).toBe('s1t1');
+      expect(within(info).getByTestId('arm-step-title').textContent).toContain('Run the migration');
+      expect(within(info).queryByTestId('glob-branch')).toBeNull();
+      expect(info.textContent).not.toContain('s1t1');
       expect(info.className).toContain('ml-auto');
       expect(info.className).toContain('flex-wrap');
       expect(within(screen.getByTestId('glob-header')).queryByTestId('arm-system-label')).toBeNull();
@@ -1095,18 +1121,15 @@ describe('glob view: split moves in the action ▾', () => {
     });
   });
 
-  describe('the work kind control', () => {
-    it('is not shown to a non-admin, and is a select an admin can use', async () => {
-      const user = userEvent.setup();
-      cleanup();
+  describe('the fix and work kind controls', () => {
+    it('are gone, for a non-admin and an admin alike', () => {
       renderGlob(view({ category: 'task', type: 'same' }));
+      expect(screen.queryByTestId('fix')).toBeNull();
       expect(screen.queryByTestId('work-kind')).toBeNull();
       cleanup();
-      const cb = renderGlob(view({ category: 'task', type: 'same' }), { ...board, role: 'admin' });
-      const select = screen.getByTestId<HTMLSelectElement>('work-kind');
-      expect(select.disabled).toBe(false);
-      await user.selectOptions(select, 'rnd');
-      await waitFor(() => expect(cb.onUpdate).toHaveBeenCalledWith({ workKind: 'rnd' }));
+      renderGlob(view({ category: 'task', type: 'same' }), { ...board, role: 'admin' });
+      expect(screen.queryByTestId('fix')).toBeNull();
+      expect(screen.queryByTestId('work-kind')).toBeNull();
     });
   });
 

@@ -1,16 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { connect, runMigrations } from '../../src/db/store.js';
+import { connect } from '../../src/db/store.js';
 import type { Database } from '../../src/db/store.js';
+import { ADMIN_URL, TEMPLATE_NAME } from './template-database.js';
 
-const ADMIN_URL = process.env.TEST_ADMIN_DATABASE_URL ?? 'postgres://slop:slop@localhost:5432/slop';
-
-/** A throwaway, migrated database next to the dev one (`docker compose up -d postgres`). */
+/** A throwaway, migrated database next to the dev one (`docker compose up -d postgres`): a copy of the template that globalSetup migrates once. */
 export const createTestDatabase = async (name: string): Promise<{ database: Database; url: string; drop: () => Promise<void> }> => {
   const dbName = `slop_test_${name}_${process.pid}`;
   const admin = connect(ADMIN_URL);
-  await admin.db.execute(sql.raw(`create database ${dbName}`));
+  await admin.db.execute(sql.raw(`create database ${dbName} template ${TEMPLATE_NAME}`));
   const url = ADMIN_URL.replace(/\/[^/]+$/, `/${dbName}`);
-  await runMigrations(url, new URL('../../drizzle', import.meta.url).pathname);
   const database = connect(url);
   return {
     database,

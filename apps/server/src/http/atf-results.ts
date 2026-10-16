@@ -120,7 +120,7 @@ export const mountAtfResults = (app: Hono<Env>, deps: AtfResultsRoutesDeps): voi
           .seen(runner.boardId, runner.runnerId)
           .catch(() => deps.log('atf results', `Could not note runner ${owner} as seen`));
       }
-      // A redelivery, or a run slop has no place for (an environment it doesn't observe, another board's glob, no commit): not an error for the pipeline.
+      // A redelivery, or a run slop has no place for (an environment the board doesn't have, a commit no branch deploy put there, another board's glob, no commit): not an error for the pipeline.
       return recorded.length === 0
         ? c.json({ status: 'ignored' }, 200)
         : c.json({ status: 'recorded' }, 201);

@@ -17,7 +17,8 @@ import type { Clock, Effect, EffectKind, RunnerWebhooks, Store } from '@slop/cor
 import type { Outcome, SettledExecutor } from './jobs/outbox.js';
 
 /**
- * Deploy-live webhooks (spec, ATF runners). A runner that subscribed gets a signed POST when a deploy is live and checked.
+ * Deploy-live webhooks (spec, ATF runners). A runner that subscribed gets a signed POST when a `deliver_atf_webhook` effect is
+ * executed (a dev branch deploy no longer queues one: ATF is started by the int pipeline).
  * The signing secret is slop's: made when the webhook is turned on, shown once, and kept sealed (AES-256-GCM under a key
  * derived from `SIGNING_SECRET`) in the runner's config, because an HMAC needs the secret itself, not a hash of it.
  */
@@ -237,9 +238,9 @@ export const deliverAtfWebhook = async (effect: Effect, deps: AtfWebhookDeps): P
   const known = await deps.store.transaction(async (tx) => ({
     runner: await tx.getAtfRunner(effect.boardId, effect.runnerId),
     board: await tx.getBoard(effect.boardId),
-    latest: await tx.latestEnvironmentDeploy(effect.boardId, effect.environment),
+    live: (await tx.listDeploys(effect.boardId, { environment: effect.environment, states: ['succeeded'], limit: 1 }))[0],
   }));
-  const { runner, board, latest } = known;
+  const { runner, board, live } = known;
   const webhook = runner?.config.webhook;
   if (
     runner === null ||
@@ -249,8 +250,8 @@ export const deliverAtfWebhook = async (effect: Effect, deps: AtfWebhookDeps): P
   )
     return 'dropped';
   if (webhook?.secret === undefined) return 'dropped';
-  // A newer deploy replaced this one: its own check delivers its event.
-  if (latest?.sha !== effect.sha) return 'dropped';
+  // A newer deploy replaced this one: its own success delivers its event.
+  if (live?.id !== effect.deployId) return 'dropped';
   const secret = deps.secrets.open(webhook.secret);
   if (secret === null) {
     deps.log(
@@ -295,7 +296,7 @@ export const deliverAtfWebhook = async (effect: Effect, deps: AtfWebhookDeps): P
   if (status >= 200 && status < 300) {
     deps.log(
       'atf webhook',
-      `${who} ${effect.environment}: delivered deploy ${String(effect.deployId)}`,
+      `${who} ${effect.environment}: delivered deploy ${effect.deployId}`,
     );
     return 'done';
   }

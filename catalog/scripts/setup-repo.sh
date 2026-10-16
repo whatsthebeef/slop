@@ -1,40 +1,32 @@
 #!/usr/bin/env bash
 # Prepares a GitHub repository for slop, using your gh login.
 #   - merge settings: squash only, PR title as the squash commit title, delete merged branches
-#   - optional --protect [<check>...] [--no-merge-queue]: a `slop` ruleset on the base branch (no force push or
-#     deletion, required checks, and a merge queue: squash, ALLGREEN grouping, groups of up to 5, 30 minute check
-#     timeout) with slop's App and repo admins on the bypass list (classic branch protection can't exempt an App).
-#     The bypass is for emergencies only: slop enqueues PRs and follows the queue, it never bypasses it. Queue entries
-#     are tested on the base plus the PRs ahead (a `merge_group` event), so the checks workflow must run on
-#     `merge_group` too, and the up-to-date requirement is off (the queue replaces it). --no-merge-queue leaves the
-#     queue rule out and keeps the up-to-date requirement. Created or updated by name, so re-running updates the
-#     rule; with no check names it requires `checks` (every PR's lint, type check and tests), the check subs wait for
+#   - optional --protect [<check>...]: a `slop` ruleset on the base branch (no force push or deletion, the required
+#     checks, and the up-to-date requirement) with slop's App and repo admins on the bypass list (classic branch
+#     protection can't exempt an App). slop merges one glob at a time (its merge line): the head of the line is updated
+#     from the base, rechecked and squash merged, so the head is always up to date when it merges. Created or updated by
+#     name, so re-running updates the rule; with no check names it requires `checks` (every PR's lint, type check and
+#     tests), the check subs wait for
 #   - checks slop's GitHub App is subscribed to the events slop needs and, for any it isn't, prints the
 #     App's settings link (GitHub has no API to subscribe: a person ticks them in the UI)
 #   - prints the links to install slop's GitHub App and the Claude GitHub App on the repo
 #     (GitHub only allows that in the browser or with a classic personal access token)
-# Usage: setup-repo.sh <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]] [--no-merge-queue]
+# Usage: setup-repo.sh <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]]
 set -euo pipefail
 
 # The ruleset body for the base branch: `slop`, active, no deletion or force push, the checks required, with slop's App
-# and repository admins allowed to bypass. With a merge queue (<queue> 1) the queue rule is added and the up-to-date
-# requirement dropped; without it (0) the head must be up to date. Usage: ruleset_json <app-id> <queue 1|0> <check>...
+# and repository admins allowed to bypass, and the head required to be up to date. Usage: ruleset_json <app-id> <check>...
 ruleset_json() {
   python3 - "$@" <<'PY'
 import json, sys
-app_id, queue, checks = int(sys.argv[1]), sys.argv[2] == "1", sys.argv[3:]
+app_id, checks = int(sys.argv[1]), sys.argv[2:]
 rules = [
     {"type": "deletion"},
     {"type": "non_fast_forward"},
     {"type": "required_status_checks", "parameters": {
-        "strict_required_status_checks_policy": not queue,
+        "strict_required_status_checks_policy": True,
         "required_status_checks": [{"context": c} for c in checks]}},
 ]
-if queue:
-    rules.append({"type": "merge_queue", "parameters": {
-        "merge_method": "SQUASH", "grouping_strategy": "ALLGREEN",
-        "max_entries_to_build": 5, "max_entries_to_merge": 5, "min_entries_to_merge": 1,
-        "min_entries_to_merge_wait_minutes": 1, "check_response_timeout_minutes": 30}})
 print(json.dumps({
     "name": "slop", "target": "branch", "enforcement": "active",
     "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
@@ -50,18 +42,17 @@ PY
 [[ "${SETUP_REPO_SOURCE_ONLY:-}" == 1 ]] && return 0
 
 repo="${1:-}"; shift || true
-app=""; base=""; checks=(); protect=0; queue=1
+app=""; base=""; checks=(); protect=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app) app="$2"; shift ;;
     --base) base="$2"; shift ;;
     --protect) shift; protect=1; while [[ $# -gt 0 && "$1" != --* ]]; do checks+=("$1"); shift; done; continue ;;
-    --no-merge-queue) queue=0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift
 done
-[[ -n "$repo" && -n "$app" ]] || { echo "Usage: $0 <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]] [--no-merge-queue]" >&2; exit 1; }
+[[ -n "$repo" && -n "$app" ]] || { echo "Usage: $0 <owner/repo> --app <slop-app-slug> [--base main] [--protect [<check> ...]]" >&2; exit 1; }
 base="${base:-$(gh api "repos/$repo" --jq .default_branch)}"
 
 echo "Merge settings for $repo..."
@@ -75,7 +66,7 @@ echo "  squash only, PR title as commit title, merged branches deleted"
 if [[ ${#checks[@]} -gt 0 ]]; then
   echo "Branch ruleset \`slop\` on $base (required: ${checks[*]})..."
   app_id=$(gh api "apps/$app" --jq .id)
-  body=$(ruleset_json "$app_id" "$queue" "${checks[@]}")
+  body=$(ruleset_json "$app_id" "${checks[@]}")
   ruleset_id=$(gh api "repos/$repo/rulesets" --jq '.[] | select(.name == "slop") | .id' | head -n1)
   if [[ -n "$ruleset_id" ]]; then
     printf '%s' "$body" | gh api -X PUT "repos/$repo/rulesets/$ruleset_id" --input - --silent
@@ -84,14 +75,8 @@ if [[ ${#checks[@]} -gt 0 ]]; then
     printf '%s' "$body" | gh api -X POST "repos/$repo/rulesets" --input - --silent
     echo "  created ruleset"
   fi
-  if [[ $queue -eq 1 ]]; then
-    echo "  merge queue on (squash, ALLGREEN, groups of up to 5, 30 minute check timeout); required checks run on each"
-    echo "  queue entry (the checks workflow must run on merge_group), no force pushes or deletion"
-    echo "  slop's App ($app) and repo admins can bypass for emergencies only; slop never bypasses the queue"
-  else
-    echo "  merge queue off (--no-merge-queue); required checks pass on an up-to-date head, no force pushes or deletion"
-    echo "  slop's App ($app) and repo admins can bypass"
-  fi
+  echo "  required checks pass on an up-to-date head, no force pushes or deletion"
+  echo "  slop's App ($app) and repo admins can bypass"
   echo "  Run the checks workflow on pushes to $base too."
   if gh api "repos/$repo/branches/$base/protection" --silent 2>/dev/null; then
     echo "  NOTE: $base also has classic branch protection, which can't exempt slop's App and would block its sub"
@@ -103,7 +88,7 @@ fi
 
 # Keep in step with REQUIRED_APP_EVENTS in slop's apps/server/src/github/setup.ts. GitHub applies a manifest's events
 # only when the App is created, so an App made before an event was added never receives it.
-required_events=(push pull_request pull_request_review pull_request_review_comment pull_request_review_thread issue_comment check_run check_suite merge_group)
+required_events=(push pull_request pull_request_review pull_request_review_comment pull_request_review_thread issue_comment check_run check_suite)
 echo "GitHub App events for $app..."
 if app_json=$(gh api "apps/$app" 2>&1); then
   subscribed=$(printf '%s' "$app_json" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("events", [])))')

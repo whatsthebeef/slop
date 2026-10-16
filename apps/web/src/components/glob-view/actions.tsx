@@ -25,7 +25,6 @@ import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { ArmSystemLabel } from '../glob-card';
 import { META } from './tag-style';
-import { Dot } from './status';
 import { Notice } from './notice';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
@@ -298,7 +297,8 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
   );
 
 /**
- * Beside the action row (under it on narrow widths): the Arm system label and the branch, one quiet mono line.
+ * Beside the action row (under it on narrow widths): the Arm system label and the open step's title, or the branch when there is no
+ * such step, one quiet mono line.
  * Human work has no branch or deploy.
  */
 const actionLine = ({ glob }: GlobViewContext) => {
@@ -315,12 +315,16 @@ const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable
       {arming !== null && (
         <>
           <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
-          <Dot />
+          <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="arm-step-title">
+            {arming.tip}
+          </span>
         </>
       )}
-      <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
-        {glob.branch}
-      </span>
+      {arming === null && (
+        <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
+          {glob.branch}
+        </span>
+      )}
     </div>
   );
 };
@@ -520,6 +524,8 @@ export const GlobActions = ({
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || lead !== null;
   const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
+  // A glob waiting in the merge line has no main button (its card shows only the status), but Cancel merge must stay reachable: a lone ▾.
+  const lineMenu = !hasMain && blocking === null && glob.status === 'merging' && moreActions.includes('cancel_merge');
   const menuItems = (
     <>
       {moves.menu.map((move) => (
@@ -564,16 +570,18 @@ export const GlobActions = ({
       ))}
     </>
   );
-  const menu = hasMenu ? (
+  const menu = hasMenu || lineMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          variant={state.variant}
+          variant={lineMenu ? 'outline' : state.variant}
           className={
-            state.variant === 'outline'
-              ? 'rounded-l-none -ml-px px-1.5'
-              : 'rounded-l-none border-l-primary-foreground/40 px-1.5'
+            lineMenu
+              ? 'px-1.5'
+              : state.variant === 'outline'
+                ? 'rounded-l-none -ml-px px-1.5'
+                : 'rounded-l-none border-l-primary-foreground/40 px-1.5'
           }
           disabled={busy}
           aria-label="More actions"
@@ -592,8 +600,9 @@ export const GlobActions = ({
   const notice = state.presentation.notice;
   return (
     <>
-      {(hasMain || escapes.length > 0 || info !== null || notice !== null) && (
+      {(hasMain || lineMenu || escapes.length > 0 || info !== null || notice !== null) && (
         <div className="grid gap-1">
+          <Notice ctx={ctx} notice={notice} />
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
             {lead !== null && (
               <div className="inline-flex" data-testid="split-button">
@@ -666,9 +675,9 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
+            {lineMenu && menu}
             {info}
           </div>
-          <Notice ctx={ctx} notice={notice} />
           <FinishAction ctx={ctx} state={state} />
           <AnywayConfirmation ctx={ctx} state={state} />
           {state.confirmingReady && (

@@ -220,7 +220,6 @@ describe('recording a click through the service (MemoryStore)', () => {
       await boards.create('admin@example.com', {
         name: 'demo',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

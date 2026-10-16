@@ -3,7 +3,7 @@ import type { ActionPreparation } from '../attributes.js';
 import type { ActionState } from '../action-glob.js';
 import type { ArtifactSummary } from '../knowledge.js';
 import type { Arm } from '../rollout-stages.js';
-import type { ClickOutcome, Glob, List, Mode, PendingAction, Run, WorkActor } from '../types.js';
+import type { ClickOutcome, Glob, List, MergeLinePlace, Mode, PendingAction, Run, WorkActor } from '../types.js';
 import type { CompactHumanStep, HumanStep } from '../human-steps.js';
 import type { Handoff } from '../../app/glob-service.js';
 import type { Handover } from '../handover.js';
@@ -87,10 +87,12 @@ export interface PresentableGlob extends Glob {
   readonly humanSteps?: readonly ListedHumanStep[];
   /** Open rollout steps holding back sign-off, counted by the server (a same with any is merged with Merge and continue); absent on an older API, read with `?.`. */
   readonly rolloutSteps?: number;
-  /** The "Arm system" label: the first stage with an open rollout step (an environment, or the base branch for after-merge) and that step's title; absent when no step is open or on an older API. */
+  /** The "Arm system" label: the title of the first open rollout step (a downstream step counts, signed off or not); absent when none is open or on an older API. */
   readonly arm?: Arm;
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
   readonly move?: Move;
+  /** Where a merging glob stands in its board's merge line, derived on the server (`mergeLinePlaces`): board list and glob read; absent when not in the line or on an older API (read with `?.`). */
+  readonly mergeLinePlace?: MergeLinePlace;
   /** What slop is doing for the glob (board list and glob read; absent on an older API). */
   readonly machineSteps?: readonly MachineStep[];
   /** Who picked the glob up, took it over or handed it to the machine, oldest first (single-glob reads only; absent on an older API). */

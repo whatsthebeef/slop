@@ -63,7 +63,6 @@ describe('review settings and the spend line over HTTP (s15f43)', () => {
       await boards.create(ADMIN, {
         name: 'b',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

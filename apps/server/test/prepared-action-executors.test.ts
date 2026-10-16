@@ -122,6 +122,8 @@ describe('prepared actions through the code host executors (Postgres)', () => {
     // Done with checks passed: slop merges the record itself, and the merge closes the action.
     await globs.applyEvent(a.id, (g, ctx) => machine.checksCompleted(g, { sha: HEAD, passed: true }, ctx));
     unwrap(await globs.completeAction(DEV, a.id, (await current(a.id)).version, 'ran'));
+    // The record joins its board's merge line and, alone in it, becomes head: that queues the merge.
+    await globs.advanceMergeLine((await current(a.id)).boardId);
     expect(await run(a.id, 'squash_merge')).toEqual(['done']);
     expect(host.merged).toEqual([7]);
     expect(await current(a.id)).toMatchObject({ status: 'signed_off', labels: {} });

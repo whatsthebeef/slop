@@ -1,4 +1,4 @@
-import { FINDING_CLASS_DESCRIPTIONS, FINDING_CLASSES } from '@slop/core';
+import { FINDING_CLASSES } from '@slop/core';
 import type { FindingClass, FindingView } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -7,7 +7,6 @@ import { defaultFindingsOpen, findingsSummary, readFindingsOpen, writeFindingsOp
 import { findingsKey } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { SectionToggle } from './section-toggle';
-import { Tip } from './ui/tip';
 
 const SEVERITY_TEXT: Record<FindingView['severity'], string> = {
   in_scope: 'in scope',
@@ -31,11 +30,11 @@ const grouped = (findings: readonly FindingView[]) => {
 };
 
 /**
- * The glob view's review findings: counts per class, then each finding with its severity,
+ * The glob view's review findings: each finding with its severity,
  * location, round, source and commit. Finding text comes from reviews, so it is
  * shown as plain text, never as markdown. Findings live beside the glob: `glob.findings` hints and
  * reconnects refresh them, and a slow poll while any review or finding is still being processed
- * catches up on hints a hidden tab missed. The section collapses to its heading and counts; the viewer's toggle is
+ * catches up on hints a hidden tab missed. The section collapses to its heading and counts of severity; the viewer's toggle is
  * remembered, until then it starts expanded while an in-scope finding is open, and a `section=findings` link opens it.
  */
 export const ReviewFindings = ({ globId, startOpen = false }: { globId: string; startOpen?: boolean }) => {
@@ -82,21 +81,6 @@ export const ReviewFindings = ({ globId, startOpen = false }: { globId: string; 
           <p className='text-xs text-red'>
             {data.sources.failed === 1 ? "One review couldn't be split into findings." : `${String(data.sources.failed)} reviews couldn't be split into findings.`}
           </p>
-        )}
-        {data.byClass.length > 0 && (
-          <ul className='flex flex-wrap gap-1'>
-            {data.byClass.map((c) => (
-              <li key={c.class}>
-                <Tip text={FINDING_CLASS_DESCRIPTIONS[c.class]}>
-                  <span className='inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]' data-testid='finding-class'>
-                    <span>{c.class}</span>
-                    <span className={cn(c.inScope > 0 ? 'font-semibold' : 'text-muted-foreground')}>{c.total}</span>
-                    {c.inScope > 0 && <span className='font-semibold'>({c.inScope} in scope)</span>}
-                  </span>
-                </Tip>
-              </li>
-            ))}
-          </ul>
         )}
         <div className='grid gap-2'>
           {grouped(data.findings).map(([cls, items]) => (

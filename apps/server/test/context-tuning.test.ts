@@ -27,7 +27,7 @@ describe('context tuning in Postgres', () => {
     drop = created.drop;
     store = new PgStore(created.database.db);
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     tuning = new ContextTuningService({ store, clock, notifier });
     jobs = new LearningJobService({ store, clock, notifier, mining: new MiningService({ store, notifier }), contextTuning: tuning, manifests: null });
   });

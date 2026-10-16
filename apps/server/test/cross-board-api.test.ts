@@ -88,8 +88,8 @@ describe('cross-board relations over REST (Postgres)', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, BOTH, ONLY_X, ONLY_Y]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardX = unwrap(await boards.create(ADMIN, { name: 'Machine X', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    boardY = unwrap(await boards.create(ADMIN, { name: 'Machine Y', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardX = unwrap(await boards.create(ADMIN, { name: 'Machine X', repo: null, timeZone: 'UTC', environments: [] })).id;
+    boardY = unwrap(await boards.create(ADMIN, { name: 'Machine Y', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardX, BOTH, 'dev'));
     unwrap(await boards.setMember(ADMIN, boardY, BOTH, 'dev'));
     unwrap(await boards.setMember(ADMIN, boardX, ONLY_X, 'dev'));

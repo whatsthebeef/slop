@@ -1,6 +1,5 @@
 # CodeBuild buildspec that runs a board's acceptance tests (ATF) and reports the result to slop. slop
-# doesn't start ATF: the board's pipeline does, as a stage after it deploys to a release or integration
-# environment, or after a branch deploy. Pass SLOP_ENVIRONMENT (the environment tested) and SLOP_SHA (the
+# doesn't start ATF: the board's pipeline does, as a stage after the change is merged to main and deployed to int (not on a dev branch deploy). Pass SLOP_ENVIRONMENT (the environment tested) and SLOP_SHA (the
 # commit it runs); for a run on a glob's branch, also SLOP_GLOB (the glob's ID).
 #
 # The tests themselves live in the repository's .sstor/atf.sh, which must write JUnit XML under
@@ -8,8 +7,8 @@
 # slop the counts and a link, whether the tests passed or not. Any failing test shows as an ATF failure on
 # the glob's card; it never blocks a PR, approval, sign-off or a production deploy.
 #
-# Which specs run: .sstor/atf-specs.sh asks slop for the specs the globs merged in this deploy planned (their test
-# plans), exports them as SLOP_ATF_SPECS (one path per line) and SLOP_ATF_GREP, and .sstor/atf.sh runs only those, or the
+# Which specs run: .sstor/atf-specs.sh asks slop for the specs the deployed glob planned (its test
+# plan), exports them as SLOP_ATF_SPECS (one path per line) and SLOP_ATF_GREP, and .sstor/atf.sh runs only those, or the
 # board's default suite when the list is empty.
 #
 # Identity: no stored slop secret. The project's role asks AWS for a short-lived JWT (AWS outbound identity federation,

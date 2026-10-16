@@ -1,4 +1,4 @@
-import type { AtfBatch, AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, RelationScanPatch, RelationScanRow, RelationSignal, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import type { AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, Glob, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, RelationScanPatch, RelationScanRow, RelationSignal, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
 import { AGENT_SET_COMMIT_DELAY_MS, RELATION_SCAN_DEBOUNCE_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, ATF_RUNNER_METHODS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
@@ -364,29 +364,6 @@ const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
   verdictAt: r.verdictAt === undefined ? null : new Date(r.verdictAt),
 });
 
-const toEnvironmentDeploy = (row: typeof schema.environmentDeploys.$inferSelect): EnvironmentDeploy => ({
-  ...row,
-  at: row.at.toISOString(),
-  checkedAt: row.checkedAt?.toISOString() ?? null,
-});
-
-const toAtfBatch = (row: typeof schema.atfBatches.$inferSelect): AtfBatch => ({
-  ...row,
-  createdAt: row.createdAt.toISOString(),
-});
-
-const toPresence = (row: typeof schema.globEnvironments.$inferSelect): GlobPresence => ({
-  ...row,
-  checkedAt: row.checkedAt.toISOString(),
-  since: row.since?.toISOString() ?? null,
-});
-
-const presenceRow = (p: GlobPresence): typeof schema.globEnvironments.$inferInsert => ({
-  ...p,
-  checkedAt: new Date(p.checkedAt),
-  since: p.since === null ? null : new Date(p.since),
-});
-
 const toTestRun = (row: typeof schema.testRuns.$inferSelect): TestRun => ({
   ...row,
   kind: oneOf(TEST_RUN_KINDS, row.kind),
@@ -746,7 +723,6 @@ export class PgStore implements Store {
         return rows.length === 1;
       },
       deleteGlob: async (id) => {
-        await t.delete(schema.globEnvironments).where(eq(schema.globEnvironments.globId, id));
         await t.delete(schema.testRuns).where(eq(schema.testRuns.globId, id));
         await t.delete(schema.reviewFindings).where(eq(schema.reviewFindings.globId, id));
         await t.delete(schema.reviewSources).where(eq(schema.reviewSources.globId, id));
@@ -1264,6 +1240,9 @@ export class PgStore implements Store {
       lockBoardSessions: async (email) => {
         await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_sessions:${email}`}))`);
       },
+      lockMergeLine: async (boardId) => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`merge_line:${String(boardId)}`}))`);
+      },
       listBoardSessions: async (email) =>
         (
           await t
@@ -1735,76 +1714,6 @@ export class PgStore implements Store {
         return row === undefined ? null : toDeploy(row);
       },
 
-      insertEnvironmentDeploy: async (deploy) => {
-        const rows = await t
-          .insert(schema.environmentDeploys)
-          .values({ ...deploy, at: new Date(deploy.at) })
-          .onConflictDoNothing()
-          .returning({ id: schema.environmentDeploys.id });
-        return rows.length === 1;
-      },
-      latestEnvironmentDeploy: async (boardId, environment) => {
-        const d = schema.environmentDeploys;
-        const [row] = await t
-          .select()
-          .from(d)
-          .where(and(eq(d.boardId, boardId), eq(d.environment, environment), eq(d.succeeded, true)))
-          .orderBy(desc(d.at), desc(d.id))
-          .limit(1);
-        return row === undefined ? null : toEnvironmentDeploy(row);
-      },
-      listEnvironmentDeploys: async (boardId, environment, limit) => {
-        const d = schema.environmentDeploys;
-        const rows = await t
-          .select()
-          .from(d)
-          .where(and(eq(d.boardId, boardId), eq(d.environment, environment)))
-          .orderBy(desc(d.at), desc(d.id))
-          .limit(limit);
-        return rows.map(toEnvironmentDeploy);
-      },
-      markEnvironmentDeployChecked: async (boardId, environment, sha, at) => {
-        const d = schema.environmentDeploys;
-        await t
-          .update(d)
-          .set({ checkedAt: new Date(at) })
-          .where(and(eq(d.boardId, boardId), eq(d.environment, environment), eq(d.sha, sha)));
-      },
-      listGlobPresence: async (boardId, filter) => {
-        const g = schema.globEnvironments;
-        const conditions = [eq(g.boardId, boardId)];
-        if (filter.environment !== undefined) conditions.push(eq(g.environment, filter.environment));
-        if (filter.contained !== undefined) conditions.push(eq(g.contained, filter.contained));
-        if (filter.globIds !== undefined) {
-          if (filter.globIds.length === 0) return [];
-          conditions.push(inArray(g.globId, [...filter.globIds]));
-        }
-        const rows = await t.select().from(g).where(and(...conditions)).orderBy(g.globId, g.environment);
-        return rows.map(toPresence);
-      },
-      saveGlobPresence: async (rows) => {
-        const g = schema.globEnvironments;
-        // One statement; a key given twice keeps its last row (one upsert can't touch a row twice).
-        const byKey = new Map(rows.map((p) => [`${p.globId}:${p.environment}`, presenceRow(p)]));
-        if (byKey.size === 0) return;
-        await t
-          .insert(g)
-          .values([...byKey.values()])
-          .onConflictDoUpdate({
-            target: [g.globId, g.environment],
-            set: {
-              boardId: sql`excluded.board_id`,
-              mergeSha: sql`excluded.merge_sha`,
-              contained: sql`excluded.contained`,
-              checkedSha: sql`excluded.checked_sha`,
-              checkedAt: sql`excluded.checked_at`,
-              since: sql`excluded.since`,
-            },
-          });
-      },
-      lockEnvironment: async (boardId, environment) => {
-        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`environments:${String(boardId)}:${environment}`}))`);
-      },
       insertTestRun: async (run) => {
         const { specs = [], runnerId = null, ...fields } = run;
         const rows = await t
@@ -1831,50 +1740,10 @@ export class PgStore implements Store {
           .orderBy(schema.testRunSpecs.testRunId, schema.testRunSpecs.spec);
         return rows.map((row): StoredRunSpec => ({ ...row, status: oneOf(SPEC_STATUSES, row.status) }));
       },
-      getAtfBatch: async (boardId, environment, sha) => {
-        const b = schema.atfBatches;
-        const [row] = await t.select().from(b).where(and(eq(b.boardId, boardId), eq(b.environment, environment), eq(b.sha, sha)));
-        return row === undefined ? null : toAtfBatch(row);
-      },
-      latestAtfBatch: async (boardId, environment) => {
-        const b = schema.atfBatches;
-        const [row] = await t
-          .select()
-          .from(b)
-          .where(and(eq(b.boardId, boardId), eq(b.environment, environment)))
-          .orderBy(desc(b.createdAt), desc(b.id))
-          .limit(1);
-        return row === undefined ? null : toAtfBatch(row);
-      },
-      insertAtfBatch: async (batch) => {
-        const b = schema.atfBatches;
-        const [row] = await t
-          .insert(b)
-          .values({ ...batch, specs: [...batch.specs], greps: [...batch.greps], createdAt: new Date(batch.createdAt) })
-          .onConflictDoNothing()
-          .returning();
-        if (row !== undefined) return toAtfBatch(row);
-        const [stored] = await t
-          .select()
-          .from(b)
-          .where(and(eq(b.boardId, batch.boardId), eq(b.environment, batch.environment), eq(b.sha, batch.sha)));
-        if (stored === undefined) throw new Error('ATF batch insert returned nothing');
-        return toAtfBatch(stored);
-      },
       listTestRuns: async (boardId, filter) => {
         const r = schema.testRuns;
         const matches = [];
         if (filter.globIds !== undefined && filter.globIds.length > 0) matches.push(inArray(r.globId, [...filter.globIds]));
-        for (const c of filter.commits ?? []) {
-          // Either side may be a short SHA (lower-cased on the way in).
-          matches.push(
-            and(
-              isNull(r.globId),
-              eq(r.environment, c.environment),
-              sql`(starts_with(${r.sha}, ${c.sha}) or starts_with(${c.sha}, ${r.sha}))`,
-            ),
-          );
-        }
         if (matches.length === 0) return [];
         const rows = await t
           .select()
@@ -2884,14 +2753,14 @@ export class PgStore implements Store {
             if (pending !== undefined || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
           }
           if (effect.kind === 'deliver_atf_webhook') {
-            // One delivery per runner and deploy, whatever its state: a repeated containment check queues none, and a delivery
+            // One delivery per runner and deploy, whatever its state: a repeated deploy finish queues none, and a delivery
             // that already succeeded is never queued again (a failed one ran out of attempts and stays failed, and a dropped one, refused
             // by the receiver or the address check, stays dropped: the same delivery ID is not repeated).
             const jobs = schema.outbox;
-            const same = sql`${jobs.kind} = 'deliver_atf_webhook' and ${jobs.effect}->>'runnerId' = ${String(effect.runnerId)} and ${jobs.effect}->>'deployId' = ${String(effect.deployId)}`;
+            const same = sql`${jobs.kind} = 'deliver_atf_webhook' and ${jobs.effect}->>'runnerId' = ${effect.runnerId} and ${jobs.effect}->>'deployId' = ${effect.deployId}`;
             // Two checks racing on the same deploy would both see no job and both insert one: serialise them per (runner, deploy)
             // until this transaction commits, so the second one's check sees the first one's job.
-            await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`deliver_atf_webhook:${String(effect.runnerId)}:${String(effect.deployId)}`}))`);
+            await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`deliver_atf_webhook:${effect.runnerId}:${effect.deployId}`}))`);
             const [existing] = await t.select({ id: jobs.id }).from(jobs).where(sql`${same}`).limit(1);
             if (existing !== undefined || rows.some((r) => r.effect.kind === effect.kind && r.effect.runnerId === effect.runnerId && r.effect.deployId === effect.deployId)) continue;
           }

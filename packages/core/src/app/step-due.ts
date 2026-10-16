@@ -4,8 +4,8 @@ import type { Tx } from '../ports.js';
 
 /**
  * When an `after_deploy:<env>` step falls due (`StoredHumanStep.dueSince`). It is written, not derived, so a rollback never
- * takes a step back out of due: slop sets it when a deploy check finds the glob newly in the environment, or when a person
- * marks the environment deployed. Branch deploys don't count: they deploy a commit from before the merge.
+ * takes a step back out of due: slop sets it when the glob's branch is deployed to the (dev) environment, or when a person
+ * marks the environment deployed. A succeeded branch deploy counts, before the merge too (`DeployService.finish` marks the steps).
  */
 
 /** The steps of these globs that wait for a deploy to `environment` and aren't due yet, now due: saved, and returned. */
@@ -21,7 +21,7 @@ export const markStepsDue = async (tx: Tx, boardId: number, globIds: readonly st
 
 /**
  * `dueSince` for a step being written for `due`: null unless the step waits for a deploy and the glob is already there. That
- * is when the environment holds the glob now, a person marked it deployed earlier, or another step of the glob for the same
+ * is when a branch deploy of the glob to the environment has succeeded, a person marked it deployed earlier, or another step of the glob for the same
  * environment is already due (so a re-read record's new step doesn't wait for a deploy that already happened).
  */
 export const dueSinceFor = async (tx: Tx, glob: Pick<Glob, 'id' | 'boardId'>, due: HumanStepDue, siblings: readonly StoredHumanStep[], now: string): Promise<string | null> => {
@@ -29,7 +29,7 @@ export const dueSinceFor = async (tx: Tx, glob: Pick<Glob, 'id' | 'boardId'>, du
   const environment = due.slice('after_deploy:'.length);
   const inherited = siblings.find((s) => s.due === due && s.dueSince !== null)?.dueSince;
   if (inherited !== undefined && inherited !== null) return inherited;
-  if ((await tx.listGlobPresence(glob.boardId, { environment, globIds: [glob.id], contained: true })).length > 0) return now;
+  if ((await tx.listDeploys(glob.boardId, { environment, globIds: [glob.id], states: ['succeeded'], limit: 1 })).length > 0) return now;
   const marks = await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['EnvironmentMarkedDeployed'], [glob.id]);
   return marks.some((e) => e.data.environment === environment) ? now : null;
 };

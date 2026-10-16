@@ -1,3 +1,4 @@
+import { isAgentSetGlob } from './agent-set.js';
 import { actionState } from './action-glob.js';
 import { doThisCommands, fetchCommandFor } from './action-script.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
@@ -67,15 +68,16 @@ export type HumanStepWho = string;
 
 /**
  * When a step falls due. `after_deploy:<env>` falls due once the step's `dueSince` is set: a recorded deploy of the glob's merge to <env>, or a person's mark.
+ * `downstream` is the "also on the rest of the pipeline" step: due once the glob is merged, it blocks nothing and a person ticks it when the change is released further (slop never tracks those deploys).
  * `once` is a one-shot command inside the change: it has no environment, falls due as soon as its script is on the glob's branch
  * (at once when it has none), stays done once done and is never reopened by a later generation.
  */
-export type HumanStepDue = 'now' | 'after_merge' | 'once' | `after_deploy:${string}`;
+export type HumanStepDue = 'now' | 'after_merge' | 'once' | 'downstream' | `after_deploy:${string}`;
 
 export const isHumanStepDue = (value: string): value is HumanStepDue =>
-  value === 'now' || value === 'after_merge' || value === 'once' || (value.startsWith('after_deploy:') && value.length > 'after_deploy:'.length);
+  value === 'now' || value === 'after_merge' || value === 'once' || value === 'downstream' || (value.startsWith('after_deploy:') && value.length > 'after_deploy:'.length);
 
-/** The environment an `after_deploy:<env>` step names; null for any other step. */
+/** The environment an `after_deploy:<env>` step names; null for any other step (a downstream step names none: its wording comes from the board's knowledge doc). */
 export const environmentOf = (due: HumanStepDue): string | null => (due.startsWith('after_deploy:') ? due.slice('after_deploy:'.length) : null);
 
 /** The refusal for a step that waits for an environment the board doesn't have, naming the ones it has. */
@@ -93,7 +95,7 @@ export type HumanStepBlock = (typeof HUMAN_STEP_BLOCKS)[number];
 export type HumanStepScript = { readonly artifact: string } | { readonly path: string };
 
 /** What a step's chip runs: a state-machine action, or opening the run's session (a link, not a state change). */
-export type StepAction = Action | 'open_session' | 'mark_deployed';
+export type StepAction = Action | 'open_session';
 
 /** The title of the placeholder step the investigator leaves when it predicts a rollout (origin `investigation`). */
 export const PREDICTED_ROLLOUT_TITLE = 'Rollout: steps to be written';
@@ -263,7 +265,7 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
     (glob.pr.state === 'draft' || glob.pr.state === 'ready') &&
     (glob.status === 'pr_open' || glob.status === 'in_progress');
   // A person who implements the glob fixes its conflict or failed merge themselves: no routine run will.
-  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null;
+  const personMergeFailure = glob.failure?.kind === 'merge' && glob.implementer !== null && !isAgentSetGlob(glob);
   if (glob.implementer !== null && ((hasOpenPr && glob.conflict != null) || personMergeFailure))
     steps.push(derived('resolve_conflict', 'Resolve conflict', 'implementer'));
   const run = glob.runs[glob.runs.length - 1];
@@ -299,7 +301,7 @@ const onceDue = (glob: Pick<Glob, 'pr' | 'status'>, script: HumanStepScript | nu
 
 /**
  * What a stored step is for this glob. After the merge: due once the glob is merged, but not while it is still in Merging
- * (the code host may show the PR merged before slop has moved the glob on). After a deploy: due once `dueSince` is set. Once:
+ * (the code host may show the PR merged before slop has moved the glob on). Downstream: due once the glob is merged, like after the merge. After a deploy: due once `dueSince` is set. Once:
  * due as soon as its script is on the branch (see `onceDue`), merged or not.
  */
 export const stateOf = (
@@ -311,13 +313,13 @@ export const stateOf = (
   if (step.state === 'dismissed') return 'dismissed';
   if (step.due === 'now') return 'due';
   if (step.due === 'once') return onceDue(glob, step.script, onBranch) ? 'due' : 'pending';
-  if (step.due === 'after_merge') return isMerged(glob) && glob.status !== 'merging' ? 'due' : 'pending';
+  if (step.due === 'after_merge' || step.due === 'downstream') return isMerged(glob) && glob.status !== 'merging' ? 'due' : 'pending';
   return step.dueSince !== null ? 'due' : 'pending';
 };
 
-/** What a rollout step holds back by default: after the merge, sign-off and dependants; after a deploy, nothing (a step that says `blocks` keeps it). */
+/** What a rollout step holds back by default: after the merge, sign-off and dependants; after a deploy or downstream, nothing (a step that says `blocks` keeps it; a downstream step never holds anything back). */
 export const defaultStepBlocks = (due: HumanStepDue): readonly HumanStepBlock[] =>
-  due.startsWith('after_deploy:') ? [] : ['sign_off', 'dependants'];
+  due.startsWith('after_deploy:') || due === 'downstream' ? [] : ['sign_off', 'dependants'];
 
 const fromStored = (glob: Glob, s: StoredHumanStep, onBranch?: ReadonlySet<string>): HumanStep => ({
   id: s.id,
@@ -441,6 +443,7 @@ export const dueText = (due: HumanStepDue): string => {
   if (due === 'now') return 'now';
   if (due === 'after_merge') return 'after the merge';
   if (due === 'once') return 'once, when its script is on the branch';
+  if (due === 'downstream') return 'when the change is released further down the pipeline';
   return `after the deploy to ${due.slice('after_deploy:'.length)}`;
 };
 

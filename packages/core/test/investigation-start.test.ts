@@ -34,7 +34,7 @@ describe('Start and Pick up during an investigation', () => {
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => `run-${String(++n)}` }, routines: { hasRoutine: () => Promise.resolve(true) } });
     artifacts = new ArtifactService({ store, clock, notifier: new RecordingNotifier() });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   it('Start queues behind the investigation, a second Start changes nothing, and the end of the run starts the glob', async () => {

@@ -75,7 +75,7 @@ describe('relation scan in Postgres', () => {
     artifacts = new ArtifactService({ store, clock, notifier, relationScan: scan });
     runner = new OutboxRunner(db, { globs }, relationScanExecutors(scan), () => undefined, 'llm');
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   afterAll(async () => {

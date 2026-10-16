@@ -1,11 +1,11 @@
-import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
+import type { BaseChecks, Board, BoardService, Effect, Store, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, prepareInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
 import { hasBranchRecord, isOpenAction, isRepoAccessFailure, isSetupFailure, machine, preparationOf, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
-import { QueueDetectionError, repoOf } from './codehost.js';
+import { repoOf } from './codehost.js';
 
 /** How long a cancelled check run may wait for a newer run on the same head before it is re-requested. */
 const CANCELLED_CHECK_WAIT_MS = 5 * 60_000;
@@ -17,23 +17,22 @@ const PROVISION_POLL_MS = 3_000;
 /** GitHub's refusal when a merge names a head the PR no longer has. */
 const HEAD_MODIFIED = /head branch was modified/i;
 
-/** A dequeue with no reason this soon after the enqueue may just be the host not showing the entry yet: look again first. */
-const QUEUE_GRACE_MS = 2 * 60_000;
-
-/** The merge queue's removal reasons in words (the host's `MergeQueueDequeueReason` values). */
-const QUEUE_REASON_TEXT: Readonly<Record<string, string>> = {
-  MANUAL: 'Removed from the merge queue',
-  CI_FAILURE: 'Removed from the merge queue: its checks failed',
-  CI_TIMEOUT: 'Removed from the merge queue: its checks timed out',
-  BRANCH_PROTECTIONS: 'Removed from the merge queue: a branch protection rule was not met',
-  QUEUE_CLEARED: 'Removed from the merge queue: the queue was cleared',
-  GIT_TREE_INVALID: 'Removed from the merge queue: GitHub could not build the merge commit',
-  INVALID_MERGE_COMMIT: 'Removed from the merge queue: GitHub could not build the merge commit',
-};
-
 /** The HTTP status of a code host error (Octokit's `status`), when it has one. */
 const httpStatus = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null;
+
+/**
+ * Queues a base-branch read for every board with a repo (start-up: a default branch renamed while slop was down is
+ * caught without a push). The executor is idempotent, so a repeated start queues harmless duplicates.
+ */
+export const queueBaseBranchRefreshes = async (store: Pick<Store, 'transaction'>): Promise<number> =>
+  store.transaction(async (tx) => {
+    const effects = (await tx.listAllBoards())
+      .filter((b) => b.repo !== null)
+      .map((b): Effect => ({ kind: 'refresh_base_branch', globId: `board-${String(b.id)}`, boardId: b.id }));
+    await tx.enqueueEffects(effects);
+    return effects.length;
+  });
 
 /**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
@@ -43,7 +42,7 @@ export const codeHostExecutors = (
   host: CodeHost,
   boardOf: (id: number) => Promise<Board | null>,
   routines: RoutineSource,
-  boards: Pick<BoardService, 'recordBaseChecks'>,
+  boards: Pick<BoardService, 'recordBaseChecks' | 'recordBaseBranch'>,
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
   notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
@@ -148,6 +147,14 @@ export const codeHostExecutors = (
       }
     },
 
+    rerun_checks: async (effect, glob) => {
+      if (effect.kind !== 'rerun_checks' || glob === null) return 'dropped';
+      const repo = await repoFor(glob.boardId);
+      if (repo === null) return 'dropped';
+      await host.rerunFailedJobs(repo, effect.sha, { force: true });
+      return 'done';
+    },
+
     sync_pr_labels: async (_effect, glob) => {
       if (glob?.pr == null) return 'dropped';
       const repo = await repoFor(glob.boardId);
@@ -237,10 +244,6 @@ export const codeHostExecutors = (
         log('reconcile', `${glob.id} rereading head checks (no result recorded)`);
         await globs.applyEvent(glob.id, (g, ctx) => machine.checksChanged(g, ctx));
       }
-      // A queued merge re-reads its queue entry too (a missed dequeue or merge, and the position behind it).
-      if (now?.status === 'merging' && now.mergeQueue != null) {
-        await globs.applyEvent(glob.id, (g, ctx) => machine.mergeQueueEvent(g, { kind: 'reconcile' }, ctx));
-      }
       return 'done';
     },
 
@@ -285,6 +288,17 @@ export const codeHostExecutors = (
           ),
         { relations: true },
       );
+      return 'done';
+    },
+
+    // A host that can't answer throws (the outbox retries) or says null; either way the stored base stays.
+    refresh_base_branch: async (effect) => {
+      if (effect.kind !== 'refresh_base_branch') return 'dropped';
+      const board = await boardOf(effect.boardId);
+      const repo = board === null ? null : repoOf(board);
+      if (repo === null || !host.configured) return 'dropped';
+      const name = await host.defaultBranch(repo);
+      if (name !== null) await boards.recordBaseBranch(effect.boardId, name);
       return 'done';
     },
 
@@ -425,25 +439,14 @@ export const codeHostExecutors = (
 
     squash_merge: async (effect, glob, { globs }, attempt) => {
       if (effect.kind !== 'squash_merge' || glob?.pr == null) return 'dropped';
+      // Only the head of the board's merge line merges, at the head it was queued for: an effect that outlived a Cancel merge,
+      // a push or the glob's turn is dropped, which is the second guard against two heads working at once.
+      if (glob.status !== 'merging' || glob.mergeLine?.head == null || glob.pr.headSha !== effect.sha) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       const prNumber = glob.pr.number;
-      let result;
-      try {
-        result = await host.squashMerge(repo, glob, prNumber, effect.sha);
-      } catch (error) {
-        // The host couldn't say whether the branch has a merge queue: never merge on a guess. Retry, and hand the glob back at the end.
-        if (!(error instanceof QueueDetectionError) || attempt?.final !== true) throw error;
-        await globs.applyEvent(glob.id, (g, ctx) => machine.mergeFailed(g, `Not merged: ${error.message}`, ctx));
-        return 'done';
-      }
+      const result = await host.squashMerge(repo, glob, prNumber, effect.sha);
       switch (result.outcome) {
-        case 'queued':
-          // The host's merge queue merges it in order; its events (and the reconcile sweep) report back.
-          await globs.applyEvent(glob.id, (g, ctx) =>
-            machine.mergeQueued(g, { sha: effect.sha, position: result.position, state: result.state }, ctx),
-          );
-          break;
         case 'merged':
           // Slop's own merge response; the `closed` webhook that follows is a no-op (rows 15 and 31).
           await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: result.sha, number: prNumber }, ctx));
@@ -492,78 +495,10 @@ export const codeHostExecutors = (
       return 'done';
     },
 
-    /**
-     * A merge queue webhook or reconcile hint: read the PR and its queue entry from the host and apply the truth. Merged,
-     * closed and moved heads go through the transitions the webhooks use; an entry records its place; an entry that is gone
-     * with the PR still open means the queue removed it, which fails the glob with the queue's reason (or flags a conflict).
-     */
-    read_merge_queue: async (effect, glob, { globs }, attempt) => {
-      if (effect.kind !== 'read_merge_queue' || glob?.pr == null || glob.status !== 'merging') return 'dropped';
-      const repo = await repoFor(glob.boardId);
-      if (repo === null) return 'dropped';
-      const prNumber = glob.pr.number;
-      const pr = await host.prState(repo, prNumber);
-      if (pr.state === 'merged') {
-        await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: pr.mergeSha ?? pr.headSha, number: prNumber }, ctx));
-        return 'done';
-      }
-      if (pr.state === 'closed') {
-        await globs.applyEvent(glob.id, (g, ctx) => machine.prClosed(g, ctx));
-        return 'done';
-      }
-      if (pr.headSha !== glob.pr.headSha) {
-        log('merge', `${glob.id} head moved to ${pr.headSha} while queued (missed webhook)`);
-        await globs.applyEvent(glob.id, (g, ctx) => machine.commitPushed(g, { sha: pr.headSha, runId: null }, ctx));
-        return 'done';
-      }
-      const entry = await host.mergeQueueEntry(repo, prNumber);
-      if (entry !== null) {
-        await globs.applyEvent(glob.id, (g, ctx) => machine.mergeQueued(g, { sha: pr.headSha, ...entry }, ctx));
-        return 'done';
-      }
-      // Not recorded as queued: the enqueue is still in flight, so there is nothing to have been removed from.
-      const queued = glob.mergeQueue;
-      if (queued == null) return 'done';
-      // Webhook reasons come in both cases (`merge_group` is lowercase, GraphQL and `pull_request` upper).
-      const reason = effect.reason?.toUpperCase();
-      // The host reports the merge itself a moment before the PR reads as merged, and the entry a moment after the enqueue.
-      const merging = reason === 'SUCCEEDED' || reason === 'ALREADY_MERGED' || reason === 'MERGED';
-      const fresh = reason === undefined && Date.parse(now()) - Date.parse(queued.since) < QUEUE_GRACE_MS;
-      if ((merging || fresh) && attempt?.final !== true) throw new Error('The merge queue entry is gone but the PR has not merged yet');
-      if (reason === 'MERGE_CONFLICT') {
-        const conflict = { base: repo.base, files: await host.conflictFiles(repo, prNumber) };
-        await globs.applyEvent(glob.id, (g, ctx) => machine.mergeQueueDequeued(g, { reason: machine.conflictReason(conflict), conflict }, ctx));
-        return 'done';
-      }
-      // `failedSha` is only ever recorded on the glob whose PR the failing group names, so it is this PR's failure.
-      const failed = reason === 'CI_FAILURE' || reason === 'CI_TIMEOUT' || queued.failedSha !== undefined;
-      const checks = failed && queued.failedSha !== undefined ? await explainFailure(repo, queued.failedSha) : null;
-      const text =
-        reason !== undefined && QUEUE_REASON_TEXT[reason] !== undefined
-          ? QUEUE_REASON_TEXT[reason]
-          : failed
-            ? QUEUE_REASON_TEXT['CI_FAILURE']
-            : 'Left the merge queue without merging';
-      await globs.applyEvent(glob.id, (g, ctx) =>
-        machine.mergeQueueDequeued(g, { reason: text ?? 'Left the merge queue without merging', ...(checks !== null && { checks }) }, ctx),
-      );
-      return 'done';
-    },
-
-    /** Cancel merge on a queued PR: the glob is already back in pr_open, so only the host's queue entry is left to remove. */
-    dequeue_merge: async (effect, glob, { globs }) => {
-      // A later merge may have queued the PR again (Cancel merge, then the gate re-merges): a delayed dequeue must not remove it.
-      if (effect.kind !== 'dequeue_merge' || glob?.pr == null || glob.status === 'merging') return 'dropped';
-      const repo = await repoFor(glob.boardId);
-      if (repo === null) return 'dropped';
-      const prNumber = glob.pr.number;
-      if ((await host.dequeue(repo, prNumber)) === 'not_queued') {
-        // It wasn't in the queue any more: the queue may have merged it first.
-        const pr = await host.prState(repo, prNumber);
-        if (pr.state === 'merged') {
-          await globs.applyEvent(glob.id, (g, ctx) => machine.merged(g, { sha: pr.mergeSha ?? pr.headSha, number: prNumber }, ctx));
-        }
-      }
+    /** The merge line's nudge: makes the next glob of the board the head when it has none. Board-wide, idempotent, under the board's lock. */
+    advance_merge_line: async (effect, _glob, { globs }) => {
+      if (effect.kind !== 'advance_merge_line') return 'dropped';
+      await globs.advanceMergeLine(effect.boardId);
       return 'done';
     },
 

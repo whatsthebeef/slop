@@ -1,4 +1,4 @@
-import { isForViewer, isMerged } from './human-steps.js';
+import { isForViewer } from './human-steps.js';
 import type { HumanStep, HumanStepViewer, StepAction } from './human-steps.js';
 import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
@@ -17,7 +17,7 @@ export const HOLDERS = ['you', 'human', 'machine', 'waiting', 'stalled', 'idle',
 export type Holder = (typeof HOLDERS)[number];
 
 /** Why a glob is stalled, which picks the wording of the step that hands it to a person. */
-export const STALL_CAUSES = ['failed', 'queued', 'quiet', 'nobody', 'deploy'] as const;
+export const STALL_CAUSES = ['failed', 'queued', 'quiet', 'nobody'] as const;
 export type StallCause = (typeof STALL_CAUSES)[number];
 
 export interface Move {
@@ -124,13 +124,18 @@ export const CHECKS_RUNNING_TEXT = 'running checks';
 export const mergingFromBaseText = (base: string): string => `merging from ${base}`;
 
 /**
- * The one wording for a PR in the code host's merge queue: "in merge queue · N ahead" (N is the PRs ahead of it), plain
- * "in merge queue" when the position is unknown, and "merging" once its group is being merged.
+ * The one wording for a glob in its board's merge line, by place (1 is the head): "merging" for the head (the status line says
+ * "running checks" instead while its checks run), "next to merge" for the second and "N ahead in the merge line" from the third
+ * (N is the number of globs ahead of it in the line: the head and the one that is next count). The place is the line's, derived on the server;
+ * without it (an older API, a card that has no line) a waiting glob reads plain "in the merge line".
  */
-export const MERGE_QUEUE_TEXT = 'in merge queue';
-export const MERGE_QUEUE_TIP = 'GitHub tests it with the PRs ahead of it and merges it in order.';
-export const mergeQueueText = (position: number | null, state: 'queued' | 'merging'): string =>
-  state === 'merging' ? 'merging' : position === null ? MERGE_QUEUE_TEXT : `${MERGE_QUEUE_TEXT} · ${String(Math.max(0, position - 1))} ahead`;
+export const MERGE_LINE_TEXT = 'in the merge line';
+export const NEXT_TO_MERGE_TEXT = 'next to merge';
+export const mergeLineText = (position: number | null): string =>
+  position === null ? MERGE_LINE_TEXT : position <= 1 ? 'merging' : position === 2 ? NEXT_TO_MERGE_TEXT : `${String(position - 1)} ahead in the merge line`;
+/** The tooltip's explanation, with the IDs ahead when they are known. */
+export const mergeLineTip = (ahead: readonly string[]): string =>
+  `Slop merges one glob at a time, in the order they were ready, and only the one at the head updates from main and runs checks.${ahead.length === 0 ? '' : ` Ahead of it: ${ahead.join(', ')}.`}`;
 
 /** The `human` move's reasons when a person holds a glob: picked up (no machine run), or pairing on a super. */
 export const PICKED_UP_REASON = 'Picked up';
@@ -150,12 +155,6 @@ const stalled = (cause: StallCause, reason: string, label: string, since: string
 
 const earliest = (steps: readonly MachineStep[]): string | null =>
   steps.map((s) => s.startedAt).filter((t): t is string => t !== null).sort()[0] ?? null;
-
-/** How long a merged glob's rollout steps may wait on a deploy nobody reported before the card says so (a pipeline takes a few minutes). */
-export const DEPLOY_STALL_MINUTES = 15;
-
-/** The one wording of a rollout waiting on a deploy that never came: the card and status show just this. */
-export const DEPLOY_STALLED_LABEL = 'Deploy stalled';
 
 /** The short stall label for a merge conflict: the card's one wording, also the status line's text for a failed merge. */
 export const MERGE_CONFLICT_STALL_LABEL = 'stalled · merge conflict';
@@ -199,8 +198,9 @@ export const whoseMove = (
   const mergeWaits = held.some((h) => h.gate === 'merge');
   // While slop gets its recommendation for a picked-up decision, the status says so rather than "Decide"; Decide is still usable.
   const recommending = machineSteps.some((s) => s.kind === 'recommendation' && s.holdsBall && isInFlight(s) && !isStale(s, now, thresholds));
+  // A downstream step is nobody's move: it blocks nothing and a person ticks it whenever the change reaches the rest of the pipeline.
   const due = humanSteps.filter(
-    (s) => s.kind !== 'unstick' && s.state === 'due' && !(mergeWaits && s.kind === 'merge') && !(recommending && s.kind === 'decide'),
+    (s) => s.kind !== 'unstick' && s.state === 'due' && s.due !== 'downstream' && !(mergeWaits && s.kind === 'merge') && !(recommending && s.kind === 'decide'),
   );
   if (due.length > 0) {
     const mine = options.viewer === undefined ? [] : due.filter((s) => isForViewer(s, glob, options.viewer as HumanStepViewer));
@@ -247,16 +247,6 @@ export const whoseMove = (
   // or the card would hide Start on a glob that is free to start.
   if (glob.status !== 'planning' && rollouts.length > 0 && quiet.length === 0 && !machineSteps.some((s) => s.state === 'failed')) {
     const first = rollouts[0];
-    // A merged glob whose steps all wait on a deploy that was never recorded (none running, none reported) is stalled, not waiting:
-    // nothing else will move it, so the card says so and offers Mark deployed.
-    const deployWait = rollouts.filter((s) => s.due.startsWith('after_deploy:'));
-    if (isMerged(glob) && deployWait.length === rollouts.length) {
-      const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000));
-      if (minutes >= DEPLOY_STALL_MINUTES) {
-        const env = deployWait[0]?.due.slice('after_deploy:'.length) ?? 'an environment';
-        return stalled('deploy', `nothing is recorded as deployed to ${env} since the merge`, DEPLOY_STALLED_LABEL, glob.updatedAt, minutes);
-      }
-    }
     return { holder: 'waiting', reason: `waiting for ${first?.title ?? 'a step'}`, since: null, waitingOn: rollouts.map((s) => s.id) };
   }
 
@@ -353,7 +343,6 @@ const ACTION_TITLES: Readonly<Partial<Record<StepAction, string>>> = {
   start: 'Start',
   start_anyway: 'Start',
   open_session: 'Open session',
-  mark_deployed: 'Mark deployed',
 };
 
 /** What the unstick step needs beyond the move: the actions the viewer may take, and whether a run's session can be opened. */
@@ -376,7 +365,7 @@ export const unstickAction = (
   if (move.cause === undefined) return null;
   const allowed = options.allowed;
   const ok = (a: StepAction): boolean =>
-    a === 'open_session' ? options.session !== false : a === 'mark_deployed' ? true : allowed === undefined || allowed.includes(a);
+    a === 'open_session' ? options.session !== false : allowed === undefined || allowed.includes(a);
   const pair = ((): [StepAction, Action | undefined] => {
     switch (move.cause) {
       case 'failed':
@@ -386,8 +375,6 @@ export const unstickAction = (
         return ['open_session', 'pick_up'];
       case 'nobody':
         return glob.implementer === null ? ['start', 'pick_up'] : ['pick_up', 'start_anyway'];
-      case 'deploy':
-        return ['mark_deployed', undefined];
     }
   })();
   const [first, second] = pair;

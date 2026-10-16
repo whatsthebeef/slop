@@ -7,9 +7,6 @@ export interface Repo {
   readonly base: string;
 }
 
-/** The host can't say whether a branch has a merge queue: nothing is merged on a guess (the outbox retries). */
-export class QueueDetectionError extends Error {}
-
 export const repoOf = (board: Board): Repo | null => {
   const [owner, name] = (board.repo ?? '').split('/');
   return owner !== undefined && owner !== '' && name !== undefined && name !== ''
@@ -43,8 +40,6 @@ export type MergeResult =
   | { readonly outcome: 'undecided' }
   /** The head isn't behind the base but its checks aren't green (still running, or failed): slop never merges it. */
   | { readonly outcome: 'checks_not_green'; readonly state: 'pending' | 'failed' | 'unknown' }
-  /** The branch has a merge queue: the PR is in it (the host tests it with the PRs ahead and merges it in order). */
-  | ({ readonly outcome: 'queued' } & MergeQueueEntry)
   | { readonly outcome: 'refused'; readonly reason: string };
 
 /**
@@ -143,14 +138,6 @@ export interface BranchRules {
   readonly requiredChecks: readonly string[];
   /** Whether the integration is on the bypass list of the rulesets requiring checks; null when the host won't show bypass lists. */
   readonly integrationBypasses: boolean | null;
-  /** Whether the branch has a merge queue rule: slop's merge then enqueues the PR instead of merging it. */
-  readonly mergeQueue: boolean;
-}
-
-/** A PR's place in the host's merge queue: its 1-based position (null when unknown) and whether its group is being merged. */
-export interface MergeQueueEntry {
-  readonly position: number | null;
-  readonly state: 'queued' | 'merging';
 }
 
 export interface CodeHost {
@@ -236,6 +223,8 @@ export interface CodeHost {
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
   /** Lines changed (the commit's stats) and files touched by commit `sha` against its first parent: a merged sub's size. */
   commitDiffSummary(repo: Repo, sha: string, signal?: AbortSignal): Promise<DiffSummary>;
+  /** The repo's default branch (the board's base); null when the host can't say (unreachable, no access, no such repo). */
+  defaultBranch(repo: Repo): Promise<string | null>;
   /** The head commit of `ref` (a branch) and its subject line; null when the branch doesn't exist. */
   headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string; parent: string | null } | null>;
   /**
@@ -250,52 +239,20 @@ export interface CodeHost {
   /**
    * Re-runs the failed jobs of the workflow runs that failed on `sha`, once per commit: `rerun` when it asked for
    * them, `already_rerun` when a failed run on the commit is already a re-run (so a redelivered event never re-runs
-   * twice), `unavailable` when the host refused (the integration lacks permission) or nothing could be re-run.
+   * twice; `force`, a person's Retry checks, skips that guard), `unavailable` when the host refused (the integration lacks permission) or nothing could be re-run.
    */
-  rerunFailedJobs(repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'>;
+  rerunFailedJobs(repo: Repo, sha: string, opts?: { force?: boolean }): Promise<'rerun' | 'already_rerun' | 'unavailable'>;
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /**
    * Squash-merges at exactly `sha` as `<id>: <title>`. Slop's App bypasses the host's branch rules, so slop enforces them:
-   * it merges only a head that is `sha` with passed checks. Where the branch has a merge queue it enqueues the PR instead
-   * (`queued`), never merging it directly or updating its branch: the queue tests the combined result. Otherwise a behind
-   * head is updated (the merge resumes on the new head's checks); one whose checks aren't green is not merged
-   * (`checks_not_green`). Throws when it can't tell whether the branch has a merge queue.
+   * it merges only a head that is `sha` with passed checks: a behind head is updated (the merge resumes on the new
+   * head's checks), and one whose checks aren't green is not merged (`checks_not_green`).
    */
   squashMerge(repo: Repo, glob: Glob, prNumber: number, sha: string): Promise<MergeResult>;
-  /** The PR's entry in the host's merge queue; null when it isn't queued. */
-  mergeQueueEntry(repo: Repo, prNumber: number): Promise<MergeQueueEntry | null>;
-  /** Takes the PR out of the host's merge queue; `not_queued` when it wasn't in it. */
-  dequeue(repo: Repo, prNumber: number): Promise<'dequeued' | 'not_queued'>;
   /**
    * Reverts commit `sha` on the base branch as a new commit `Revert "<subject>"`. `moved` when the base has commits
    * after `sha` (the revert is then left to a person).
    */
   revertCommit(repo: Repo, sha: string): Promise<'reverted' | 'moved'>;
-}
-
-/**
- * Commit ancestry on the code host, apart from `CodeHost` so its test fakes don't need it: release and integration
- * deploys are matched to globs by whether the deployed commit contains each glob's merge commit.
- */
-export interface CommitGraph {
-  /** Whether `descendant` contains `ancestor` (or is it); null when the host doesn't know either commit. */
-  contains(repo: Repo, descendant: string, ancestor: string, signal?: AbortSignal): Promise<boolean | null>;
-}
-
-/** A release tag and the commit it points at. */
-export interface ReleaseTag {
-  readonly name: string;
-  readonly sha: string;
-}
-
-/**
- * Refs on the code host, apart from `CodeHost` so its test fakes don't need it: a person recording a release by hand
- * names a branch, tag or commit, and slop needs the commit it means (and recent tags to offer).
- */
-export interface ReleaseRefs {
-  /** The commit `ref` (a branch, tag or sha) points at; null when the host doesn't know it. */
-  resolveRef(repo: Repo, ref: string): Promise<string | null>;
-  /** The repo's most recent tags, newest first. */
-  recentTags(repo: Repo, limit: number): Promise<ReleaseTag[]>;
 }

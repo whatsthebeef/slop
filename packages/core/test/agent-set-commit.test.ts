@@ -57,7 +57,7 @@ describe('the agent set commit', () => {
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     service = new AgentSetCommitService({ store, clock, notifier, knowledge, repo: { committedVersion: () => Promise.resolve(committed) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId));
   });
 
@@ -109,10 +109,11 @@ describe('the agent set commit', () => {
     expect(ready.files.map((f) => [f.path, f.executable])).toEqual([
       ['.claude/agents/tester.md', false],
       ['.claude/hooks/after_push.sh', true],
+      ['.claude/settings.json', false],
       ['.claude/slop-agent-set.json', false],
     ]);
     const manifest = ready.files.at(-1);
-    expect(parseAgentSetManifest(manifest?.content ?? '')).toEqual({ version: 2, files: ['.claude/agents/tester.md', '.claude/hooks/after_push.sh'] });
+    expect(parseAgentSetManifest(manifest?.content ?? '')).toEqual({ version: 2, files: ['.claude/agents/tester.md', '.claude/hooks/after_push.sh', '.claude/settings.json'] });
     expect(JSON.parse(manifest?.content ?? '')).toMatchObject({ board: boardId, fetchedAt: '2026-10-05T12:00:00Z' });
   });
 
@@ -122,7 +123,7 @@ describe('the agent set commit', () => {
     expect(await service.prepare(boardId)).toEqual({ kind: 'dropped' });
     expect(await agentSetGlobs()).toHaveLength(0);
     expect(await service.prepare(boardId + 7)).toEqual({ kind: 'dropped' });
-    const noRepo = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'c', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const noRepo = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'c', repo: null, timeZone: 'UTC', environments: [] })).id;
     expect(await service.prepare(noRepo)).toEqual({ kind: 'dropped' });
   });
 
@@ -151,7 +152,7 @@ describe('a closed agent-set PR', () => {
     const knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     const service = new AgentSetCommitService({ store, clock, notifier, knowledge, repo: { committedVersion: () => Promise.resolve(null) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId));
     await service.prepare(boardId);
     const key = `agent-set:${String(boardId)}:`;
@@ -210,7 +211,7 @@ describe("slop's agent-set glob in the machine", () => {
     expect(machine.allowedActions(ready, dev)).toEqual(['review_now', 'merge', 'delete']);
     expect(machine.allowedActions({ ...ready, headChecks: passed }, dev)).toEqual(['review_now', 'merge', 'delete']);
     expect(machine.allowedActions({ ...ready, mergeMode: 'when_green' }, dev)).toEqual(['review_now', 'cancel_merge', 'delete']);
-    expect(machine.allowedActions({ ...ready, headChecks: { sha: 'a', state: 'failed' } }, dev)).toEqual(['review_now', 'delete']);
+    expect(machine.allowedActions({ ...ready, headChecks: { sha: 'a', state: 'failed' } }, dev)).toEqual(['retry_checks', 'review_now', 'delete']);
   });
 
   it('is marked ready from the board without an implementation record', () => {

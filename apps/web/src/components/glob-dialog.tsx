@@ -43,7 +43,6 @@ export const GlobDetail = ({
   email,
   onAddStep,
   onCompleteStep,
-  onMarkDeployed,
   onDismissStep,
   onFailStep,
   onSuggestion,
@@ -82,7 +81,6 @@ export const GlobDetail = ({
     due?: string;
   }) => Promise<boolean>;
   onCompleteStep: (stepId: string) => Promise<boolean>;
-  onMarkDeployed?: (env: string) => Promise<boolean>;
   onDismissStep: (stepId: string, reason: string) => Promise<boolean>;
   /** "It failed" on a due step. */
   onFailStep?: (stepId: string, note: string) => Promise<boolean>;
@@ -195,7 +193,6 @@ export const GlobDetail = ({
     onDismissQuestion,
     onAddStep,
     onCompleteStep,
-    ...(onMarkDeployed === undefined ? {} : { onMarkDeployed }),
     onDismissStep,
     ...(onFailStep === undefined ? {} : { onFailStep }),
     ...(onSuggestion === undefined ? {} : { onSuggestion }),

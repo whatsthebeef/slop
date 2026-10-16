@@ -77,7 +77,7 @@ describe('create-time relation scan', () => {
     answer = { prerequisites: [], decided: [] };
     globs = build(trigger);
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   it('creates a sub waiting, with an automatic relation and no run, when its plan says it needs an open glob', async () => {

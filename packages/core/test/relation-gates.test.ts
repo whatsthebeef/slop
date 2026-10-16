@@ -63,7 +63,9 @@ describe('the merge gate (machine)', () => {
     // With the relation met (or loaded none) it merges as before.
     const free = unwrap(machine.checksCompleted(armed, { sha: HEAD, passed: true }, ctx(null), facts('merge', 'merged')));
     expect(free.glob.status).toBe('merging');
-    expect(free.effects.some((e) => e.kind === 'squash_merge')).toBe(true);
+    // It joins the board's merge line; only the head's merge is queued (by `advanceMergeLine`).
+    expect(free.glob.mergeLine).toEqual({ joinedAt: NOW });
+    expect(free.effects.map((e) => e.kind)).toEqual(['advance_merge_line']);
   });
 
   it('a sub whose gate passed stays in pr_open, held, instead of merging', () => {
@@ -83,8 +85,8 @@ describe('the merge gate (machine)', () => {
     expect(unwrap(machine.gateReleased(armed, facts('merge', 'open'), null, ctx(null))).changed).toBe(false);
     const resumed = unwrap(machine.gateReleased(armed, facts('merge', 'merged'), null, ctx(null)));
     expect(resumed.glob).toMatchObject({ status: 'merging', mergeMode: null, mergeHold: null });
-    expect(resumed.events.map((e) => e.type)).toEqual(['MergeResumed', 'StatusChanged']);
-    expect(resumed.effects).toEqual([{ kind: 'squash_merge', globId: armed.id, generation: armed.generation, sha: HEAD }]);
+    expect(resumed.events.map((e) => e.type)).toEqual(['MergeResumed', 'StatusChanged', 'MergeLineJoined']);
+    expect(resumed.effects).toEqual([{ kind: 'advance_merge_line', globId: 'board-1', boardId: 1 }]);
     // Idempotent: the second call on the result changes nothing.
     expect(unwrap(machine.gateReleased(resumed.glob, facts('merge', 'merged'), null, ctx(null))).changed).toBe(false);
 
@@ -182,7 +184,7 @@ describe('Merge anyway and Sign off anyway (machine)', () => {
     it('merges a same now when the checks passed, lifts the merge relation and logs who and why', () => {
       const t = unwrap(machine.mergeAnyway(open(), WHY, ctx(dev), { continue: false, facts: { relations: held } }));
       expect(t.glob.status).toBe('merging');
-      expect(t.effects.some((e) => e.kind === 'squash_merge')).toBe(true);
+      expect(t.effects.some((e) => e.kind === 'advance_merge_line')).toBe(true);
       expect(t.relationEdits).toEqual([{ id: 'rel-s1t2-s1t1-merge', overriddenAt: NOW }]);
       expect(t.events.find((e) => e.type === 'MergeOverridden')).toMatchObject({ globId: 's1t2', actor: dev.email, data: { for: ['s1t1'], reason: WHY } });
       // Start-now learning reads HoldOverridden: Merge anyway must never emit it.
@@ -199,7 +201,7 @@ describe('Merge anyway and Sign off anyway (machine)', () => {
       const withSteps = { relations: held, rolloutSteps: 2 };
       const t = unwrap(machine.mergeAnyway(open(), WHY, ctx(dev), { continue: false, facts: withSteps }));
       expect(t.glob).toMatchObject({ status: 'merging', mergeMode: null });
-      expect(t.effects.some((e) => e.kind === 'squash_merge')).toBe(true);
+      expect(t.effects.some((e) => e.kind === 'advance_merge_line')).toBe(true);
       // Kept open for the steps: the merge is observed as a rollout, not a close.
       expect(t.events.find((e) => e.type === 'StatusChanged')?.data).toMatchObject({ to: 'merging', mode: 'rollout' });
       const pending = open({ headChecks: { sha: HEAD, state: 'pending' } });
@@ -228,11 +230,11 @@ describe('Merge anyway and Sign off anyway (machine)', () => {
       const armed = open({ mergeMode: 'when_green', mergeHold: { since: NOW, sha: HEAD, for: ['s1t1'] } });
       const a = unwrap(machine.mergeAnyway(armed, WHY, ctx(dev), { continue: false, facts: { relations: held } }));
       expect(a.glob).toMatchObject({ status: 'merging', mergeMode: null, mergeHold: null });
-      expect(ids(a.events)).toEqual(['MergeOverridden', 'MergeResumed', 'StatusChanged']);
+      expect(ids(a.events)).toEqual(['MergeOverridden', 'MergeResumed', 'StatusChanged', 'MergeLineJoined']);
       const sub = open({ type: 'sub', implementer: null, mergeHold: { since: NOW, sha: HEAD, for: ['s1t1'] } });
       const b = unwrap(machine.mergeAnyway(sub, WHY, ctx(dev), { continue: false, facts: { relations: held } }));
       expect(b.glob.status).toBe('merging');
-      expect(b.effects.some((e) => e.kind === 'squash_merge')).toBe(true);
+      expect(b.effects.some((e) => e.kind === 'advance_merge_line')).toBe(true);
     });
 
     it('lifts the relation and leaves an armed merge armed while its checks are pending', () => {
@@ -400,7 +402,7 @@ describe('the relation service: gates, resumes and the relations API', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -442,10 +444,10 @@ describe('the relation service: gates, resumes and the relations API', () => {
     const resumed = await current(g.id);
     expect(resumed).toMatchObject({ status: 'merging', mergeMode: null });
     expect(resumed.mergeHold ?? null).toBeNull();
-    expect(effectKinds().filter((k) => k === 'squash_merge')).toHaveLength(1);
+    expect(effectKinds().filter((k) => k === 'advance_merge_line')).toHaveLength(1);
     // A second release changes nothing and queues no second merge.
     await globs.releaseDependents(first.id, boardId);
-    expect(effectKinds().filter((k) => k === 'squash_merge')).toHaveLength(1);
+    expect(effectKinds().filter((k) => k === 'advance_merge_line')).toHaveLength(1);
   });
 
   it('a held sub resumes when the relation is dismissed, and when the other glob is deleted', async () => {
@@ -569,7 +571,7 @@ describe('the relation service: gates, resumes and the relations API', () => {
       expect(rows(g.id).find((r) => r.gate === 'merge')?.overriddenAt).toBe(NOW);
       expect(store.state.events.filter((e) => e.type === 'MergeOverridden' && e.globId === g.id)).toMatchObject([{ actor: DEV, data: { for: [first.id], reason: 'It is cosmetic' } }]);
       expect(store.state.events.some((e) => e.type === 'HoldOverridden')).toBe(false);
-      expect(effectKinds().filter((k) => k === 'squash_merge')).toHaveLength(1);
+      expect(effectKinds().filter((k) => k === 'advance_merge_line')).toHaveLength(1);
       // The overridden relation shows as done (overridden), not holding.
       const view = unwrap(await globs.get(DEV, g.id));
       expect(view.holding).toEqual([]);
@@ -583,7 +585,7 @@ describe('the relation service: gates, resumes and the relations API', () => {
       expect((await current(g.id)).mergeHold).toMatchObject({ for: [first.id] });
       unwrap(await globs.mergeAnyway(DEV, g.id, (await current(g.id)).version, 'go'));
       expect(await current(g.id)).toMatchObject({ status: 'merging', mergeMode: null });
-      expect(effectKinds().filter((k) => k === 'squash_merge')).toHaveLength(1);
+      expect(effectKinds().filter((k) => k === 'advance_merge_line')).toHaveLength(1);
       expect(code(await globs.mergeAnyway(DEV, g.id, (await current(g.id)).version, 'again'))).toBe('invalid_transition');
     });
 

@@ -144,8 +144,12 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     if (row === undefined) throw new Error(`No pending ${kind}`);
     return executor(row.effect, await current(), { globs }, attempt);
   };
-  const mergeContinue = async () =>
-    unwrap(await globs.merge(DEV, globId, (await current()).version, true));
+  /** Merge and continue: the glob joins the board's merge line, and the line's nudge (run here, as the outbox would) makes it head. */
+  const mergeContinue = async () => {
+    const merged = unwrap(await globs.merge(DEV, globId, (await current()).version, true));
+    await globs.advanceMergeLine(merged.boardId);
+    return merged;
+  };
   const closedMerged = (number: number) => ({
     id: deliveryId(),
     event: 'pull_request',
@@ -195,7 +199,8 @@ describe('Merge and continue (row 31) through the executors and webhooks', () =>
     try {
       expect(await merge(HEAD)).toBe('done');
       expect(await current()).toMatchObject({ status: 'merging', mergeUpdates: 1 });
-      // The updated head's checks pass and the base moved again and the update conflicts.
+      // The update pushes a new head (the head keeps its place in the line); its checks pass, the base moved again and the update conflicts.
+      await globs.applyEvent(globId, (g, ctx) => machine.commitPushed(g, { sha: 'u1', runId: null }, ctx));
       host.mergeResult = { outcome: 'conflict' };
       expect(await merge('u1')).toBe('done');
     } finally {

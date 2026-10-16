@@ -70,7 +70,7 @@ describe('groups over REST and MCP (Postgres)', () => {
     await store.transaction(async (tx) => {
       for (const email of [DEV, ADMIN, OUTSIDER]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     const outbox = new OutboxRunner(database.db, { globs }, {}, () => undefined);
     app = createApp({ auth: new Auth(database.db, loadConfig({})), links: new SignedLinks('test'), boards, globs, groups, hub: notifier, outbox, onBoardCreated: () => Promise.resolve() });

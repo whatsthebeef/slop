@@ -107,7 +107,6 @@ describe('acting on an investigation', () => {
       await boards.create(ADMIN, {
         name: 'demo',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

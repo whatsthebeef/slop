@@ -168,9 +168,9 @@ describe('an action waiting for its script', () => {
       ...patch,
     });
 
-  it('says "waiting · s1t1" with the human icon and the script tooltip', () => {
+  it('says "s1t1" with the human icon and the script tooltip', () => {
     expect(holdLine(action())).toEqual({
-      text: 'waiting · s1t1',
+      text: 's1t1',
       tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`,
       icon: 'human',
     });
@@ -190,7 +190,7 @@ describe('an action waiting for its script', () => {
   });
 
   it('shows the hold on the card, and nothing for a free or finished action', () => {
-    expect(cornerStatus(action(), NOW)).toMatchObject({ kind: 'hold', icon: 'human', text: 'waiting · s1t1' });
+    expect(cornerStatus(action(), NOW)).toMatchObject({ kind: 'hold', icon: 'human', text: 's1t1' });
     expect(cornerStatus(action({ holding: [], script: null, allowedActions: ['complete_action', 'dismiss_action', 'delete'] }), NOW)).toBeNull();
   });
 

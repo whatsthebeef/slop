@@ -81,7 +81,7 @@ describe('deploys in Postgres', () => {
       expect(inserted.deploy).toBeNull();
       const withDeploy: Board = {
         ...inserted,
-        deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: 'sandbox-deploy', projects: {} },
+        deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev1: 'sandbox-deploy', dev2: 'sandbox-deploy' } },
         version: inserted.version + 1,
       };
       expect(await tx.updateBoard(withDeploy, inserted.version)).toBe(true);

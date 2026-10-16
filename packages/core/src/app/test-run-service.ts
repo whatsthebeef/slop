@@ -1,16 +1,14 @@
 import { LEGACY_RUNNER_NAME } from '../domain/atf-runners.js';
-import { RECENT_MERGE_DAYS, observedEnvironment } from '../domain/environments.js';
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
 import type { DomainEvent } from '../domain/events.js';
 import { parseId } from '../domain/ids.js';
 import { sameCommit } from '../domain/signals.js';
 import { testPlanSpecs, unionSpecs } from '../domain/test-plan.js';
+import type { RequestedGrep, RequestedSpec } from '../domain/test-plan.js';
 import * as testRuns from '../domain/test-runs.js';
 import type {
-  AtfBatch,
   AtfIndicator,
-  EnvironmentCommit,
   GlobSpecResult,
   NewTestRun,
   OwnSpecs,
@@ -31,7 +29,7 @@ export interface TestRunServiceDeps {
 export interface ReportedAtfRun {
   /** `owner/name`: the boards on that repo record it. */
   readonly repo: string;
-  /** The commit it tested. An environment run without one takes the environment's latest succeeded deploy. */
+  /** The commit it tested. An environment run without one takes the environment's latest succeeded branch deploy. */
   readonly sha: string | null;
   /** The environment it ran against. Required for an environment run; a branch run defaults to the glob's. */
   readonly environment: string | null;
@@ -66,8 +64,8 @@ export class TestRunService {
 
   /**
    * Records a reported ATF run. A run on a glob's branch is that glob's (logged as `ATFCompleted` on it); otherwise it
-   * is a run against a release or integration environment, recorded on every board on the repo that observes it, at
-   * the commit it tested. Returns the boards that recorded it (none: ignored or a redelivery).
+   * is a run against a dev environment at a commit, recorded on the glob whose succeeded branch deploy put that commit there,
+   * on every board on the repo with such a deploy. Returns the boards that recorded it (none: ignored or a redelivery).
    *
    * With a `binding` (a runner that proved its identity) only the bound board records it, `input.repo` is ignored, and the
    * run keeps the runner's ID; the runner's "last result" is stamped when a run was recorded.
@@ -118,14 +116,18 @@ export class TestRunService {
       if (input.environment === null) return [];
       const boardIds: number[] = [];
       for (const board of boards) {
-        if (observedEnvironment(board, input.environment) === null) continue;
+        if (!board.environments.some((e) => e.name === input.environment)) continue;
+        const succeeded = await tx.listDeploys(board.id, { environment: input.environment, states: ['succeeded'], limit: RECENT_DEPLOYS });
         // Without a commit, the run tested what the environment runs now.
-        const sha = input.sha ?? (await tx.latestEnvironmentDeploy(board.id, input.environment))?.sha ?? null;
+        const sha = input.sha ?? succeeded[0]?.sha ?? null;
         if (sha === null) continue;
+        // The run belongs to the glob whose branch deploy put the commit there (the newest, if it was deployed twice).
+        const deploy = succeeded.find((d) => sameCommit(d.sha, sha));
+        if (deploy === undefined) continue;
         const inserted = await tx.insertTestRun({
           boardId: board.id,
           kind: 'atf',
-          globId: null,
+          globId: deploy.globId,
           environment: input.environment,
           sha,
           ...counts,
@@ -138,7 +140,7 @@ export class TestRunService {
         if (!inserted) continue;
         await stampResult(tx, binding, now);
         boardIds.push(board.id);
-        hints.push({ kind: 'board.tests', boardId: board.id });
+        hints.push({ kind: 'glob.deploys', boardId: board.id, globId: deploy.globId });
       }
       return boardIds;
     });
@@ -151,11 +153,9 @@ export class TestRunService {
     return this.deps.store.transaction(async (tx) => {
       const state = new Map<string, AtfIndicator[]>();
       if (globIds.length === 0) return state;
-      const presences = await tx.listGlobPresence(boardId, { globIds, contained: true });
-      const commits = new Map<string, EnvironmentCommit>();
-      for (const p of presences) commits.set(`${p.environment}:${p.checkedSha}`, { environment: p.environment, sha: p.checkedSha });
-      const runs = await tx.listTestRuns(boardId, { globIds, commits: [...commits.values()] });
+      const runs = await tx.listTestRuns(boardId, { globIds });
       if (runs.length === 0) return state;
+      const deployed = await tx.listDeploys(boardId, { globIds, states: ['succeeded'] });
       // Only a branch run needs its glob (the PR head says whether the run is stale): read those in one go.
       const withBranchRuns = [...new Set(runs.flatMap((r) => (r.globId === null ? [] : [r.globId])))];
       const globs = new Map((await tx.getGlobs(withBranchRuns)).map((g) => [g.id, g]));
@@ -166,7 +166,7 @@ export class TestRunService {
       for (const globId of globIds) {
         const specs = planned.get(globId);
         const own: OwnSpecs | undefined = specs === undefined ? undefined : { planned: specs, rows };
-        const indicators = testRuns.atfIndicators({ id: globId, pr: globs.get(globId)?.pr ?? null }, runs, presences, own, names);
+        const indicators = testRuns.atfIndicators({ id: globId, pr: globs.get(globId)?.pr ?? null }, runs, deployed, own, names);
         if (indicators.length > 0) state.set(globId, indicators);
       }
       return state;
@@ -174,8 +174,8 @@ export class TestRunService {
   }
 
   /**
-   * Every ATF run the glob view lists (its branch runs and the runs against the environment commits holding it, each with
-   * its per-spec rows) and each spec its latest test plan lists with the newest result for the glob.
+   * Every ATF run the glob view lists (its branch runs and the runs against the commits its branch deploys put in an
+   * environment, each with its per-spec rows) and each spec its latest test plan lists with the newest result for the glob.
    */
   async forGlob(email: string, globId: string): Promise<Result<GlobTests>> {
     return this.deps.store.transaction(async (tx) => {
@@ -184,70 +184,37 @@ export class TestRunService {
       if ((await tx.getMember(glob.boardId, email)) === null) {
         return forbidden(`You are not a member of board ${String(glob.boardId)}`);
       }
-      const presences = await tx.listGlobPresence(glob.boardId, { globIds: [globId], contained: true });
-      const commits = presences.map((p) => ({ environment: p.environment, sha: p.checkedSha }));
-      const runs = await tx.listTestRuns(glob.boardId, { globIds: [globId], commits });
+      const runs = await tx.listTestRuns(glob.boardId, { globIds: [globId] });
+      const deployed = await tx.listDeploys(glob.boardId, { globIds: [globId], states: ['succeeded'] });
       const rows = await tx.listTestRunSpecs(runs.map((r) => r.id));
       const planned = (await plannedSpecsOf(tx, [globId])).get(globId) ?? [];
       const own: OwnSpecs | undefined = planned.length === 0 ? undefined : { planned, rows };
       const names = await runnerNamesOf(tx, glob.boardId, runs);
-      const listed = testRuns.globTestRuns(glob, runs, presences, own, names).map((run): GlobTests['runs'][number] => {
+      const listed = testRuns.globTestRuns(glob, runs, deployed, own, names).map((run): GlobTests['runs'][number] => {
         const specs = runSpecRows(rows, run.id);
         return specs.length === 0 ? run : { ...run, specs };
       });
-      return ok({ runs: listed, specs: testRuns.globSpecResults(glob, planned, runs, rows, presences) });
+      return ok({ runs: listed, specs: testRuns.globSpecResults(glob, planned, runs, rows, deployed) });
     });
   }
 
   /**
-   * The specs the board's ATF stage should run for `sha` in `environment` (a burst of merges deployed together runs the
-   * union once). `pending`: the deploy's containment check hasn't finished (or the deploy isn't reported yet); `superseded`:
-   * a newer deploy replaced `sha`. The first answer is stored per (environment, sha) and every repeat returns it.
-   * Callers authorise: this answers for any board.
+   * The specs the board's ATF stage should run for `sha` in `environment`: the union of the test plans' lists of the globs
+   * whose succeeded branch deploys put `sha` there. `pending`: no such deploy has succeeded (yet); `superseded`: a newer
+   * deploy replaced `sha` in the environment. Callers authorise: this answers for any board.
    */
   async atfBatch(boardId: number, environment: string, sha: string): Promise<Result<AtfBatchAnswer>> {
-    const now = this.deps.clock.now();
     return this.deps.store.transaction(async (tx) => {
       const board = await tx.getBoard(boardId);
       if (board === null) return notFound(`No board ${String(boardId)}`);
-      if (observedEnvironment(board, environment) === null) {
-        return invalidInput(`${environment} isn't an environment this board observes`);
+      if (!board.environments.some((e) => e.name === environment)) {
+        return invalidInput(`${environment} isn't an environment of this board`);
       }
-      await tx.lockEnvironment(boardId, environment);
-      const latest = await tx.latestEnvironmentDeploy(boardId, environment);
-      const known = await tx.listEnvironmentDeploys(boardId, environment, 50);
-      if (latest === null || !known.some((d) => sameCommit(d.sha, sha))) return ok({ status: 'pending' });
-      if (!sameCommit(latest.sha, sha)) return ok({ status: 'superseded', latestSha: latest.sha });
-      const stored = await tx.getAtfBatch(boardId, environment, latest.sha);
-      if (stored !== null) return ok({ status: 'ready', batch: stored });
-      if (latest.checkedAt === null) return ok({ status: 'pending' });
-      const previous = known.find((d) => d.succeeded && d.id !== latest.id && !sameCommit(d.sha, latest.sha));
-      const since = testRuns.batchWindowStart(
-        (await tx.latestAtfBatch(boardId, environment))?.createdAt ?? null,
-        previous?.at ?? null,
-        now,
-        RECENT_MERGE_DAYS,
-      );
-      const newlyHeld = (await tx.listBoardEvents(boardId, since, ['Deployed']))
-        .filter((e) => e.at > since && e.data.observed === true && e.data.environment === environment)
-        .map((e) => e.globId);
-      const globIds = [...new Set(newlyHeld)];
-      const plans = globIds.length === 0 ? [] : await tx.latestArtifacts(globIds, ['test_plan']);
-      const union = unionSpecs(
-        globIds.map((globId) => {
-          const plan = plans.find((a) => a.globId === globId);
-          return { globId, atf: plan === undefined ? null : testPlanSpecs(plan) };
-        }),
-      );
-      const batch = await tx.insertAtfBatch({
-        boardId,
-        environment,
-        sha: latest.sha,
-        specs: union.specs,
-        greps: union.greps,
-        createdAt: now,
-      });
-      return ok({ status: 'ready', batch });
+      const [latest] = await tx.listDeploys(boardId, { environment, states: ['succeeded'], limit: 1 });
+      const batch = await batchOf(tx, boardId, environment, sha);
+      if (batch === null) return ok({ status: 'pending' });
+      if (latest !== undefined && !sameCommit(latest.sha, sha)) return ok({ status: 'superseded', latestSha: latest.sha });
+      return ok({ status: 'ready', ...batch });
     });
   }
 }
@@ -261,11 +228,19 @@ export interface GlobTests {
   readonly specs: readonly GlobSpecResult[];
 }
 
+/** The specs (and greps) one deploy should run, with the globs whose test plans asked for each. */
+export interface AtfBatch {
+  readonly environment: string;
+  readonly sha: string;
+  readonly specs: readonly RequestedSpec[];
+  readonly greps: readonly RequestedGrep[];
+}
+
 /** What the ATF stage is told for a deploy. */
 export type AtfBatchAnswer =
   | { readonly status: 'pending' }
   | { readonly status: 'superseded'; readonly latestSha: string }
-  | { readonly status: 'ready'; readonly batch: AtfBatch };
+  | ({ readonly status: 'ready' } & AtfBatch);
 
 const MAX_RUN_SPECS_LISTED = 200;
 const SEVERITY = { failed: 0, missing: 1, skipped: 2, passed: 3 } as const;
@@ -307,7 +282,28 @@ const runnerNamesOf = async (tx: Tx, boardId: number, runs: readonly TestRun[]):
   return names;
 };
 
-/** The run's specs plus a `missing` row for every spec of the environment's batch at that commit that it didn't report. */
+/** How many of an environment's newest succeeded deploys are searched for a commit (older ones count as superseded). */
+const RECENT_DEPLOYS = 200;
+
+/**
+ * The spec list of the succeeded branch deploys of `sha` in `environment` (normally one glob's), read from the globs' latest
+ * test plans; null when none has succeeded.
+ */
+const batchOf = async (tx: Tx, boardId: number, environment: string, sha: string): Promise<AtfBatch | null> => {
+  const deployed = (await tx.listDeploys(boardId, { environment, states: ['succeeded'], limit: RECENT_DEPLOYS })).filter((d) => sameCommit(d.sha, sha));
+  if (deployed.length === 0) return null;
+  const globIds = [...new Set(deployed.map((d) => d.globId))];
+  const plans = await tx.latestArtifacts(globIds, ['test_plan']);
+  const union = unionSpecs(
+    globIds.map((globId) => {
+      const plan = plans.find((a) => a.globId === globId);
+      return { globId, atf: plan === undefined ? null : testPlanSpecs(plan) };
+    }),
+  );
+  return { environment, sha: deployed[0]?.sha ?? sha, ...union };
+};
+
+/** The run's specs plus a `missing` row for every spec of the deploy's list that it didn't report. */
 const withMissing = async (
   tx: Tx,
   boardId: number,
@@ -315,7 +311,6 @@ const withMissing = async (
   sha: string,
   reported: readonly TestRunSpec[],
 ): Promise<TestRunSpec[]> => {
-  const batch = await tx.latestAtfBatch(boardId, environment);
-  if (batch === null || !sameCommit(batch.sha, sha)) return [...reported];
-  return [...reported, ...testRuns.missingSpecs(batch.specs, reported)];
+  const batch = await batchOf(tx, boardId, environment, sha);
+  return batch === null ? [...reported] : [...reported, ...testRuns.missingSpecs(batch.specs, reported)];
 };

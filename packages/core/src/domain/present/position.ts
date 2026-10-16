@@ -14,7 +14,7 @@ import type { PresentableGlob } from './facts.js';
 import {
   checksInFlightWhileMerging,
   checksRunningTip,
-  mergeQueueStatus,
+  mergeLineStatus,
   mergingChecksText,
 } from './check-wording.js';
 
@@ -49,7 +49,7 @@ const DOING: Readonly<Record<MachineStepKind, string>> = {
   investigate: 'investigating',
   implement: 'implementing',
   fix_checks: 'fixing CI',
-  resolve_conflict: 'fixing the conflict',
+  resolve_conflict: 'fixing conflict',
   answer_review: 'answering review',
   standby: 'standby',
   review_code: 'reviewing the code',
@@ -113,7 +113,7 @@ const machineText = (
   // An armed merge is queued until the checks pass, but what the machine is doing is merging (the shared wording while they run).
   if (step.kind === 'merge')
     return (
-      mergeQueueStatus(glob) ??
+      mergeLineStatus(glob) ??
       (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : DOING.merge)
     );
   if (step.state === 'queued') {
@@ -176,10 +176,13 @@ export const positionOf = (
   const steps = stepsOf(glob);
   const move = moveOf(glob, now, viewer);
   const session = liveSession(glob);
-  // Slop's own agent-set glob has no run, session or implementer: slop commits the set itself.
+  // Slop's own agent-set glob has no run, session or implementer: slop commits the set itself. Once its checks run or it merges,
+  // it reads like any other glob.
   if (
     isAgentSetGlob(glob) &&
     session === null &&
+    !steps.some((s) => s.kind === 'checks' || s.kind === 'merge') &&
+    move.holder !== 'waiting' &&
     (glob.status === 'in_progress' || glob.status === 'implementing')
   ) {
     return {

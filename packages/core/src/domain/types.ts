@@ -238,21 +238,31 @@ export interface Failure {
   readonly kind?: 'merge' | 'reverted' | 'provisioning' | 'needs_pairing';
   /** `needs_pairing`: the decision the routine would have had to guess, for the person who takes it over as a super. */
   readonly decision?: string;
-  /** A merge queue removal for failed checks: the failing check on the queue's combined result. */
-  readonly checks?: CheckFailure;
 }
 
-/** Where a merging PR is in the code host's merge queue. */
-export interface MergeQueueState {
-  /** When slop saw it enqueued. */
+/**
+ * A merging glob's place in its board's merge line. The line is the board's `merging` globs that carry this, in order of
+ * `joinedAt` (then glob ID); only the head, at most one per board, updates its branch, waits for its checks and merges.
+ */
+export interface MergeLine {
+  /** When the glob joined the line; a push keeps it, so the glob keeps its place. */
+  readonly joinedAt: string;
+  /** Present only on the head. Absent (never null) on a waiting glob: the store's one-head index tests for its presence. */
+  readonly head?: MergeLineHead;
+}
+
+export interface MergeLineHead {
+  /** When this glob became the head, or when its head commit last changed (the stuck-head clock starts here). */
   readonly since: string;
-  /** The PR head that was enqueued. */
-  readonly sha: string;
-  /** The queue's 1-based position (the PRs ahead are `position - 1`); null when unknown. */
-  readonly position: number | null;
-  readonly state: 'queued' | 'merging';
-  /** The merge group commit whose checks failed, when a check run on it said so (the dequeue's failure lines come from it). */
-  readonly failedSha?: string;
+  /** When the reconcile sweep last asked for the head's checks again; a second silence after it fails the merge. */
+  readonly recheckedAt?: string;
+}
+
+/** Where a glob stands in the line, derived from the board's merging globs (never stored): 1 is the head. */
+export interface MergeLinePlace {
+  readonly position: number;
+  /** The IDs ahead of it, head first. */
+  readonly ahead: readonly string[];
 }
 
 export interface MergeConflict {
@@ -469,8 +479,8 @@ export interface Glob {
   readonly mergeMode: MergeMode | null;
   /** Times slop updated a behind branch for the current merge request; a new Merge press starts it again at 0. */
   readonly mergeUpdates?: number;
-  /** Set while the merging PR sits in the code host's merge queue (null or absent: slop merges it directly). */
-  readonly mergeQueue?: MergeQueueState | null;
+  /** Set while the glob is merging: its place in the board's merge line (null or absent: not in the line). */
+  readonly mergeLine?: MergeLine | null;
   readonly headChecks: HeadChecks | null;
   /** Every routine run, oldest first; the last one is the current run. */
   readonly runs: readonly Run[];
@@ -547,28 +557,10 @@ export interface ClickOutcome {
   readonly reason: string;
 }
 
-/**
- * What deploys an environment besides branch deploys, which slop observes: `integration` is deployed by the base
- * branch's own pipeline, `release` by release refs cut from it. Without a role slop doesn't track which globs it holds.
- */
-export const ENVIRONMENT_ROLES = ['integration', 'release'] as const;
-export type EnvironmentRole = (typeof ENVIRONMENT_ROLES)[number];
-
-/** How slop learns of an observed environment's deploys: a pipeline reports them (the default), or a person records each one. */
-export const ENVIRONMENT_DEPLOY_KNOWN = ['pipeline', 'manual'] as const;
-export type EnvironmentDeployKnown = (typeof ENVIRONMENT_DEPLOY_KNOWN)[number];
-
+/** A dev environment: a branch-deploy target. Slop doesn't track any other environment (int, staging, prod). */
 export interface Environment {
   readonly name: string;
   readonly allowBranchDeploy: boolean;
-  /** At most one per board: the environment a sub gets when it is created without one. */
-  readonly subDefault?: true;
-  /** Set when the board's pipelines deploy the base branch or a release ref here and report it to slop. */
-  readonly role?: EnvironmentRole;
-  /** Only with a role: `manual` when a person records each deploy in slop. Absent means a pipeline reports them (`report-deploy.sh`). */
-  readonly deployKnown?: 'manual';
-  /** At most one per board, and only a release environment: deploying a glob here before sign-off is warned about. */
-  readonly production?: true;
 }
 
 /**
@@ -579,9 +571,7 @@ export type DeployIntegration =
   | {
       readonly provider: 'codebuild';
       readonly region: string;
-      /** The CodeBuild project for environments without their own. */
-      readonly defaultProject: string;
-      /** Per environment, a CodeBuild project overriding the default. */
+      /** Per environment, the CodeBuild project its deploys start; every branch-deploy environment names its own. */
       readonly projects: Readonly<Record<string, string>>;
     }
   | {

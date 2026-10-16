@@ -3,9 +3,9 @@ import { listOf } from './matrix.js';
 import type { Environment, Glob, List } from './types.js';
 import { isHumanCategory } from './types.js';
 
-/** The environments a new glob may be given automatically: branch deploys allowed and no role (never integration, release or production). */
+/** The environments a new glob may be given automatically: branch deploys allowed. */
 export const autoEnvironments = (environments: readonly Environment[]): readonly Environment[] =>
-  environments.filter((e) => e.allowBranchDeploy && e.role === undefined);
+  environments.filter((e) => e.allowBranchDeploy);
 
 /** How far along each list is: a holder further along keeps its environment, so it is the one the newcomer should share. */
 const PROGRESS: Readonly<Record<List, number>> = { planning: 0, doing: 1, reviewing: 2, signed_off: -1 };
@@ -18,7 +18,7 @@ export interface EnvironmentPick {
 
 /**
  * The environment a new code glob gets when nobody chose one: the first free candidate in the board's order; when none is free, the one whose holder is furthest along (Reviewing before
- * Doing), then the least recently deployed, then the board's sub default. `open` are the board's globs; `latest` each glob's latest deploy.
+ * Doing), then the least recently deployed, then the board's order. `open` are the board's globs; `latest` each glob's latest deploy.
  * Null when the board has no candidate.
  */
 export const pickEnvironment = (
@@ -55,7 +55,7 @@ export const pickEnvironment = (
     const holder = [...hs].sort((a, b) => PROGRESS[listOf(b.glob.status)] - PROGRESS[listOf(a.glob.status)] || b.at - a.at)[0]?.glob.id ?? '';
     return { e, index, progress, at, holder };
   });
-  ranked.sort((a, b) => b.progress - a.progress || a.at - b.at || (b.e.subDefault === true ? 1 : 0) - (a.e.subDefault === true ? 1 : 0) || a.index - b.index);
+  ranked.sort((a, b) => b.progress - a.progress || a.at - b.at || a.index - b.index);
   const chosen = ranked[0];
   if (chosen === undefined) return null;
   return { environment: chosen.e.name, reason: `${chosen.e.name}: shared with ${chosen.holder} (all busy)` };

@@ -234,7 +234,6 @@ describe('hotspot service', () => {
       await new BoardService({ store, notifier }).create(ADMIN, {
         name: 'demo',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

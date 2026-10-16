@@ -116,7 +116,6 @@ describe('test plan routes', () => {
       await boards.create(DEV, {
         name: 'b',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

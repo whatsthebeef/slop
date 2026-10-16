@@ -1,6 +1,5 @@
-import type { Board, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
+import type { Board, BoardService, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
 import { isWrongReply, machine, parseId, subGateCheckOf } from '@slop/core';
-import { FAILED_CONCLUSIONS } from './merge-state.js';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import * as schema from '../db/schema.js';
@@ -18,13 +17,11 @@ const pushPayload = z.object({
   created: z.boolean().default(false),
   deleted: z.boolean().default(false),
   head_commit: z.object({ message: z.string() }).nullable().optional(),
-  repository,
+  repository: repository.extend({ default_branch: z.string().min(1).optional() }),
 });
 
 const pullRequestPayload = z.object({
   action: z.string(),
-  /** On `dequeued`: why the merge queue removed the PR (`MERGE_CONFLICT`, `CI_FAILURE`, ...); every payload field here is a hint. */
-  reason: z.string().nullish(),
   pull_request: z.object({
     number: z.number(),
     draft: z.boolean().default(false),
@@ -34,23 +31,6 @@ const pullRequestPayload = z.object({
   }),
   repository,
 });
-
-/** A merge group (the merge queue's temporary commit for one or more PRs): `checks_requested` when it is built, `destroyed` when it goes. */
-const mergeGroupPayload = z.object({
-  action: z.string(),
-  reason: z.string().nullish(),
-  merge_group: z
-    .object({
-      head_sha: z.string().nullish(),
-      head_ref: z.string().nullish(),
-      base_ref: z.string().nullish(),
-    })
-    .optional(),
-  repository,
-});
-
-/** The merge queue's refs: `gh-readonly-queue/<base branch>/pr-<number>-<sha>`. */
-const QUEUE_REF = /^(?:refs\/heads\/)?gh-readonly-queue\/(.+)\/pr-(\d+)-[0-9a-f]+$/;
 
 const checkPayload = z.object({
   check_suite: z.object({ head_branch: z.string().nullable(), status: z.string().nullable().optional() }).optional(),
@@ -102,6 +82,8 @@ export const githubDeliveryHandler =
   (deps: {
     db: Db;
     globs: GlobService;
+    /** Absent: a push's default branch isn't taken into the board (the read from the host still is). */
+    boards?: Pick<BoardService, 'recordBaseBranch'>;
     github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     /** The base branch of a board received a push (the code view fetches it). */
@@ -131,6 +113,7 @@ const handle = async (
   deps: {
     db: Db;
     globs: GlobService;
+    boards?: Pick<BoardService, 'recordBaseBranch'>;
     github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     onBasePush?: (boardId: number) => void;
@@ -174,6 +157,32 @@ const handle = async (
     }
   };
 
+  /**
+   * A push payload names the repo's default branch. When it differs from a board's cached base, take it now (the push
+   * itself may be to the new default) and queue a read from the host, which confirms it. One pending read per board.
+   */
+  const syncBaseBranch = async (repo: string, defaultBranch: string | undefined): Promise<void> => {
+    if (defaultBranch === undefined) return;
+    const rows = await deps.db.select().from(schema.boards).where(sql`lower(${schema.boards.repo}) = ${repo.toLowerCase()}`);
+    for (const board of rows.filter((b) => b.baseBranch !== defaultBranch)) {
+      // Through the service: the version bumps and a board.changed hint goes out.
+      await deps.boards?.recordBaseBranch(board.id, defaultBranch);
+      const globId = `board-${String(board.id)}`;
+      const [pending] = await deps.db
+        .select({ id: schema.outbox.id })
+        .from(schema.outbox)
+        .where(sql`${schema.outbox.kind} = 'refresh_base_branch' and ${schema.outbox.globId} = ${globId} and ${schema.outbox.state} = 'pending' and ${schema.outbox.attempts} = 0`)
+        .limit(1);
+      if (pending !== undefined) continue;
+      await deps.db.insert(schema.outbox).values({
+        kind: 'refresh_base_branch',
+        globId,
+        effect: { kind: 'refresh_base_branch', globId, boardId: board.id },
+      });
+      await deps.db.execute(sql`select pg_notify('slop_outbox', '')`);
+    }
+  };
+
   /** The base branch received a push: every glob in Doing on that board rereads how far its branch is behind it. */
   const queueBehind = async (branch: string, repo: string): Promise<void> => {
     const rows = await deps.db.select().from(schema.boards).where(eq(schema.boards.baseBranch, branch));
@@ -188,24 +197,11 @@ const handle = async (
   const apply = (glob: Glob, step: Parameters<GlobService['applyEvent']>[1]) =>
     deps.globs.applyEvent(glob.id, step);
 
-  /**
-   * The merge queue changed on a board's base branch. A merge group's ref names only its last PR, so every queued glob of
-   * the boards on that branch re-reads its own entry (the queue is small); the read, not the webhook, decides.
-   */
-  const refreshQueued = async (baseBranch: string, repo: string, hint: machine.MergeQueueHint): Promise<void> => {
-    const rows = await deps.db.select().from(schema.boards).where(eq(schema.boards.baseBranch, baseBranch));
-    for (const board of rows.filter((b) => b.repo?.toLowerCase() === repo.toLowerCase())) {
-      for (const glob of await deps.globs.peekAll(board.id, { status: ['merging'] })) {
-        if (glob.mergeQueue == null) continue;
-        await apply(glob, (g, ctx) => machine.mergeQueueEvent(g, hint, ctx));
-      }
-    }
-  };
-
   switch (delivery.event) {
     case 'push': {
       const push = pushPayload.parse(delivery.payload);
       const branch = push.ref.replace(/^refs\/heads\//, '');
+      await syncBaseBranch(push.repository.full_name, push.repository.default_branch);
       const glob = await globFor(branch, push.repository.full_name);
       if (glob === null && !push.deleted) await queueBehind(branch, push.repository.full_name);
       if (glob === null || push.deleted) return true;
@@ -260,29 +256,9 @@ const handle = async (
             await apply(glob, (g, ctx) => machine.prClosed(g, ctx));
           }
           return true;
-        case 'enqueued':
-        case 'dequeued':
-          await apply(glob, (g, ctx) =>
-            machine.mergeQueueEvent(g, { kind: event.action === 'enqueued' ? 'enqueued' : 'dequeued', ...(event.reason == null ? {} : { reason: event.reason }) }, ctx),
-          );
-          return true;
         default:
           return true;
       }
-    }
-
-    case 'merge_group': {
-      const event = mergeGroupPayload.parse(delivery.payload);
-      const base = event.merge_group?.base_ref?.replace(/^refs\/heads\//, '');
-      if (base == null || base === '') return true;
-      await refreshQueued(base, event.repository.full_name, {
-        kind: 'group',
-        ...(event.merge_group?.head_sha == null ? {} : { groupSha: event.merge_group.head_sha }),
-        // Only `merged` says something about every glob (the merge is in flight). Other group reasons describe the group,
-        // not each PR in it; `pull_request.dequeued` carries a PR's own reason.
-        ...(event.reason?.toLowerCase() === 'merged' ? { reason: event.reason } : {}),
-      });
-      return true;
     }
 
     case 'check_suite':
@@ -290,23 +266,6 @@ const handle = async (
       const event = checkPayload.parse(delivery.payload);
       const branch = event.check_suite?.head_branch ?? event.check_run?.check_suite.head_branch;
       const finished = event.check_run?.status === 'completed' || event.check_suite?.status === 'completed';
-      // A check on a merge group's ref belongs to no glob's branch: it tells the queued globs to re-read their entries.
-      const queueRef = branch == null ? null : QUEUE_REF.exec(branch);
-      const queueBase = queueRef?.[1];
-      if (queueBase != null) {
-        const run = event.check_run;
-        if (finished) {
-          const failed = run?.status === 'completed' && run.conclusion !== null && FAILED_CONCLUSIONS.has(run.conclusion);
-          // The ref names the group's last PR; only that PR's glob records the failure.
-          const prNumber = Number(queueRef?.[2]);
-          await refreshQueued(
-            queueBase,
-            event.repository.full_name,
-            failed ? { kind: 'checks_failed', groupSha: run.head_sha, prNumber } : { kind: 'group' },
-          );
-        }
-        return true;
-      }
       if (finished && branch != null) await queueBaseChecks(branch, event.repository.full_name);
       const glob = await globFor(branch, event.repository.full_name);
       if (glob === null) return true;

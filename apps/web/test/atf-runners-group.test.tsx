@@ -25,7 +25,7 @@ vi.mock('../src/lib/api', async (original) => ({
 }));
 
 const environments = [
-  { name: 'staging', allowBranchDeploy: false, role: 'integration' as const },
+  { name: 'staging', allowBranchDeploy: false },
   { name: 'dev', allowBranchDeploy: true },
 ];
 
@@ -163,11 +163,11 @@ describe('adding a runner', () => {
     expect(screen.queryByTestId('runner-credentials')).toBeNull();
   });
 
-  it('only offers environments the board observes', async () => {
+  it("offers each of the board's environments", async () => {
     renderGroup();
     await screen.findByTestId('runners-empty');
     expect(screen.getByTestId('runner-env-staging')).toBeTruthy();
-    expect(screen.queryByTestId('runner-env-dev')).toBeNull();
+    expect(screen.getByTestId('runner-env-dev')).toBeTruthy();
   });
 
   it('refuses a GitHub runner that pins nothing, with the server wording, and sends nothing', async () => {

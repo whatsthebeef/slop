@@ -47,9 +47,9 @@ describe('holdLine', () => {
   });
 
   it('says a start hold by a glob, a decision and a merge gate in the gate\'s words', () => {
-    expect(holdLine(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 'waiting · s1t1', icon: 'hourglass' });
+    expect(holdLine(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 's1t1', icon: 'hourglass' });
     expect(holdLine(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided' })] }))).toMatchObject({
-      text: 'waiting · decision s1k1',
+      text: 'decision s1k1',
       icon: 'human',
     });
     expect(holdLine(prOpen({ holding: [hold('s1k1', { toIsDecision: true, gate: 'merge' })] }))?.text).toBe('merge held · decision s1k1');
@@ -57,7 +57,7 @@ describe('holdLine', () => {
 
   it('names the first of several and counts the others, and the tip lists each with its reason', () => {
     const line = holdLine(view({ status: 'planning', holding: [hold('s1t1', { reason: 'a' }), hold('s1t2', { state: 'planning' }), hold('s1t3', { toIsDecision: true })] }));
-    expect(line?.text).toBe('waiting · s1t1 +2');
+    expect(line?.text).toBe('s1t1');
     expect(line?.tip.split('\n')).toEqual([
       `Waits for s1t1 to be merged and rolled out (Doing): a`,
       `Waits for s1t2 to be merged and rolled out (Planning) (no reason given)`,

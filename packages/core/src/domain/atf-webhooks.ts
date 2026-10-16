@@ -26,15 +26,15 @@ export const webhookSignedText = (timestamp: number, body: string): string =>
 export const webhookSignatureHeader = (hexDigest: string): string => `sha256=${hexDigest}`;
 
 /** One delivery per runner and deploy; the same ID on every retry, so a receiver can ignore one it already handled. */
-export const webhookDeliveryId = (runnerId: number, deployId: number): string =>
-  `atf-${String(runnerId)}-${String(deployId)}`;
+export const webhookDeliveryId = (runnerId: number, deployId: string): string =>
+  `atf-${String(runnerId)}-${deployId}`;
 
 export interface DeployLiveEvent {
   readonly boardId: number;
   readonly boardName: string;
   readonly environment: string;
   readonly sha: string;
-  readonly deployId: number;
+  readonly deployId: string;
   /** When the deploy happened. */
   readonly deployedAt: string;
   readonly deliveryId: string;

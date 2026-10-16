@@ -8,8 +8,8 @@ import { NOW } from './fixtures.js';
 const run = (patch: Partial<NewTestRun> = {}): NewTestRun => ({
   boardId: 1,
   kind: 'atf',
-  globId: null,
-  environment: 'staging',
+  globId: 's1t1',
+  environment: 'qa',
   sha: 'abc1234',
   passed: 3,
   failed: 1,
@@ -35,7 +35,7 @@ describe('per-spec test results in the store', () => {
     expect(await store.transaction((tx) => tx.insertTestRun(run({ specs })))).toBe(true);
     await store.transaction((tx) => tx.insertTestRun(run({ eventId: 'e2' })));
     const runs = await store.transaction((tx) =>
-      tx.listTestRuns(1, { commits: [{ environment: 'staging', sha: 'abc1234' }] }),
+      tx.listTestRuns(1, { globIds: ['s1t1'] }),
     );
     expect(runs).toHaveLength(2);
     // The run itself carries no spec rows.
@@ -69,33 +69,6 @@ describe('per-spec test results in the store', () => {
   });
 });
 
-describe('ATF batches in the store', () => {
-  it('stores one batch per board, environment and commit and returns the first on a repeat', async () => {
-    const store = new MemoryStore();
-    const batch = {
-      boardId: 1,
-      environment: 'staging',
-      sha: 'abc1234',
-      specs: [{ spec: 'a.spec.ts', globIds: ['s1t1'] }],
-      greps: [{ grep: '@x', globIds: ['s1t1'] }],
-      createdAt: NOW,
-    };
-    const first = await store.transaction((tx) => tx.insertAtfBatch(batch));
-    const again = await store.transaction((tx) =>
-      tx.insertAtfBatch({ ...batch, specs: [], createdAt: '2026-10-06T00:00:00.000Z' }),
-    );
-    expect(again).toEqual(first);
-    expect(await store.transaction((tx) => tx.getAtfBatch(1, 'staging', 'abc1234'))).toEqual(first);
-    expect(await store.transaction((tx) => tx.getAtfBatch(1, 'staging', 'other'))).toBeNull();
-    expect(await store.transaction((tx) => tx.getAtfBatch(2, 'staging', 'abc1234'))).toBeNull();
-    const later = await store.transaction((tx) =>
-      tx.insertAtfBatch({ ...batch, sha: 'def5678', createdAt: '2026-10-06T00:00:00.000Z' }),
-    );
-    expect(await store.transaction((tx) => tx.latestAtfBatch(1, 'staging'))).toEqual(later);
-    expect(await store.transaction((tx) => tx.latestAtfBatch(1, 'prod'))).toBeNull();
-  });
-});
-
 describe('the board ATF setting', () => {
   const ADMIN = 'admin@example.com';
   const SERVER_ADMIN = 'ops@example.com';
@@ -123,7 +96,7 @@ describe('the board ATF setting', () => {
     });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: SERVER_ADMIN, name: SERVER_ADMIN, active: true }));
-    const created = await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
     boardId = created.value.id;
     version = created.value.version;
@@ -173,7 +146,7 @@ describe('the board ATF setting', () => {
     boards = new BoardService({ store, notifier: new RecordingNotifier(), atfPolicy: policy, serverAdmins: [SERVER_ADMIN], newExternalId: () => 'ext-2', clock: { now: () => NOW } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: SERVER_ADMIN, name: SERVER_ADMIN, active: true }));
-    const created = unwrapOk(await boards.create(ADMIN, { name: 'c', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const created = unwrapOk(await boards.create(ADMIN, { name: 'c', repo: null, timeZone: 'UTC', environments: [] }));
     unwrapOk(await boards.setMember(ADMIN, created.id, SERVER_ADMIN, 'admin'));
     await store.transaction(async (tx) => {
       const b = await tx.getBoard(created.id);

@@ -185,7 +185,7 @@ describe('a run for each purpose', () => {
         prOpen({ conflict, currentRun: r, runs: [r], allowedActions: ['resolve_conflict'] }),
       );
       expect(p.status?.icon).toMatch(/^machine/);
-      expect(p.status?.text).toMatch(/starting|queued|fixing the conflict/);
+      expect(p.status?.text).toMatch(/starting|queued|fixing conflict/);
       expect(p.notice).toBeNull();
     }
   });
@@ -193,7 +193,7 @@ describe('a run for each purpose', () => {
   it('a running conflict fix spins', () => {
     const r = running('resolve_conflict');
     const p = present(prOpen({ conflict, currentRun: r, runs: [r] }));
-    expect(p.status).toMatchObject({ icon: 'machine-spinning', text: 'fixing the conflict' });
+    expect(p.status).toMatchObject({ icon: 'machine-spinning', text: 'fixing conflict' });
   });
 
   it('a failed conflict fix leaves the conflict in the notice and Fix conflict to try again', () => {
@@ -370,7 +370,7 @@ describe('pending clicks', () => {
     expect(p.notice).toBeNull();
   });
 
-  it('a pending Fix conflict reads fixing the conflict', () => {
+  it('a pending Fix conflict reads fixing conflict', () => {
     const p = holdsRules(
       prOpen({
         conflict,
@@ -378,7 +378,7 @@ describe('pending clicks', () => {
         pendingAction: click('resolve_conflict'),
       }),
     );
-    expect(p.status?.text).toBe('fixing the conflict');
+    expect(p.status?.text).toBe('fixing conflict');
     expect(p.cardPrimary).toBeNull();
     expect(p.notice).toBeNull();
   });
@@ -437,8 +437,8 @@ describe('pending clicks', () => {
     it.each([
       ['armed to merge when checks pass', { mergeMode: 'when_green' as const }],
       [
-        'in the merge queue',
-        { mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' as const } },
+        'waiting in the merge line',
+        { status: 'merging' as const, mergeLine: { joinedAt: NOW } },
       ],
       ['merging', { status: 'merging' as const }],
     ])('Merge %s says nothing', (_name, patch) => {
@@ -475,7 +475,7 @@ describe('rollout steps open after the merge', () => {
       ...patch,
     }) as ListedHumanStep;
 
-  it('says rollout, asks for a Do block and raises no notice', () => {
+  it('says do, asks for a Do block and raises no notice', () => {
     const g = view({
       type: 'same',
       status: 'reviewing',
@@ -485,10 +485,48 @@ describe('rollout steps open after the merge', () => {
       labels: {},
     });
     const p = holdsRules(g);
-    expect(p.status?.text).toBe('rollout');
+    expect(p.status?.text).toBe('do');
+    expect(p.status?.tip).not.toContain('rollout open');
     expect(p.blocks).toEqual([{ kind: 'do', id: 'step-1' }]);
     expect(p.notice).toBeNull();
     expect(p.cardPrimary).toBeNull();
+  });
+
+  it('a due step for the viewer reads do, never its title, with the title and the rest in the tooltip', () => {
+    const g = prOpen({
+      headChecks: { sha: HEAD, state: 'passed' },
+      humanSteps: [
+        step({
+          id: 'step-1',
+          kind: 'rollout',
+          title: 'Grant the role',
+          due: 'once',
+          blocks: ['reviewing'],
+        }),
+        step({ id: 'step-2', title: 'Run the migration', due: 'now', blocks: ['reviewing'] }),
+      ],
+    });
+    const p = holdsRules(g);
+    expect(p.status?.text).toBe('do');
+    expect(p.status?.tip).toContain('Grant the role (+1 more)');
+  });
+
+  it('a due decision reads decide, never its title', () => {
+    const g = prOpen({
+      headChecks: { sha: HEAD, state: 'passed' },
+      humanSteps: [
+        step({
+          id: 'step-3',
+          kind: 'decide',
+          title: 'Pick the table',
+          due: 'now',
+          blocks: ['reviewing'],
+        }),
+      ],
+    });
+    const p = holdsRules(g);
+    expect(p.status?.text).toBe('decide');
+    expect(p.status?.tip).toContain('Pick the table');
   });
 
   it('a stored work step a review finding needs a person for is a Do block, not a problem notice', () => {

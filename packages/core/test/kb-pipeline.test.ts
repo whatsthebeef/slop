@@ -157,7 +157,7 @@ describe('KB pipeline: routing and dedupe', () => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
     boardId = unwrap(
-      await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] }),
     ).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     const create = async () =>

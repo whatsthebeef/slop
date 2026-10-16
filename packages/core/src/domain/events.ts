@@ -30,8 +30,10 @@ export const DOMAIN_EVENT_TYPES = [
   'MergeResumed',
   /** Slop updated a behind branch while merging (data: how many times for this merge request). */
   'MergeBranchUpdated',
-  /** The code host's merge queue took the PR, or its place in the queue changed (data: `position`, `state`, `sha`). */
-  'MergeQueued',
+  /** The glob joined its board's merge line (data: `sha`, the head it joined with). */
+  'MergeLineJoined',
+  /** The glob became the head of its board's merge line: it now updates, waits for its checks and merges (data: `sha`). */
+  'MergeLineHead',
   'MergeReverted',
   'MergeRevertFailed',
   'MergeRevertDeclined',
@@ -175,12 +177,10 @@ export type Effect =
     }
   | { readonly kind: 'squash_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   /**
-   * The code host's merge queue changed (a webhook hint, or a reconcile): re-read the PR's queue entry and state from the
-   * host and apply the truth. `reason` is the dequeue reason the webhook gave; `groupSha` the merge group commit it named.
+   * The board's merge line changed (a glob joined or left it): promote the next head if there is none. Board-wide like
+   * `refresh_base_checks` (`globId` is `board-<id>`, not generation-checked); idempotent, so a duplicate or late one is harmless.
    */
-  | { readonly kind: 'read_merge_queue'; readonly globId: string; readonly generation: number; readonly reason?: string; readonly groupSha?: string }
-  /** Take the PR out of the host's merge queue (Cancel merge while queued). */
-  | { readonly kind: 'dequeue_merge'; readonly globId: string; readonly generation: number }
+  | { readonly kind: 'advance_merge_line'; readonly globId: string; readonly boardId: number }
   /** Revert a sub's merge commit on the base branch after the checks on it failed. */
   | { readonly kind: 'revert_merge'; readonly globId: string; readonly generation: number; readonly sha: string }
   | { readonly kind: 'reopen_pr'; readonly globId: string; readonly generation: number }
@@ -222,20 +222,14 @@ export type Effect =
    */
   | { readonly kind: 'refresh_base_checks'; readonly globId: string; readonly boardId: number }
   /**
-   * A release or integration environment now runs `sha`: work out which recently merged globs (and which globs it
-   * held before, for rollbacks) that commit contains. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`,
-   * not generation-checked); dropped when a newer deploy to the environment has been recorded since.
+   * Read the code host's default branch and cache it as the board's base branch (a push, a settings change or start-up).
+   * Board-wide like `refresh_base_checks` (`globId` is `board-<id>`, not generation-checked); idempotent, and a host that
+   * can't answer keeps the stored value.
    */
-  | {
-      readonly kind: 'check_environment';
-      readonly globId: string;
-      readonly boardId: number;
-      readonly environment: string;
-      readonly sha: string;
-    }
+  | { readonly kind: 'refresh_base_branch'; readonly globId: string; readonly boardId: number }
   /**
-   * A push-mode board's deploy of `sha` to `environment` has been checked: start the board's ATF project with the specs its
-   * merged globs' test plans listed. Board-wide like `check_environment` (`globId` is `board-<id>`, not generation-checked);
+   * Start (no longer queued by a dev branch deploy: the int pipeline starts ATF; the executor stays) a push-mode board's deploy of `sha` to `environment`: start the board's ATF project with the specs its
+   * glob's test plan listed. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`, not generation-checked);
    * dropped when a newer deploy has replaced `sha`; a failed start is logged and never blocks anything.
    */
   | {
@@ -246,7 +240,7 @@ export type Effect =
       readonly sha: string;
     }
   /**
-   * A deploy of `sha` to `environment` is live and checked: tell one runner that subscribed to webhook delivery (signed POST of
+   * (No longer queued by a dev branch deploy; the executor stays.) A deploy of `sha` to `environment` is live: tell one runner that subscribed to webhook delivery (signed POST of
    * the deploy-live event). Board-wide like `start_atf` (`globId` is `board-<id>`, not generation-checked). The outbox keeps one
    * job per runner and deploy; dropped when the runner is gone or off, or a newer deploy replaced `sha`; a failed delivery is
    * retried with the outbox's backoff, never blocks anything.
@@ -256,7 +250,7 @@ export type Effect =
       readonly globId: string;
       readonly boardId: number;
       readonly runnerId: number;
-      readonly deployId: number;
+      readonly deployId: string;
       readonly environment: string;
       readonly sha: string;
       /** When the deploy happened. */
@@ -293,6 +287,8 @@ export type Effect =
    * not generation-checked); the outbox keeps one pending job per board and delays it a few seconds, so a burst runs once.
    */
   | { readonly kind: 'recheck_overlaps'; readonly globId: string; readonly boardId: number }
+  /** Re-run the failed jobs of the checks on the PR head `sha` (Retry checks), whatever an earlier re-run did. */
+  | { readonly kind: 'rerun_checks'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number }
   /**
@@ -418,6 +414,9 @@ export interface OutboxJob {
 
 /** The board's overlap recheck: its `globId` is `board-<id>`, as for the other board-wide effects. */
 export const recheckOverlapsEffect = (boardId: number): Effect => ({ kind: 'recheck_overlaps', globId: `board-${String(boardId)}`, boardId });
+
+/** The board's merge line advance: its `globId` is `board-<id>`, as for the other board-wide effects. */
+export const advanceMergeLineEffect = (boardId: number): Effect => ({ kind: 'advance_merge_line', globId: `board-${String(boardId)}`, boardId });
 
 /** Raise the plan-changed question for plan.md version `version` of a glob (idempotent by the question's key). */
 export const planChangedQuestionEffect = (globId: string, version: number): Effect => ({ kind: 'plan_changed_question', globId, version });

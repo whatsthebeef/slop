@@ -62,7 +62,6 @@ describe('hand-over brief in the services', () => {
       await boards.create(ADMIN, {
         name: 'demo',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

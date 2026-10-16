@@ -3,9 +3,8 @@ import * as machine from '../machine.js';
 import { actionState, preparationOf } from '../action-glob.js';
 import {
   appliedHolding,
-  DEPLOY_STALLED_LABEL,
   MERGE_CONFLICT_STALL_LABEL,
-  MERGE_QUEUE_TIP,
+  mergeLineTip,
 } from '../whose-move.js';
 import {
   behindAdvice,
@@ -17,6 +16,7 @@ import {
 } from '../readiness.js';
 import { UNTIL_WORDS } from '../relations.js';
 import { yourTurn } from '../human-steps.js';
+import { stepGroup } from './human-steps.js';
 import type { Action } from '../machine.js';
 import type { Holding } from '../relations.js';
 import type { HumanStepKind, HumanStepViewer, StepAction } from '../human-steps.js';
@@ -27,7 +27,7 @@ import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-view.js';
 import type { PresentableGlob } from './facts.js';
 import {
   checksInFlightWhileMerging,
-  mergeQueueStatus,
+  mergeLineStatus,
   mergingChecksText,
 } from './check-wording.js';
 import { actionPresentation, type ActionIcon } from './action-presentation.js';
@@ -68,6 +68,8 @@ export interface StatusLine {
   readonly work?: true;
   /** The problem is a merge conflict: the card says it in a few words and the glob view lists the files. */
   readonly conflict?: true;
+  /** `merging`: the glob waits in the board's merge line (not the head): the card shows the hourglass, not the machine. */
+  readonly waiting?: true;
 }
 
 /**
@@ -89,6 +91,13 @@ export const isProblemLine = (line: Pick<StatusLine, 'kind'>): boolean =>
 
 /** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
 const TURN_LABEL_MAX = 24;
+
+/** The one word a person's step shows in the corner, by group: never the step's title. Housekeeping has none. */
+const PERSON_WORD: Readonly<Partial<Record<ReturnType<typeof stepGroup>, string>>> = {
+  answer: 'question',
+  do: 'do',
+  decide: 'decide',
+};
 
 /** True for an investigate-only run: it never started the glob (`purpose` is absent on implementing runs). */
 export const isInvestigateRun = (run: { readonly purpose?: string }): boolean =>
@@ -272,8 +281,8 @@ export const statusCandidates = (
     const sha = glob.pr?.headSha ?? null;
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
     // Checks in flight read the shared merging wording ("running checks", or "merging from <base>" while catching up).
-    // In the host's merge queue it reads the queue wording instead.
-    const queued = mergeQueueStatus(glob);
+    // Waiting in the board's merge line it reads its place instead: only the head merges, and it does no work until its turn.
+    const queued = mergeLineStatus(glob);
     const merge =
       queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
     // A prepared action's merge is its record being written after Done.
@@ -287,7 +296,8 @@ export const statusCandidates = (
         tip:
           queued === null
             ? `Merging ${short}: slop merges it once the checks pass, and stops and says why if they fail${rollout}`
-            : `Merging ${short}: in the merge queue. ${MERGE_QUEUE_TIP}${rollout}`,
+            : `Merging ${short}: waiting in the merge line. ${mergeLineTip(glob.mergeLinePlace?.ahead ?? [])}${rollout}`,
+        ...(queued === null ? {} : { waiting: true as const }),
       }),
     );
   }
@@ -376,14 +386,6 @@ export const statusLine = (
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha, { rolloutSteps: glob.rolloutSteps ?? 0 });
-    // A rollout waiting on a deploy that never came is a stall: the warning says it in two words, the tooltip says what is missing.
-    if (glob.move?.holder === 'stalled' && glob.move.cause === 'deploy')
-      return make({
-        kind: 'stuck',
-        full: DEPLOY_STALLED_LABEL,
-        tone: 'text-required',
-        tip: `${DEPLOY_STALLED_LABEL}\n${glob.move.reason}`,
-      });
     // Merged with its rollout still open: how far it is, and whose turn.
     const rollout =
       glob.humanSteps === undefined
@@ -411,6 +413,14 @@ export const statusLine = (
         stalled === null
           ? null
           : `${stalled.reason.charAt(0).toUpperCase()}${stalled.reason.slice(1)}${stalled.since === null ? '' : ` since ${new Date(stalled.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}`;
+      // A person's step (Answer, Do, Decide) reads as one word; its title and the count of the rest are the tooltip's.
+      const personWord = 'id' in turn ? PERSON_WORD[stepGroup(turn)] : undefined;
+      const moreSteps =
+        personWord === undefined || glob.humanSteps === undefined
+          ? 0
+          : glob.humanSteps.filter(
+              (s) => s !== turn && s.state === 'due' && PERSON_WORD[stepGroup(s)] !== undefined,
+            ).length;
       const turnAction = 'action' in turn ? turn.action : undefined;
       // The chip names one action; the cause (and that other options are in the glob view) is the tooltip's.
       const tip =
@@ -418,10 +428,12 @@ export const statusLine = (
           ? ready.tip
           : cause !== null
             ? `${cause}\nOther options are in the glob view`
-            : turn.title;
+            : personWord === undefined
+              ? turn.title
+              : `${oneLine(turn.title)}${moreSteps > 0 ? ` (+${String(moreSteps)} more)` : ''}`;
       return make({
         kind: 'ready',
-        full: oneLine(turn.title, TURN_LABEL_MAX),
+        full: personWord ?? oneLine(turn.title, TURN_LABEL_MAX),
         turn: turn.kind,
         ...(turnAction === undefined ? {} : { action: turnAction }),
         tone: 'text-signal-strong',
@@ -630,7 +642,7 @@ const holdState = (state: Holding['state']): string => {
     case 'open':
       return 'Doing';
     case 'rollout':
-      return 'rollout open';
+      return 'to do';
     case 'decided':
       return 'decided';
     case 'done':
@@ -654,7 +666,7 @@ export const chainTip = (glob: PresentableGlob): string =>
     .join(', ');
 
 export interface HoldLine {
-  /** "waiting · s15f145", "waiting · decision s15k123", "merge held · s15f145", plus " +N" for the other holds. */
+  /** The holder's ID ("s15f145", "decision s15k123"), or "merge held · s15f145" / "sign-off held · s15f145" for a later gate; the other holds are in the tip. */
   readonly text: string;
   /** One line per hold: what it waits for, where that stands and why. */
   readonly tip: string;
@@ -686,10 +698,10 @@ const scriptHoldTip = (glob: PresentableGlob, h: Holding): string | null => {
  */
 export const holdLine = (glob: PresentableGlob): HoldLine | null => {
   const held = appliedHolding(glob, glob.holding ?? []);
-  const [first, ...rest] = held;
+  const [first] = held;
   if (first === undefined) return null;
   return {
-    text: `${GATE_WORDS[first.gate].head} · ${named(first)}${rest.length > 0 ? ` +${String(rest.length)}` : ''}`,
+    text: first.gate === 'start' ? named(first) : `${GATE_WORDS[first.gate].head} · ${named(first)}`,
     tip: held
       .map(
         (h) =>

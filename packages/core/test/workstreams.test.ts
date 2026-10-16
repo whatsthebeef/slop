@@ -145,7 +145,7 @@ describe('the record hook', () => {
     artifacts = new ArtifactService({ store, clock, notifier });
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'run-1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     globId = unwrap(await globs.create(ADMIN, { boardId, title: 'Big', type: 'same', category: 'feature', group: null, environment: null, autoTrigger: false, idempotencyKey: null })).id;
   });
 
