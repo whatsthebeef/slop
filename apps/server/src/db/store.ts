@@ -1,5 +1,5 @@
-import type { AtfBatch, AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
-import { AGENT_SET_COMMIT_DELAY_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, ATF_RUNNER_METHODS, reviewSettingsOf } from '@slop/core';
+import type { AtfBatch, AtfRunner, StoredRunSpec, ContextSettingChange, KnowledgePageVersion, OutboxJob, IntakeSnapshot, BoardNotification, Category, SlopType, WorkKind, ChatMessage, ChatThread, ChatFeedback, Artifact, Candidate, Decision, DecisionSource, InboxItem, InboxLink, IntegrationToken, KnowledgeItem, SearchQuery, ArtifactMeta, ArtifactSummary, Board, BoardJob, Deploy, DomainEvent, EnvironmentDeploy, Glob, GlobPresence, GlobFilter, HumanStepDue, StoredHumanStep, KbSignalState, KnowledgeDoc, Member, Relation, RelationPatch, RelationScanPatch, RelationScanRow, ReviewFinding, ReviewSource, SizeCheck, SizeThresholdChange, SizeCalibrationChange, SizeRecord, TypeCorrection, EscalationRecord, DependencyRuleChange, RiskArea, RiskAreaChange, Store, SubLimitChange, TestRun, Tx, User } from '@slop/core';
+import { AGENT_SET_COMMIT_DELAY_MS, RELATION_SCAN_DEBOUNCE_MS, CONTEXT_SETTING_KEYS, NO_GLOB, laneOf, resolveContextSettings, isClearedAttachment, AREAS, DEFAULT_SIZE_CALIBRATION, GLOB_OWNED_SOURCES, suggestionsOf, NOTIFICATION_SEVERITIES, ARTIFACT_KINDS, ARTIFACT_KINDS_WITH_CONTENT, BOARD_JOBS, DOMAIN_EVENT_TYPES, DEPLOY_STATES, DEPLOY_TRIGGERS, isHumanStepDue, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, KNOWLEDGE_KINDS, KNOWLEDGE_LAYERS, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, DEFAULT_SIZE_THRESHOLD, proposalOfStored, SIZE_DECISIONS, SIZE_OUTCOMES, SUB_LIMIT_OUTCOMES, DEPENDENCY_CAUSES, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, TEST_RUN_KINDS, SPEC_STATUSES, ATF_RUNNER_METHODS, reviewSettingsOf } from '@slop/core';
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -300,11 +300,29 @@ const toRelation = (row: typeof schema.relations.$inferSelect): Relation => ({
   reason: row.reason,
   evidence: row.evidence,
   source: row.source,
+  kind: row.kind,
   group: row.group,
   dismissedAt: row.dismissedAt?.toISOString() ?? null,
   dismissedPlanHash: row.dismissedPlanHash,
   overriddenAt: row.overriddenAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
+});
+
+const toRelationScan = (row: typeof schema.relationScans.$inferSelect): RelationScanRow => ({
+  globId: row.globId,
+  mentionedId: row.mentionedId,
+  sentenceHash: row.sentenceHash,
+  boardId: row.boardId,
+  kind: row.kind,
+  decision: row.decision,
+  gate: row.gate,
+  reason: row.reason,
+  sentence: row.sentence,
+  relationId: row.relationId,
+  state: row.state,
+  model: row.model,
+  createdAt: row.createdAt.toISOString(),
+  decidedAt: row.decidedAt?.toISOString() ?? null,
 });
 
 const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
@@ -317,6 +335,7 @@ const relationRow = (r: Relation): typeof schema.relations.$inferInsert => ({
   reason: r.reason,
   evidence: r.evidence,
   source: r.source,
+  kind: r.kind ?? 'waits',
   group: r.group,
   dismissedAt: r.dismissedAt === null ? null : new Date(r.dismissedAt),
   dismissedPlanHash: r.dismissedPlanHash,
@@ -713,6 +732,9 @@ export class PgStore implements Store {
         await t.delete(schema.humanSteps).where(eq(schema.humanSteps.globId, id));
         // Its own relations go; the ones pointing at it stay, so a glob that waited on it can say it was deleted.
         await t.delete(schema.relations).where(eq(schema.relations.fromGlob, id));
+        // A "superseded by" label pointing at it goes too: with its superseder gone the glob is no longer superseded.
+        await t.delete(schema.relations).where(and(eq(schema.relations.toGlob, id), eq(schema.relations.kind, 'superseded_by')));
+        await t.delete(schema.relationScans).where(eq(schema.relationScans.globId, id));
         await t.delete(schema.statusDismissals).where(eq(schema.statusDismissals.globId, id));
         await t.delete(schema.artifacts).where(eq(schema.artifacts.globId, id));
         // Older decisions that this glob's decisions replaced stand again; its own rows go with their items below.
@@ -1452,8 +1474,15 @@ export class PgStore implements Store {
           await t.insert(schema.humanSteps).values(row).onConflictDoUpdate({ target: schema.humanSteps.id, set: row });
         }
       },
+      // The three list methods the gate code reads return only `waits` rows; a supersession is read with its own two.
       listRelations: async (boardId) =>
-        (await t.select().from(schema.relations).where(eq(schema.relations.boardId, boardId)).orderBy(schema.relations.createdAt, schema.relations.id)).map(toRelation),
+        (
+          await t
+            .select()
+            .from(schema.relations)
+            .where(and(eq(schema.relations.boardId, boardId), eq(schema.relations.kind, 'waits')))
+            .orderBy(schema.relations.createdAt, schema.relations.id)
+        ).map(toRelation),
       listRelationsFrom: async (globIds) => {
         if (globIds.length === 0) return [];
         // One JSON parameter, not one per ID: a long list would pass Postgres's parameter limit.
@@ -1461,7 +1490,7 @@ export class PgStore implements Store {
         const rows = await t
           .select()
           .from(r)
-          .where(sql`${r.fromGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb))`)
+          .where(sql`${r.fromGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb)) and ${r.kind} = 'waits'`)
           .orderBy(r.createdAt, r.id);
         return rows.map(toRelation);
       },
@@ -1471,7 +1500,27 @@ export class PgStore implements Store {
         const rows = await t
           .select()
           .from(r)
-          .where(sql`${r.toGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb))`)
+          .where(sql`${r.toGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb)) and ${r.kind} = 'waits'`)
+          .orderBy(r.createdAt, r.id);
+        return rows.map(toRelation);
+      },
+      listSupersessions: async (globIds) => {
+        if (globIds.length === 0) return [];
+        const r = schema.relations;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(sql`${r.fromGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb)) and ${r.kind} = 'superseded_by'`)
+          .orderBy(r.createdAt, r.id);
+        return rows.map(toRelation);
+      },
+      listSupersededBy: async (globIds) => {
+        if (globIds.length === 0) return [];
+        const r = schema.relations;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(sql`${r.toGlob} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb)) and ${r.kind} = 'superseded_by'`)
           .orderBy(r.createdAt, r.id);
         return rows.map(toRelation);
       },
@@ -1496,8 +1545,52 @@ export class PgStore implements Store {
       deleteRelationsFrom: async (globId) => {
         await t.delete(schema.relations).where(eq(schema.relations.fromGlob, globId));
       },
-      lockBoardRelations: async (boardId) => {
-        await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`board_relations:${boardId}`}))`);
+      // One instance-wide lock: cross-board edges mean two boards' writers must not both pass the cycle check.
+      lockRelations: async () => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext('relations'))`);
+      },
+      lockBoardRelations: async () => {
+        await t.execute(sql`select pg_advisory_xact_lock(hashtext('relations'))`);
+      },
+      listRelationScans: async (globId) => {
+        const r = schema.relationScans;
+        return (await t.select().from(r).where(eq(r.globId, globId)).orderBy(r.createdAt, r.mentionedId, r.sentenceHash)).map(toRelationScan);
+      },
+      upsertRelationScans: async (rows) => {
+        if (rows.length === 0) return;
+        // A decided or dismissed pair is never overwritten: the first decision stands.
+        await t
+          .insert(schema.relationScans)
+          .values(
+            rows.map((x) => ({
+              ...x,
+              createdAt: new Date(x.createdAt),
+              decidedAt: x.decidedAt === null ? null : new Date(x.decidedAt),
+            })),
+          )
+          .onConflictDoNothing();
+      },
+      listOpenSuggestions: async (globIds) => {
+        if (globIds.length === 0) return [];
+        const r = schema.relationScans;
+        const rows = await t
+          .select()
+          .from(r)
+          .where(sql`${r.globId} in (select jsonb_array_elements_text(${JSON.stringify(globIds)}::jsonb)) and ${r.state} = 'open'`)
+          .orderBy(r.createdAt, r.mentionedId, r.sentenceHash);
+        return rows.map(toRelationScan);
+      },
+      updateRelationScan: async (globId, mentionedId, sentenceHash, patch: RelationScanPatch) => {
+        const set: Partial<typeof schema.relationScans.$inferInsert> = {};
+        if (patch.decision !== undefined) set.decision = patch.decision;
+        if (patch.gate !== undefined) set.gate = patch.gate;
+        if (patch.reason !== undefined) set.reason = patch.reason;
+        if (patch.relationId !== undefined) set.relationId = patch.relationId;
+        if (patch.state !== undefined) set.state = patch.state;
+        if (patch.decidedAt !== undefined) set.decidedAt = patch.decidedAt === null ? null : new Date(patch.decidedAt);
+        if (Object.keys(set).length === 0) return;
+        const r = schema.relationScans;
+        await t.update(r).set(set).where(and(eq(r.globId, globId), eq(r.mentionedId, mentionedId), eq(r.sentenceHash, sentenceHash)));
       },
       listStatusDismissals: async (email, boardId) => {
         const d = schema.statusDismissals;
@@ -2653,6 +2746,21 @@ export class PgStore implements Store {
             // One unclaimed commit job per board, and every bump pushes it out again: the commit follows the last bump of a batch.
             const jobs = schema.outbox;
             const runAfter = new Date(Date.now() + AGENT_SET_COMMIT_DELAY_MS);
+            const updated = await t
+              .update(jobs)
+              .set({ runAfter })
+              .where(and(eq(jobs.kind, effect.kind), eq(jobs.globId, effect.globId), eq(jobs.state, 'pending'), eq(jobs.attempts, 0)))
+              .returning({ id: jobs.id });
+            if (updated.length > 0 || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
+            rows.push({ kind: effect.kind, lane: laneOf(effect.kind), globId: effect.globId, effect, runAfter });
+            continue;
+          }
+          if (effect.kind === 'scan_relations') {
+            // One unclaimed scan per glob, and every trigger pushes it out again: a burst of saves makes one pass.
+            const jobs = schema.outbox;
+            // Two concurrent saves would both find no pending job and queue two: the per-glob lock makes the second one see the first.
+            await t.execute(sql`select pg_advisory_xact_lock(hashtext(${`scan_relations:${effect.globId}`}))`);
+            const runAfter = new Date(Date.now() + RELATION_SCAN_DEBOUNCE_MS);
             const updated = await t
               .update(jobs)
               .set({ runAfter })

@@ -1,5 +1,5 @@
-import { BoardService, GlobService, LABEL_NAMES } from '@slop/core';
-import type { Relation, Result } from '@slop/core';
+import { BoardService, GlobService, LABEL_NAMES, RELATION_SCAN_DEBOUNCE_MS, sentenceHash } from '@slop/core';
+import type { Effect, Relation, RelationScanRow, Result } from '@slop/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgStore } from '../src/db/store.js';
 import { StallWatch } from '../src/jobs/stall-watch.js';
@@ -20,6 +20,7 @@ const relation = (patch: Partial<Relation> & Pick<Relation, 'id' | 'from' | 'to'
   reason: null,
   evidence: [],
   source: 'person',
+  kind: 'waits',
   group: null,
   dismissedAt: null,
   dismissedPlanHash: null,
@@ -94,6 +95,135 @@ describe('relations in Postgres', () => {
     expect(await rows()).toEqual([]);
   });
 
+  it('keeps a supersession out of the three list methods and reads it with its own two (the memory store has the same test)', async () => {
+    const waits = relation({ id: 'rel_w', from: 's1t1', to: 's1t2' });
+    const supersession = relation({ id: 'rel_s', from: 's1t11', to: 's1t13', gate: 'sign_off', kind: 'superseded_by', source: 'agent', reason: 'replaces it' });
+    await store.transaction(async (tx) => {
+      expect(await tx.insertRelation(waits)).toBe(true);
+      expect(await tx.insertRelation(supersession)).toBe(true);
+      // The same pair and gate is allowed once per kind, and not twice.
+      expect(await tx.insertRelation({ ...waits, id: 'rel_other_kind', kind: 'superseded_by' })).toBe(true);
+      expect(await tx.insertRelation({ ...supersession, id: 'rel_dup' })).toBe(false);
+    });
+    expect(await rows()).toEqual([waits]);
+    expect(await store.transaction((tx) => tx.listRelationsFrom(['s1t11', 's1t1']))).toEqual([waits]);
+    expect(await store.transaction((tx) => tx.listRelationsTo(['s1t13', 's1t2']))).toEqual([waits]);
+    expect((await store.transaction((tx) => tx.listSupersessions(['s1t11']))).map((r) => r.id)).toEqual(['rel_s']);
+    expect((await store.transaction((tx) => tx.listSupersededBy(['s1t13']))).map((r) => r.id)).toEqual(['rel_s']);
+    expect(await store.transaction((tx) => tx.listSupersessions([]))).toEqual([]);
+    expect(await store.transaction((tx) => tx.listSupersededBy(['s1t11']))).toEqual([]);
+    const long = Array.from({ length: 70_000 }, (_, i) => `s1t${String(i + 100)}`);
+    expect(await store.transaction((tx) => tx.listSupersessions(long))).toEqual([]);
+    await store.transaction(async (tx) => {
+      await tx.deleteRelationsFrom('s1t1');
+      await tx.deleteRelationsFrom('s1t11');
+    });
+    expect(await rows()).toEqual([]);
+  });
+
+  it('lists a cross-board relation under the holder\'s board and to the target on any board', async () => {
+    const cross = relation({ id: 'rel_x', from: 's1t1', to: 's2t5' });
+    await store.transaction((tx) => tx.insertRelation(cross));
+    expect(await store.transaction((tx) => tx.listRelationsTo(['s2t5']))).toEqual([cross]);
+    expect(await store.transaction((tx) => tx.listRelations(2))).toEqual([]);
+    await store.transaction((tx) => tx.deleteRelation('rel_x'));
+  });
+
+  it('serialises relation writers with one instance-wide lock, whichever way it is taken', async () => {
+    const order: string[] = [];
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = store.transaction(async (tx) => {
+      await tx.lockRelations();
+      order.push('first locked');
+      await held;
+      order.push('first done');
+    });
+    // Let the first transaction take the lock before the second asks for it.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const second = store.transaction(async (tx) => {
+      await tx.lockBoardRelations(boardId + 1);
+      order.push('second locked');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(order).toEqual(['first locked']);
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first locked', 'first done', 'second locked']);
+  });
+
+  describe('the relation scan', () => {
+    const scan = (patch: Partial<RelationScanRow> = {}): RelationScanRow => ({
+      globId: 's1t1',
+      mentionedId: 's1t2',
+      sentenceHash: sentenceHash('Waits for s1t2.'),
+      boardId,
+      kind: 'mention',
+      decision: 'suggested',
+      gate: 'sign_off',
+      reason: 'Waits for s1t2.',
+      sentence: 'Waits for s1t2.',
+      relationId: null,
+      state: 'open',
+      model: null,
+      createdAt: AT,
+      decidedAt: null,
+      ...patch,
+    });
+
+    it('keeps the first decision for a pair and sentence, lists open suggestions, patches one row, and reads a long list as one parameter', async () => {
+      await store.transaction((tx) => tx.upsertRelationScans([scan(), scan({ mentionedId: 's1t3', decision: 'history', state: 'done' })]));
+      await store.transaction((tx) => tx.upsertRelationScans([scan({ decision: 'not_prerequisite', state: 'dismissed' })]));
+      expect((await store.transaction((tx) => tx.listRelationScans('s1t1'))).map((r) => [r.mentionedId, r.decision, r.state])).toEqual([
+        ['s1t2', 'suggested', 'open'],
+        ['s1t3', 'history', 'done'],
+      ]);
+      expect(await store.transaction((tx) => tx.listRelationScans('s1t1'))).toContainEqual(scan());
+      expect((await store.transaction((tx) => tx.listOpenSuggestions(['s1t1', 's1t9']))).map((r) => r.mentionedId)).toEqual(['s1t2']);
+      expect(await store.transaction((tx) => tx.listOpenSuggestions([]))).toEqual([]);
+      const long = Array.from({ length: 70_000 }, (_, i) => `s1t${String(i + 100)}`);
+      expect(await store.transaction((tx) => tx.listOpenSuggestions(long))).toEqual([]);
+      await store.transaction((tx) => tx.updateRelationScan('s1t1', 's1t2', sentenceHash('Waits for s1t2.'), { state: 'dismissed', decidedAt: AT, relationId: 'rel_a' }));
+      expect(await store.transaction((tx) => tx.listOpenSuggestions(['s1t1']))).toEqual([]);
+      expect((await store.transaction((tx) => tx.listRelationScans('s1t1')))[0]).toMatchObject({ state: 'dismissed', decidedAt: AT, relationId: 'rel_a', decision: 'suggested' });
+    });
+
+    it('a transaction that throws leaves no scan row behind', async () => {
+      await expect(
+        store.transaction(async (tx) => {
+          await tx.upsertRelationScans([scan({ globId: 's1t77' })]);
+          throw new Error('boom');
+        }),
+      ).rejects.toThrow('boom');
+      expect(await store.transaction((tx) => tx.listRelationScans('s1t77'))).toEqual([]);
+    });
+
+    it('queues one unclaimed scan_relations job per glob on the llm lane and pushes its runAfter out on every trigger', async () => {
+      const effect = (globId: string): Effect => ({ kind: 'scan_relations', globId });
+      const jobs = () => store.transaction((tx) => tx.latestOutboxJobs(['s1t5', 's1t6'], ['scan_relations']));
+      const before = Date.now();
+      await store.transaction((tx) => tx.enqueueEffects([effect('s1t5')]));
+      const first = (await jobs())[0];
+      expect(first?.state).toBe('pending');
+      expect(Date.parse(first?.runAfter ?? '') - before).toBeGreaterThanOrEqual(RELATION_SCAN_DEBOUNCE_MS - 1_000);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await store.transaction((tx) => tx.enqueueEffects([effect('s1t5'), effect('s1t5'), effect('s1t6')]));
+      const after = await jobs();
+      expect(after).toHaveLength(2);
+      const again = after.find((j) => j.globId === 's1t5');
+      expect(again?.id).toBe(first?.id);
+      expect(Date.parse(again?.runAfter ?? '')).toBeGreaterThan(Date.parse(first?.runAfter ?? ''));
+    });
+
+    it('two concurrent saves of one glob queue one scan job, not two (R1-13)', async () => {
+      const effect: Effect = { kind: 'scan_relations', globId: 's1t7' };
+      await Promise.all([store.transaction((tx) => tx.enqueueEffects([effect])), store.transaction((tx) => tx.enqueueEffects([effect]))]);
+      expect(await store.transaction((tx) => tx.latestOutboxJobs(['s1t7'], ['scan_relations']))).toHaveLength(1);
+    });
+  });
+
   it('reads a long list of IDs as one parameter', async () => {
     const ids = Array.from({ length: 70_000 }, (_, i) => `s1t${String(i + 100)}`);
     expect(await store.transaction((tx) => tx.listRelationsFrom(ids))).toEqual([]);
@@ -129,6 +259,15 @@ describe('relations in Postgres', () => {
     expect(started?.version ?? 0).toBeGreaterThan(third.version);
     unwrap(await globs.delete(DEV, third.id, started?.version ?? 0));
     expect(await rows()).toEqual([]);
+  });
+
+  it('deleting a superseder removes the superseded_by label pointing at it (R1-4)', async () => {
+    const old = await create();
+    const made = await create();
+    unwrap(await globs.addSupersession(DEV, made.id, old.id, { reason: 'replaced' }, 'agent'));
+    expect(await store.transaction((tx) => tx.listSupersessions([old.id]))).toHaveLength(1);
+    unwrap(await globs.delete(DEV, made.id, (await globs.peek(made.id))?.version ?? 0));
+    expect(await store.transaction((tx) => tx.listSupersessions([old.id]))).toEqual([]);
   });
 
   it('two cycle-closing writes at once: exactly one wins, under the board lock', async () => {

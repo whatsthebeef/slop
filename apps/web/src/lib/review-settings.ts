@@ -49,6 +49,22 @@ export const spendLine = (spend: {
     : `${base} + ${String(spend.unpricedCalls)} unpriced ${spend.unpricedCalls === 1 ? 'call' : 'calls'}`;
 };
 
+/** What the tooltip calls a source whose name is not plain words. */
+const SOURCE_LABELS: Readonly<Record<string, string>> = { relation_scan: 'relation_scan (automatic relations)' };
+
+/**
+ * The board settings' line for the automatic relation pass: "Automatic relations: $0.0123 this month", with the calls that had no
+ * price added when there are some. Four decimals, because most months cost cents or less.
+ */
+export const relationScanLine = (spend: {
+  readonly bySource?: Readonly<Record<string, number>>;
+  readonly unpricedBySource?: Readonly<Record<string, number>>;
+}): string => {
+  const unpriced = spend.unpricedBySource?.['relation_scan'] ?? 0;
+  const base = `Automatic relations: $${(spend.bySource?.['relation_scan'] ?? 0).toFixed(4)} this month`;
+  return unpriced === 0 ? base : `${base} + ${String(unpriced)} unpriced ${unpriced === 1 ? 'call' : 'calls'}`;
+};
+
 /**
  * The spend line's tooltip: one line per source, costliest first, with its priced cost and/or its unpriced calls
  * (such as `chat $0.42 + 1 unpriced`, or `kb_draft 3 unpriced` for a source that lost its price), then the total
@@ -73,7 +89,7 @@ export const spendBreakdown = (spend: {
         usd === undefined ? null : `$${usd.toFixed(2)}`,
         calls > 0 ? `${String(calls)} unpriced` : null,
       ];
-      return `${source} ${parts.filter((p) => p !== null).join(' + ')}`;
+      return `${SOURCE_LABELS[source] ?? source} ${parts.filter((p) => p !== null).join(' + ')}`;
     });
   if (spend.unpricedCalls > 0)
     lines.push(

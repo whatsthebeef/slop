@@ -2,6 +2,7 @@ import type { ArtifactSummary } from './knowledge.js';
 import { currentRun } from './machine.js';
 import type { ReviewFinding, ReviewSource } from './findings.js';
 import { QUEUED_NOTICE_MINUTES, STUCK_MINUTES, checksExplanation } from './readiness.js';
+import type { HumanStep } from './human-steps.js';
 import type { Glob, Run } from './types.js';
 
 /**
@@ -219,3 +220,33 @@ export const handoverMarkdown = (brief: Handover): string =>
     brief.next,
     ...(brief.detail.length === 0 ? [] : ['', '## Detail', ...brief.detail.map((d) => `- ${d}`)]),
   ].join('\n');
+
+/**
+ * What to say when someone picks up (or takes over) a glob that has already merged: not just "already merged", but what is
+ * left (its open human steps, its sign-off labels still to be approved) and how to make a code change after the merge.
+ * Links are paths on the slop server; callers that know its address can prefix it.
+ */
+export const mergedPickUpNotice = (
+  glob: Pick<Glob, 'id' | 'status' | 'labels'>,
+  steps: readonly Pick<HumanStep, 'title' | 'who' | 'state'>[],
+): string => {
+  const page = `/globs/${glob.id}`;
+  const open = steps.filter((s) => s.state === 'due' || s.state === 'pending');
+  const labels = Object.entries(glob.labels).filter(([, state]) => state !== 'approved');
+  const lines = [`${glob.id} is already merged (${glob.status}), so there is nothing to pick up.`];
+  if (open.length > 0) {
+    lines.push(
+      "What's left (a person does these in the glob view; they need no pick-up):",
+      ...open.map((s) => `- ${s.title} (${s.who}, ${s.state})`),
+      `The commands are in the glob view: ${page}?section=human-steps`,
+    );
+  }
+  if (labels.length > 0) {
+    lines.push(`Labels still to be approved: ${labels.map(([name, state]) => `${name} (${state})`).join(', ')}. See ${page}`);
+  }
+  if (open.length === 0 && labels.length === 0) {
+    lines.push(glob.status === 'signed_off' ? "What's left: nothing." : "What's left: nothing but sign-off.");
+  }
+  lines.push('For more code changes, make a follow-up: sstor --new "<what>" (or create a glob on the board).');
+  return lines.join('\n');
+};

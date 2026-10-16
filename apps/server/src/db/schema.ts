@@ -2,6 +2,10 @@ import type {
   AttachmentFile,
   HumanStepBlock,
   RelationGate,
+  RelationKind,
+  RelationScanDecision,
+  RelationScanKind,
+  RelationScanState,
   RelationSource,
   RelationUntil,
   HumanStepScript,
@@ -41,7 +45,7 @@ import type {
   SignalFigures,
   TypeSignals,
 } from '@slop/core';
-import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, RELATION_GATES, RELATION_SOURCES, RELATION_UNTILS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
+import { AGENT_KB_APPROVALS, CONTEXT_SETTING_KEYS, SIZE_DECISIONS, SIZE_OUTCOMES, CATEGORIES, CONFIDENCES, SLOP_TYPES, SNAPSHOT_SOURCES, AUTHORITY_TIERS, DEPENDENCY_CAUSES, BOARD_JOBS, DECISION_SOURCE_KINDS, DECISION_SOURCE_STATES, DEPLOY_STATES, DEPLOY_TRIGGERS, HUMAN_STEP_KINDS, STORED_STEP_STATES, RELATION_GATES, RELATION_KINDS, RELATION_SCAN_DECISIONS, RELATION_SCAN_KINDS, RELATION_SCAN_STATES, RELATION_SOURCES, RELATION_UNTILS, EFFECT_CHECK_GLOBS_DEFAULT, KNOWLEDGE_PAGE_INTERVAL_DEFAULT, KNOWLEDGE_PAGE_REASONS, KNOWLEDGE_PAGE_VERDICTS, EMBEDDING_DIMENSIONS, FINDING_CLASSES, FINDING_SEVERITIES, FINDING_SOURCES, FINDING_STATES, INBOX_SOURCE_TYPES, INBOX_STATES, INBOX_STATUSES, ITEM_STATES, ITEM_STATUSES, KNOWLEDGE_LAYERS, REPLACE_STATES, REVIEW_SOURCE_KINDS, REVIEW_SOURCE_STATES, SOURCE_TYPES, SUB_LIMIT_OUTCOMES, SUB_LIMIT_STEP, RISK_AREA_SOURCES, RISK_AREA_CHANGE_KINDS, RISK_AREA_CAUSES, ESCALATION_CRITERIA, ESCALATION_OUTCOMES, REVIEW_CATEGORIES, REVIEW_FEEDBACK_SOURCES, REVIEW_SEVERITIES, REVIEW_VERDICTS } from '@slop/core';
 import {
   bigint,
   bigserial,
@@ -393,6 +397,8 @@ export const relations = pgTable(
     reason: text('reason'),
     evidence: jsonb('evidence').$type<readonly string[]>().notNull().default(sql`'[]'::jsonb`),
     source: text('source', { enum: RELATION_SOURCES }).$type<RelationSource>().notNull(),
+    /** `waits`, or `superseded_by` (`from` is superseded by `to`; gate and until are inert placeholders). */
+    kind: text('kind', { enum: RELATION_KINDS }).$type<RelationKind>().notNull().default('waits'),
     /** The group a group-wide relation was set for (its name as then spelled). */
     group: text('group'),
     dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
@@ -401,11 +407,39 @@ export const relations = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [
-    uniqueIndex('relations_from_to_gate_idx').on(t.fromGlob, t.toGlob, t.gate),
+    uniqueIndex('relations_from_to_gate_kind_idx').on(t.fromGlob, t.toGlob, t.gate, t.kind),
     index('relations_board_idx').on(t.boardId),
     index('relations_from_idx').on(t.fromGlob),
     index('relations_to_idx').on(t.toGlob),
   ],
+);
+
+/**
+ * The automatic relation pass's memory, one row per (glob, mentioned glob or step, sentence): what the pass decided about a
+ * mention, so a decided or dismissed pair is never asked again. A row in state `open` is a card suggestion.
+ */
+export const relationScans = pgTable(
+  'relation_scans',
+  {
+    globId: text('glob_id').notNull(),
+    /** The glob a sentence mentions; for `step_failed`, the step's ID. */
+    mentionedId: text('mentioned_id').notNull(),
+    sentenceHash: text('sentence_hash').notNull(),
+    boardId: integer('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: RELATION_SCAN_KINDS }).$type<RelationScanKind>().notNull(),
+    decision: text('decision', { enum: RELATION_SCAN_DECISIONS }).$type<RelationScanDecision>().notNull(),
+    gate: text('gate', { enum: RELATION_GATES }).$type<RelationGate>(),
+    reason: text('reason'),
+    sentence: text('sentence').notNull(),
+    relationId: text('relation_id'),
+    state: text('state', { enum: RELATION_SCAN_STATES }).$type<RelationScanState>().notNull(),
+    model: text('model'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.globId, t.mentionedId, t.sentenceHash] }), index('relation_scans_board_state_idx').on(t.boardId, t.state)],
 );
 
 /** The status messages a person has acknowledged on a glob (the card's line, the Now panel); the key names the situation, so a new one shows again. */

@@ -21,7 +21,8 @@ export const groupSection = async (tx: Tx, clock: Clock, glob: Glob): Promise<Gr
   const members = all.filter((g) => inGroup(g, glob.group ?? '') && !isArchivedDecision(g));
   const relations = await tx.listRelationsFrom(members.filter((g) => !isHumanCategory(g.category)).map((g) => g.id));
   const memberIds = new Set(members.map((g) => g.id));
-  const others = await tx.getGlobs([...new Set(relations.map((r) => r.to))].filter((id) => !memberIds.has(id)));
+  // Group-wide decisions live on the group's board: a decision glob on another board (a cross-board wait) is not shown here.
+  const others = (await tx.getGlobs([...new Set(relations.map((r) => r.to))].filter((id) => !memberIds.has(id)))).filter((g) => g.boardId === glob.boardId);
   // Plans only for the neighbours the context shows, in one read.
   const shown = contextNeighbours(glob, members, clock.now()).slice(0, GROUP_CONTEXT_MAX_GLOBS);
   const plans = new Map((await tx.latestArtifacts(shown.map((g) => g.id), ['plan'])).map((a) => [a.globId, a.content]));

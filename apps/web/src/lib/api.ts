@@ -81,7 +81,9 @@ import type {
   HumanStep,
   DependencyRulesView,
   Holding,
+  HeldBack,
   RelationGate,
+  RelationSuggestion,
   RelationUntil,
   RelationsView,
   TargetChange,
@@ -125,6 +127,10 @@ export interface GlobView extends Glob {
   readonly holding?: readonly Holding[];
   /** The glob's relations in groups: holding it back, held back by it, and no longer holding (single-glob reads only). */
   readonly relations?: RelationsView;
+  /** Other globs' relations that wait for this one (board list rows; redacted for boards the viewer is not on); absent when none or on an older API. */
+  readonly holdsBack?: readonly HeldBack[];
+  /** Open card suggestions from the automatic relation pass; absent when none or on an older API. */
+  readonly suggestions?: readonly RelationSuggestion[];
   /** Open and answered questions (the "the AI is unsure" marker); absent on an older API or when the glob has none (read with `?.`). */
   readonly questions?: readonly OpenQuestion[];
   /** Set when the glob came from a split: the glob that was cut, this one's place (0 is the original) and every part's ID. */
@@ -559,7 +565,12 @@ export type AddRelationInput = {
   readonly gate?: RelationGate;
   readonly until?: RelationUntil;
   readonly reason?: string;
-} & ({ readonly to: string; readonly version: number } | { readonly holdsBack: string });
+} & (
+  | { readonly to: string; readonly version: number }
+  | { readonly holdsBack: string }
+  /** This glob supersedes that one (the label lands on it). */
+  | { readonly supersedes: string }
+);
 
 /** An answer to an open question: a chosen option, free text, or both. */
 export interface AnswerQuestionInput {
@@ -857,6 +868,9 @@ export const api = {
       `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`,
       {},
     ),
+  /** "It failed": a rollout step's run failed. The step stays open and slop asks whether a glob fixes it. The version is sent once, as given. */
+  failStep: (id: string, stepId: string, note: string, version?: number | null) =>
+    request<GlobView>('POST', `/api/globs/${id}/steps/${encodeURIComponent(stepId)}/fail`, version === undefined ? { note } : { note, version }),
   /** A person's mark that the glob's change is deployed to the environment: its after-deploy steps fall due. */
   markEnvironmentDeployed: (id: string, env: string) =>
     request<GlobView>('POST', `/api/globs/${id}/environments/${encodeURIComponent(env)}/deployed`, {}),
@@ -1056,6 +1070,12 @@ export const api = {
   /** The ✕ on a relation: it is not a dependency. */
   dismissRelation: (id: string, relationId: string, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/relations/${relationId}/dismiss`, { version }),
+  /** Accepts a card suggestion (writes the relation); a failed step's suggestion needs `glob`, the fix glob to link. */
+  acceptSuggestion: (id: string, suggestionId: string, body: { readonly glob?: string } = {}) =>
+    request<GlobView>('POST', `/api/globs/${id}/suggestions/${encodeURIComponent(suggestionId)}/accept`, body),
+  /** "Not a prerequisite": the suggestion is declined and never asked again. */
+  dismissSuggestion: (id: string, suggestionId: string) =>
+    request<GlobView>('POST', `/api/globs/${id}/suggestions/${encodeURIComponent(suggestionId)}/dismiss`, {}),
   /** Adds a relation: `to` holds this glob back (needs its version), or `holdsBack` is held back by this one (a decision's "Holds back"). */
   addRelation: (id: string, relation: AddRelationInput) => request<GlobView>('POST', `/api/globs/${id}/relations`, relation),
   /** Answers an open question (an option, free text, or both); writes the Clarifications attachment and releases what it held. */

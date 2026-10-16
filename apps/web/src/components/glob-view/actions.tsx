@@ -387,7 +387,7 @@ const TakeOverConfirmation = ({
   ctx: GlobViewContext;
   state: GlobActionsState;
 }) => {
-  const says = takeOverConfirmation(ctx.glob);
+  const says = takeOverConfirmation(ctx.glob, state.viewer?.email);
   const [copied, setCopied] = useState(false);
   const copy = async () =>
     setCopied(

@@ -19,7 +19,7 @@ import type {
   DependencyRuleView,
 } from '../domain/dependency-rules.js';
 import type { ImpliedAfter, Glob, Relation } from '../domain/types.js';
-import { MAX_RELATIONS, hasMerged, isActive, wouldCycle } from '../domain/relations.js';
+import { MAX_RELATIONS, hasMerged, isActive, relationUniverse, wouldCycle } from '../domain/relations.js';
 import type { Catalog, IdGenerator, Notifier, Store, Tx } from '../ports.js';
 import { adminOf, memberOf } from './access.js';
 import { readMergePolicy } from './knowledge-service.js';
@@ -196,11 +196,16 @@ export class DependencyLearningService {
       const byId = new Map(found.filter((g) => g.boardId === glob.boardId).map((g) => [g.id, g]));
       // The board's relations are read under its lock: two failures learning needs on each other must see each other's.
       await tx.lockBoardRelations(glob.boardId);
-      const board = await tx.listRelations(glob.boardId);
-      const ids = unmergedPrerequisiteIds(reason, new Set(byId.keys()), glob.id).filter((id) => {
+      const own = await tx.listRelations(glob.boardId);
+      const candidates = unmergedPrerequisiteIds(reason, new Set(byId.keys()), glob.id).filter((id) => {
         const dep = byId.get(id);
-        return dep !== undefined && !hasMerged(dep) && !wouldCycle(board, { from: glob.id, to: id, gate: 'start', until: 'merged' });
+        return dep !== undefined && !hasMerged(dep);
       });
+      // The cycle check reads across boards: a path back to this glob may run through another board's relations.
+      const universe = await relationUniverse((from) => tx.listRelationsFrom(from), own, candidates);
+      if (!universe.ok) return [];
+      const board = [...own];
+      const ids = candidates.filter((id) => !wouldCycle(universe.value, { from: glob.id, to: id, gate: 'start', until: 'merged' }));
       if (ids.length === 0) return [];
       const policy = await readMergePolicy(tx, glob.boardId);
       const patterns = candidatePatterns(policy.exclusivePaths, defaults);

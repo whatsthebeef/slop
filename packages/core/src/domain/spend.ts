@@ -41,6 +41,7 @@ export const LLM_SPEND_SOURCES = [
   'rollout',
   'chat',
   'knowledge_page',
+  'relation_scan',
 ] as const;
 
 export type LlmSpendSource = (typeof LLM_SPEND_SOURCES)[number];
