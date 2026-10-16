@@ -392,29 +392,36 @@ describe('"N waiting on this" in the corner status', () => {
 describe('open questions on the card', () => {
   const q = { id: 'q1', text: 'Is prod in scope?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'start', raisedAt: NOW } as const;
 
-  it('shows "Waiting for an answer" for a Planning glob held by a start question, ahead of a relation hold', () => {
+  it('shows "question" with the human icon for a Planning glob held by a start question, ahead of a relation hold', () => {
     const held = view({ status: 'planning', questions: [q], holding: [hold('s1t9')] });
     const status = cornerStatus(held, NOW);
-    expect(status?.text).toBe('Waiting for an answer');
-    expect(status?.kind).toBe('hold');
+    expect(status).toMatchObject({ kind: 'question', icon: 'human', text: 'question' });
     expect(status?.tip).toContain('Is prod in scope?');
     expect(status?.click).toEqual({ kind: 'section', target: { section: 'questions' } });
     expect(hasBlocker(held, NOW)).toBe(true);
   });
 
-  it('says nothing for an answered, dismissed, overridden or notice question', () => {
+  it('says "questions" for more than one open question', () => {
+    expect(cornerStatus(view({ status: 'planning', questions: [q, { ...q, id: 'q2' }] }), NOW)?.text).toBe('questions');
+  });
+
+  it('says nothing for an answered or dismissed question', () => {
     for (const patch of [
       { answer: { text: 'Yes', by: 'a', at: NOW } },
       { dismissed: { by: 'a', at: NOW, note: null } },
-      { startOverridden: { by: 'a', at: NOW } },
-      { blocking: 'none' as const },
     ]) {
-      expect(cornerStatus(view({ status: 'planning', questions: [{ ...q, ...patch }] }), NOW)?.text).not.toBe('Waiting for an answer');
+      expect(cornerStatus(view({ status: 'planning', questions: [{ ...q, ...patch }] }), NOW)?.text).not.toBe('question');
     }
   });
 
-  it('shows a merge question as the hold only when nothing else is going on', () => {
-    const merge = { ...q, blocking: 'merge' as const };
-    expect(cornerStatus(view({ status: 'planning', questions: [merge] }), NOW)?.text).toBe('Waiting for an answer');
+  it('shows a merge question or a notice as "question" when nothing else is going on', () => {
+    for (const blocking of ['merge', 'none'] as const) {
+      expect(cornerStatus(view({ status: 'planning', questions: [{ ...q, blocking }] }), NOW)).toMatchObject({ icon: 'human', text: 'question' });
+    }
+  });
+
+  it('shows no corner status for a glob that is only behind its base', () => {
+    const behind = view({ status: 'in_progress', behind: { base: 'main', behindBy: 2, files: ['a.ts'], at: NOW } });
+    expect(cornerStatus(behind, NOW)?.kind).not.toBe('behind');
   });
 });

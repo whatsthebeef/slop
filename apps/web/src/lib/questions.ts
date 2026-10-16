@@ -41,8 +41,8 @@ export const questionChipTip = (glob: Pick<GlobView, 'questions'>): string | nul
   return `${clip(first.text)}${open.length > 1 ? ` (+${String(open.length - 1)} more)` : ''}. Opens the questions`;
 };
 
-/** What a hold says on the card, and what holds it. */
-export const WAITING_FOR_ANSWER = 'Waiting for an answer';
+/** What the card's corner says for open questions. */
+export const questionText = (count: number): string => (count > 1 ? 'questions' : 'question');
 
 /** True when the glob has an open question (the board filter). */
 export const hasOpenQuestions = (glob: Pick<GlobView, 'questions'>): boolean => openQuestionsOf(glob).length > 0;
