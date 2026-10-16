@@ -232,7 +232,7 @@ describe('a conflict-fix run that went to standby (s15b86)', () => {
     expect(standby).not.toMatch(/fixing|animate-spin/);
     expect(positionOf(fixed('active'), NOW)).toMatchObject({
       holder: 'machine',
-      text: 'fixing the conflict',
+      text: 'fixing conflict',
       spinning: true,
     });
     // While the fix runs the status says so, with a spinner in the corner.
@@ -240,7 +240,7 @@ describe('a conflict-fix run that went to standby (s15b86)', () => {
     const justNow = new Date().toISOString();
     const fresh = view({ ...fixed('active'), runs: [run({ state: 'active', purpose: 'resolve_conflict', startedAt: justNow, lastProgressAt: justNow })] });
     const fixing = card(fresh);
-    expect(fixing).toMatch(/data-testid="position"[^>]*>.*?<span class="truncate" data-testid="status-text">fixing the conflict<\/span>/);
+    expect(fixing).toMatch(/data-testid="position"[^>]*>.*?<span class="truncate" data-testid="status-text">fixing conflict<\/span>/);
     expect(fixing).toContain('animate-spin');
   });
 

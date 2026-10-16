@@ -215,7 +215,7 @@ describe('a run for each purpose', () => {
         prOpen({ conflict, currentRun: r, runs: [r], allowedActions: ['resolve_conflict'] }),
       );
       expect(p.status?.icon).toMatch(/^machine/);
-      expect(p.status?.text).toMatch(/starting|queued|fixing the conflict/);
+      expect(p.status?.text).toMatch(/starting|queued|fixing conflict/);
       expect(p.notice).toBeNull();
     }
   });
@@ -223,7 +223,7 @@ describe('a run for each purpose', () => {
   it('a running conflict fix spins', () => {
     const r = running('resolve_conflict');
     const p = present(prOpen({ conflict, currentRun: r, runs: [r] }));
-    expect(p.status).toMatchObject({ icon: 'machine-spinning', text: 'fixing the conflict' });
+    expect(p.status).toMatchObject({ icon: 'machine-spinning', text: 'fixing conflict' });
   });
 
   it('a failed conflict fix leaves the conflict in the notice and Fix conflict to try again', () => {
@@ -400,7 +400,7 @@ describe('pending clicks', () => {
     expect(p.notice).toBeNull();
   });
 
-  it('a pending Fix conflict reads fixing the conflict', () => {
+  it('a pending Fix conflict reads fixing conflict', () => {
     const p = holdsRules(
       prOpen({
         conflict,
@@ -408,7 +408,7 @@ describe('pending clicks', () => {
         pendingAction: click('resolve_conflict'),
       }),
     );
-    expect(p.status?.text).toBe('fixing the conflict');
+    expect(p.status?.text).toBe('fixing conflict');
     expect(p.cardPrimary).toBeNull();
     expect(p.notice).toBeNull();
   });

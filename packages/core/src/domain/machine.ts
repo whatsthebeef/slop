@@ -1432,7 +1432,7 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
     );
   }
   if (hasWorkingRun(glob) || hasConflictFixRun(glob)) {
-    return runActive('Already fixing the conflict: the run merges the latest base branch');
+    return runActive('Already fixing conflict: the run merges the latest base branch');
   }
   if (!canRequestConflictFix(glob)) {
     return invalidTransition(

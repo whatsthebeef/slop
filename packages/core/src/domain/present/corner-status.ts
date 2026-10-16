@@ -416,7 +416,7 @@ export const cornerStatus = (
       status.kind === 'stuck' ||
       status.kind === 'behind')
   ) {
-    // Someone is on the problem: say what the machine is doing ("fixing the conflict"), with the problem in the tooltip.
+    // Someone is on the problem: say what the machine is doing ("fixing conflict"), with the problem in the tooltip.
     const icon = position.spinning ? 'machine-spinning' : 'machine';
     return make('machine', icon, position.label, position.tone, cardTargets.actions(), [
       position.tip,
