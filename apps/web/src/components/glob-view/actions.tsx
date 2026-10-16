@@ -388,15 +388,6 @@ const TakeOverConfirmation = ({
   state: GlobActionsState;
 }) => {
   const says = takeOverConfirmation(ctx.glob, state.viewer?.email);
-  const [copied, setCopied] = useState(false);
-  const copy = async () =>
-    setCopied(
-      await copyOrSelect(
-        says.command,
-        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
-        () => undefined,
-      ),
-    );
   return (
     <div
       role="alertdialog"
@@ -409,20 +400,10 @@ const TakeOverConfirmation = ({
       {state.brief !== null && (
         <p data-testid="handover-confirmation">{handoverConfirmation('take_over', state.brief)}</p>
       )}
-      <div className="flex items-center gap-2">
-        <code className="flex-1 rounded bg-muted px-2 py-1" data-testid="take-over-command">
-          {says.command}
-        </code>
-        <Button
-          size="sm"
-          variant="outline"
-          data-testid="take-over-copy"
-          onClick={() => void copy()}
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </Button>
-      </div>
-      <p>{says.how}</p>
+      <code className="rounded bg-muted px-2 py-1" data-testid="take-over-command">
+        {says.command}
+      </code>
+      <p data-testid="take-over-how">{says.how}</p>
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={() => state.setConfirmingTakeOver(false)}>
           Cancel
@@ -438,7 +419,7 @@ const TakeOverConfirmation = ({
             })
           }
         >
-          Pick up
+          Confirm pick up
         </Button>
       </div>
     </div>
