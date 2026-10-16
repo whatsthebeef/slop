@@ -1,22 +1,17 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { BoardService, DeployService, EnvironmentService, Result, TestRunService } from '@slop/core';
+import type { BoardService, DeployService, Result, TestRunService } from '@slop/core';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
-import { repoOf } from '../codehost.js';
-import type { ReleaseRefs } from '../codehost.js';
 import type { SignedLinks } from '../signed-links.js';
 import type { Env } from './app.js';
-import { atfDetailSchema, linkSchema, reportedSpecs, shaSchema } from './atf-report.js';
+import { atfDetailSchema, reportedSpecs } from './atf-report.js';
 import { errorBody, statusOf } from './views.js';
 
 export interface DeployRoutesDeps {
   readonly deploys: DeployService;
-  readonly environments: EnvironmentService;
   readonly testRuns: TestRunService;
   readonly boards: BoardService;
   readonly links: SignedLinks;
-  /** Resolves the refs a person records a manual deploy with; without it Record a deploy is off. */
-  readonly refs?: ReleaseRefs;
   /** The keys EventBridge API destinations send (one per deploy-target stack); `/webhooks/aws` is off without any. */
   readonly awsWebhookKeys: readonly string[];
   readonly log: (task: string, message: string) => void;
@@ -62,22 +57,15 @@ const slopCiBase = z.object({
   time: z.iso.datetime({ offset: true }).optional(),
 });
 
-/** `slop.ci`'s "Slop Environment Deployed": a pipeline deployed a commit to a release or integration environment. */
-const environmentDeployedSchema = slopCiBase.extend({
-  'detail-type': z.literal('Slop Environment Deployed'),
-  detail: z.object({
-    repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
-    environment: z.string().min(1).max(100),
-    sha: shaSchema,
-    ref: z.string().min(1).max(255).optional(),
-    status: z.enum(['succeeded', 'failed']),
-    url: linkSchema.optional(),
-  }),
-});
+/**
+ * `slop.ci`'s old "Slop Environment Deployed": other boards' pipelines may still send it, but slop no longer tracks
+ * releases, so it is acknowledged and dropped (the detail is not read).
+ */
+const legacyEnvironmentDeployedSchema = slopCiBase.extend({ 'detail-type': z.literal('Slop Environment Deployed') });
 
 /**
  * `slop.ci`'s "Slop ATF Completed": a pipeline ran the acceptance tests on a glob's branch (`branch` is the glob's ID)
- * or against a release or integration environment (`environment`, at the `sha` it tested, else what it runs now).
+ * or against an environment (`environment`, at the `sha` it tested, else what it runs now).
  */
 const atfCompletedSchema = slopCiBase.extend({
   'detail-type': z.literal('Slop ATF Completed'),
@@ -85,11 +73,11 @@ const atfCompletedSchema = slopCiBase.extend({
 });
 
 /**
- * Events the board's own pipelines send about themselves (`catalog/scripts/report-deploy.sh` and `atf-report.sh` put
- * them on the EventBridge bus; any CI may post the same envelope with the key). The `detail-type` says which; each
+ * Events the board's own pipelines send about themselves (`atf-report.sh` puts
+ * it on the EventBridge bus; any CI may post the same envelope with the key). The `detail-type` says which; each
  * kind's detail has its own schema.
  */
-const slopCiEventSchema = z.discriminatedUnion('detail-type', [environmentDeployedSchema, atfCompletedSchema]);
+const slopCiEventSchema = z.discriminatedUnion('detail-type', [legacyEnvironmentDeployedSchema, atfCompletedSchema]);
 
 type SlopCiEvent = z.infer<typeof slopCiEventSchema>;
 
@@ -113,9 +101,6 @@ const CODEBUILD_FINAL: Record<string, boolean> = {
   TIMED_OUT: false,
 };
 
-// A branch, tag or commit name: no path tricks (`..`), spaces or control characters.
-const recordSchema = z.object({ ref: z.string().max(255).regex(/^(?!.*\.\.)[\w./@+-]*$/).optional() });
-
 const send = <T>(c: Context<Env>, result: Result<T>) =>
   result.ok ? c.json({ value: result.value }) : c.json(errorBody(result.error), statusOf(result.error));
 
@@ -132,35 +117,32 @@ const sameSecret = (expected: string, given: string): boolean => {
 export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
   const { deploys } = deps;
 
+  let legacyLogged = false;
+
   /** Records a `slop.ci` event; returns the boards that recorded it. */
   const recordCi = async (event: SlopCiEvent): Promise<number[]> => {
+    if (event['detail-type'] === 'Slop Environment Deployed') {
+      // Logged once per process: a pipeline that still sends it would otherwise fill the log.
+      if (!legacyLogged) {
+        legacyLogged = true;
+        deps.log('webhook aws', 'ignoring "Slop Environment Deployed": slop no longer tracks release environments');
+      }
+      return [];
+    }
     // The event's ID dedupes redeliveries (per board); its time orders deploys that arrive out of order.
     const eventId = `aws:${event.id}`;
     const at = event.time === undefined ? null : new Date(event.time).toISOString();
-    if (event['detail-type'] === 'Slop ATF Completed') {
-      const { detail } = event;
-      return deps.testRuns.recordAtf({
-        repo: detail.repo,
-        sha: detail.sha ?? null,
-        environment: detail.environment ?? null,
-        branch: detail.branch ?? null,
-        passed: detail.passed,
-        failed: detail.failed,
-        skipped: detail.skipped ?? 0,
-        url: detail.url ?? null,
-        ...(detail.specs !== undefined && { specs: reportedSpecs(detail.specs) }),
-        at,
-        eventId,
-      });
-    }
     const { detail } = event;
-    return deps.environments.recordDeploy({
+    return deps.testRuns.recordAtf({
       repo: detail.repo,
-      environment: detail.environment,
-      sha: detail.sha,
-      ref: detail.ref ?? null,
-      succeeded: detail.status === 'succeeded',
+      sha: detail.sha ?? null,
+      environment: detail.environment ?? null,
+      branch: detail.branch ?? null,
+      passed: detail.passed,
+      failed: detail.failed,
+      skipped: detail.skipped ?? 0,
       url: detail.url ?? null,
+      ...(detail.specs !== undefined && { specs: reportedSpecs(detail.specs) }),
       at,
       eventId,
     });
@@ -171,15 +153,13 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     const membership = await deps.boards.get(c.get('email'), boardId);
     if (!membership.ok) return send(c, membership);
     const globIds = (c.req.query('globs') ?? '').split(',').filter((id) => id !== '');
-    const [{ indicators, running }, environments, atf] = await Promise.all([
+    const [{ indicators, running }, atf] = await Promise.all([
       deploys.boardState(boardId, globIds),
-      deps.environments.boardState(boardId, globIds),
       deps.testRuns.boardState(boardId, globIds),
     ]);
     return c.json({
       indicators: Object.fromEntries(indicators),
       running: [...running],
-      environments: Object.fromEntries(environments),
       atf: Object.fromEntries(atf),
     });
   });
@@ -190,43 +170,6 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     if (!result.ok) return c.json(errorBody(result.error), statusOf(result.error));
     return c.json({ value: result.value.runs, specs: result.value.specs });
   });
-
-  // The board's observed environments: how each one's deploys are known and the last one seen.
-  app.get('/api/boards/:b/environments', async (c) =>
-    send(c, await deps.environments.forBoard(c.get('email'), Number(c.req.param('b')))),
-  );
-
-  // Recent release tags, to offer when a person records a deploy by hand.
-  app.get('/api/boards/:b/release-tags', async (c) => {
-    const membership = await deps.boards.get(c.get('email'), Number(c.req.param('b')));
-    if (!membership.ok) return send(c, membership);
-    const repo = repoOf(membership.value.board);
-    if (deps.refs === undefined || repo === null) return c.json({ value: [] });
-    return c.json({ value: await deps.refs.recentTags(repo, 10) });
-  });
-
-  // A member records that a manual environment now runs a branch, tag or commit (default: the base branch's head).
-  app.post('/api/boards/:b/environments/:env/deploys', async (c) => {
-    const email = c.get('email');
-    const boardId = Number(c.req.param('b'));
-    const body = recordSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!body.success) return c.json({ error: 'expected {"ref"?: string}' }, 400);
-    const membership = await deps.boards.get(email, boardId);
-    if (!membership.ok) return send(c, membership);
-    const repo = repoOf(membership.value.board);
-    if (deps.refs === undefined || repo === null) return c.json({ error: "This board's repo isn't connected, so slop can't look up the commit" }, 409);
-    const refusal = await deps.environments.manualRefusal(boardId, c.req.param('env'));
-    if (refusal !== null) return c.json({ code: 'invalid_input', message: refusal }, 422);
-    const ref = body.data.ref?.trim() ?? '';
-    const named = ref === '' ? repo.base : ref;
-    const sha = await deps.refs.resolveRef(repo, named);
-    if (sha === null) return c.json({ error: `${named} isn't a branch, tag or commit in ${repo.owner}/${repo.name}` }, 404);
-    return send(c, await deps.environments.recordManualDeploy(email, boardId, c.req.param('env'), { sha, ref: named }));
-  });
-
-  app.get('/api/globs/:id/environments', async (c) =>
-    send(c, await deps.environments.forGlob(c.get('email'), c.req.param('id'))),
-  );
 
   app.get('/api/globs/:id/deploys', async (c) =>
     send(c, await deploys.history(c.get('email'), c.req.param('id'))),

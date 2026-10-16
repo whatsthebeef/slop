@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, EnvironmentService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, RelationCheckService, ContextTuningService, ContextReportService, DependencyLearningService, RelationLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, RelationCheckService, ContextTuningService, ContextReportService, DependencyLearningService, RelationLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -33,7 +33,7 @@ import { AppCredentialsStore, fileSlot } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
 import { ReviewFeedbackPoller } from './review-feedback-poller.js';
 import { HostBranchFiles } from './branch-files.js';
-import { codeHostExecutors } from './codehost-executors.js';
+import { codeHostExecutors, queueBaseBranchRefreshes } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
 import { createRunnerAuthenticator } from './atf-auth.js';
@@ -44,7 +44,6 @@ import { WebhookSecrets, atfWebhookExecutors, dnsResolver, httpsTransport, runne
 import { CodeBuildAtfStarter } from './atf-starter.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
-import { environmentExecutors } from './environment-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
 import { rolloutExecutors } from './rollout-executors.js';
 import { questionExecutors } from './question-executors.js';
@@ -181,7 +180,6 @@ const deploys = new DeployService({
   clock: { now: () => new Date().toISOString() },
   newDeployId: () => `dep_${randomUUID()}`,
 });
-const environments = new EnvironmentService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 const testRuns = new TestRunService({ store, notifier: hub, clock: { now: () => new Date().toISOString() } });
 
 // One executor table; each runner drains only its own lane (`laneOf(kind)`).
@@ -194,7 +192,6 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
       deployCallbackUrl(links, config.WEBHOOK_BASE_URL ?? config.PUBLIC_URL),
       logError,
     ),
-    ...environmentExecutors(environments, github, () => github.configured, boardOf, logError),
     ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(atfPolicy), boardOf, log: logError }),
     ...(webhookSecrets === null
       ? {}
@@ -605,7 +602,7 @@ mountSkillZip(app, {
   skillsDir: config.SKILLS_DIR,
   uploadHost: config.ATTACHMENTS_BUCKET === undefined ? null : `${config.ATTACHMENTS_BUCKET}.s3.${config.ATTACHMENTS_REGION}.amazonaws.com`,
 });
-mountDeploys(app, { deploys, environments, testRuns, boards, links, refs: github, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
+mountDeploys(app, { deploys, testRuns, boards, links, awsWebhookKeys: config.AWS_WEBHOOK_KEY, log: logError });
 // ATF runners (spec, ATF runners): each identity method adds a verifier here; the board's integration token is the legacy way in.
 // Client credentials need slop's own Cognito pool; without its settings (local development) that method can't authenticate or be issued.
 const cognitoClients =
@@ -789,6 +786,10 @@ if (runs('catalog')) {
 }
 
 if (runs('outbox')) outbox.start();
+// Boards created before slop read the base branch from GitHub have a stale or empty one; one refresh each (idempotent).
+if (runs('outbox')) {
+  void queueBaseBranchRefreshes(store).catch((error: unknown) => logError('base branch', error instanceof Error ? error.message : String(error)));
+}
 /** Set once shutdown begins, so nothing started later (the `llm` runner after its self-healing pass) starts. */
 let stopping = false;
 // The `llm` lane has its own switch; `kb` (SLOP_SESSION_JOBS=kb) starts it too, since it carries the KB pipeline.
@@ -866,7 +867,7 @@ if (runs('tunnel')) tunnelWatch?.start();
 const followWatch =
   config.SLOP_FOLLOW_FILE === undefined
     ? null
-    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, config.SLOP_FOLLOW_ENVIRONMENT, notifications, (d) => environments.recordDeploy(d), logError);
+    : new LocalFollowWatch(config.SLOP_FOLLOW_FILE, notifications, logError);
 if (runs('follow')) followWatch?.start();
 // Arrivals come from the bucket's events (when a queue is set) and the sweep, which also expires links nobody used.
 const attachmentEvents =

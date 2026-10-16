@@ -1,5 +1,5 @@
 import { describe as group, expect, it } from 'vitest';
-import type { RaisedNotification, ReportedDeploy } from '@slop/core';
+import type { RaisedNotification } from '@slop/core';
 import { describe, LOCAL_FOLLOW_SOURCE, LocalFollowWatch, type FollowStatus } from '../src/local-follow.js';
 
 const SHA = 'a'.repeat(40);
@@ -10,11 +10,9 @@ const status = (fields: Partial<FollowStatus>): FollowStatus => ({ state: 'follo
 const watch = (file: string | null, now = NOW) => {
   const raised: RaisedNotification[] = [];
   const cleared: [number | null, string][] = [];
-  const deploys: ReportedDeploy[] = [];
   const errors: string[] = [];
   const follow = new LocalFollowWatch(
     'follow.json',
-    'local',
     {
       raise: (n) => {
         raised.push(n);
@@ -25,15 +23,11 @@ const watch = (file: string | null, now = NOW) => {
         return Promise.resolve();
       },
     },
-    (deploy) => {
-      deploys.push(deploy);
-      return Promise.resolve([15]);
-    },
     (_, message) => errors.push(message),
     () => now,
     () => (file === null ? Promise.reject(new Error('ENOENT')) : Promise.resolve(file)),
   );
-  return { follow, raised, cleared, deploys, errors };
+  return { follow, raised, cleared, errors };
 };
 
 group('describe', () => {
@@ -68,13 +62,10 @@ group('describe', () => {
 });
 
 group('LocalFollowWatch', () => {
-  it('records the commit it runs as one local deploy, however often it checks', async () => {
-    const { follow, deploys, raised } = watch(JSON.stringify(status({ state: 'updated' })));
+  it('raises the update note on each check while it is fresh', async () => {
+    const { follow, raised } = watch(JSON.stringify(status({ state: 'updated' })));
     await follow.check();
     await follow.check();
-    expect(deploys).toEqual([
-      { repo: 'o/slop', environment: 'local', sha: SHA, ref: null, succeeded: true, url: null, at: AT, eventId: `local:${SHA}` },
-    ]);
     expect(raised.map((n) => n.severity)).toEqual(['info', 'info']);
   });
 
@@ -85,16 +76,14 @@ group('LocalFollowWatch', () => {
     expect(late.cleared).toEqual([[null, LOCAL_FOLLOW_SOURCE]]);
   });
 
-  it('warns while held, records nothing, and clears when follow carries on', async () => {
+  it('warns while held and clears when follow carries on', async () => {
     const held = watch(JSON.stringify(status({ state: 'held', reason: 'dirty' })));
     await held.follow.check();
-    expect(held.deploys).toEqual([]);
     expect(held.raised[0]?.severity).toBe('warning');
     const following = watch(JSON.stringify(status({ state: 'following' })));
     await following.follow.check();
     expect(following.raised).toEqual([]);
     expect(following.cleared).toEqual([[null, LOCAL_FOLLOW_SOURCE]]);
-    expect(following.deploys).toHaveLength(1);
   });
 
   it('ignores a missing file and logs one that is not a status', async () => {
