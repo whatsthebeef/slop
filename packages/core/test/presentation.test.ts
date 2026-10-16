@@ -475,7 +475,7 @@ describe('rollout steps open after the merge', () => {
       ...patch,
     }) as ListedHumanStep;
 
-  it('says rollout, asks for a Do block and raises no notice', () => {
+  it('says do, asks for a Do block and raises no notice', () => {
     const g = view({
       type: 'same',
       status: 'reviewing',
@@ -485,10 +485,48 @@ describe('rollout steps open after the merge', () => {
       labels: {},
     });
     const p = holdsRules(g);
-    expect(p.status?.text).toBe('rollout');
+    expect(p.status?.text).toBe('do');
+    expect(p.status?.tip).not.toContain('rollout open');
     expect(p.blocks).toEqual([{ kind: 'do', id: 'step-1' }]);
     expect(p.notice).toBeNull();
     expect(p.cardPrimary).toBeNull();
+  });
+
+  it('a due step for the viewer reads do, never its title, with the title and the rest in the tooltip', () => {
+    const g = prOpen({
+      headChecks: { sha: HEAD, state: 'passed' },
+      humanSteps: [
+        step({
+          id: 'step-1',
+          kind: 'rollout',
+          title: 'Grant the role',
+          due: 'once',
+          blocks: ['reviewing'],
+        }),
+        step({ id: 'step-2', title: 'Run the migration', due: 'now', blocks: ['reviewing'] }),
+      ],
+    });
+    const p = holdsRules(g);
+    expect(p.status?.text).toBe('do');
+    expect(p.status?.tip).toContain('Grant the role (+1 more)');
+  });
+
+  it('a due decision reads decide, never its title', () => {
+    const g = prOpen({
+      headChecks: { sha: HEAD, state: 'passed' },
+      humanSteps: [
+        step({
+          id: 'step-3',
+          kind: 'decide',
+          title: 'Pick the table',
+          due: 'now',
+          blocks: ['reviewing'],
+        }),
+      ],
+    });
+    const p = holdsRules(g);
+    expect(p.status?.text).toBe('decide');
+    expect(p.status?.tip).toContain('Pick the table');
   });
 
   it('a stored work step a review finding needs a person for is a Do block, not a problem notice', () => {

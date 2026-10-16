@@ -87,16 +87,16 @@ describe('main step action', () => {
 describe('rollout status line', () => {
   const steps = [step({ id: 'a', state: 'done' }), step({ id: 'b' }), step({ id: 'c', state: 'pending' }), step({ id: 'd', state: 'dismissed' })];
   it('is "rollout done/total": the steps done of all (a dismissed one is not counted); the open steps are in the tooltip', () => {
-    expect(statusLine(merged(steps), NOW, admin)).toMatchObject({ kind: 'ready', text: 'rollout', turn: 'rollout', work: true });
+    expect(statusLine(merged(steps), NOW, admin)).toMatchObject({ kind: 'ready', text: 'do', turn: 'rollout', work: true });
     expect(rolloutLine(merged(steps), steps, admin)?.tip).toMatch(/^Merged; 1 of 3 rollout steps done/);
   });
   it('is a quiet line when the due step is for somebody else', () => {
-    expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'rollout' });
-    expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'rollout' });
+    expect(statusLine(merged(steps), NOW, dev)).toMatchObject({ kind: 'rollout', text: 'do' });
+    expect(statusLine(merged(steps), NOW)).toMatchObject({ kind: 'rollout', text: 'do' });
   });
   it('shows the human icon on the card, with the count and first step in the tooltip', () => {
     const named = [step({ id: 'a', state: 'done' }), step({ id: 'b', title: 'Run the migration' })];
-    expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)).toMatchObject({ kind: 'rollout', icon: 'human', text: 'rollout' });
+    expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)).toMatchObject({ kind: 'rollout', icon: 'human', text: 'do' });
     expect(cornerStatus(merged(named, {move: {holder: 'waiting', reason: 'waiting on rollout', since: null}}), NOW, dev)?.tip).toContain('Merged; 1 of 2 rollout steps done: Run the migration');
   });
   it('lists every open step in the tooltip', () => {
@@ -106,7 +106,7 @@ describe('rollout status line', () => {
   it('waits for a deploy that is still running, where the board tracks deploys, and does not count a predicted placeholder', () => {
     const deploy = (state: 'running' | 'done') => ({ id: 'd', kind: 'deploy' as const, state, startedAt: null, lastProgressAt: null, detail: 'prod', holdsBall: false });
     expect(rolloutLine(merged(steps), steps, admin, [deploy('running')])).toBeNull();
-    expect(rolloutLine(merged(steps), steps, admin, [deploy('done')])?.text).toBe('rollout');
+    expect(rolloutLine(merged(steps), steps, admin, [deploy('done')])?.text).toBe('do');
     const predicted = [step({ state: 'pending', predicted: true })];
     expect(rolloutLine(merged(predicted), predicted, admin)).toBeNull();
   });
