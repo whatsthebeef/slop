@@ -850,6 +850,12 @@ describe('glob view: the notice beside the primary action', () => {
     expect(document.body.textContent).not.toContain('Also:');
   });
 
+  it('puts the notice above the primary button', () => {
+    renderGlob(conflicted());
+    const order = (notice() as HTMLElement).compareDocumentPosition(screen.getByTestId('glob-actions'));
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('does not repeat failed checks the conflict explains', () => {
     renderGlob(
       conflicted({
