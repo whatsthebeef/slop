@@ -3,7 +3,7 @@ import type { DecisionAttributes, DecisionLearning, KbTarget, KnowledgeKind, Sug
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { RefObject } from 'react';
 import { Link } from 'react-router';
 import { KeepAsLearning, inPipeline, PIPELINE_POLL_MS, WatchSignal, watching } from '@/components/decision-learning';
 import { Button } from '@/components/ui/button';
@@ -469,101 +469,30 @@ const MenuItems = ({ flow, only }: { flow: DecideFlow; only?: MenuKey }) => (
 export const WAITING_FOR_DRAFT = 'Waiting for the draft';
 
 /**
- * A learning's outcome as the glob's main action in the action row under the title: the recommended outcome (else Approve)
- * with the other outcomes in the ▾. While the change is still being drafted it is a disabled "Waiting for the draft" and
- * the ▾ holds only Reject…. With a form open the button becomes that form's submit (Save, Reject…) beside a Cancel.
- * `extra` is the row's other actions, which follow the outcomes in the ▾.
- */
-export const DecisionMainAction = ({ flow, extra }: { flow: DecideFlow; extra?: ReactNode }) => {
-  const { mode, busy, waiting, attributes } = flow;
-  const { outcomeMode, blocked, label, off, press } = mainState(flow);
-  const holding = waiting && mode === null;
-  const keeping = mode === 'keep';
-  const note = conflictNote(attributes.conflictsWith ?? []);
-  return (
-    <>
-      <div className='inline-flex' data-testid='split-button'>
-        <Tip text={holding ? 'The change is still being drafted; there is nothing to approve yet' : (blocked ?? (outcomeMode === 'accept_with_edits' ? 'Saves your wording and approves the change' : flow.approve.tip))}>
-          <Button
-            size='sm'
-            className='rounded-r-none'
-            disabled={off || holding || keeping}
-            data-testid='main-action'
-            data-outcome={outcomeMode ?? 'accept'}
-            onClick={press}
-          >
-            {flow.working !== null && <Loader2 className='size-3.5 animate-spin' aria-hidden />}
-            {holding ? WAITING_FOR_DRAFT : keeping && flow.working === null ? 'Approving without a document' : label}
-          </Button>
-        </Tip>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size='sm' className='rounded-l-none border-l-primary-foreground/40 px-1.5' disabled={busy} aria-label='More actions' data-testid='more-actions'>
-              <ChevronDown className='size-3.5' aria-hidden />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='end' data-testid='more-menu'>
-            <MenuItems flow={flow} {...(holding ? { only: 'reject' as const } : {})} />
-            {extra}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      {mode !== null && !keeping && (
-        <Button size='sm' variant='ghost' data-testid='outcome-clear' onClick={flow.close}>
-          Cancel
-        </Button>
-      )}
-      {blocked !== null && (
-        <span className='text-xs text-muted-foreground' data-testid='approve-blocked'>
-          {blocked}
-        </span>
-      )}
-      {note !== null && (
-        <span className='text-xs text-amber-800 dark:text-amber-200' data-testid='conflict-note'>
-          {note}
-        </span>
-      )}
-    </>
-  );
-};
-
-/** The form of the outcome the action row opened (reject reason, the edited wording, retarget…), in the body: fields only, the row's button submits it. */
-export const OutcomeForms = ({ flow }: { flow: DecideFlow }) => {
-  const { mode, glob, attributes, busy } = flow;
-  if (mode === null) return null;
-  return (
-    <div ref={flow.formRef} data-testid='outcome-forms'>
-      {mode === 'keep' ? (
-        <KeepAsLearning key={`${glob.id}-${String(glob.version)}`} glob={glob} attributes={attributes} learning={flow.learning} busy={busy} onClose={flow.close} onSent={(sending) => flow.sent('keep', sending)} />
-      ) : (
-        <OutcomeForm key={`${mode}-${flow.applied?.outcome === mode ? 'applied' : 'plain'}`} flow={flow} choice={mode} />
-      )}
-    </div>
-  );
-};
-
-/**
- * The outcome controls at the foot of the proposal block: one primary button (the recommended outcome, else Approve), the
+ * The outcome controls at the foot of the proposal block of a decision or learning (the action row has none): one primary button (the recommended outcome, else Approve), the
  * other outcomes in the ▾ and the chosen outcome's form beneath. The block holds the learning's only Approve.
  */
 export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
-  const { mode, approve, glob, attributes, busy } = flow;
+  const { mode, approve, glob, attributes, busy, waiting } = flow;
   const { outcomeMode, blocked, label: mainLabel, off: mainOff, press } = mainState(flow);
+  // While the change is still being drafted there is nothing to approve: only Reject… is open. "Keep as learning" sends by its own form.
+  const holding = waiting && mode === null;
+  const keeping = mode === 'keep';
   const note = conflictNote(attributes.conflictsWith ?? []);
   return (
     <div className='grid gap-2' data-testid='outcomes'>
       <div className='flex flex-wrap items-center gap-2' role='group' aria-label='Outcome'>
         <div className='flex'>
-          <Tip text={blocked ?? (outcomeMode === 'accept_with_edits' ? 'Saves your wording and approves the change' : approve.tip)}>
+          <Tip text={holding ? 'The change is still being drafted; there is nothing to approve yet' : (blocked ?? (outcomeMode === 'accept_with_edits' ? 'Saves your wording and approves the change' : approve.tip))}>
             <Button
               size='sm'
               className='rounded-r-none'
-              disabled={mainOff}
+              disabled={mainOff || holding || keeping}
               data-testid={`outcome-${outcomeMode ?? 'accept'}`}
               onClick={press}
             >
               {flow.working !== null && <Loader2 className='size-3.5 animate-spin' aria-hidden />}
-              {mainLabel}
+              {holding ? WAITING_FOR_DRAFT : keeping && flow.working === null ? 'Approving without a document' : mainLabel}
             </Button>
           </Tip>
           <DropdownMenu>
@@ -573,11 +502,11 @@ export const Outcomes = ({ flow }: { flow: DecideFlow }) => {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='start' data-testid='outcomes-menu'>
-              <MenuItems flow={flow} />
+              <MenuItems flow={flow} {...(holding ? { only: 'reject' as const } : {})} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        {mode !== null && (
+        {mode !== null && !keeping && (
           <Button size='sm' variant='ghost' data-testid='outcome-clear' onClick={flow.close}>
             Cancel
           </Button>

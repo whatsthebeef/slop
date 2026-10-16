@@ -281,7 +281,7 @@ describe('It failed on a due step', () => {
     const user = userEvent.setup();
     let finish: (ok: boolean) => void = () => undefined;
     const onFail = vi.fn<(stepId: string, note: string) => Promise<boolean>>(() => new Promise<boolean>((resolve) => (finish = resolve)));
-    const glob = view({ humanSteps: [step] });
+    const glob = view({ status: 'in_progress', humanSteps: [step] });
     render(
       <MemoryRouter>
         <HumanSteps glob={glob} canAdd onAdd={vi.fn()} onComplete={vi.fn()} onDismiss={vi.fn()} onFail={onFail} />
@@ -300,7 +300,7 @@ describe('It failed on a due step', () => {
   it('has no It failed button when the page cannot report it', () => {
     render(
       <MemoryRouter>
-        <HumanSteps glob={view({ humanSteps: [step] })} canAdd onAdd={vi.fn()} onComplete={vi.fn()} onDismiss={vi.fn()} />
+        <HumanSteps glob={view({ status: 'in_progress', humanSteps: [step] })} canAdd onAdd={vi.fn()} onComplete={vi.fn()} onDismiss={vi.fn()} />
       </MemoryRouter>,
     );
     expect(screen.queryByTestId('due-failed')).toBeNull();
