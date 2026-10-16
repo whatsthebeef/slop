@@ -1,4 +1,4 @@
-import { MERGING_WHEN_CHECKS_PASS_TEXT, mergeQueueText, mergingFromBaseText, modeOf } from '@slop/core';
+import { currentBehind, MERGING_WHEN_CHECKS_PASS_TEXT, mergeQueueText, mergingFromBaseText, modeOf } from '@slop/core';
 import type { GlobView } from './api';
 
 /** The head moved past the checks slop recorded: it just merged the base in and waits for the new head's checks. */
@@ -17,7 +17,7 @@ export const checksInFlightWhileMerging = (glob: GlobView): boolean =>
  */
 export const mergingChecksText = (glob: GlobView, base?: string): string =>
   catchingUp(glob)
-    ? mergingFromBaseText(glob.conflict?.base ?? glob.behind?.base ?? base ?? 'the base')
+    ? mergingFromBaseText(glob.conflict?.base ?? currentBehind(glob)?.base ?? base ?? 'the base')
     : MERGING_WHEN_CHECKS_PASS_TEXT;
 
 /** What a glob in the code host's merge queue says ("in merge queue · N ahead", "merging" once its group merges); null when it isn't queued. */

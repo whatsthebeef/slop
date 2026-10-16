@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Result } from '../src/domain/errors.js';
 import * as m from '../src/domain/machine.js';
+import { behindWarning, currentBehind } from '../src/domain/readiness.js';
 import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { NOW, admin, board, ctx, dev, glob, other, po, relationFacts, run } from './fixtures.js';
@@ -1344,7 +1345,7 @@ describe('checks and merging (slice 2)', () => {
     expect(effectKinds(t)).toEqual(['refresh_checks', 'review_change']);
     const pushed = value(m.commitPushed({ ...ready, headChecks: { sha: 'bbb', state: 'passed' } }, { sha: 'ccc', runId: null }, ctx(null)));
     expect(pushed.glob.headChecks).toBeNull();
-    expect(effectKinds(pushed)).toEqual(['refresh_checks', 'review_change']);
+    expect(effectKinds(pushed)).toEqual(['refresh_checks', 'review_change', 'check_behind']);
   });
 
   it('a gate check result counts only for the PR head: a run on another sha (a push to the base) is ignored', () => {
@@ -1662,13 +1663,41 @@ describe('how far a branch is behind the base', () => {
   it('records the distance when it changes and clears it when the branch is up to date', () => {
     const g = glob({ status: 'in_progress', pr });
     const recorded = value(m.behindChecked(g, found, ctx(null)));
-    expect(recorded.glob.behind).toEqual({ ...found, at: NOW });
+    expect(recorded.glob.behind).toEqual({ ...found, at: NOW, headSha: 'abc1234' });
     expect(value(m.behindChecked(recorded.glob, found, ctx(null))).changed).toBe(false);
     expect(value(m.behindChecked(recorded.glob, { ...found, behindBy: 4 }, ctx(null))).glob.behind?.behindBy).toBe(4);
     expect(value(m.behindChecked(g, { ...found, behindBy: 0, files: [] }, ctx(null))).changed).toBe(false);
     const cleared = value(m.behindChecked(recorded.glob, { ...found, behindBy: 0, files: [] }, ctx(null)));
     expect(cleared.glob.behind).toBeNull();
     expect(value(m.behindChecked(glob({ status: 'in_progress', pr: null }), found, ctx(null))).changed).toBe(false);
+  });
+
+  it('a push after the base was merged in rechecks even when it sends a ready PR back to review, and clears the record', () => {
+    const ready = { number: 7, state: 'ready' as const, headSha: 'abc1234' };
+    const behind = { base: 'main', behindBy: 1, files: [], at: NOW, headSha: 'abc1234' };
+    const pushed = value(m.commitPushed(glob({ status: 'in_progress', pr: ready, behind, implementer: dev.email }), { sha: 'def5678', runId: null }, ctx(null)));
+    expect(pushed.glob.status).toBe('pr_open');
+    expect(pushed.effects).toContainEqual({ kind: 'check_behind', globId: 's1t1', generation: 1 });
+    const reviewing = value(m.commitPushed(glob({ status: 'pr_open', pr: ready, behind }), { sha: 'def5678', runId: null }, ctx(null)));
+    expect(reviewing.effects).toContainEqual({ kind: 'check_behind', globId: 's1t1', generation: 1 });
+    const after = value(m.behindChecked(pushed.glob, { base: 'main', behindBy: 0, files: [] }, ctx(null)));
+    expect(after.glob.behind).toBeNull();
+  });
+
+  it('a push that still lacks a newer base commit updates the count and the head', () => {
+    const g = glob({ status: 'in_progress', pr, behind: { base: 'main', behindBy: 3, files: ['a.ts'], at: NOW, headSha: 'abc1234' } });
+    const pushed = value(m.commitPushed(g, { sha: 'def5678', runId: null }, ctx(null))).glob;
+    const rechecked = value(m.behindChecked(pushed, { base: 'main', behindBy: 1, files: [] }, ctx(null))).glob;
+    expect(rechecked.behind).toMatchObject({ behindBy: 1, headSha: 'def5678' });
+  });
+
+  it('a record read for an older head is not shown, so a missed webhook cannot leave advice already acted on', () => {
+    const behind = { base: 'main', behindBy: 1, files: [], at: NOW, headSha: 'old0000' };
+    const g = glob({ status: 'in_progress', pr, behind });
+    expect(currentBehind(g)).toBeNull();
+    expect(behindWarning(g)).toBeNull();
+    expect(behindWarning({ ...g, behind: { ...behind, headSha: 'abc1234' } })).toBe('main is 1 merge ahead; no files changed on both sides');
+    expect(currentBehind({ ...g, behind: { base: 'main', behindBy: 1, files: [], at: NOW } })).not.toBeNull();
   });
 });
 

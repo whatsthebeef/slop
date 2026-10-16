@@ -2,6 +2,7 @@ import {
   appliedHolding,
   behindAdvice,
   behindWarning,
+  currentBehind,
   checksExplanation,
   machine,
   readyStatus,
@@ -643,9 +644,9 @@ export const workstreamLine = (glob: GlobView): WorkstreamLine | null => {
  * so slop will merge it into the branch first and stop if it conflicts. Null when nothing is known to be ahead.
  */
 export const mergeWarning = (
-  glob: Pick<GlobView, 'status' | 'behind' | 'conflict'>,
+  glob: Pick<GlobView, 'status' | 'behind' | 'conflict' | 'pr'>,
 ): string | null => {
-  const behind = glob.behind;
+  const behind = currentBehind(glob);
   if (glob.status !== 'pr_open' || glob.conflict != null || behind == null || behind.behindBy <= 0)
     return null;
   return `${behind.base} has moved since the checks ran; slop will merge it into the branch first and stop if it conflicts`;

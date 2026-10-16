@@ -274,6 +274,8 @@ export interface BehindBase {
   /** Files changed on both sides since they diverged: where a conflict can be. */
   readonly files: readonly string[];
   readonly at: string;
+  /** The PR head the distance was read for. A record for another head than the glob's current one is out of date. */
+  readonly headSha?: string | null;
 }
 
 /** What an edge between two globs means: `needs` (the code must be on main; blocks start) or `overlaps` (same files; orders merges only). */
