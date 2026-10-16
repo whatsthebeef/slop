@@ -549,53 +549,25 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
     });
   });
 
-  describe('suggestions from the automatic pass', () => {
-    it('accepting a prerequisite adds the relation as the person, with the sentence as its reason', async () => {
+  describe('a mention is no longer a suggestion', () => {
+    it('an old open mention row is neither shown on the glob or the board list nor answerable', async () => {
       const a = await make();
       const b = await make({ title: 'Needs a' });
-      const sentence = `Hand over the profile only after ${a.id} is in place.`;
-      await seed(scanRow({ globId: b.id, mentionedId: a.id, sentence, gate: 'sign_off' }));
-      const [s] = unwrapped(await globs.get(ADMIN, b.id)).suggestions ?? [];
-      expect(s).toMatchObject({ kind: 'prerequisite', mentioned: a.id, gate: 'sign_off' });
-      expect(s?.text).toContain(`Mentions ${a.id}`);
-      unwrapped(await globs.resolveSuggestion(ADMIN, b.id, s?.id ?? '', 'accept'));
-      expect(rows(b.id)).toMatchObject([{ to: a.id, gate: 'sign_off', source: 'person', reason: sentence }]);
-      expect(scans()[0]).toMatchObject({ state: 'done', decision: 'added' });
-    });
-
-    it('accepting a reverse suggestion writes the relation on the other glob; a supersede suggestion writes the supersession', async () => {
-      const served = await make({ title: 'Served' });
-      const fix = await make({ title: 'Fix' });
-      await seed(scanRow({ globId: fix.id, mentionedId: served.id, sentence: `This fixes ${served.id}.`, gate: 'sign_off' }));
-      const [r] = unwrapped(await globs.get(ADMIN, fix.id)).suggestions ?? [];
-      expect(r?.kind).toBe('reverse');
-      unwrapped(await globs.resolveSuggestion(ADMIN, fix.id, r?.id ?? '', 'accept'));
-      expect(rows(served.id)).toMatchObject([{ to: fix.id, gate: 'sign_off', source: 'person' }]);
-
-      const old = await make({ title: 'Old' });
-      const fresh = await make({ title: 'Fresh' });
-      await seed(scanRow({ globId: fresh.id, mentionedId: old.id, sentence: `This replaces ${old.id}.` }));
-      const [x] = unwrapped(await globs.get(ADMIN, fresh.id)).suggestions ?? [];
-      expect(x?.kind).toBe('supersedes');
-      unwrapped(await globs.resolveSuggestion(ADMIN, fresh.id, x?.id ?? '', 'accept'));
-      expect(unwrapped(await globs.get(ADMIN, old.id)).relationGroups.supersededBy).toMatchObject({ id: fresh.id });
-    });
-
-    it('adding a covering relation by hand marks the suggestion done', async () => {
-      const a = await make();
-      const b = await make();
-      await seed(scanRow({ globId: b.id, mentionedId: a.id, sentence: `Needs ${a.id} first.` }));
-      unwrapped(await globs.addRelation(ADMIN, b.id, null, { to: a.id, reason: 'x' }, 'held_by', 'agent'));
+      await seed(scanRow({ globId: b.id, mentionedId: a.id, sentence: `Hand over the profile only after ${a.id} is in place.`, gate: 'sign_off' }));
       expect(unwrapped(await globs.get(ADMIN, b.id)).suggestions).toBeUndefined();
-      expect(scans()[0]).toMatchObject({ state: 'done', relationId: rows(b.id)[0]?.id });
+      expect(unwrapped(await globs.listWithArtifacts(ADMIN, boardId, {})).find((r) => r.glob.id === b.id)?.suggestions).toBeUndefined();
+      const [row] = scans();
+      const answered = await globs.resolveSuggestion(ADMIN, b.id, `${a.id}:${row?.sentenceHash ?? ''}`, 'accept');
+      expect(answered.ok).toBe(false);
     });
 
-    it('a suggestion that names a glob on a board the viewer cannot see is not shown', async () => {
-      const other = unwrapped(await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
-      const foreign = unwrapped(await globs.create(OUTSIDER, input({ boardId: other.id })));
-      const mine = await make();
-      await seed(scanRow({ globId: mine.id, mentionedId: foreign.id, sentence: `Waits for ${foreign.id}.` }));
-      expect(unwrapped(await globs.get(DEV, mine.id)).suggestions).toBeUndefined();
+    it('a relation the pass added records where the sentence was read in the log', async () => {
+      const a = await make();
+      const b = await make({ title: 'Needs a' });
+      await globs.applyAutomatic(b.id, await planHashOf(b.id), [{ to: a.id, gate: 'start', until: 'merged', reason: 'wait for a', sentence: 'Wait for a.', from: 'plan' }], ADMIN);
+      expect(store.state.events.filter((e) => e.type === 'RelationAdded' && e.globId === b.id)).toMatchObject([
+        { data: { source: 'mention', from: 'plan', note: `added relation to ${a.id} from a mention in the plan`, reason: 'wait for a' } },
+      ]);
     });
   });
 
@@ -609,15 +581,15 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
       ...patch,
     });
 
-    it('writes source auto rows with the reason in one go, events carry the source, and returns what it added', async () => {
+    it('writes source mention rows with the reason in one go, events carry the source, and returns what it added', async () => {
       const a = await make();
       const b = await make();
       const waiting = await make({ type: 'sub', after: [a.id] });
       const plan = await planHashOf(waiting.id);
       const result = await globs.applyAutomatic(waiting.id, plan, [add(b.id, { gate: 'sign_off', reason: 'hand over after b' })], ADMIN);
       expect(result).toEqual({ added: [b.id], skipped: [], stale: false });
-      expect(rows(waiting.id).find((r) => r.to === b.id)).toMatchObject({ gate: 'sign_off', until: 'merged', source: 'auto', reason: 'hand over after b' });
-      expect(store.state.events.filter((e) => e.type === 'RelationAdded' && e.globId === waiting.id && e.data.source === 'auto')).toHaveLength(1);
+      expect(rows(waiting.id).find((r) => r.to === b.id)).toMatchObject({ gate: 'sign_off', until: 'merged', source: 'mention', reason: 'hand over after b' });
+      expect(store.state.events.filter((e) => e.type === 'RelationAdded' && e.globId === waiting.id && e.data.source === 'mention')).toHaveLength(1);
       expect((await current(waiting.id)).version).toBeGreaterThan(waiting.version);
     });
 
@@ -656,7 +628,7 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
       // Unknown glob, empty reason.
       const r = await globs.applyAutomatic(x.id, await planHashOf(x.id), [add('s1t999'), add(b.id, { reason: ' ' })], ADMIN);
       expect(r.skipped.map((s) => s.why)).toEqual(['No glob s1t999', 'a relation needs a reason']);
-      expect(rows().filter((q) => q.source === 'auto')).toEqual([]);
+      expect(rows().filter((q) => q.source === 'mention')).toEqual([]);
     });
 
     it("holds_back writes the row on the other glob (the fix or follow-up case)", async () => {
@@ -665,7 +637,7 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
       const fix = await make({ title: 'Fix' });
       const result = await globs.applyAutomatic(fix.id, await planHashOf(fix.id), [add(served.id, { gate: 'sign_off', direction: 'holds_back', reason: 'fixes it' })], ADMIN);
       expect(result.added).toEqual([served.id]);
-      expect(rows(served.id)).toMatchObject([{ to: fix.id, gate: 'sign_off', source: 'auto', reason: 'fixes it' }]);
+      expect(rows(served.id)).toMatchObject([{ to: fix.id, gate: 'sign_off', source: 'mention', reason: 'fixes it' }]);
     });
 
     it("cross-board: allowed when the glob's creator is a member of the other board, a skipped result when not", async () => {
@@ -678,7 +650,7 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
       unwrapped(await boards.setMember(OUTSIDER, other.id, ADMIN, 'admin'));
       const allowed = await globs.applyAutomatic(mine.id, await planHashOf(mine.id), [add(foreign.id, { gate: 'sign_off' })], ADMIN);
       expect(allowed.added).toEqual([foreign.id]);
-      expect(rows(mine.id)[0]).toMatchObject({ boardId, to: foreign.id, source: 'auto' });
+      expect(rows(mine.id)[0]).toMatchObject({ boardId, to: foreign.id, source: 'mention' });
     });
 
     it('dismissing an automatic relation remembers the pair in the scan cache, so it is never asked again', async () => {

@@ -112,6 +112,10 @@ export const DOMAIN_EVENT_TYPES = [
   'RolloutStepFailed',
   /** The last work step holding back sign-off was done (or dismissed), so the glob moved on. */
   'RolloutDone',
+  /** A person merged a glob although `merge` relations held it (data: `for`, the globs it waited on, and the `reason`). Not `HoldOverridden`: Start-now learning reads that. */
+  'MergeOverridden',
+  /** A person signed a glob off although `sign_off` relations held it (data: `for` and `reason`). */
+  'SignOffOverridden',
   /** Every label is approved but a `sign_off` relation is unmet, so the glob stays in Reviewing (data: the globs it waits on). */
   'SignOffHeld',
   /** The last `sign_off` relation was met, so a glob with approved labels moved to Signed off. */

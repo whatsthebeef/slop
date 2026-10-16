@@ -152,14 +152,15 @@ export class DependencyLearningService {
         for (const pattern of covering) if (await this.move(tx, glob.boardId, defaults, pattern, 'edge_dismissed', glob.id, evidence)) touched = true;
       }
       // Start now on a need, then a merge that never failed for it: the need was an overlap. Only the inferred and learned
-      // relations Start now overrode (`overriddenAt`) are downgraded: the relation goes and the predicted overlap stays.
+      // relations Start now overrode (`overriddenAt`) are downgraded: the relation goes and the predicted overlap stays. A mention
+      // relation (also overridden by Start now) is the text's word, not an inferred overlap, so it teaches nothing and stays as it is.
       const overridden = events.filter((e) => e.type === 'HoldOverridden').flatMap((e) => stringsOf(e.data['for']));
       const history = await tx.listDependencyRuleChanges(glob.boardId);
       const failedFor = new Set(history.filter((c) => c.globId === glob.id && c.cause === 'unmerged_prerequisite').map((c) => c.evidence));
       let next: Glob = glob;
       const released: Relation[] = [];
       for (const id of new Set(overridden)) {
-        const edge = mine.find((r) => r.to === id && r.gate === 'start' && r.overriddenAt !== null);
+        const edge = mine.find((r) => r.to === id && r.gate === 'start' && r.overriddenAt !== null && (r.source === 'inferred' || r.source === 'learned'));
         if (edge === undefined || [...failedFor].some((text) => text.includes(id))) continue;
         const evidence = `${glob.id} started anyway without ${id} and merged without failing for it`;
         const downgraded: ImpliedAfter = { id, paths: edge.evidence, kind: 'overlaps', source: 'learned', evidence };

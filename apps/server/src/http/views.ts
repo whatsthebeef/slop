@@ -1,5 +1,5 @@
 import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationSuggestion, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, storedBlockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
@@ -161,7 +161,7 @@ export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; a
     ...armField(v.arm ?? null),
     // The script an open action runs and whether the base branch has it (null `onBase`: not checked); null for any other glob.
     script: v.script ?? null,
-    // Open card suggestions (is it a prerequisite? supersedes? a failed step: link a glob?), only when there are some.
+    // Open card questions (a failed step: link a glob?), only when there are some.
     ...(v.suggestions === undefined || v.suggestions.length === 0 ? {} : { suggestions: v.suggestions }),
     // The glob's relations in groups: what holds it back (the same as `holding`), what it holds back, and what no longer holds.
     relations: v.relationGroups,
@@ -214,6 +214,8 @@ export const globViewFor = (
         ...(relations === undefined ? {} : { relations }),
         // Merge and continue instead of Merge for a same with open rollout steps; Pick up on its merged glob.
         rolloutSteps: openRolloutSteps(stored),
+        // Sign off anyway is offered only once no step holds the sign-off back.
+        rollout: storedBlockProgress(stored, 'sign_off'),
       },
     ),
     artifacts,

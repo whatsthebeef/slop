@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Holding, RelationsView, RelationSuggestion } from '@slop/core';
 import { MemoryRouter } from 'react-router';
@@ -65,7 +65,7 @@ const renderRelated = (glob: GlobView, onSuggestion?: SuggestionHandler) => {
 };
 
 describe('Related: reasons', () => {
-  it('badges a person or agent relation with no reason, and no inferred, learned, split or automatic one', () => {
+  it('badges a person or agent relation with no reason, and no inferred, learned, split or mention one', () => {
     renderRelated(
       view({
         relations: related({
@@ -75,7 +75,8 @@ describe('Related: reasons', () => {
             hold('s1t4', { source: 'inferred' }),
             hold('s1t5', { source: 'learned' }),
             hold('s1t6', { source: 'split' }),
-            hold('s1t7', { source: 'auto' }),
+            hold('s1t7', { source: 'mention' }),
+            hold('s1t9', { source: 'auto' }),
             hold('s1t8', { reason: 'needs the schema' }),
           ],
         }),
@@ -83,7 +84,7 @@ describe('Related: reasons', () => {
     );
     expect(screen.getByTestId('no-reason-s1t2').textContent).toBe('no reason given');
     expect(screen.getByTestId('no-reason-s1t3')).not.toBeNull();
-    for (const id of ['s1t4', 's1t5', 's1t6', 's1t7', 's1t8']) expect(screen.queryByTestId(`no-reason-${id}`)).toBeNull();
+    for (const id of ['s1t4', 's1t5', 's1t6', 's1t7', 's1t8', 's1t9']) expect(screen.queryByTestId(`no-reason-${id}`)).toBeNull();
     expect(screen.getByTestId('related-row-s1t8').textContent).toContain(': needs the schema');
   });
 
@@ -114,14 +115,56 @@ describe('Related: reasons', () => {
   });
 });
 
-describe('Related: automatic relations', () => {
-  it('shows "added automatically" with the quoted reason and a one-click dismiss', async () => {
+describe('Related: relations from a mention', () => {
+  const sentence = 'Hand the profile over only after s1t7 is deployed.';
+
+  it('shows a "from a mention" chip with the sentence as its hover, not inline, and a one-click dismiss', async () => {
     const user = userEvent.setup();
-    const { onDismissEdge } = renderRelated(view({ relations: related({ holding: [hold('s1t7', { source: 'auto', reason: 'only after s1t7 is deployed' })] }) }));
-    expect(screen.getByTestId('auto-badge-s1t7').textContent).toBe('added automatically');
-    expect(screen.getByTestId('related-row-s1t7').textContent).toContain('“only after s1t7 is deployed”');
+    const { onDismissEdge } = renderRelated(view({ relations: related({ holding: [hold('s1t7', { source: 'mention', reason: sentence })] }) }));
+    const chip = screen.getByTestId('mention-badge-s1t7');
+    expect(chip.textContent).toBe('from a mention');
+    // The Tip describes the chip for screen readers (aria-describedby) and shows the sentence on hover.
+    const describedBy = chip.getAttribute('aria-describedby') ?? '';
+    expect(describedBy).not.toBe('');
+    expect(document.getElementById(describedBy)?.textContent).toBe(sentence);
+    expect(screen.getByTestId('related-row-s1t7').textContent).not.toContain(`: ${sentence}`);
     await user.click(screen.getByTestId('dismiss-edge-s1t7'));
     expect(onDismissEdge).toHaveBeenCalledWith('rel_s1t7');
+  });
+
+  it('reads an old `auto` row the same way', () => {
+    renderRelated(view({ relations: related({ holding: [hold('s1t7', { source: 'auto', reason: sentence })] }) }));
+    expect(screen.getByTestId('mention-badge-s1t7').textContent).toBe('from a mention');
+  });
+
+  it('shows the sentence on hover after a pause', async () => {
+    vi.useFakeTimers();
+    try {
+      renderRelated(view({ relations: related({ holding: [hold('s1t7', { source: 'mention', reason: sentence })] }) }));
+      fireEvent.mouseEnter(screen.getByTestId('mention-badge-s1t7').parentElement as HTMLElement);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2100);
+      });
+      expect(screen.getByRole('tooltip', { hidden: true }).textContent).toBe(sentence);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the inline reason for other sources', () => {
+    renderRelated(view({ relations: related({ holding: [hold('s1t8', { source: 'person', reason: 'needs the schema' })] }) }));
+    expect(screen.getByTestId('related-row-s1t8').textContent).toContain(': needs the schema');
+    expect(screen.queryByTestId('mention-badge-s1t8')).toBeNull();
+  });
+
+  it('lists a relation that was forced through as overridden in Done', async () => {
+    const user = userEvent.setup();
+    renderRelated(
+      view({ relations: related({ done: [{ relationId: 'rel_d', to: 's1t7', toTitle: 'T', gate: 'merge', until: 'merged', reason: sentence, source: 'mention', how: 'overridden' }] }) }),
+    );
+    await user.click(screen.getByTestId('related-toggle'));
+    await user.click(screen.getByText('Done (1)'));
+    expect(screen.getByTestId('related-row-s1t7').textContent).toContain('(forced through)');
   });
 });
 
@@ -172,40 +215,29 @@ describe('Related: supersedes', () => {
   });
 });
 
-describe('Related: suggestions', () => {
-  const suggestion = (patch: Partial<RelationSuggestion> = {}): RelationSuggestion => ({
-    id: 's1t5:abc',
-    kind: 'prerequisite',
-    text: 'Mentions s1t5: is it a prerequisite?',
-    mentioned: 's1t5',
-    gate: 'start',
+describe('Related: a failed step still asks, a mention never does', () => {
+  const failedStep = (patch: Partial<RelationSuggestion> = {}): RelationSuggestion => ({
+    id: 'step:hs_1',
+    kind: 'step_failed',
+    text: 'This step failed: is there a fix glob?',
+    mentioned: null,
+    stepId: 'hs_1',
     ...patch,
   });
 
-  it('accepts and declines a prerequisite suggestion through the handler', async () => {
-    const user = userEvent.setup();
-    const onSuggestion = vi.fn<SuggestionHandler>(() => Promise.resolve(true));
-    renderRelated(view({ relations: related(), suggestions: [suggestion()] }), onSuggestion);
-    const item = screen.getByTestId('suggestion-s1t5:abc');
-    expect(item.textContent).toContain('Mentions s1t5');
-    await user.click(within(item).getByRole('button', { name: 'Add relation' }));
-    expect(onSuggestion).toHaveBeenCalledWith('s1t5:abc', 'accept');
-    await user.click(within(item).getByRole('button', { name: 'Not a prerequisite' }));
-    expect(onSuggestion).toHaveBeenLastCalledWith('s1t5:abc', 'dismiss');
-  });
-
-  it('says "Mark superseded" for a supersedes suggestion', () => {
-    renderRelated(view({ relations: related(), suggestions: [suggestion({ id: 's1t3:d', kind: 'supersedes', mentioned: 's1t3' })] }), vi.fn());
-    expect(screen.getByRole('button', { name: 'Mark superseded' })).not.toBeNull();
+  it('has no Suggestions group: the failed step sits under "Failed step", with no mention question beside it', () => {
+    renderRelated(view({ relations: related({ holding: [hold('s1t7', { source: 'mention', reason: 'only after s1t7' })] }), suggestions: [failedStep()] }), vi.fn());
+    expect(screen.queryByText('Suggestions')).toBeNull();
+    expect(screen.queryByTestId('related-suggestions')).toBeNull();
+    expect(within(screen.getByTestId('related-failed-step')).getByText('Failed step')).not.toBeNull();
+    expect(screen.queryByText(/is it a prerequisite/)).toBeNull();
+    expect(screen.queryByText('Not a prerequisite')).toBeNull();
   });
 
   it('links a glob to a failed step: the accept carries the glob ID', async () => {
     const user = userEvent.setup();
     const onSuggestion = vi.fn<SuggestionHandler>(() => Promise.resolve(true));
-    renderRelated(
-      view({ relations: related(), suggestions: [suggestion({ id: 'step:hs_1', kind: 'step_failed', mentioned: null, text: 'This step failed: is there a fix glob?', stepId: 'hs_1' })] }),
-      onSuggestion,
-    );
+    renderRelated(view({ relations: related(), suggestions: [failedStep()] }), onSuggestion);
     const link = screen.getByRole('button', { name: 'Link a glob' });
     expect((link as HTMLButtonElement).disabled).toBe(true);
     await user.type(screen.getByLabelText('Glob that fixes it'), 's1b6');
@@ -213,19 +245,27 @@ describe('Related: suggestions', () => {
     expect(onSuggestion).toHaveBeenCalledWith('step:hs_1', 'accept', 's1b6');
   });
 
+  it('declines a failed step with "No fix needed"', async () => {
+    const user = userEvent.setup();
+    const onSuggestion = vi.fn<SuggestionHandler>(() => Promise.resolve(true));
+    renderRelated(view({ relations: related(), suggestions: [failedStep()] }), onSuggestion);
+    await user.click(screen.getByRole('button', { name: 'No fix needed' }));
+    expect(onSuggestion).toHaveBeenCalledWith('step:hs_1', 'dismiss');
+  });
+
   it('sends one request for a double click', async () => {
     const user = userEvent.setup();
     let finish: (ok: boolean) => void = () => undefined;
     const onSuggestion = vi.fn<SuggestionHandler>(() => new Promise<boolean>((resolve) => (finish = resolve)));
-    renderRelated(view({ relations: related(), suggestions: [suggestion()] }), onSuggestion);
-    await user.dblClick(screen.getByTestId('suggestion-accept'));
+    renderRelated(view({ relations: related(), suggestions: [failedStep()] }), onSuggestion);
+    await user.dblClick(screen.getByTestId('suggestion-dismiss'));
     expect(onSuggestion).toHaveBeenCalledTimes(1);
     finish(true);
   });
 
   it('shows the text without buttons when the page cannot answer', () => {
-    renderRelated(view({ relations: related(), suggestions: [suggestion()] }));
-    expect(screen.getByTestId('suggestion-s1t5:abc').textContent).toContain('Mentions s1t5');
+    renderRelated(view({ relations: related(), suggestions: [failedStep()] }));
+    expect(screen.getByTestId('suggestion-step:hs_1').textContent).toContain('This step failed');
     expect(screen.queryByTestId('suggestion-accept')).toBeNull();
   });
 });
@@ -234,7 +274,7 @@ describe('an older API without the new fields', () => {
   it('renders a plain relation with no badge-only fields, no suggestions and no supersedes', () => {
     renderRelated(view({ relations: related({ holding: [hold('s1t2', { source: 'inferred' })] }) }));
     expect(screen.getByTestId('related-row-s1t2')).not.toBeNull();
-    expect(screen.queryByTestId('related-suggestions')).toBeNull();
+    expect(screen.queryByTestId('related-failed-step')).toBeNull();
     expect(screen.queryByTestId('related-superseded-by')).toBeNull();
     expect(screen.queryByTestId('related-other-boards')).toBeNull();
     expect(relationTips(view({ relations: related() }))).toEqual([]);
@@ -259,17 +299,17 @@ describe('card tips', () => {
     expect(hidden?.tip).not.toContain('another board (');
   });
 
-  it('says what it holds back and why, who supersedes it and the open suggestions', () => {
+  it('says what it holds back and why, who supersedes it and the failed step question', () => {
     const g = view({
       holdsBack: [{ relationId: 'r1', from: 's1t8', fromTitle: null, gate: 'sign_off', until: 'merged', reason: 'needs the fix', source: 'agent' }],
       relations: related({ supersededBy: { id: 's1t9', title: null, reason: null, source: 'agent' }, waitedOnByOtherBoards: 1 }),
-      suggestions: [{ id: 's1t5:abc', kind: 'prerequisite', text: 'Mentions s1t5: is it a prerequisite?', mentioned: 's1t5' }],
+      suggestions: [{ id: 'step:hs_1', kind: 'step_failed', text: 'This step failed: is there a fix glob?', mentioned: null, stepId: 'hs_1' }],
     });
     expect(relationTips(g)).toEqual([
       'Superseded by s1t9 (no reason given)',
       's1t8 waits: needs the fix',
       '1 glob on other boards waits for this',
-      'Suggestion: Mentions s1t5: is it a prerequisite?',
+      'Suggestion: This step failed: is there a fix glob?',
     ]);
   });
 });

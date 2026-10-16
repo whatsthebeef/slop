@@ -15,6 +15,8 @@ const ACTIONS: readonly Action[] = [
   'investigate',
   'review_now',
   'start_anyway',
+  'merge_anyway',
+  'sign_off_anyway',
   'pick_up',
   'take_over',
   'retrigger',
@@ -97,6 +99,12 @@ describe('actionPresentation', () => {
     expect(actionPresentation('investigate', g).label).toBe('Investigate plan');
     expect(actionPresentation('review_now', g).label).toBe('Review code');
     expect(actionPresentation('delete', g)).toMatchObject({ icon: null, placement: 'reset' });
+  });
+
+  it('puts Merge anyway and Sign off anyway in the More menu, named for what they force through', () => {
+    expect(actionPresentation('merge_anyway', view({ status: 'pr_open' }))).toMatchObject({ label: 'Merge anyway', icon: 'machine', placement: 'more' });
+    expect(actionPresentation('sign_off_anyway', view({ status: 'reviewing' }))).toMatchObject({ label: 'Sign off anyway', icon: 'human', placement: 'more' });
+    expect(actionPresentation('merge_anyway', view()).tip).toContain('who did it is recorded');
   });
 
   it('names start_anyway by what it does: Start now in Planning, Start when taking over from a person', () => {

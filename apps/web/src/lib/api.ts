@@ -601,6 +601,8 @@ export type ActionPath =
   | 'investigate'
   | 'review-now'
   | 'start-anyway'
+  | 'merge-anyway'
+  | 'sign-off-anyway'
   | 'retrigger'
   | 'retry-autofix'
   | 'resolve-conflict'
@@ -888,8 +890,11 @@ export const api = {
   /** An action glob that is not needed after all (the reason is required). */
   dismissAction: (id: string, version: number, reason: string) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/dismiss`, { version, reason: reason.trim() }),
-  action: (id: string, action: ActionPath, version: number, anyway?: boolean) =>
-    request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, anyway === true ? { version, anyway } : { version }),
+  /** `reason` is what Start now (optional), Merge anyway and Sign off anyway (required) record with who did it. */
+  action: (id: string, action: ActionPath, version: number, anyway?: boolean, reason?: string) => {
+    const why = reason?.trim() ?? '';
+    return request<GlobView>('POST', `/api/globs/${id}/actions/${action}`, { version, ...(anyway === true ? { anyway } : {}), ...(why === '' ? {} : { reason: why }) });
+  },
   intake: (boardId: number, text: string) =>
     request<IntakeProposalView>('POST', `/api/boards/${boardId}/intake`, { text }),
   intakeAccuracy: (boardId: number) => request<IntakeAccuracy>('GET', `/api/boards/${boardId}/intake-accuracy`),
@@ -1072,10 +1077,10 @@ export const api = {
   /** The ✕ on a relation: it is not a dependency. */
   dismissRelation: (id: string, relationId: string, version: number) =>
     request<GlobView>('POST', `/api/globs/${id}/relations/${relationId}/dismiss`, { version }),
-  /** Accepts a card suggestion (writes the relation); a failed step's suggestion needs `glob`, the fix glob to link. */
+  /** Answers a failed step's question: `glob` is the fix glob to link. */
   acceptSuggestion: (id: string, suggestionId: string, body: { readonly glob?: string } = {}) =>
     request<GlobView>('POST', `/api/globs/${id}/suggestions/${encodeURIComponent(suggestionId)}/accept`, body),
-  /** "Not a prerequisite": the suggestion is declined and never asked again. */
+  /** "No fix needed": the question is declined and never asked again. */
   dismissSuggestion: (id: string, suggestionId: string) =>
     request<GlobView>('POST', `/api/globs/${id}/suggestions/${encodeURIComponent(suggestionId)}/dismiss`, {}),
   /** Adds a relation: `to` holds this glob back (needs its version), or `holdsBack` is held back by this one (a decision's "Holds back"). */
@@ -1093,6 +1098,8 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   investigate: 'investigate',
   review_now: 'review-now',
   start_anyway: 'start-anyway',
+  merge_anyway: 'merge-anyway',
+  sign_off_anyway: 'sign-off-anyway',
   pick_up: 'pick-up',
   take_over: 'take-over',
   retrigger: 'retrigger',

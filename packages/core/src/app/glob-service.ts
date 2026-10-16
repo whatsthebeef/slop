@@ -38,8 +38,8 @@ import type { CodeView } from './code-view.js';
 import { CodeViewUnavailable } from '../domain/code-view.js';
 import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, UNTIL_WORDS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, normaliseUntil, pickUpWarning, relationUniverse, startIds, OTHER_BOARD_GLOB, toState, wouldCycle } from '../domain/relations.js';
 import type { AwaitedDependency, DoneRelation, ExternalGlob, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, Supersession, TitleInfo, ToState } from '../domain/relations.js';
-import { globIdsIn, idSentences, quoteReason, reverseCuesIn, sentenceHash, supersedeCuesIn } from '../domain/relation-scan.js';
-import type { AutomaticAdd, AutomaticRelations, AutomaticResult, RelationListExtras, RelationScanRow, RelationSuggestion } from '../domain/relation-scan.js';
+import { globIdsIn, idSentences, sentenceHash } from '../domain/relation-scan.js';
+import type { AutomaticAdd, AutomaticRelations, AutomaticResult, MentionOrigin, RelationListExtras, RelationScanRow, RelationSuggestion } from '../domain/relation-scan.js';
 import { suggestionIdOf } from '../domain/relation-scan.js';
 import { appendClarification, planChangedQuestion, questionAwaits } from '../domain/questions.js';
 import type { NewQuestion, OpenQuestion } from '../domain/questions.js';
@@ -48,7 +48,7 @@ import type { IntakeRecord, SnapshotSource } from '../domain/intake-learning.js'
 import type { BranchFiles, Clock, Embedder, GlobFilter, Hint, IdGenerator, Notifier, RoutineDirectory, Store, Tx } from '../ports.js';
 import { DECISIONS_LABEL, decisionsAttachment } from '../domain/decision-glob.js';
 import { ACTION_PLAN_TEMPLATE } from '../domain/action-glob.js';
-import { defaultFix, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, storedCategory, workKindOf } from '../domain/types.js';
+import { defaultFix, isFromMention, defaultWorkKind, fixOf, isCodeGlob, isHumanCategory, storedCategory, workKindOf } from '../domain/types.js';
 import { addArtifact, governingDecisions, handoverOf } from './artifact-service.js';
 import { readMergePolicy } from './knowledge-service.js';
 import { subGateCheckOf } from '../domain/merge-policy.js';
@@ -168,10 +168,10 @@ export const MAX_RELATION_REASON = 300;
 /** How many relations beyond a board's own the cycle check reads across boards before it refuses. */
 
 /** Who stated the relations of a request: the source they are recorded with. */
-export type RelationsBy = 'person' | 'agent' | 'auto';
+export type RelationsBy = 'person' | 'agent' | 'mention';
 
 /** Whether relations stated by this source must carry a one-line reason (people are prompted in the web, never blocked). */
-const needsReason = (by: RelationsBy): boolean => by === 'agent' || by === 'auto';
+const needsReason = (by: RelationsBy): boolean => by === 'agent' || by === 'mention';
 
 /** The refusal for an agent's relation without a reason. */
 const reasonRefusal = (to: string): Result<never> =>
@@ -380,13 +380,24 @@ const NO_IDS: ReadonlySet<string> = new Set();
 const eventName = (id: string, external: ReadonlySet<string>): string => (external.has(id) ? OTHER_BOARD_GLOB : id);
 
 /** The event on `from` for a relation that was added. */
-const relationAdded = (r: Relation, actor: string | null, at: string, external: ReadonlySet<string> = NO_IDS): DomainEvent => ({
-  type: 'RelationAdded',
-  globId: r.from,
-  actor,
-  at,
-  data: { to: eventName(r.to, external), gate: r.gate, until: r.until, source: r.source, reason: r.reason },
-});
+const relationAdded = (r: Relation, actor: string | null, at: string, external: ReadonlySet<string> = NO_IDS, origin?: MentionOrigin): DomainEvent => {
+  const to = eventName(r.to, external);
+  return {
+    type: 'RelationAdded',
+    globId: r.from,
+    actor,
+    at,
+    data: {
+      to,
+      gate: r.gate,
+      until: r.until,
+      source: r.source,
+      reason: r.reason,
+      // A mention's row says where the sentence was read: "added relation to s15t246 from a mention in the plan".
+      ...(origin === undefined || !isFromMention(r.source) ? {} : { from: origin, note: `added relation to ${to} from a mention in the ${origin}` }),
+    },
+  };
+};
 
 /**
  * The events a relation write logs on `from`: one per relation added (see `relationAdded`), dismissed (with its source, so
@@ -407,7 +418,7 @@ const relationEvents = (
     const gone = known(r);
     if (gone !== undefined) events.push({ type: 'RelationReleased', globId: from, actor, at, data: { to: eventName(gone.to, external), gate: gone.gate, reason: 'removed' } });
   }
-  for (const r of inserted) events.push(relationAdded(r, actor, at, external));
+  for (const r of inserted) events.push(relationAdded(r, actor, at, external, write.origin));
   for (const u of write.update) {
     const was = known(u.id);
     if (was !== undefined && u.patch.dismissedAt != null) {
@@ -529,37 +540,15 @@ const factsView = (facts: RelationFacts, external: ReadonlyMap<string, ExternalG
   return { relations, states };
 };
 
-/** What an open stored decision is, from the words of its sentence: a fix or follow-up (reverse), a replacement, or a plain mention. */
-const suggestionKindOf = (row: Pick<RelationScanRow, 'kind' | 'mentionedId' | 'sentence'>): RelationSuggestion['kind'] =>
-  row.kind === 'step_failed'
-    ? 'step_failed'
-    : reverseCuesIn(row.sentence).some((c) => c.id === row.mentionedId)
-      ? 'reverse'
-      : supersedeCuesIn(row.sentence).some((c) => c.id === row.mentionedId)
-        ? 'supersedes'
-        : 'prerequisite';
-
-/** A stored decision as the card's suggestion. */
-const suggestionView = (row: RelationScanRow): RelationSuggestion => {
-  const kind = suggestionKindOf(row);
-  const quoted = quoteReason(row.sentence);
-  const text =
-    kind === 'step_failed'
-      ? row.sentence
-      : kind === 'reverse'
-        ? `Mentions ${row.mentionedId}: does this glob fix or continue it? "${quoted}"`
-        : kind === 'supersedes'
-          ? `Mentions ${row.mentionedId}: does this glob replace it? "${quoted}"`
-          : `Mentions ${row.mentionedId}: is it a prerequisite? "${quoted}"`;
-  return {
-    id: suggestionIdOf(row),
-    kind,
-    text,
-    mentioned: kind === 'step_failed' ? null : row.mentionedId,
-    ...(row.gate === null ? {} : { gate: row.gate }),
-    ...(kind === 'step_failed' ? { stepId: row.mentionedId } : {}),
-  };
-};
+/** A stored open question as the card's suggestion: only a failed step asks one now (a mentioned glob becomes a relation instead). */
+const suggestionView = (row: RelationScanRow): RelationSuggestion => ({
+  id: suggestionIdOf(row),
+  kind: 'step_failed',
+  text: row.sentence,
+  mentioned: null,
+  ...(row.gate === null ? {} : { gate: row.gate }),
+  stepId: row.mentionedId,
+});
 
 /** A dismissal key is opaque to the server; the web builds it from the situation (see `lib/dismissals.ts`). */
 const DISMISSAL_KEY = /^[\w:.+@/-]{1,200}$/;
@@ -650,7 +639,7 @@ export class GlobService implements AutomaticRelations {
       const sizeCheck = await tx.getSizeCheck(glob.id);
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
       const rolloutSteps = openRolloutSteps(stored);
-      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, rolloutSteps, ...scriptFacts(check) };
+      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, rolloutSteps, rollout: storedBlockProgress(stored, 'sign_off'), ...scriptFacts(check) };
       const board = await tx.getBoard(glob.boardId);
       const known = (board?.environments ?? []).map((e) => e.name);
       // A step that waits for an environment the board doesn't define can never fall due: flag it so the view offers to dismiss it.
@@ -662,7 +651,7 @@ export class GlobService implements AutomaticRelations {
       const seen = await this.seeOthers(tx, email, glob.boardId, [...new Set(relations.relations.map((r) => r.to))]);
       const waited = await this.waitedOnBy(tx, glob.id, email);
       const groups = await this.relationGroupsOf(tx, glob, relations, email, seen);
-      const suggestions = await this.suggestionsOf(tx, email, [glob.id]);
+      const suggestions = await this.suggestionsOf(tx, [glob.id]);
       return ok({
         glob,
         allowedActions: machine.allowedActions(glob, actor.value, facts),
@@ -1172,10 +1161,9 @@ export class GlobService implements AutomaticRelations {
   }
 
   /**
-   * A person answers a card suggestion. `accept` writes what it asks: a prerequisite (this glob waits for the one it names; source
-   * `person`, the sentence as its reason), a reverse relation (the named glob waits for this one), a supersession (this glob
-   * supersedes it), or for a failed step "link a glob" (`body.glob`: this glob can't be signed off until it merges, reason "fixes
-   * the failed step <title>"). `dismiss` is remembered: it is never asked again. Returns the glob.
+   * A person answers the open question of a failed step (the only card suggestion left: a mentioned glob becomes a relation by itself).
+   * `accept` is "link a glob" (`body.glob`: this glob can't be signed off until it merges, reason "fixes the failed step <title>");
+   * `dismiss` is remembered: it is never asked again. Returns the glob.
    */
   async resolveSuggestion(
     email: string,
@@ -1189,9 +1177,9 @@ export class GlobService implements AutomaticRelations {
       if (glob === null) return notFound(`No glob ${id}`);
       const actor = await this.actorFor(tx, email, glob.boardId);
       if (!actor.ok) return actor;
-      const row = (await tx.listOpenSuggestions([id])).find((r) => suggestionIdOf(r) === suggestionId);
+      const row = (await tx.listOpenSuggestions([id])).find((r) => r.kind === 'step_failed' && suggestionIdOf(r) === suggestionId);
       if (row === undefined) return notFound(`No open suggestion ${suggestionId} on ${id}`);
-      const title = row.kind === 'step_failed' ? ((await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === row.mentionedId)?.title ?? null) : null;
+      const title = (await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === row.mentionedId)?.title ?? null;
       return ok({ glob, row, title });
     });
     if (!read.ok) return read;
@@ -1199,24 +1187,13 @@ export class GlobService implements AutomaticRelations {
     const settle = (patch: { readonly state: 'done' | 'dismissed'; readonly decision?: 'added' | 'not_prerequisite' }): Promise<void> =>
       this.deps.store.transaction((tx) => tx.updateRelationScan(row.globId, row.mentionedId, row.sentenceHash, { ...patch, decidedAt: this.deps.clock.now() }));
     if (action === 'dismiss') {
-      await settle({ state: 'dismissed', ...(row.kind === 'mention' ? { decision: 'not_prerequisite' as const } : {}) });
+      await settle({ state: 'dismissed' });
       this.publish(glob);
       return ok(glob);
     }
-    const reason = quoteReason(row.sentence);
-    const kind = suggestionKindOf(row);
-    let result: Result<Glob>;
-    if (kind === 'step_failed') {
-      const fix = (body.glob ?? '').trim();
-      if (fix === '') return invalidInput('Name the glob that fixes the failed step');
-      result = await this.addRelation(email, id, null, { to: fix, gate: 'sign_off', until: 'merged', reason: `fixes the failed step ${title ?? row.mentionedId}` }, 'held_by', 'person');
-    } else if (kind === 'supersedes') {
-      result = await this.addSupersession(email, id, row.mentionedId, { reason }, 'person');
-    } else if (kind === 'reverse') {
-      result = await this.addRelation(email, id, null, { to: row.mentionedId, gate: row.gate ?? 'sign_off', reason }, 'holds_back', 'person');
-    } else {
-      result = await this.addRelation(email, id, null, { to: row.mentionedId, gate: row.gate ?? 'start', reason }, 'held_by', 'person');
-    }
+    const fix = (body.glob ?? '').trim();
+    if (fix === '') return invalidInput('Name the glob that fixes the failed step');
+    const result = await this.addRelation(email, id, null, { to: fix, gate: 'sign_off', until: 'merged', reason: `fixes the failed step ${title ?? row.mentionedId}` }, 'held_by', 'person');
     if (!result.ok) return result;
     await settle({ state: 'done', decision: 'added' });
     return result;
@@ -1286,7 +1263,7 @@ export class GlobService implements AutomaticRelations {
           (g) => ok({ glob: g, changed: false, events: [], effects: [] }),
           {
             applies: 'any',
-            relationPlan: (t, g, board) => this.planRelations(t, g, board, [{ to: target.id, gate: add.gate, until: add.until, reason }], 'auto', actorEmail),
+            relationPlan: (t, g, board) => this.planRelations(t, g, board, [{ to: target.id, gate: add.gate, until: add.until, reason }], 'mention', actorEmail, add.from),
           },
           tx,
         );
@@ -1727,7 +1704,7 @@ export class GlobService implements AutomaticRelations {
       const titles = titlesOf(seen.reach.globs);
       // Who waits for these globs (one read), redacted for a viewer outside the other glob's board; and the open suggestions.
       const heldBy = await this.holdsBackOf(tx, email, globs);
-      const suggestions = await this.suggestionsOf(tx, email, globs.map((g) => g.id));
+      const suggestions = await this.suggestionsOf(tx, globs.map((g) => g.id));
       return ok(
         globs.map((glob): ListedGlobRow => {
           const facts: RelationFacts = { relations: ownBy.get(glob.id) ?? [], states: seen.reach.states };
@@ -2145,7 +2122,7 @@ export class GlobService implements AutomaticRelations {
       for (const p of autoNeeds) {
         const target = known.get(p.id);
         if (target === undefined || p.id === id || !(await this.viewableTarget(tx, email, target))) continue;
-        const row: NewRelation = { to: p.id, gate: p.gate, until: p.until, reason: p.reason, evidence: [], source: 'auto' };
+        const row: NewRelation = { to: p.id, gate: p.gate, until: p.until, reason: p.reason, evidence: [], source: 'mention' };
         if (!checkRelationShape({ id, category: input.category }, { to: p.id, until: p.until, gate: p.gate }, target).ok) continue;
         if (needs.some((r) => r.to === p.id && r.gate === p.gate)) continue;
         if (p.gate === 'start' && !stillHolds(row, states.get(p.id))) continue;
@@ -2675,6 +2652,8 @@ export class GlobService implements AutomaticRelations {
     wanted: readonly RelationInput[],
     by: RelationsBy,
     viewer: string | null,
+    /** Where a `mention` relation's sentence was read from (goes in the log). */
+    origin?: MentionOrigin,
   ): Promise<Result<RelationWrite>> {
     // The last statement of one glob and gate wins.
     const list = [...new Map(wanted.map((w) => [`${w.to.trim()}|${w.gate ?? 'start'}`, { ...w, to: w.to.trim() }])).values()].filter((w) => w.to !== '');
@@ -2719,7 +2698,7 @@ export class GlobService implements AutomaticRelations {
       add.push(draft);
       growing = [...rest, draftOf(glob.boardId, glob.id, draft)];
     }
-    return ok({ add, update, remove });
+    return ok({ add, update, remove, ...(origin === undefined ? {} : { origin }) });
   }
 
   /**
@@ -2793,10 +2772,10 @@ export class GlobService implements AutomaticRelations {
     });
   }
 
-  /** Start a glob that waits for others to merge, before they have. */
-  async startAnyway(email: string, id: string, version: number) {
+  /** Start a glob that waits for others to merge, before they have. `reason` (optional) is logged with who did it. */
+  async startAnyway(email: string, id: string, version: number, reason?: string) {
     const wrote = { value: false };
-    const result = await this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAnyway(glob, ctx, facts.relations), {
+    const result = await this.command(email, id, version, (glob, ctx, _board, facts) => machine.startAnyway(glob, ctx, facts.relations, reason), {
       relations: true,
       record: this.handoverRecorder(wrote),
     });
@@ -2829,7 +2808,7 @@ export class GlobService implements AutomaticRelations {
       // A person's "no" to a relation slop added is remembered by the pair, so the automatic pass never asks about it again.
       record: async (tx, before) => {
         const r = dismissed.value;
-        if (r === null || r.source !== 'auto') return;
+        if (r === null || !isFromMention(r.source)) return;
         const now = this.deps.clock.now();
         const key = sentenceHash(r.reason ?? '');
         await tx.upsertRelationScans([
@@ -3110,6 +3089,20 @@ export class GlobService implements AutomaticRelations {
     );
   }
 
+  /**
+   * Merge anyway: the `merge` relations holding a ready PR are overridden (logged with who and why) and the merge goes the way
+   * Merge would have taken it. A merge held while armed, or a sub's, resumes. Needs a reason.
+   */
+  mergeAnyway(email: string, id: string, version: number, reason: string) {
+    return this.command(
+      email,
+      id,
+      version,
+      (glob, ctx, _board, facts) => machine.mergeAnyway(glob, reason, ctx, { continue: false, facts }),
+      { relations: true, rollout: true },
+    );
+  }
+
   /** Cancel merge: disarms "merge when checks pass". */
   cancelMerge(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx) => machine.cancelMerge(glob, ctx));
@@ -3132,6 +3125,18 @@ export class GlobService implements AutomaticRelations {
   signOffDecision(email: string, id: string, version: number) {
     return this.command(email, id, version, (glob, ctx, _board, facts) => machine.signOffDecision(glob, ctx, facts.rollout ?? null, facts.relations), {
       applies: 'decision',
+      rollout: true,
+      relations: true,
+    });
+  }
+
+  /**
+   * Sign off anyway: the `sign_off` relations holding a merged glob (approved labels, rollout done) or an accepted decision are
+   * overridden (logged with who and why) and it is signed off. Needs a reason.
+   */
+  signOffAnyway(email: string, id: string, version: number, reason: string) {
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.signOffAnyway(glob, reason, ctx, facts.rollout ?? null, facts.relations), {
+      applies: 'any',
       rollout: true,
       relations: true,
     });
@@ -3871,15 +3876,12 @@ export class GlobService implements AutomaticRelations {
     return found;
   }
 
-  /** The open card suggestions of these globs (a failed step, a mention slop was unsure of), by glob; those that name a glob the viewer can't see are left out. */
-  private async suggestionsOf(tx: Tx, viewer: string | null, globIds: readonly string[]): Promise<Map<string, RelationSuggestion[]>> {
+  /** The open card suggestions of these globs, by glob: a failed step's "is there a fix glob?" (old open mention rows are not shown). */
+  private async suggestionsOf(tx: Tx, globIds: readonly string[]): Promise<Map<string, RelationSuggestion[]>> {
     const found = new Map<string, RelationSuggestion[]>();
     const rows = globIds.length === 0 ? [] : await tx.listOpenSuggestions(globIds);
-    if (rows.length === 0) return found;
-    const mentioned = new Map((await tx.getGlobs([...new Set(rows.filter((r) => r.kind === 'mention').map((r) => r.mentionedId))])).map((g) => [g.id, g]));
     for (const row of rows) {
-      const other = mentioned.get(row.mentionedId);
-      if (row.kind === 'mention' && other !== undefined && (await this.sideOf(tx, viewer, row.boardId)(other.boardId))?.hidden === true) continue;
+      if (row.kind !== 'step_failed') continue;
       found.set(row.globId, [...(found.get(row.globId) ?? []), suggestionView(row)]);
     }
     return found;
@@ -4037,7 +4039,6 @@ export class GlobService implements AutomaticRelations {
           if (!(await tx.insertRelation(r))) throw new Error(`Relation from ${glob.id} to ${r.to} already exists`);
         }
         for (const e of edits) await tx.updateRelation(e.id, { overriddenAt: e.overriddenAt });
-        await this.closeCovering(tx, inserted, ctx.now);
         const external = await this.externalIds(tx, glob.boardId, [...before, ...inserted].map((r) => r.to));
         const logged = relationEvents(glob.id, ctx.actor?.email ?? null, ctx.now, before, write, inserted, external);
         // A change to the relations alone still moves the glob's version, so live updates and stale forms see it.
@@ -4089,18 +4090,8 @@ export class GlobService implements AutomaticRelations {
     }
     if (inserted.length > 0) {
       const external = await this.externalIds(tx, glob.boardId, inserted.map((r) => r.to));
-      await tx.appendEvents(inserted.map((r) => relationAdded(r, actor, at, external)));
-    }
-    await this.closeCovering(tx, inserted, at);
-  }
-
-  /** A relation between two globs answers any open suggestion about the pair (either way round): it is marked done with the relation. */
-  private async closeCovering(tx: Tx, rows: readonly Relation[], at: string): Promise<void> {
-    if (rows.length === 0) return;
-    const open = (await tx.listOpenSuggestions([...new Set(rows.flatMap((r) => [r.from, r.to]))])).filter((o) => o.kind === 'mention');
-    for (const o of open) {
-      const row = rows.find((r) => (r.from === o.globId && r.to === o.mentionedId) || (r.to === o.globId && r.from === o.mentionedId));
-      if (row !== undefined) await tx.updateRelationScan(o.globId, o.mentionedId, o.sentenceHash, { state: 'done', decision: 'added', relationId: row.id, decidedAt: at });
+      // The create-time classifier reads the plan only.
+      await tx.appendEvents(inserted.map((r) => relationAdded(r, actor, at, external, 'plan')));
     }
   }
 

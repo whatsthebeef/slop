@@ -20,6 +20,8 @@ const WORKING: Partial<Record<Action, string>> = {
   resolve_conflict: 'Fixing conflict…',
   start_again: 'Discarding…',
   merge: 'Merging…',
+  merge_anyway: 'Merging…',
+  sign_off_anyway: 'Signing off…',
   merge_continue: 'Merging…',
   retry_merge: 'Merging…',
   cancel_merge: 'Cancelling…',
@@ -35,7 +37,7 @@ export const mergeOutcomeText = (
   glob: { status: string; mergeMode?: string | null; failure?: { reason: string } | null; humanSteps?: readonly ListedHumanStep[] },
 ): string | null => {
   if (action === 'cancel_merge') return 'Merge cancelled';
-  if (action !== 'merge' && action !== 'merge_continue' && action !== 'retry_merge') return null;
+  if (action !== 'merge' && action !== 'merge_anyway' && action !== 'merge_continue' && action !== 'retry_merge') return null;
   const after = hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : '';
   if (glob.mergeMode === 'when_green' && glob.status === 'pr_open') return `Will merge when checks pass${after}`;
   if (glob.status === 'failed') return `Can't merge: ${glob.failure?.reason ?? 'the merge failed'}`;

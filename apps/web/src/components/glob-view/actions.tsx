@@ -26,6 +26,8 @@ import { startAgainConfirmation } from '@/lib/start-again';
 import { handoverConfirmation, handoverToShow } from '@/lib/handover';
 import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
+import { anywayConfirmation, anywayOf, reasonRequired } from '@/lib/anyway';
+import type { AnywayAction } from '@/lib/anyway';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
@@ -106,6 +108,8 @@ export const useGlobActions = ({
   const [confirmingReady, setConfirmingReady] = useState(false);
   // An action's Done asks for an optional note, and its Dismiss for a reason, before it ends the action.
   const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | null>(null);
+  // Start now, Merge anyway and Sign off anyway override what holds the glob back: they say what it is and ask why first.
+  const [confirmingAnyway, setConfirmingAnyway] = useState<AnywayAction | null>(null);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
   // "Why you're needed": the full box until the viewer acknowledges it, then one line.
@@ -119,6 +123,7 @@ export const useGlobActions = ({
     setConfirmingOversized(null);
     setBriefOpen(false);
     setFinishing(null);
+    setConfirmingAnyway(null);
   }, [glob.id]);
   // Dismissing a message is stored per person on the server; the page reloads the glob afterwards.
   const dismiss = (key: string, on: boolean) =>
@@ -176,6 +181,11 @@ export const useGlobActions = ({
       setFinishing(action);
       return;
     }
+    const overriding = anywayOf(action, glob);
+    if (overriding !== null) {
+      setConfirmingAnyway(overriding);
+      return;
+    }
     if (action === 'start_again') {
       setConfirmingAgain(true);
       return;
@@ -215,9 +225,25 @@ export const useGlobActions = ({
       if (await onAction(action, undefined, text)) setFinishing(null);
     });
 
+  /** Runs the overriding action with the reason typed in its confirmation: one request, whatever the clicks. */
+  const confirmAnyway = (action: AnywayAction, reason: string) =>
+    startAction(
+      pending,
+      running,
+      { action, version: glob.version, at: Date.now() },
+      glob,
+      () => onAction(action, undefined, reason),
+      setPending,
+    ).then((ok) => {
+      if (ok) setConfirmingAnyway(null);
+    });
+
   return {
     decision,
     human,
+    confirmingAnyway,
+    setConfirmingAnyway,
+    confirmAnyway,
     finishing,
     setFinishing,
     finish,
@@ -415,6 +441,46 @@ const FinishAction = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActions
           onClick={() => void state.finish(kind, text)}
         >
           {dismissing ? 'Dismiss' : 'Done'}
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+/** Start now, Merge anyway and Sign off anyway: what the glob is held for, and why it goes ahead (required for the last two). */
+const AnywayConfirmation = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
+  const [text, setText] = useState('');
+  const action = state.confirmingAnyway;
+  useEffect(() => setText(''), [action, ctx.glob.id]);
+  if (action === null) return null;
+  const says = anywayConfirmation(action, ctx.glob);
+  const needed = reasonRequired(action);
+  const brief = action === 'start_anyway' ? state.brief : null;
+  return (
+    <div
+      role="alertdialog"
+      aria-label={says.title}
+      className="grid gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+      data-testid="anyway-confirmation"
+      data-action={action}
+    >
+      <p data-testid="anyway-says">{says.says}</p>
+      {brief !== null && <p data-testid="handover-confirmation">{handoverConfirmation('start_anyway', brief)}</p>}
+      <label className="grid gap-1">
+        <span>{says.ask}</span>
+        <Input value={text} autoFocus maxLength={2000} data-testid="anyway-reason" onChange={(e) => setText(e.target.value)} />
+      </label>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => state.setConfirmingAnyway(null)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={state.busy || (needed && text.trim() === '')}
+          data-testid="confirm-anyway"
+          onClick={() => void state.confirmAnyway(action, text.trim())}
+        >
+          {says.title}
         </Button>
       </div>
     </div>
@@ -619,6 +685,7 @@ export const GlobActions = ({
             {group}
           </div>
           <FinishAction ctx={ctx} state={state} />
+          <AnywayConfirmation ctx={ctx} state={state} />
           {state.confirmingReady && (
             <div
               role="alert"

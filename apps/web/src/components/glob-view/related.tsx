@@ -1,4 +1,4 @@
-import { isHumanCategory } from '@slop/core';
+import { isFromMention, isHumanCategory } from '@slop/core';
 import type { ExternalGlob, Holding, RelationGate, RelationSource, RelationSuggestion, RelationUntil, Supersession } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
@@ -12,6 +12,7 @@ import { HumanIcon, MachineIcon } from '../actor-icons';
 import { SectionToggle } from '../section-toggle';
 import { Button } from '../ui/button';
 import { Input, Select } from '../ui/input';
+import { Tip } from '../ui/tip';
 import type { GlobViewContext } from './context';
 
 /** What a gate refuses until its target gets there, in words: "can't start until merged". */
@@ -27,7 +28,9 @@ const SOURCE_WORDS: Record<RelationSource, string> = {
   inferred: 'inferred by slop',
   learned: 'learned from a failed run',
   split: 'from the split',
-  auto: 'added automatically',
+  mention: 'from a mention',
+  // The old name of `mention`, on rows written before it.
+  auto: 'from a mention',
 };
 
 /** Accepts (writes the relation; a failed step's `glob` is the fix to link) or dismisses a card suggestion; resolves false when it failed. */
@@ -64,7 +67,7 @@ export interface RelatedGroups {
   readonly supersedes: readonly Supersession[];
   /** How many globs on boards the viewer is not on wait for this one. */
   readonly otherBoards: number;
-  /** Card suggestions from the automatic pass: possible prerequisites, supersessions and a failed step's fix. */
+  /** A failed step's open question, "is there a fix glob?" (a mentioned glob is never asked about: it becomes a relation). */
   readonly suggestions: readonly RelationSuggestion[];
 }
 
@@ -79,7 +82,7 @@ const rowOf = (h: Holding): RelatedRow => ({
   ...(h.external === undefined ? {} : { external: h.external }),
 });
 
-const HOW_WORDS = { met: 'done', deleted: 'deleted', dismissed: 'dismissed', overridden: 'started anyway' } as const;
+const HOW_WORDS = { met: 'done', deleted: 'deleted', dismissed: 'dismissed', overridden: 'forced through' } as const;
 
 /** The Related section's content: the glob's relations in groups; null when it has none (or the API is older and sends none). */
 export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
@@ -165,6 +168,7 @@ export const Row = ({
 }) => {
   const hidden = row.external?.hidden === true;
   const reason = (row.reason ?? '').trim();
+  const fromMention = isFromMention(row.source);
   return (
     <li data-testid={`related-row-${row.id}`}>
       {hidden ? (
@@ -178,16 +182,26 @@ export const Row = ({
       )}
       <span className="text-muted-foreground"> · {row.words}</span>
       {how !== undefined && <span className="text-muted-foreground"> ({how})</span>}
-      {reason !== '' && <span className="text-muted-foreground">: {row.source === 'auto' ? `“${reason}”` : reason}</span>}
+      {reason !== '' && !fromMention && <span className="text-muted-foreground">: {reason}</span>}
       {lacksReason(row) && (
         <span className="ml-2 rounded bg-muted px-1.5 text-xs text-muted-foreground" data-testid={`no-reason-${row.id}`}>
           no reason given
         </span>
       )}
-      <span className="ml-2 inline-flex items-center gap-1 text-xs text-muted-foreground" data-testid={row.source === 'auto' ? `auto-badge-${row.id}` : undefined}>
-        {row.source === 'person' ? <HumanIcon decorative /> : <MachineIcon decorative />}
-        {SOURCE_WORDS[row.source]}
-      </span>
+      {fromMention ? (
+        // The sentence that made slop add the relation is the chip's hover, so people can see why it is there.
+        <Tip text={reason === '' ? 'Slop added this from a glob ID in the text' : reason} className="ml-2">
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" data-testid={`mention-badge-${row.id}`}>
+            <MachineIcon decorative />
+            {SOURCE_WORDS[row.source]}
+          </span>
+        </Tip>
+      ) : (
+        <span className="ml-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
+          {row.source === 'person' ? <HumanIcon decorative /> : <MachineIcon decorative />}
+          {SOURCE_WORDS[row.source]}
+        </span>
+      )}
       {row.dismissible && onDismiss !== null && <DismissRelation id={row.id} relationId={row.relationId} onDismiss={onDismiss} />}
     </li>
   );
@@ -227,20 +241,11 @@ const SupersessionLine = ({
   );
 };
 
-const SUGGESTION_WORDS: Record<RelationSuggestion['kind'], { readonly yes: string; readonly no: string }> = {
-  prerequisite: { yes: 'Add relation', no: 'Not a prerequisite' },
-  reverse: { yes: 'Add relation', no: 'Not related' },
-  supersedes: { yes: 'Mark superseded', no: 'Not superseded' },
-  step_failed: { yes: 'Link a glob', no: 'No fix needed' },
-};
-
-/** One card suggestion: its text with the two answers; a failed step also takes the ID of the glob that fixes it. */
-const SuggestionItem = ({ suggestion, onSuggestion }: { suggestion: RelationSuggestion; onSuggestion: SuggestionHandler | undefined }) => {
+/** A failed step's question: its text with the two answers ("Link a glob" takes the ID of the glob that fixes it). */
+const FailedStepItem = ({ suggestion, onSuggestion }: { suggestion: RelationSuggestion; onSuggestion: SuggestionHandler | undefined }) => {
   const [fix, setFix] = useState('');
   const [working, setWorking] = useState(false);
   const sending = useRef(false);
-  const words = SUGGESTION_WORDS[suggestion.kind];
-  const failed = suggestion.kind === 'step_failed';
   const answer = (action: 'accept' | 'dismiss', glob?: string) => {
     if (onSuggestion === undefined || sending.current) return;
     sending.current = true;
@@ -256,28 +261,26 @@ const SuggestionItem = ({ suggestion, onSuggestion }: { suggestion: RelationSugg
       <span>{suggestion.text}</span>
       {onSuggestion !== undefined && (
         <span className="flex flex-wrap items-center gap-2">
-          {failed && (
-            <Input
-              className="h-7 w-32 text-xs"
-              aria-label="Glob that fixes it"
-              placeholder="s15b6"
-              value={fix}
-              onChange={(e) => setFix(e.target.value)}
-              data-testid="suggestion-fix-glob"
-            />
-          )}
+          <Input
+            className="h-7 w-32 text-xs"
+            aria-label="Glob that fixes it"
+            placeholder="s15b6"
+            value={fix}
+            onChange={(e) => setFix(e.target.value)}
+            data-testid="suggestion-fix-glob"
+          />
           <Button
             size="sm"
             variant="outline"
             className="h-6 px-2 text-xs"
-            disabled={working || (failed && fixId === '')}
+            disabled={working || fixId === ''}
             data-testid="suggestion-accept"
-            onClick={() => answer('accept', failed ? fixId : undefined)}
+            onClick={() => answer('accept', fixId)}
           >
-            {words.yes}
+            Link a glob
           </Button>
           <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={working} data-testid="suggestion-dismiss" onClick={() => answer('dismiss')}>
-            {words.no}
+            No fix needed
           </Button>
         </span>
       )}
@@ -428,7 +431,7 @@ export const RelatedSection = ({
   /** The ✕ on a row: the relation is not a dependency; resolves false when it failed. */
   onDismissEdge: (relationId: string) => Promise<boolean>;
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
-  /** The answers on a suggestion; without it the suggestions show without buttons. */
+  /** The answers on a failed step's question; without it the question shows without buttons. */
   onSuggestion?: SuggestionHandler;
 }) => {
   const { glob } = ctx;
@@ -496,9 +499,9 @@ export const RelatedSection = ({
       {groups !== null &&
         groups.supersedes.map((o) => <SupersessionLine key={o.id} boardId={boardId} other={o} lead="Supersedes" testId={`related-supersedes-${o.id}`} onDismiss={null} />)}
       {groups !== null && groups.suggestions.length > 0 && (
-        <Group name="Suggestions" testId="related-suggestions">
+        <Group name="Failed step" testId="related-failed-step">
           {groups.suggestions.map((sg) => (
-            <SuggestionItem key={sg.id} suggestion={sg} onSuggestion={onSuggestion} />
+            <FailedStepItem key={sg.id} suggestion={sg} onSuggestion={onSuggestion} />
           ))}
         </Group>
       )}

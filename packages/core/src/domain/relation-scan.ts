@@ -12,7 +12,7 @@ import type { HeldBack } from './relations.js';
 import type { RelationGate, RelationUntil } from './types.js';
 
 /** A reason quoted from a sentence is cut to this many characters. */
-export const REASON_MAX_CHARS = 240;
+export const REASON_MAX_CHARS = 300;
 
 const normalise = (sentence: string): string => sentence.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -80,9 +80,21 @@ export const supersedeCuesIn = (sentence: string): RelationCue[] => cuesOf(sente
 /** What a decision about a sentence is remembered under: the same sentence (any case, any spacing) hashes the same. */
 export const sentenceHash = (sentence: string): string => hash(normalise(sentence));
 
-/** The sentence as a relation's reason: white space collapsed, at most `REASON_MAX_CHARS` characters (cut with an ellipsis). */
+/** Markdown in a sentence as plain text: links and images keep their words, code, emphasis and strike-through marks and quote and heading marks go. */
+const plainText = (sentence: string): string =>
+  sentence
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`+([^`]*)`+/g, '$1')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/~~(.+?)~~/g, '$1')
+    // A single `*word*` or `_word_` is emphasis only at word edges: `snake_case` and `a * b` stay as written.
+    .replace(/(^|[\s(])([*_])(?=\S)(.+?)(?<=\S)\2(?=$|[\s).,;:!?])/g, '$1$3')
+    .replace(/^\s*(?:>\s*)+/, '')
+    .replace(/^\s*#{1,6}\s+/, '');
+
+/** The sentence as a relation's reason: plain text (no markdown marks), white space collapsed, at most `REASON_MAX_CHARS` characters (cut with an ellipsis). */
 export const quoteReason = (sentence: string): string => {
-  const one = sentence.replace(/\s+/g, ' ').trim();
+  const one = plainText(sentence).replace(/\s+/g, ' ').trim();
   return one.length <= REASON_MAX_CHARS ? one : `${one.slice(0, REASON_MAX_CHARS - 1).trimEnd()}…`;
 };
 
@@ -93,7 +105,10 @@ export const quoteReason = (sentence: string): string => {
 export const RELATION_SCAN_KINDS = ['mention', 'step_failed'] as const;
 export type RelationScanKind = (typeof RELATION_SCAN_KINDS)[number];
 
-/** What the pass decided: added a relation, history, context, not a prerequisite (a person said no), suggested (reverse or supersede), or unsure. */
+/**
+ * What the pass decided: added a relation, history, context, not a prerequisite (a person said no). `suggested` and `unsure` are
+ * old rows only (nothing writes them now: a mention the pass was unsure of becomes a relation), kept so stored rows type-check.
+ */
 export const RELATION_SCAN_DECISIONS = ['added', 'history', 'context', 'not_prerequisite', 'suggested', 'unsure'] as const;
 export type RelationScanDecision = (typeof RELATION_SCAN_DECISIONS)[number];
 
@@ -125,14 +140,17 @@ export interface RelationScanRow {
 /** What can change on a stored decision. */
 export type RelationScanPatch = Partial<Pick<RelationScanRow, 'decision' | 'gate' | 'reason' | 'relationId' | 'state' | 'decidedAt'>>;
 
-/** A card suggestion, as the glob view and the board list carry it (non-blocking; a person accepts or dismisses it). */
+/**
+ * An open question the glob view carries: a failed rollout step asking "is there a fix glob?" (non-blocking; a person links a glob
+ * or says none is needed). A mentioned glob is never asked about: the pass adds the relation (`source: 'mention'`).
+ */
 export interface RelationSuggestion {
   /** Names the row: `<mentionedId>:<sentenceHash>`, what the accept and dismiss routes take. */
   readonly id: string;
-  readonly kind: 'prerequisite' | 'supersedes' | 'reverse' | 'step_failed';
-  /** One line for the card: "Mentions s15t220: is it a prerequisite?" with the quoted sentence. */
+  readonly kind: 'step_failed';
+  /** One line for the card: the failed step's title and note. */
   readonly text: string;
-  /** The glob it is about; null for a failed step. */
+  /** The glob it is about; always null for a failed step. */
   readonly mentioned: string | null;
   readonly gate?: RelationGate;
   /** Set for `step_failed`. */
@@ -152,6 +170,10 @@ export interface RelationListExtras {
 // ---------------------------------------------------------------------------
 // Applying an automatic pass (implemented by GlobService)
 
+/** Which text of the glob a mention was read from (the log says "from a mention in the plan"). */
+export const MENTION_ORIGINS = ['plan', 'implementation record', 'attachment', 'step'] as const;
+export type MentionOrigin = (typeof MENTION_ORIGINS)[number];
+
 /** One relation the pass wants to add: the other glob, the gate and until, and the sentence it came from (the reason is its quote). */
 export interface AutomaticAdd {
   /** The other glob. */
@@ -161,6 +183,8 @@ export interface AutomaticAdd {
   /** At most `REASON_MAX_CHARS` characters: `quoteReason(sentence)`. */
   readonly reason: string;
   readonly sentence: string;
+  /** Where the sentence was read from, for the log. */
+  readonly from?: MentionOrigin;
   /** `holding` (default): this glob waits for `to`. `holds_back`: the row goes on `to` and points at this glob (a fix or a follow-up). */
   readonly direction?: 'holding' | 'holds_back';
 }
@@ -175,7 +199,7 @@ export interface AutomaticResult {
   readonly stale: boolean;
 }
 
-/** What the relation scan needs from `GlobService`: one transaction that re-reads the plan hash and writes `source: 'auto'` rows. */
+/** What the relation scan needs from `GlobService`: one transaction that re-reads the plan hash and writes `source: 'mention'` rows. */
 export interface AutomaticRelations {
   applyAutomatic(globId: string, planHash: string, adds: readonly AutomaticAdd[], actorEmail: string | null): Promise<AutomaticResult>;
 }

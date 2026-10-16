@@ -81,6 +81,20 @@ export const actionPresentation = (
             tip: 'Starts before what it waits for has merged; its branch lacks their changes',
             placement: 'more',
           };
+    case 'merge_anyway':
+      return {
+        label: 'Merge anyway',
+        icon: 'machine',
+        tip: 'Merges although a relation holds it back: you say why, the relation is marked overridden and who did it is recorded',
+        placement: 'more',
+      };
+    case 'sign_off_anyway':
+      return {
+        label: 'Sign off anyway',
+        icon: 'human',
+        tip: 'Signs off although a relation holds it back: you say why, the relation is marked overridden and who did it is recorded',
+        placement: 'more',
+      };
     case 'pick_up':
       return glob.status === 'planning'
         ? {

@@ -101,7 +101,9 @@ export const GlobPage = () => {
         if (path === null) return Promise.resolve(false);
         // Copied before the request: browsers refuse clipboard writes once the click's user gesture has passed.
         const finish = copyCommand(action, open.id, open.type);
-        return change(() => api.action(open.id, path, open.version, anyway)).then(async (ok) => {
+        // Start now, Merge anyway and Sign off anyway carry the reason typed in their confirmation.
+        const reason = action === 'start_anyway' || action === 'merge_anyway' || action === 'sign_off_anyway' ? text : undefined;
+        return change(() => api.action(open.id, path, open.version, anyway, reason)).then(async (ok) => {
           const after = client.getQueryData<GlobView>(globKey(open.id));
           const said = ok && after !== undefined ? mergeOutcomeText(action, after) : null;
           if (said !== null) toast(said);
