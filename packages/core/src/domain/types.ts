@@ -510,6 +510,10 @@ export interface Glob {
 export const ENVIRONMENT_ROLES = ['integration', 'release'] as const;
 export type EnvironmentRole = (typeof ENVIRONMENT_ROLES)[number];
 
+/** How slop learns of an observed environment's deploys: a pipeline reports them (the default), or a person records each one. */
+export const ENVIRONMENT_DEPLOY_KNOWN = ['pipeline', 'manual'] as const;
+export type EnvironmentDeployKnown = (typeof ENVIRONMENT_DEPLOY_KNOWN)[number];
+
 export interface Environment {
   readonly name: string;
   readonly allowBranchDeploy: boolean;
@@ -517,6 +521,8 @@ export interface Environment {
   readonly subDefault?: true;
   /** Set when the board's pipelines deploy the base branch or a release ref here and report it to slop. */
   readonly role?: EnvironmentRole;
+  /** Only with a role: `manual` when a person records each deploy in slop. Absent means a pipeline reports them (`report-deploy.sh`). */
+  readonly deployKnown?: 'manual';
   /** At most one per board, and only a release environment: deploying a glob here before sign-off is warned about. */
   readonly production?: true;
 }
