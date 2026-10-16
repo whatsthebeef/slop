@@ -79,7 +79,7 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     <QuestionsSection ctx={ctx} onAnswer={onAnswerQuestion} onDismiss={onDismissQuestion} />
   ),
   conflict: ({ ctx }) => <ConflictSection ctx={ctx} />,
-  problem: ({ ctx, nowState, actions }) => <ProblemSection ctx={ctx} state={nowState} actions={actions} />,
+  problem: ({ ctx, nowState }) => <ProblemSection ctx={ctx} state={nowState} />,
   escalation: ({ ctx, section }) => (
     <EscalationSection ctx={ctx} startOpen={section === 'escalation'} />
   ),

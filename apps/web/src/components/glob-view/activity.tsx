@@ -27,13 +27,13 @@ const ActorMark = ({ actor }: { actor: ActivityEntry['actor'] }) =>
   ) : actor === 'github' ? (
     <GitPullRequest className="size-3.5" aria-hidden />
   ) : (
-    <TriangleAlert className="size-3.5 text-required" aria-hidden />
+    <TriangleAlert className="size-3.5 text-red" aria-hidden />
   );
 
 const Entry = ({ entry, now }: { entry: ActivityEntry; now: number }) => {
   const external = entry.link !== null && /^https?:\/\//.test(entry.link);
   return (
-    <li className="flex min-w-0 items-center gap-2" data-testid="activity-entry" data-actor={entry.actor} title={entry.title}>
+    <li className={`flex min-w-0 items-center gap-2${entry.actor === 'warn' ? ' text-red' : ''}`} data-testid="activity-entry" data-actor={entry.actor} title={entry.title}>
       <ActorMark actor={entry.actor} />
       <span className="min-w-0 flex-1 truncate">
         {entry.text}
@@ -73,11 +73,11 @@ export const ActivityLog = ({
   actions: GlobActionsState;
 }) => {
   const { board, glob } = ctx;
-  const { move, turn, steps, seen, turnDismissed } = state;
+  const { move, turn, steps, problem, turnDismissed } = state;
   const [all, setAll] = useState(false);
   useEffect(() => {
     setAll(false);
-  }, [glob.id, seen?.key]);
+  }, [glob.id, problem?.kind]);
   const feed = activityOf(glob, board.repo, steps, actions.viewer?.email);
   const shown = all ? feed : feed.slice(0, ACTIVITY_SHOWN);
   const now = Date.now();

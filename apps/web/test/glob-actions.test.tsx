@@ -213,7 +213,7 @@ describe('glob view: main button', () => {
     renderGlob(view({ allowedActions: ['delete'] }));
     expect(mainButton()).toBeNull();
     expect(screen.queryByTestId('more-actions')).toBeNull();
-    expect(screen.queryByTestId('glob-actions')).toBeNull();
+    expect(within(screen.getByTestId('glob-actions')).queryAllByRole('button')).toHaveLength(0);
   });
 
   it('while merging, Cancel merge leads and the ▾ holds Review code and Pick up', async () => {
@@ -937,27 +937,45 @@ describe('glob view: split moves in the action ▾', () => {
     expect(within(panel).queryAllByRole('button')).toHaveLength(0);
   });
 
-  describe('the top bar and the group tag', () => {
-    it('reads "ID · type ▾ · list": the type control sits in the sticky bar, not in the action row', () => {
+  describe('the top bar, the tags and the action line', () => {
+    it('keeps the top bar to identity: ID · list; the type control sits with the group tag under the title', () => {
       renderGlob(view({ type: 'same', list: 'planning', group: 'glob-view-layout' }));
       const bar = screen.getByTestId('glob-header');
-      const [id, type, list] = ['glob-id', 'glob-type', 'glob-list'].map((t) => within(bar).getByTestId(t)) as [HTMLElement, HTMLElement, HTMLElement];
-      expect(id.compareDocumentPosition(type) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(type.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(bar).queryByTestId('glob-type')).toBeNull();
+      expect(within(bar).getByTestId('glob-list').textContent).toBe('Planning');
+      const chips = screen.getByTestId('glob-chips');
+      const group = within(chips).getByTestId('group-chip');
+      const type = within(chips).getByTestId('glob-type');
+      expect(group.compareDocumentPosition(type) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(type.textContent).toBe('same');
-      expect(list.textContent).toBe('Planning');
+      expect(type.className).toContain('text-[10px]');
+      expect(group.className).toContain('text-[10px]');
+      expect(type.className).toContain('font-mono');
       expect(within(screen.getByTestId('glob-actions')).queryByTestId('glob-type')).toBeNull();
       expect(screen.getAllByTestId('glob-type')).toHaveLength(1);
     });
 
-    it('puts the group tag at the right of the action row and nowhere else, with no label tags under the title', () => {
+    it('puts the group tag beside the type control and nowhere else, with no label tags under the title', () => {
       renderGlob(view({ group: 'glob-view-layout', labels: { FR: 'required', CR: 'required' } }));
-      const row = screen.getByTestId('glob-actions');
-      expect(within(row).getByTestId('group-chip').textContent).toBe('glob-view-layout');
-      expect(within(row).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
-      expect(row.lastElementChild?.contains(within(row).getByTestId('group-chip'))).toBe(true);
+      const chips = screen.getByTestId('glob-chips');
+      expect(within(chips).getByTestId('group-chip').textContent).toBe('glob-view-layout');
+      expect(within(chips).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
+      expect(within(screen.getByTestId('glob-actions')).queryByTestId('group-chip')).toBeNull();
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
+    });
+
+    it('shows the Arm system label and the branch on a quiet line beside the action row, not in the top bar', () => {
+      const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
+      renderGlob(view({ branch: 's1t1', humanSteps: [step] }));
+      const row = screen.getByTestId('glob-actions');
+      const info = within(row).getByTestId('action-line-info');
+      expect(within(info).getByTestId('arm-system-label').textContent).toBe('Arm system');
+      expect(within(info).getByTestId('glob-branch').textContent).toBe('s1t1');
+      expect(info.className).toContain('ml-auto');
+      expect(info.className).toContain('flex-wrap');
+      expect(within(screen.getByTestId('glob-header')).queryByTestId('arm-system-label')).toBeNull();
+      expect(within(screen.getByTestId('glob-header')).queryByTestId('glob-branch')).toBeNull();
     });
   });
 

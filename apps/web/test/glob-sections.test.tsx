@@ -8,7 +8,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { GlobDetail } from '../src/components/glob-dialog';
 import type { BoardView, GlobView } from '../src/lib/api';
 import { board as coreBoard, glob as coreGlob } from '../../../packages/core/test/fixtures';
-import { handoverKey } from '../src/lib/dismissals';
 
 const board: BoardView = { ...coreBoard, role: 'dev' };
 
@@ -194,8 +193,9 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.queryByTestId('machine-steps')).toBeNull();
     // The header chip is Planning-only (s15b86); this glob is pr_open, so the reason lives in the disclosure.
     expect(screen.queryByTestId('escalation-chip')).toBeNull();
-    expect(screen.getAllByText(/Error: boom/)).toHaveLength(1);
-    expect(screen.getByTestId('problem-block').textContent).toContain('Error: boom');
+    // Someone is on it: no red block while the fix run works (the corner says "fixing CI").
+    expect(screen.queryByTestId('problem-block')).toBeNull();
+    expect(screen.queryByText(/Error: boom/)).toBeNull();
     // Escalation reason appears only in the escalation block, never in Now.
     expect(screen.getByTestId('activity').textContent).not.toContain('Touches auth');
   });
@@ -208,12 +208,8 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('glob-header').textContent).not.toMatch(/branch|v\d/);
     const log = screen.getByTestId('activity');
     expect(log.id).toBe('glob-activity');
-    const problem = screen.getByTestId('problem-block');
-    expect(problem.textContent).toContain('Error: boom');
+    expect(screen.queryByTestId('problem-block')).toBeNull();
     expect(log.textContent).not.toContain('Error: boom');
-    const actions = document.querySelector('[data-section="actions"]');
-    expect(actions).not.toBeNull();
-    if (actions !== null) expect(problem.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("the viewer's turn: the headline and the handover brief inside the details", () => {
@@ -221,7 +217,7 @@ describe('glob view: escalation, dependencies and edit fields', () => {
       view({
         status: 'pr_open',
         pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
-        implementer: 'dev@example.com',
+        implementer: null,
         allowedActions: ['pick_up'],
         move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
         handover: { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] },
@@ -425,63 +421,67 @@ describe('glob view: dismissable status messages', () => {
     view({
       status: 'failed',
       failure: { reason: 'Could not reproduce the bug: a whole paragraph of detail', at: AT },
-      implementer: 'dev@example.com',
+      implementer: null,
       allowedActions: ['pick_up'],
       ...patch,
     });
-  const buttons = () => screen.getAllByRole('button').map((b) => b.textContent);
 
-  it('shows the long failure with a dismiss x that stores failure.at through onDismiss', async () => {
-    const cb = renderGlob(failed());
+  it('shows the long failure with no dismiss control', () => {
+    renderGlob(failed({ implementer: null }));
     expect(screen.getByTestId('status-line').textContent).toContain('whole paragraph');
-    await userEvent.click(screen.getByTestId('dismiss-message'));
-    expect(cb.onDismiss).toHaveBeenCalledWith(`failure:${AT}`, true);
+    expect(within(screen.getByTestId('problem-block')).queryByTestId('dismiss-message')).toBeNull();
+    expect(screen.queryByTestId('show-again')).toBeNull();
   });
 
-  it('collapses a dismissed failure to the short label and keeps the main action; no expander', () => {
-    renderGlob(failed());
-    const before = buttons().filter((b) => b !== '' && !/Got it/.test(b));
-    cleanup();
-    renderGlob(failed({ dismissedKeys: [`failure:${AT}`] }));
-    const line = screen.getByTestId('status-line');
-    expect(line.getAttribute('data-dismissed')).toBe('true');
-    expect(screen.getByTestId('block-head').textContent).toContain('Run failed');
-    expect(document.body.textContent).not.toContain('whole paragraph');
-    expect(before.length).toBeGreaterThan(0);
-    expect(buttons().filter((b) => b !== '' && b !== 'Show again')).toEqual(before);
-    expect(screen.queryByTestId('show-details')).toBeNull();
-  });
-
-  it('shows a new failure again, undismissed', () => {
-    renderGlob(failed({ dismissedKeys: [`failure:${AT}`], failure: { reason: 'A newer failure', at: '2026-10-09T09:00:00.000Z' } }));
-    expect(screen.getByTestId('status-line').textContent).toContain('A newer failure');
+  it('ignores an old stored dismissal: the failure shows in full', () => {
+    renderGlob(failed({ implementer: null, dismissedKeys: [`failure:${AT}`] }));
+    expect(screen.getByTestId('status-line').textContent).toContain('whole paragraph');
     expect(screen.getByTestId('status-line').getAttribute('data-dismissed')).toBeNull();
   });
 
-  it('undoes a dismissal with Show again', async () => {
-    const cb = renderGlob(failed({ dismissedKeys: [`failure:${AT}`] }));
-    await userEvent.click(screen.getByTestId('show-again'));
-    expect(cb.onDismiss).toHaveBeenCalledWith(`failure:${AT}`, false);
+  it('shows a new failure with its new reason', () => {
+    renderGlob(failed({ implementer: null, failure: { reason: 'A newer failure', at: '2026-10-09T09:00:00.000Z' } }));
+    expect(screen.getByTestId('status-line').textContent).toContain('A newer failure');
   });
 
-  it('handover Got it stores the brief key through the same onDismiss, and a dismissed brief is collapsed', async () => {
+  it('hides the problem block while a person has picked the glob up', () => {
+    renderGlob(failed({ implementer: 'dev@example.com' }));
+    expect(screen.queryByTestId('problem-block')).toBeNull();
+  });
+
+  it('hides the problem block while a fix run is queued or running, and brings it back when the run has failed', () => {
+    const fixing = (state: 'queued' | 'active' | 'watching') =>
+      failed({ implementer: null, currentRun: { id: 'r2', state, outcome: null } as unknown as GlobView['currentRun'] });
+    for (const state of ['queued', 'active', 'watching'] as const) {
+      renderGlob(fixing(state));
+      expect(screen.queryByTestId('problem-block')).toBeNull();
+      cleanup();
+    }
+    renderGlob(
+      failed({
+        implementer: null,
+        failure: { reason: 'The fix run failed too', at: '2026-10-09T09:00:00.000Z' },
+        currentRun: { id: 'r2', state: 'ended', outcome: 'failed' } as unknown as GlobView['currentRun'],
+      }),
+    );
+    expect(screen.getByTestId('status-line').textContent).toContain('The fix run failed too');
+  });
+
+  it('shows the handover brief with no Got it, and no read state', () => {
     const brief = { why: ['Checks failed on abcdef1'], next: 'Reproduce and fix', detail: [] };
-    const turn = (patch: Partial<GlobView> = {}) =>
+    renderGlob(
       view({
         status: 'pr_open',
         pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
-        implementer: 'dev@example.com',
+        implementer: null,
         allowedActions: ['pick_up'],
         move: { holder: 'you', reason: 'Merge', since: null, who: 'dev@example.com' },
         handover: brief,
-        ...patch,
-      });
-    const cb = renderGlob(turn());
-    await userEvent.click(within(screen.getByTestId('problem-block')).getByTestId('handover-acknowledge'));
-    expect(cb.onDismiss).toHaveBeenCalledWith(handoverKey(brief), true);
-    cleanup();
-    renderGlob(turn({ dismissedKeys: [handoverKey(brief)] }));
-    expect(within(screen.getByTestId('handover-box')).queryByRole('button', { name: /^Got it/ })).toBeNull();
+      }),
+    );
+    const block = screen.getByTestId('problem-block');
+    expect(within(block).queryByTestId('handover-acknowledge')).toBeNull();
+    expect(within(block).queryByTestId('handover-expand')).toBeNull();
   });
 });
 
@@ -493,7 +493,7 @@ describe('glob view: Now panel for a stalled failure', () => {
     view({
       status: 'failed',
       failure,
-      implementer: 'dev@example.com',
+      implementer: null,
       allowedActions: ['pick_up'],
       move: { holder: 'stalled', reason: REASON, label, since: AT, cause: 'failed' },
       handover: brief,
@@ -585,6 +585,8 @@ describe('glob view: Activity log', () => {
     expect(failure?.textContent).toContain('reason');
     expect(failure?.textContent).not.toContain('line two');
     expect(failure?.getAttribute('title')).toContain('line two');
+    expect(failure?.className).toContain('text-red');
+    expect(failure?.querySelector('svg')?.getAttribute('class')).toContain('text-red');
     expect(screen.getByTestId('activity-show-all').textContent).toBe('Show less');
     await user.click(screen.getByTestId('activity-show-all'));
     expect(screen.getAllByTestId('activity-entry')).toHaveLength(8);

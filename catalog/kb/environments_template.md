@@ -1,6 +1,6 @@
 ---
 catalog: environments_template
-version: 2
+version: 3
 area: environments
 audience: [implementer, tester, change_reviewer]
 description: The board's environments and what each is for (branch deploys, integration, release, production). Template — replace every <placeholder> in your board's copy.
@@ -25,11 +25,20 @@ Each takes glob branches; the last successful deploy is what runs there, and ano
 
 Give it the `integration` role in board settings. Its pipeline reports each deploy with `.sstor/report-deploy.sh <environment>` (from the slop catalog), and slop then shows the environment on every glob whose merge commit the deployed commit contains.
 
+## How deploys are known
+
+Each observed environment (one with a role) says in board settings how slop learns of its deploys:
+
+- **Pipeline** (the default): the pipeline reports each deploy with `report-deploy.sh`. An environment that has never reported says so on the board, with the line to add.
+- **Manual**: nobody's pipeline deploys it, so a person records each release in slop (**Record a deploy to <env>** in the board header's environments panel, or on the environment's settings row), choosing a branch, tag or commit. Slop then treats it as a reported deploy: contained globs show the environment on their cards and their `after_deploy:<env>` steps fall due. A glob's own **Mark deployed to <env>** stays for one-offs.
+
+Say here which of your environments are manual. When you write a rollout step for a manual environment, remember it falls due only once someone records the release, not when a pipeline finishes.
+
 ## Release and production
 
 <Release environments and how releases are cut. Production deploys are manual; say who may run them and how.>
 
-Give each the `release` role in board settings, and mark the production one. Their pipelines report deploys with `.sstor/report-deploy.sh` too. Deploying to production before a glob is signed off is allowed, but its card warns about it.
+Give each the `release` role in board settings, and mark the production one. Their pipelines report deploys with `.sstor/report-deploy.sh` too, or, when the release is cut by hand, set the environment to manual and record each release in slop. Deploying to production before a glob is signed off is allowed, but its card warns about it.
 
 ## Off limits
 

@@ -18,7 +18,7 @@ describe('Activity log with long text', () => {
       { id: 'e1', actor: 'machine', text: long, at: null, link: null, linkLabel: '', title: long, count: 1, command: null },
     ]);
     const ctx = { board: { repo: 'o/r' }, glob: { id: 's1t1', pr: null } } as unknown as GlobViewContext;
-    const state = { move: null, turn: null, steps: [], brief: null, problem: null, seen: null, turnDismissed: false } as unknown as NowState;
+    const state = { move: null, turn: null, steps: [], brief: null, problem: null, turnDismissed: false } as unknown as NowState;
     render(
       <MemoryRouter>
         <ActivityLog ctx={ctx} state={state} actions={{ busy: false } as unknown as GlobActionsState} />
