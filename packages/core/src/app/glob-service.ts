@@ -3116,7 +3116,8 @@ export class GlobService implements AutomaticRelations {
 
   /**
    * Merge anyway: the `merge` relations holding a ready PR are overridden (logged with who and why) and the merge goes the way
-   * Merge would have taken it. A merge held while armed, or a sub's, resumes. Needs a reason.
+   * Merge would have taken it. A merge held while armed, or a sub's, resumes. Needs a reason. Unlike `merge` it keeps the default
+   * `applies: 'work'` rather than `'prepared'`: actions are only held by start relations and never offer merge_anyway.
    */
   mergeAnyway(email: string, id: string, version: number, reason: string) {
     return this.command(

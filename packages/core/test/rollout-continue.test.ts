@@ -489,6 +489,17 @@ describe('through the service', () => {
     expect(unwrap(await globs.merge(DEV, without.id, without.version)).status).toBe('merging');
   });
 
+  it('merge anyway loads the rollout steps: a same with steps is merged and kept open for them, not closed', async () => {
+    const held = await readyGlob();
+    const blocker = unwrap(await globs.create(DEV, input({ title: 'Blocker' })));
+    unwrap(await globs.addHumanStep(DEV, held.id, null, { title: 'Roll out' }));
+    unwrap(await globs.addRelation(DEV, held.id, null, { to: blocker.id, gate: 'merge', reason: 'merges after it' }, 'held_by', 'person'));
+    const merging = unwrap(await globs.mergeAnyway(DEV, held.id, (await peek(held.id)).version, 'the blocker is unrelated'));
+    expect(merging).toMatchObject({ status: 'merging', mergeMode: null });
+    const status = store.state.events.filter((e) => e.globId === held.id && e.type === 'StatusChanged').at(-1);
+    expect(status?.data).toMatchObject({ to: 'merging', mode: 'rollout' });
+  });
+
   it('pick up works on a merged glob while a step is open, and not after', async () => {
     const g = await readyGlob();
     const step = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out' }));
