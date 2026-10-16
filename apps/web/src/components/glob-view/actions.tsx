@@ -29,7 +29,7 @@ import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-l
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
-import { ArmSystemLabel, EnvironmentChips } from '../glob-card';
+import { ArmSystemLabel } from '../glob-card';
 import { armLabel } from '@/lib/rollout-stages';
 import { api } from '@/lib/api';
 import { globEnvironmentsKey } from '@/lib/live';
@@ -329,7 +329,25 @@ const EnvironmentLine = ({ ctx }: { ctx: GlobViewContext }) => {
       },
     ];
   });
-  return held.length === 0 ? null : <EnvironmentChips environments={held} />;
+  return (
+    <>
+      {held.map((env) => {
+        const warned = env.warning === 'before_sign_off';
+        const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}`;
+        return (
+          <Tip key={env.environment} text={tip}>
+            <span
+              className={`${META} whitespace-nowrap ${warned ? 'text-required' : 'text-signal-strong'}`}
+              data-testid="environment-chip"
+              data-warning={env.warning}
+            >
+              {env.environment} ✓
+            </span>
+          </Tip>
+        );
+      })}
+    </>
+  );
 };
 
 /**
