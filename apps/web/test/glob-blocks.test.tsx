@@ -256,4 +256,89 @@ describe('the blocks above the action button', () => {
     );
     expect(document.querySelectorAll('[data-block]')).toHaveLength(0);
   });
+  describe('normal states are not problems', () => {
+    const calm = {
+      conflict: null,
+      handover: null,
+      escalation: null,
+      failure: null,
+      allowedActions: [],
+      labels: {},
+    };
+
+    it('shows no problem block for a merging glob, and the corner status still says it', () => {
+      renderGlob(
+        view({
+          ...calm,
+          status: 'merging',
+          list: 'doing',
+          pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+          headChecks: { sha: 'abcdef1234567', state: 'pending' },
+        }),
+      );
+      expect(screen.queryByTestId('problem-block')).toBeNull();
+      expect(screen.queryByTestId('dismiss-message')).toBeNull();
+      expect(screen.getByTestId('header-status').textContent).toContain('merging');
+    });
+
+    it('shows the due steps and no Rollout problem block for a merged glob with steps due', () => {
+      renderGlob(
+        view({
+          ...calm,
+          status: 'reviewing',
+          list: 'doing',
+          pr: { number: 7, state: 'merged', headSha: 'abcdef1234567' },
+          headChecks: null,
+          humanSteps: [dueStep],
+        }),
+      );
+      expect(screen.queryByTestId('problem-block')).toBeNull();
+      expect(screen.getByTestId('due-steps')).not.toBeNull();
+    });
+
+    it('shows no problem block when the base is red', () => {
+      renderGlob(
+        view({
+          ...calm,
+          status: 'reviewing',
+          list: 'reviewing',
+          pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+          headChecks: {
+            sha: 'abcdef1234567',
+            state: 'failed',
+            inheritedFrom: { base: 'main', since: null },
+          } as never,
+        }),
+      );
+      expect(screen.queryByTestId('problem-block')).toBeNull();
+    });
+
+    it('shows a red block with a dismiss control for failed checks on the glob\'s own change', () => {
+      renderGlob(
+        view({
+          ...calm,
+          status: 'reviewing',
+          list: 'reviewing',
+          pr: { number: 7, state: 'ready', headSha: 'abcdef1234567' },
+          headChecks: { sha: 'abcdef1234567', state: 'failed' },
+        }),
+      );
+      const block = screen.getByTestId('problem-block');
+      expect(block.getAttribute('data-block')).toBe('problem');
+      expect(within(block).getByTestId('dismiss-message')).not.toBeNull();
+    });
+
+    it('shows a red block with a dismiss control for a failed run', () => {
+      renderGlob(
+        view({
+          ...calm,
+          status: 'failed',
+          list: 'doing',
+          failure: { reason: 'Routine run failed', at: NOW },
+        }),
+      );
+      const block = screen.getByTestId('problem-block');
+      expect(within(block).getByTestId('dismiss-message')).not.toBeNull();
+    });
+  });
 });

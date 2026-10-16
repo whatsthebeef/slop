@@ -5,6 +5,7 @@ import { stripMarkdown } from '@/lib/markdown-text';
 import { InlineMarkdown } from '../markdown-view';
 import { handoverKey, shortLabel } from '@/lib/dismissals';
 import { cn } from '@/lib/utils';
+import type { StatusLine } from '@/lib/status-line';
 import type { GlobActionsState } from './actions';
 import { Block, blockActor } from './block';
 import type { GlobViewContext } from './context';
@@ -12,6 +13,15 @@ import { GotIt, Link, LinkButton, capitalised, shownElsewhere } from './status';
 import type { NowState } from './status';
 
 const CLAMP_AT = 200;
+
+/** The block's body: what is wrong, never just the title again (the tooltip's first line says more when it can). */
+const bodyOf = (problem: StatusLine): string => {
+  const same = (a: string, b: string) => a.trim().replace(/\.$/, '').toLowerCase() === b.trim().toLowerCase();
+  const title = shortLabel(problem);
+  if (!same(problem.full, title)) return problem.full;
+  const more = problem.tip.split('\n').find((l) => l.trim() !== '' && !same(l, title));
+  return more ?? problem.full;
+};
 
 /** A long line (a run's whole failure reason) cut to its first lines, with a toggle for the rest. */
 const Clamped = ({ text }: { text: string }) => {
@@ -94,7 +104,7 @@ export const ProblemSection = ({
             data-testid="status-line"
             data-kind={line.problem.kind}
           >
-            {line.problem.full}
+            {bodyOf(line.problem)}
             {line.problem.doing !== null && (
               <span className="font-normal">
                 {' — '}
@@ -115,12 +125,7 @@ export const ProblemSection = ({
                 )
               </>
             )}
-            {line.problem.kind !== 'rollout' && (
-              <GotIt
-                disabled={actions.busy}
-                onClick={() => void actions.dismiss(line.seen.key, true)}
-              />
-            )}
+            <GotIt disabled={actions.busy} onClick={() => void actions.dismiss(line.seen.key, true)} />
           </p>
         )
       }
