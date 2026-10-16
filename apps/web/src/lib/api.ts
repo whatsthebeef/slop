@@ -48,7 +48,7 @@ import type {
   RunnerChange,
   RunnerInput,
   SpecStatus,
-  EnvironmentIndicator,
+  BoardEnvironment,
   GlobEnvironment,
   MonthSpend,
   ReadinessItem,
@@ -363,10 +363,8 @@ export interface BoardDeploys {
   readonly indicators: Readonly<Record<string, DeployIndicator>>;
   /** Environments with a deploy running: Deploy now is disabled there for everyone. */
   readonly running: readonly string[];
-  /** The release and integration environments each glob is in. Optional: an older server doesn't send it, and a
-   * mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
-  readonly environments?: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
-  /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional, as above. */
+  /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional: an older server
+   * doesn't send it, and a mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
   readonly atf?: Readonly<Record<string, readonly AtfRun[]>>;
 }
 
@@ -828,6 +826,15 @@ export const api = {
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
   globEnvironments: (id: string) =>
     request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
+  /** The board's observed environments: how each one's deploys are known and the last one seen. */
+  boardEnvironments: (boardId: number) =>
+    request<{ value: BoardEnvironment[] }>('GET', `/api/boards/${boardId}/environments`).then((r) => r.value),
+  /** Recent release tags of the board's repo, offered when recording a deploy. */
+  releaseTags: (boardId: number) =>
+    request<{ value: { name: string; sha: string }[] }>('GET', `/api/boards/${boardId}/release-tags`).then((r) => r.value),
+  /** Records that a manual environment now runs `ref` (a branch, tag or commit; blank means the base branch's head). */
+  recordEnvironmentDeploy: (boardId: number, environment: string, ref: string) =>
+    request<{ value: unknown }>('POST', `/api/boards/${boardId}/environments/${encodeURIComponent(environment)}/deploys`, { ref }),
   globTests: (id: string) => request<GlobTestsView>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
   /** The same read with the planned specs' results beside the runs. */
   globTestsView: (id: string) => request<GlobTestsView>('GET', `/api/globs/${id}/tests`),

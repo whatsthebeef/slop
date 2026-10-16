@@ -145,6 +145,9 @@ const validateSettings = (settings: BoardSettings): Result<null> => {
     const production = settings.environments.filter((e) => e.production === true);
     if (production.length > 1) return invalidInput('Only one environment can be production');
     if (production.some((e) => e.role !== 'release')) return invalidInput('Only a release environment can be production');
+    if (settings.environments.some((e) => e.deployKnown !== undefined && e.role === undefined)) {
+      return invalidInput('Only an environment with a pipeline role can have its deploys recorded by hand');
+    }
   }
   const deploy = settings.deploy;
   if (deploy?.provider === 'codebuild') {

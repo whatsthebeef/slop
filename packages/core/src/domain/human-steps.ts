@@ -31,6 +31,36 @@ export const HUMAN_STEP_KINDS = [
 ] as const;
 export type HumanStepKind = (typeof HUMAN_STEP_KINDS)[number];
 
+/**
+ * The three kinds of step a person sees, and slop's own housekeeping. Decide: a decision glob's outcome or a review label. Answer: a question
+ * within the glob. Do: a command or task (a rollout, a once step, an action glob). Housekeeping (merge, a conflict, an upload, a stuck run,
+ * pairing, marking ready, signing off) are slop's own next moves: the primary action and the corner status show them, never a step block.
+ */
+export const HUMAN_STEP_GROUPS = ['decide', 'answer', 'do', 'housekeeping'] as const;
+export type HumanStepGroup = (typeof HUMAN_STEP_GROUPS)[number];
+
+/** Each step kind's group, in one table: the web and the board's "needs you" logic read it. The kinds themselves are unchanged. */
+export const HUMAN_STEP_GROUP: Readonly<Record<HumanStepKind, HumanStepGroup>> = {
+  decide: 'decide',
+  review_label: 'decide',
+  answer: 'answer',
+  rollout: 'do',
+  action: 'do',
+  resolve_conflict: 'housekeeping',
+  merge: 'housekeeping',
+  done: 'housekeeping',
+  upload_file: 'housekeeping',
+  sign_off: 'housekeeping',
+  pair: 'housekeeping',
+  unstick: 'housekeeping',
+};
+
+/** What a person sees a step as: Decide, Answer or Do. Housekeeping has no label because it is never shown as a step. */
+export const HUMAN_STEP_GROUP_LABEL: Readonly<Record<Exclude<HumanStepGroup, 'housekeeping'>, string>> = { decide: 'Decide', answer: 'Answer', do: 'Do' };
+
+/** Whether a step is slop's own next move (Merge, Fix conflict, Upload, Retry, Pick up) rather than something a person decides, answers or does. */
+export const isHousekeepingStep = (step: Pick<HumanStep, 'kind'>): boolean => HUMAN_STEP_GROUP[step.kind] === 'housekeeping';
+
 /** Who a step is for: a role, `anyone`, or one person's email. `admin` means anyone who may decide (an admin or the PO). */
 export const HUMAN_STEP_ROLES = ['implementer', 'admin', 'po', 'qa', 'anyone'] as const;
 export type HumanStepWho = string;

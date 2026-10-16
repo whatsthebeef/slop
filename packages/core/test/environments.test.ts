@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { EnvironmentService } from '../src/app/environment-service.js';
+import { BoardService } from '../src/app/board-service.js';
+import { EnvironmentService, recordedBy } from '../src/app/environment-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import { humanSteps } from '../src/domain/human-steps.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
@@ -383,5 +384,126 @@ describe('after-deploy steps fall due (s15f176)', () => {
     expect(added.ok && added.value.blocks).toEqual([]);
     const merge = await globs.addHumanStep(DEV, 's1t2', null, { title: 'Now' });
     expect(merge.ok && merge.value.blocks).toEqual(['sign_off', 'dependants']);
+  });
+});
+
+describe('environments whose deploys are recorded by hand (s15t239)', () => {
+  const DEV = 'dev@example.com';
+  const manualBoard: Board = {
+    ...board,
+    environments: [
+      { name: 'staging', allowBranchDeploy: false, role: 'integration' },
+      { name: 'prod', allowBranchDeploy: false, role: 'release', production: true, deployKnown: 'manual' },
+    ],
+  };
+  let store: MemoryStore;
+  let notifier: RecordingNotifier;
+  let service: EnvironmentService;
+  let globs: GlobService;
+
+  const rolloutStep = (): StoredHumanStep => ({
+    id: 'a',
+    boardId: board.id,
+    globId: 's1t1',
+    kind: 'rollout',
+    title: 'Arm prod',
+    detail: null,
+    who: 'anyone',
+    due: 'after_deploy:prod',
+    state: 'open',
+    blocks: [],
+    check: null,
+    script: null,
+    why: null,
+    permissions: null,
+    commands: [],
+    verify: null,
+    origin: 'rollout-section',
+    createdBy: DEV,
+    createdAt: NOW,
+    doneBy: null,
+    doneAt: null,
+    dismissedReason: null,
+    dueSince: null,
+  });
+
+  beforeEach(async () => {
+    store = new MemoryStore();
+    notifier = new RecordingNotifier();
+    service = new EnvironmentService({ store, notifier, clock: { now: () => NOW } });
+    globs = new GlobService({ store, notifier, clock: { now: () => NOW }, ids: { runId: () => 'r1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
+    await store.transaction(async (tx) => {
+      await tx.insertBoard({ ...manualBoard, environments: [...manualBoard.environments], sensitivePaths: [] });
+      await tx.upsertUser({ email: DEV, name: DEV, active: true });
+      await tx.upsertMember({ boardId: board.id, email: DEV, role: 'dev' });
+      await tx.insertGlob(glob({ id: 's1t1', status: 'reviewing' }), null);
+      await tx.saveHumanSteps([rolloutStep()]);
+    });
+  });
+
+  it('records a deploy like a reported one: once, with who, queueing the containment check', async () => {
+    const recorded = await service.recordManualDeploy(DEV, board.id, 'prod', { sha: 'r1', ref: 'v1.2' });
+    expect(recorded.ok && [recorded.value.sha, recorded.value.ref, recorded.value.succeeded, recorded.value.at]).toEqual(['r1', 'v1.2', true, NOW]);
+    expect(store.state.outbox).toEqual([{ kind: 'check_environment', globId: `board-${String(board.id)}`, boardId: board.id, environment: 'prod', sha: 'r1' }]);
+    const view = await service.forBoard(DEV, board.id);
+    expect(view.ok && view.value.map((e) => [e.environment, e.deployKnown, e.latest?.sha ?? null, e.recordedBy])).toEqual([
+      ['staging', 'pipeline', null, null],
+      ['prod', 'manual', 'r1', DEV],
+    ]);
+  });
+
+  it('puts the environment on the contained globs and makes their after-deploy steps due, with no per-glob mark', async () => {
+    await service.recordManualDeploy(DEV, board.id, 'prod', { sha: 'r1', ref: null });
+    await service.recordContainment(board.id, 'prod', 'r1', [{ globId: 's1t1', mergeSha: 'm1', contained: true }]);
+    const step = await store.transaction(async (tx) => (await tx.listHumanSteps(board.id, ['s1t1']))[0]);
+    expect(step?.dueSince).toBe(NOW);
+    const state = await service.boardState(board.id, ['s1t1']);
+    expect(state.get('s1t1')?.map((i) => i.environment)).toEqual(['prod']);
+  });
+
+  it('keeps the per-glob Mark deployed for one-offs', async () => {
+    const marked = await globs.markEnvironmentDeployed(DEV, 's1t1', 'prod');
+    expect(marked.ok && marked.value.marked).toBe(1);
+  });
+
+  it('refuses a stranger, an environment a pipeline reports, an unobserved one and an unknown one', async () => {
+    const code = async (who: string, env: string) => {
+      const r = await service.recordManualDeploy(who, board.id, env, { sha: 'r1', ref: null });
+      return r.ok ? 'ok' : r.error.code;
+    };
+    expect(await code('stranger@example.com', 'prod')).toBe('forbidden');
+    expect(await code(DEV, 'staging')).toBe('invalid_input');
+    expect(await code(DEV, 'nowhere')).toBe('invalid_input');
+    expect(store.state.environmentDeploys).toHaveLength(0);
+  });
+
+  it('says a pipeline environment has never reported, and a manual one has nothing recorded', async () => {
+    const view = await service.forBoard(DEV, board.id);
+    expect(view.ok && view.value.map((e) => [e.deployKnown, e.latest])).toEqual([['pipeline', null], ['manual', null]]);
+    expect((await service.forBoard('stranger@example.com', board.id)).ok).toBe(false);
+  });
+
+  it('keeps the recorder out of a pipeline deploy', () => {
+    const deploy = { id: 1, boardId: 1, environment: 'prod', sha: 'a', ref: null, succeeded: true, url: null, at: NOW, eventId: 'aws:e1', checkedAt: null };
+    expect(recordedBy(deploy)).toBeNull();
+    expect(recordedBy({ ...deploy, eventId: 'person:a.b@example.com:1760572800000.abc' })).toBe('a.b@example.com');
+  });
+});
+
+describe('board settings: how an environment\'s deploys are known (s15t239)', () => {
+  const admin = 'admin@example.com';
+  it('stores manual on an environment with a role and refuses it on one without', async () => {
+    const store = new MemoryStore();
+    const boards = new BoardService({ store, notifier: new RecordingNotifier() });
+    await store.transaction((tx) => tx.upsertUser({ email: admin, name: admin, active: true }));
+    const created = await boards.create(admin, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    if (!created.ok) throw new Error('create failed');
+    const without = await boards.updateSettings(admin, created.value.id, created.value.version, {
+      environments: [{ name: 'prod', allowBranchDeploy: false, deployKnown: 'manual' }],
+    });
+    expect(without.ok).toBe(false);
+    const environments = [{ name: 'prod', allowBranchDeploy: false, role: 'release', deployKnown: 'manual' } as const];
+    const saved = await boards.updateSettings(admin, created.value.id, created.value.version, { environments });
+    expect(saved.ok && saved.value.environments).toEqual(environments);
   });
 });

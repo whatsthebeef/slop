@@ -213,7 +213,7 @@ describe('glob view: main button', () => {
     renderGlob(view({ allowedActions: ['delete'] }));
     expect(mainButton()).toBeNull();
     expect(screen.queryByTestId('more-actions')).toBeNull();
-    expect(screen.queryByTestId('glob-actions')).toBeNull();
+    expect(within(screen.getByTestId('glob-actions')).queryAllByRole('button')).toHaveLength(0);
   });
 
   it('while merging, Cancel merge leads and the ▾ holds Review code and Pick up', async () => {
@@ -565,21 +565,23 @@ describe('glob view: a decision in Doing', () => {
       ...patch,
     });
 
-  it('has the outcome as the action row’s main button, the one Approve change, which opens the approval', async () => {
+  it('has no primary or ▾ in the action row: the one Approve change is in the decision block, which opens the approval', async () => {
     const user = userEvent.setup();
     const cb = renderGlob(decision());
     expect(screen.queryByText('Decide')).toBeNull();
-    const row = await screen.findByTestId('glob-actions');
-    expect(screen.getAllByTestId('main-action')).toHaveLength(1);
-    expect(within(screen.getByTestId('proposal-block')).queryByRole('button', { name: /^Approve/ })).toBeNull();
-    await user.click(within(row).getByRole('button', { name: 'Approve change' }));
+    const outcomes = await screen.findByTestId('outcomes');
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+    expect(within(screen.getByTestId('decision-block')).getByTestId('outcomes')).toBe(outcomes);
+    expect(screen.getAllByRole('button', { name: 'Approve change' })).toHaveLength(1);
+    await user.click(within(outcomes).getByRole('button', { name: 'Approve change' }));
     expect(await screen.findByTestId('outcome-form-accept')).toBeTruthy();
     // Opening the form decides nothing; it never calls the server by itself.
     expect(cb.onAction).not.toHaveBeenCalled();
     expect(cb.onDecide).not.toHaveBeenCalled();
   });
 
-  it('lists Reject…, approve with edits, keeping the statement and a new recommendation in the action row ▾ for an admin', async () => {
+  it('lists Reject…, approve with edits, keeping the statement and a new recommendation in the block’s ▾ for an admin', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'globDiff').mockResolvedValue({
       target: null,
@@ -589,8 +591,8 @@ describe('glob view: a decision in Doing', () => {
       learning: { status: 'open', processing: 'drafted', processingError: null, processingAttempts: 0, processAfter: null, effectCheck: null },
     });
     renderGlob(decision(), { ...board, role: 'admin' });
-    await user.click(await screen.findByTestId('more-actions'));
-    const menu = await screen.findByTestId('more-menu');
+    await user.click(await screen.findByTestId('more-outcomes'));
+    const menu = await screen.findByTestId('outcomes-menu');
     await waitFor(() => expect(within(menu).getByText('Approve without changing a document')).toBeTruthy());
     expect(within(menu).getByText('Reject…')).toBeTruthy();
     expect(within(menu).getByText('Get a new recommendation')).toBeTruthy();
@@ -600,10 +602,10 @@ describe('glob view: a decision in Doing', () => {
     expect(within(menu).getByText('Needs work')).toBeTruthy();
   });
 
-  it('opens the reject reason in the body from the action row menu', async () => {
+  it('opens the reject reason in the body from the block’s menu', async () => {
     const user = userEvent.setup();
     renderGlob(decision());
-    await user.click(await screen.findByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-outcomes'));
     await user.click(await screen.findByTestId('outcome-reject'));
     expect(await screen.findByTestId('outcome-form-reject')).toBeTruthy();
   });
@@ -619,7 +621,44 @@ describe('glob view: a decision in Doing', () => {
     renderGlob(decision(), { ...board, role: 'po' });
     const blocked = await screen.findByTestId('approve-blocked');
     expect(blocked.textContent).toContain('it changes the merge policy');
-    expect(screen.getByTestId('main-action')).toHaveProperty('disabled', true);
+    expect(screen.getByTestId('outcome-accept')).toHaveProperty('disabled', true);
+    expect(screen.queryByTestId('main-action')).toBeNull();
+  });
+
+  it('shows the block in Planning with no outcomes, and Pick up as the primary', async () => {
+    renderGlob(decision({ status: 'planning', list: 'planning', allowedActions: ['pick_up', 'delete'] }));
+    expect(await screen.findByTestId('decision-block')).toBeTruthy();
+    expect(screen.queryByTestId('outcomes')).toBeNull();
+    expect(screen.queryByTestId('more-outcomes')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Approve/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Reject/ })).toBeNull();
+    expect(mainButton()?.textContent).toMatch(/Pick up/);
+  });
+
+  it('hides a replacement’s Confirm and Dismiss in Planning, and shows them once picked up', async () => {
+    const replacement = {
+      scope: { kind: 'project', ref: null },
+      origin: { kind: 'replacement', oldId: 'd1', newId: 'd2' },
+      channel: 'agent',
+      outcome: null,
+    } as unknown as NonNullable<GlobView['attributes']>;
+    const as = { ...board, role: 'admin' } as const;
+    renderGlob(decision({ status: 'planning', list: 'planning', allowedActions: ['pick_up'], attributes: replacement }), as);
+    await screen.findByTestId('decision-section');
+    expect(screen.queryByTestId('replacement-outcomes')).toBeNull();
+    cleanup();
+    renderGlob(decision({ attributes: replacement }), as);
+    expect(await screen.findByTestId('replacement-confirm')).toBeTruthy();
+    expect(screen.getByTestId('replacement-dismiss')).toBeTruthy();
+  });
+
+  it('shows ⋯ with Take over, and no primary, only while the decision blocks', async () => {
+    const user = userEvent.setup();
+    renderGlob(decision({ allowedActions: ['decide', 'take_over'] }));
+    await screen.findByTestId('outcomes');
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    await user.click(screen.getByTestId('more-escape'));
+    expect(await screen.findByTestId('more-take_over')).toBeTruthy();
   });
 });
 
@@ -659,36 +698,115 @@ describe('a due rollout step is the main action, never a scroll-only button', ()
     return cb;
   };
 
-  it('a setting step is Mark done, which ticks the step', async () => {
+  it('has no primary or ▾ in the row; a setting step is ticked with Done in the step block', async () => {
     const user = userEvent.setup();
     const cb = renderMerged(dueStep({ kind: 'rollout', detail: 'Set it in prod' }));
-    const main = screen.getByTestId('main-action');
-    expect(main.textContent).toContain('Mark done');
-    expect(screen.getByTestId('main-action-note').textContent).toBe('Add SLOP_X to the server env');
-    expect(screen.getByTestId('main-action-note').textContent).not.toContain('Set it in prod');
-    await user.click(main);
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+    expect(screen.queryByTestId('main-action-note')).toBeNull();
+    await user.click(within(screen.getByTestId('due-step')).getByTestId('due-done'));
     expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');
   });
 
-  it('a script step is Copy rollout command, then Mark done', async () => {
+  it('a script step is copied from the step block, then ticked with Done', async () => {
     const user = userEvent.setup();
     const cb = renderMerged(dueStep({ script: { path: 'infra/deploy/host-deploy.sh' } }));
     const write = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
-    expect(screen.getByTestId('main-action').textContent).toContain('Copy rollout command');
-    await user.click(screen.getByTestId('main-action'));
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    await user.click(screen.getByTestId('step-copy'));
     expect(write).toHaveBeenCalledWith('bash infra/deploy/host-deploy.sh');
-    await waitFor(() => expect(screen.getByTestId('main-action').textContent).toContain('Mark done'));
-    await user.click(screen.getByTestId('main-action'));
+    await user.click(screen.getByTestId('due-done'));
     expect(cb.onCompleteStep).toHaveBeenCalledWith('hs_1');
   });
 
-  it('a step with a capability check is disabled, with the reason', () => {
+  it('a step with a capability check has Done disabled, with the reason, and no primary', () => {
     const cb = renderMerged(dueStep({ check: 'fileAttachments' }));
-    const main = screen.getByTestId('main-action');
-    expect((main as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId('main-action-note').textContent).toContain('waits for fileAttachments to turn on; slop ticks this itself');
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.getByTestId<HTMLButtonElement>('due-done').disabled).toBe(true);
+    expect(screen.getByTestId('step-check').textContent).toContain('waits for fileAttachments to turn on; slop ticks this itself');
     expect(cb.onCompleteStep).not.toHaveBeenCalled();
+  });
+
+  it('brings the primary back once the step is done', () => {
+    const merged = { number: 7, state: 'merged', headSha: 'abc' } as const;
+    const done = dueStep({ state: 'done', doneBy: 'admin@example.com', doneAt: '2026-10-14T00:00:00Z' });
+    renderGlob(view({ status: 'reviewing', list: 'reviewing', pr: merged, humanSteps: [done], allowedActions: ['sign_off', 'delete'] }), { ...board, role: 'admin' });
+    expect(mainButton()).not.toBeNull();
+  });
+});
+
+describe('glob view: a block that holds the glob replaces the primary and ▾ (s15t241)', () => {
+  const ready = (patch: Partial<GlobView> = {}) =>
+    view({
+      status: 'pr_open',
+      list: 'reviewing',
+      pr: { number: 7, state: 'ready', headSha: 'aaa' },
+      headChecks: { sha: 'aaa', state: 'passed' },
+      allowedActions: ['merge', 'start_again', 'delete'],
+      ...patch,
+    });
+  const raised = (patch: Partial<NonNullable<GlobView['questions']>[number]> = {}): NonNullable<GlobView['questions']>[number] => ({
+    id: 'q1',
+    text: 'Is prod in scope?',
+    raisedBy: { kind: 'intake', actor: null },
+    source: 'create',
+    blocking: 'merge',
+    raisedAt: '2026-10-14T00:00:00Z',
+    ...patch,
+  });
+  const shown = (glob: GlobView) => {
+    const cb = callbacks();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (g: GlobView) => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <GlobDetail board={board} glob={g} initialArtifact={null} {...cb} />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const out = render(tree(glob));
+    return { cb, moveTo: (g: GlobView) => out.rerender(tree(g)) };
+  };
+
+  it('has no primary and no ▾ while a merge question is open, and its answer form is in the question block', () => {
+    renderGlob(ready({ questions: [raised()] }));
+    expect(screen.queryByTestId('main-action')).toBeNull();
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Answer' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
+  });
+
+  it('keeps the primary for a question that does not block', () => {
+    renderGlob(ready({ questions: [raised({ blocking: 'none' })] }));
+    expect(mainButton()?.textContent).toContain('Merge');
+  });
+
+  it('brings the primary back when the question is answered', () => {
+    const { moveTo } = shown(ready({ questions: [raised()] }));
+    expect(mainButton()).toBeNull();
+    moveTo(ready({ version: 2, questions: [raised({ answer: { text: 'Yes', by: 'a@b.c', at: '2026-10-14T01:00:00Z' } })] }));
+    expect(mainButton()?.textContent).toContain('Merge');
+  });
+
+  it('shows ⋯ with Take over only while blocked, and the ▾ carries it again once the block is gone', async () => {
+    const user = userEvent.setup();
+    const { moveTo } = shown(ready({ allowedActions: ['merge', 'take_over', 'delete'], questions: [raised()] }));
+    await user.click(screen.getByTestId('more-escape'));
+    expect(await screen.findByTestId('more-take_over')).toBeTruthy();
+    await user.keyboard('{Escape}');
+    moveTo(ready({ version: 2, allowedActions: ['merge', 'take_over', 'delete'], questions: [raised({ dismissed: { by: 'a@b.c', at: '2026-10-14T01:00:00Z', note: '' } })] }));
+    expect(screen.queryByTestId('more-escape')).toBeNull();
+    expect(mainButton()).not.toBeNull();
+  });
+
+  it('shows an open question in Planning with no answer or dismiss buttons, and Start as the primary', () => {
+    renderGlob(view({ allowedActions: ['start', 'pick_up', 'delete'], questions: [raised({ blocking: 'none' })] }));
+    expect(screen.getByTestId('question-q1').textContent).toContain('Is prod in scope?');
+    expect(screen.queryByRole('button', { name: 'Answer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+    expect(screen.queryByLabelText('Answer q1')).toBeNull();
+    expect(mainButton()?.textContent).toBe('Start');
   });
 });
 
@@ -819,27 +937,45 @@ describe('glob view: split moves in the action ▾', () => {
     expect(within(panel).queryAllByRole('button')).toHaveLength(0);
   });
 
-  describe('the top bar and the group tag', () => {
-    it('reads "ID · type ▾ · list": the type control sits in the sticky bar, not in the action row', () => {
+  describe('the top bar, the tags and the action line', () => {
+    it('keeps the top bar to identity: ID · list; the type control sits with the group tag under the title', () => {
       renderGlob(view({ type: 'same', list: 'planning', group: 'glob-view-layout' }));
       const bar = screen.getByTestId('glob-header');
-      const [id, type, list] = ['glob-id', 'glob-type', 'glob-list'].map((t) => within(bar).getByTestId(t)) as [HTMLElement, HTMLElement, HTMLElement];
-      expect(id.compareDocumentPosition(type) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(type.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(bar).queryByTestId('glob-type')).toBeNull();
+      expect(within(bar).getByTestId('glob-list').textContent).toBe('Planning');
+      const chips = screen.getByTestId('glob-chips');
+      const group = within(chips).getByTestId('group-chip');
+      const type = within(chips).getByTestId('glob-type');
+      expect(group.compareDocumentPosition(type) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(type.textContent).toBe('same');
-      expect(list.textContent).toBe('Planning');
+      expect(type.className).toContain('text-[10px]');
+      expect(group.className).toContain('text-[10px]');
+      expect(type.className).toContain('font-mono');
       expect(within(screen.getByTestId('glob-actions')).queryByTestId('glob-type')).toBeNull();
       expect(screen.getAllByTestId('glob-type')).toHaveLength(1);
     });
 
-    it('puts the group tag at the right of the action row and nowhere else, with no label tags under the title', () => {
+    it('puts the group tag beside the type control and nowhere else, with no label tags under the title', () => {
       renderGlob(view({ group: 'glob-view-layout', labels: { FR: 'required', CR: 'required' } }));
-      const row = screen.getByTestId('glob-actions');
-      expect(within(row).getByTestId('group-chip').textContent).toBe('glob-view-layout');
-      expect(within(row).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
-      expect(row.lastElementChild?.contains(within(row).getByTestId('group-chip'))).toBe(true);
+      const chips = screen.getByTestId('glob-chips');
+      expect(within(chips).getByTestId('group-chip').textContent).toBe('glob-view-layout');
+      expect(within(chips).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
+      expect(within(screen.getByTestId('glob-actions')).queryByTestId('group-chip')).toBeNull();
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
+    });
+
+    it('shows the Arm system label and the branch on a quiet line beside the action row, not in the top bar', () => {
+      const step = { id: 'hs_1', kind: 'rollout', title: 'Run the migration', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] } as const;
+      renderGlob(view({ branch: 's1t1', humanSteps: [step] }));
+      const row = screen.getByTestId('glob-actions');
+      const info = within(row).getByTestId('action-line-info');
+      expect(within(info).getByTestId('arm-system-label').textContent).toBe('Arm system');
+      expect(within(info).getByTestId('glob-branch').textContent).toBe('s1t1');
+      expect(info.className).toContain('ml-auto');
+      expect(info.className).toContain('flex-wrap');
+      expect(within(screen.getByTestId('glob-header')).queryByTestId('arm-system-label')).toBeNull();
+      expect(within(screen.getByTestId('glob-header')).queryByTestId('glob-branch')).toBeNull();
     });
   });
 

@@ -1,39 +1,34 @@
-import { isHumanCategory, modeOf } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router';
-import { ArmSystemLabel } from '../glob-card';
+import { isHumanCategory, modeOf } from '@slop/core';
+import { GroupChip } from '../glob-card';
 import { Tip } from '../ui/tip';
-import { armLabel } from '@/lib/rollout-stages';
-import { findSection } from '@/lib/glob-scroll';
 import { LIST_TITLES } from '@/lib/list-titles';
+import { boardGroupPath } from '@/lib/group-page';
 import type { GlobViewContext } from './context';
-import { TypeChip } from './actions';
 import { EscalationChip } from './escalation';
+import { TypeChip } from './actions';
 import type { GlobActionsState } from './actions';
+import { TAG } from './tag-style';
 import { Dot, HeaderStatus } from './status';
 import type { NowState } from './status';
 
 /** The CSS variable on the page holding the sticky header's height; sections scroll to just below it. */
 export const HEADER_HEIGHT_VAR = '--glob-header-height';
 
-/** The sticky bar (type and list hidden below the sm breakpoint), a compact single row (small vertical padding, no fixed height): back to the board, then "ID · type ▾ · list", and the status at the top right. */
+/** The sticky bar (list hidden below the sm breakpoint), a compact single row (small vertical padding, no fixed height): back to the board, then "ID · list", and the status at the top right. Identity and status only. */
 export const GlobHeader = ({
   ctx,
   onClose,
   state,
-  actions,
 }: {
   ctx: GlobViewContext;
   onClose: () => void;
   state: NowState;
-  /** The actions state the type control works from; without it (or for a decision) the type shows as plain text. */
-  actions?: GlobActionsState;
 }) => {
   const { glob } = ctx;
-  // Human work (a decision, an action) has no type to change, no deploy to arm and no machine status.
   const human = isHumanCategory(glob.category);
-  const arming = human ? null : armLabel(glob);
   // The header's border shows once the page has scrolled under it.
   const topRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -89,34 +84,40 @@ export const GlobHeader = ({
         <span className="hidden items-center gap-3 sm:flex">
           <Dot />
         </span>
-        {human || actions === undefined || glob.type === null ? (
-          <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" data-testid="glob-type">
-            {modeOf(glob)}
-          </span>
-        ) : (
-          <span className="hidden shrink-0 sm:inline">
-            <TypeChip ctx={ctx} state={actions} />
-          </span>
-        )}
-        <span className="hidden items-center gap-3 sm:flex">
-          <Dot />
-        </span>
         <span className="hidden min-w-0 truncate text-sm text-muted-foreground sm:inline" data-testid="glob-list">
           {LIST_TITLES[glob.list]}
         </span>
-        {arming !== null && (
-          <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
-        )}
         <HeaderStatus glob={glob} decision={human} state={state} />
       </div>
     </>
   );
 };
 
-/** The needs-a-person chip under the title, only while it applies, so no empty line is left there; type, group and labels live elsewhere. */
-export const GlobChips = ({ ctx }: { ctx: GlobViewContext }) =>
-  ctx.glob.escalation == null || ctx.glob.status !== 'planning' ? null : (
-    <div className="flex items-center gap-2 text-sm">
-      <EscalationChip ctx={ctx} />
+/**
+ * The row under the title: the group tag, the type control styled like it (plain text for human work, which has no type to change)
+ * and, only while it applies, the needs-a-person chip. No empty line is left when there is none of them.
+ */
+export const GlobChips = ({ ctx, actions }: { ctx: GlobViewContext; actions?: GlobActionsState }) => {
+  const { glob } = ctx;
+  const human = isHumanCategory(glob.category);
+  const type =
+    human || actions === undefined || glob.type === null ? (
+      <span className={`${TAG} bg-muted text-muted-foreground`} data-testid="glob-type">
+        {modeOf(glob)}
+      </span>
+    ) : (
+      <TypeChip ctx={ctx} state={actions} />
+    );
+  const escalated = glob.escalation != null && glob.status === 'planning';
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-sm" data-testid="glob-chips">
+      {glob.group !== null && (
+        <span className="min-w-0 max-w-full" data-testid="glob-group">
+          <GroupChip name={glob.group} to={boardGroupPath(glob.boardId, glob.group)} />
+        </span>
+      )}
+      {type}
+      {escalated && <EscalationChip ctx={ctx} />}
     </div>
   );
+};

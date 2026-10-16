@@ -1,9 +1,8 @@
 import { decisionOf, isHumanCategory, machine } from '@slop/core';
-import { DecisionMainAction, isLearning } from '../decision-outcomes';
-import type { Action, EditFailure } from '@slop/core';
+import { isLearning } from '../decision-outcomes';
+import type { Action, EditFailure, EnvironmentIndicator } from '@slop/core';
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
-import { ChevronDown, Loader2 } from 'lucide-react';
+import { ChevronDown, Ellipsis, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -15,9 +14,8 @@ import {
 import { actionTiers, orderActions } from '@/lib/action-style';
 import { actionPresentation } from '@/lib/action-presentation';
 import { mainVariant, promotedAction, viewActions, viewMainAction } from '@/lib/main-action';
-import { mainStep, scriptCopyText, stepMain } from '@/lib/human-steps';
-import { api } from '@/lib/api';
-import { copyOrSelect } from '@/lib/plan-text';
+import { mainStep } from '@/lib/human-steps';
+import { blockingItem } from '@/lib/blocking-item';
 import { takeOverConfirmation } from '@/lib/sstor-command';
 import { ActorIcon, HumanIcon } from '@/components/actor-icons';
 import { findSection } from '@/lib/glob-scroll';
@@ -26,14 +24,17 @@ import { PENDING_TIMEOUT_MS, isPending, startAction } from '@/lib/pending-action
 import type { PendingAction } from '@/lib/pending-action';
 import { startAgainConfirmation } from '@/lib/start-again';
 import { handoverConfirmation, handoverToShow } from '@/lib/handover';
-import { handoverKey, isDismissed } from '@/lib/dismissals';
 import { blockedParts, chainTip, mergeWarning, waitingFor } from '@/lib/status-line';
 import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
-import { stripMarkdown } from '@/lib/markdown-text';
 import { Tip } from '../ui/tip';
-import { GroupChip } from '../glob-card';
-import { boardGroupPath } from '@/lib/group-page';
+import { ArmSystemLabel } from '../glob-card';
+import { armLabel } from '@/lib/rollout-stages';
+import { api } from '@/lib/api';
+import { globEnvironmentsKey } from '@/lib/live';
+import { useQuery } from '@tanstack/react-query';
+import { META } from './tag-style';
+import { Dot } from './status';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
 import { splittable } from './size';
@@ -111,19 +112,16 @@ export const useGlobActions = ({
   const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | 'fail_action' | null>(null);
   // Done changes nothing until GitHub confirms, so say it was asked for meanwhile.
   const [readyAsked, setReadyAsked] = useState(false);
-  // "Why you're needed": the full box until the viewer acknowledges it, then one line.
+  // "Why you're needed": shown in the problem block while nobody is on the problem.
   const brief = handoverToShow(glob);
-  const briefRead = brief !== null && isDismissed(glob, handoverKey(brief));
-  const [briefOpen, setBriefOpen] = useState(false);
   useEffect(() => {
     setConfirmingAgain(false);
     setConfirmingTakeOver(false);
     setTypeFailure(null);
     setConfirmingOversized(null);
-    setBriefOpen(false);
     setFinishing(null);
   }, [glob.id]);
-  // Dismissing a message is stored per person on the server; the page reloads the glob afterwards.
+  // Dismissing the Your turn reason is stored per person on the server; the page reloads the glob afterwards.
   const dismiss = (key: string, on: boolean) =>
     run(async () => {
       await onDismiss(key, on);
@@ -233,7 +231,6 @@ export const useGlobActions = ({
     viewer,
     /** The board's base branch, for the header's "merging from <base>". */
     base: board.baseBranch,
-    stepTurn,
     stepsSignal,
     setStepsSignal,
     actions,
@@ -243,10 +240,7 @@ export const useGlobActions = ({
     typeFailure,
     changeType,
     brief,
-    briefRead,
     dismiss,
-    briefOpen,
-    setBriefOpen,
     confirmDelete,
     setConfirmDelete,
     confirmingAgain,
@@ -297,7 +291,7 @@ const ActionContent = ({
   );
 };
 
-/** The type chip in the header: its popover says what follows before it changes the type. */
+/** The type chip beside the group tag: its popover says what follows before it changes the type. */
 export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) =>
   ctx.glob.type === null ? null : (
     <TypePopover
@@ -310,72 +304,72 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
     />
   );
 
-/**
- * A due blocking step as the glob's main button: Copy rollout command for a script (then Mark done), Mark done for a
- * setting or manual step with its text beside it, and disabled with the reason when slop ticks it itself.
- */
-const StepMainButton = ({
-  step,
-  glob,
-  busy,
-  onComplete,
-  menu,
-}: {
-  step: NonNullable<ReturnType<typeof mainStep>>['step'];
-  glob: GlobViewContext['glob'];
-  busy: boolean;
-  onComplete: ((stepId: string) => Promise<boolean>) | undefined;
-  /** The ▾ of the split button, joined to the button. */
-  menu?: ReactNode;
-}) => {
-  const main = stepMain(step);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => setCopied(false), [step.id]);
-  const copy = async () => {
-    const text = await scriptCopyText(
-      glob.boardId,
-      glob.id,
-      step.script ?? { path: '' },
-      api.rolloutScript,
-      window.location.origin,
-    );
-    setCopied(
-      await copyOrSelect(
-        text,
-        typeof navigator === 'undefined' ? undefined : navigator.clipboard,
-        () => undefined,
-      ),
-    );
-  };
-  const tick = () => void onComplete?.(step.id);
-  const asCopy = main.kind === 'copy' && !copied;
-  const label = main.kind === 'copy' ? (copied ? main.then : main.label) : main.label;
-  const unavailable = main.kind === 'wait' || (!asCopy && onComplete === undefined);
+/** The environments the glob is in, as chips; nothing until the board observes environments and the glob is in one. */
+const EnvironmentLine = ({ ctx }: { ctx: GlobViewContext }) => {
+  const { glob } = ctx;
+  const query = useQuery({ queryKey: globEnvironmentsKey(glob.id), queryFn: () => api.globEnvironments(glob.id) });
+  const held = (query.data ?? []).flatMap((env): EnvironmentIndicator[] => {
+    const presence = env.presence;
+    if (presence?.contained !== true) return [];
+    return [
+      {
+        environment: env.environment,
+        role: env.role,
+        production: env.production,
+        sha: presence.checkedSha,
+        since: presence.since,
+        ...(env.production && glob.status !== 'signed_off' && { warning: 'before_sign_off' as const }),
+      },
+    ];
+  });
   return (
     <>
-      <div className="inline-flex">
-        <Tip text={main.kind === 'wait' ? main.reason : step.title}>
-          <span>
-            <Button
-              size="sm"
-              className={menu === undefined ? undefined : 'rounded-r-none'}
-              data-testid="main-action"
-              data-step={step.id}
-              data-step-action={main.kind === 'wait' ? 'wait' : asCopy ? 'copy' : 'done'}
-              disabled={busy || unavailable}
-              onClick={asCopy ? () => void copy() : tick}
+      {held.map((env) => {
+        const warned = env.warning === 'before_sign_off';
+        const tip = `${warned ? 'Deployed to production before sign-off. ' : ''}In ${env.environment} (${env.production ? 'production' : env.role}) at ${env.sha.slice(0, 7)}`;
+        return (
+          <Tip key={env.environment} text={tip}>
+            <span
+              className={`${META} whitespace-nowrap ${warned ? 'text-required' : 'text-signal-strong'}`}
+              data-testid="environment-chip"
+              data-warning={env.warning}
             >
-              <HumanIcon decorative />
-              {label}
-            </Button>
-          </span>
-        </Tip>
-        {menu}
-      </div>
-      <span className="text-xs text-muted-foreground" data-testid="main-action-note">
-        {stripMarkdown(main.kind === 'wait' ? `${step.title}: ${main.reason}` : step.title)}
-      </span>
+              {env.environment} ✓
+            </span>
+          </Tip>
+        );
+      })}
     </>
+  );
+};
+
+/**
+ * Beside the action row (under it on narrow widths): the Arm system label, the branch and the environments, one quiet mono line.
+ * Human work has no branch, deploy or environments.
+ */
+const actionLine = ({ glob, board }: GlobViewContext) => {
+  if (isHumanCategory(glob.category)) return null;
+  const arming = armLabel(glob);
+  const observed = board.environments.some((e) => e.role !== undefined);
+  return { arming, observed };
+};
+
+const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable<ReturnType<typeof actionLine>> }) => {
+  const { glob } = ctx;
+  const { arming, observed } = line;
+  return (
+    <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="action-line-info">
+      {arming !== null && (
+        <>
+          <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
+          <Dot />
+        </>
+      )}
+      <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
+        {glob.branch}
+      </span>
+      {observed && <EnvironmentLine ctx={ctx} />}
+    </div>
   );
 };
 
@@ -520,28 +514,24 @@ export const GlobActions = ({
   onSplitting: (splitting: boolean) => void;
 }) => {
   const { glob } = ctx;
-  const { pending, stepTurn, actions, tiers, disabled, brief } = state;
+  const { pending, actions, tiers, disabled, brief } = state;
   const busy = state.busy;
   const moves = splitMoves(ctx, state, onSplitting);
-  // A due step still leads.
-  const lead = stepTurn === null ? moves.lead : null;
-  // A learning's outcome is this row's main button (the recommended outcome, the rest in its ▾). A hotspot keeps its one Approve in
-  // the block, so the row has no main action for it.
+  // While a block needs the person (a decision to make, a blocking question, a due step, a review to approve) its buttons are the
+  // only way forward: the row has no main button and no ▾. In Planning the blocks have no buttons and the main action stays.
   const flow = ctx.decide ?? null;
-  const outcome =
-    flow !== null &&
-    flow.hasItem &&
-    glob.status !== 'signed_off' &&
-    // Not picked up: Pick up is the only action, with no outcomes behind it.
-    glob.status !== 'planning' &&
-    (flow.canDecide || ctx.board.role === 'admin' || ctx.board.role === 'po') &&
-    (flow.learning === null || flow.learning.status === 'open') &&
-    stepTurn === null &&
-    lead === null
-      ? flow
-      : null;
+  const blocking = blockingItem(
+    glob,
+    ctx.board.role,
+    state.viewer,
+    flow === null || flow.learning === null || flow.learning.status === 'open',
+  );
+  const lead = blocking === null ? moves.lead : null;
+  // The decision's outcomes live in its block, so Decide is never the row's button.
   const inBlock = ctx.decide != null && state.main === 'decide';
-  const main = lead === null && !inBlock && outcome === null ? state.main : null;
+  const main = blocking === null && lead === null && !inBlock ? state.main : null;
+  // Only the glob-wide escape stays while a block holds the glob: the quiet ⋯.
+  const escapes = blocking === null ? [] : actions.filter((a) => a === 'take_over');
   const moreActions = actions.filter(
     (a) => a !== main && !(inBlock && a === 'decide') && tiers.get(a) !== 'destructive',
   );
@@ -550,7 +540,7 @@ export const GlobActions = ({
     busy && pending !== null && moreActions.includes(pending.action) ? pending.action : null;
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
-  const hasMain = main !== null || stepTurn !== null || lead !== null || outcome !== null;
+  const hasMain = main !== null || lead !== null;
   const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
   const menuItems = (
     <>
@@ -626,26 +616,13 @@ export const GlobActions = ({
       </DropdownMenuContent>
     </DropdownMenu>
   ) : undefined;
-  const group =
-    glob.group === null ? null : (
-      <span className="ml-auto min-w-0 max-w-full" data-testid="glob-group">
-        <GroupChip name={glob.group} to={boardGroupPath(glob.boardId, glob.group)} />
-      </span>
-    );
+  const line = actionLine(ctx);
+  const info = line === null ? null : <ActionLineInfo ctx={ctx} line={line} />;
   return (
     <>
-      {(hasMain || group !== null) && (
+      {(hasMain || escapes.length > 0 || info !== null) && (
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
-            {main === null && stepTurn !== null && (
-              <StepMainButton
-                step={stepTurn.step}
-                glob={glob}
-                busy={busy}
-                onComplete={state.completeStep}
-                menu={menu}
-              />
-            )}
             {lead !== null && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={lead.tip}>
@@ -664,7 +641,41 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
-            {outcome !== null && <DecisionMainAction flow={outcome} extra={menuItems} />}
+            {escapes.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    aria-label="More"
+                    data-testid="more-escape"
+                  >
+                    <Ellipsis className="size-4" aria-hidden />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" data-testid="more-escape-menu">
+                  {escapes.map((action) => {
+                    const shown = actionPresentation(action, glob, false, state.viewer?.email);
+                    return (
+                      <DropdownMenuItem
+                        key={action}
+                        data-testid={`more-${action}`}
+                        onSelect={() => state.begin(action)}
+                      >
+                        <span className="flex items-center gap-1.5 font-medium">
+                          <ActorIcon actor={shown.icon} decorative />
+                          {shown.label}
+                        </span>
+                        <span className="whitespace-pre-line text-xs text-muted-foreground">
+                          {tipOf(action, glob, state.viewer?.email)}
+                        </span>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {main !== null && (
               <div className="inline-flex" data-testid="split-button">
                 <Tip text={tipOf(main, glob, state.viewer?.email)}>
@@ -683,7 +694,7 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
-            {group}
+            {info}
           </div>
           <FinishAction ctx={ctx} state={state} />
           {state.confirmingReady && (

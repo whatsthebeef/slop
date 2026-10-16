@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { actorOf, classifyGitHubFailure, fixOf, machine, modeOf } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import { QueueDetectionError, REVIEW_CHECK } from '../codehost.js';
-import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, CommitGraph, MergeQueueEntry, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, CommitGraph, ReleaseRefs, ReleaseTag, MergeQueueEntry, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -58,7 +58,7 @@ const toEntry = (entry: z.infer<typeof queueEntry>): MergeQueueEntry => ({
  * Every glob's branch is its ID, created by slop with an empty first commit so a draft PR can
  * be opened before any work exists.
  */
-export class GitHub implements CodeHost, CommitGraph {
+export class GitHub implements CodeHost, CommitGraph, ReleaseRefs {
   private readonly installations = new Map<string, Octokit>();
   private app: App | null = null;
   private appId: number | null = null;
@@ -912,6 +912,16 @@ export class GitHub implements CodeHost, CommitGraph {
       if (isStatus(error, 404, 422)) return null;
       throw error;
     }
+  }
+
+  async resolveRef(repo: Repo, ref: string): Promise<string | null> {
+    return (await this.headOf(repo, ref))?.sha ?? null;
+  }
+
+  async recentTags(repo: Repo, limit: number): Promise<ReleaseTag[]> {
+    const gh = await this.octokit(repo);
+    const { data } = await gh.request('GET /repos/{owner}/{repo}/tags', { owner: repo.owner, repo: repo.name, per_page: limit });
+    return data.map((tag) => ({ name: tag.name, sha: tag.commit.sha }));
   }
 
   private async compare(repo: Repo, basehead: string, signal?: AbortSignal): Promise<DiffSummary> {

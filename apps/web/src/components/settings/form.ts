@@ -63,6 +63,7 @@ export const useSettingsForm = (boardId: number) => {
       toast('Settings saved');
       void client.invalidateQueries({ queryKey: ['board', boardId] });
       void client.invalidateQueries({ queryKey: ['repo-connection', boardId] });
+      void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
     },
     onError: (e) => toast(message(e)),
   });

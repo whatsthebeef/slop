@@ -24,8 +24,12 @@ const step = (over: Partial<ListedHumanStep> & Pick<ListedHumanStep, 'id' | 'sta
   ...over,
 });
 
-const show = (humanSteps: ListedHumanStep[], handlers = { onComplete: vi.fn(() => Promise.resolve(true)), onDismiss: vi.fn(() => Promise.resolve(true)) }) => {
-  const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+const show = (
+  humanSteps: ListedHumanStep[],
+  handlers = { onComplete: vi.fn(() => Promise.resolve(true)), onDismiss: vi.fn(() => Promise.resolve(true)) },
+  status: GlobView['status'] = 'in_progress',
+) => {
+  const glob = { ...coreGlob(), status, list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
   render(
     <MemoryRouter>
       <HumanSteps glob={glob} canAdd onAdd={vi.fn(() => Promise.resolve(true))} {...handlers} />
@@ -58,6 +62,14 @@ describe('due steps block', () => {
     await userEvent.type(screen.getByTestId('dismiss-reason'), 'wrong');
     await userEvent.click(screen.getByTestId('dismiss-confirm'));
     expect(h.onDismiss).toHaveBeenCalledWith('a', 'wrong');
+  });
+
+  it('shows a due step in Planning as read-only text: no Done, Dismiss or It failed', () => {
+    show([step({ id: 'a', state: 'due' })], undefined, 'planning');
+    expect(screen.getByTestId('due-step')).toBeTruthy();
+    expect(screen.queryByTestId('due-done')).toBeNull();
+    expect(screen.queryByTestId('due-dismiss')).toBeNull();
+    expect(screen.queryByTestId('due-failed')).toBeNull();
   });
 
   it('lays a structured step out as Why, Before you start, Run (script command once, then each command in a copy box) and Check it worked', async () => {
@@ -268,5 +280,35 @@ describe('the two parts of the Human steps', () => {
     expect(screen.queryByTestId('due-steps')).toBeNull();
     expect(screen.getByTestId('human-steps-toggle').textContent).toContain('More steps (0)');
     expect(screen.getByTestId('add-step')).not.toBeNull();
+  });
+});
+
+describe('three kinds of step (s15t246)', () => {
+  it("s14b3's shape: a due merge beside a question and a rollout shows only the question and the rollout as blocks", () => {
+    show([
+      step({ id: 'machine:merge', kind: 'merge', title: 'Merge and continue', who: 'anyone', due: 'now', state: 'due', blocks: ['reviewing'] }),
+      step({ id: 'machine:answer:q1', kind: 'answer', title: 'Answer: which env?', who: 'anyone', due: 'now', state: 'due', blocks: [] }),
+      step({ id: 'r1', kind: 'rollout', state: 'due' }),
+    ]);
+    const kinds = screen.getAllByTestId('step-group').map((n) => n.textContent);
+    expect(kinds).toEqual(expect.arrayContaining(['Answer', 'Do']));
+    expect(kinds).not.toContain('merge');
+    expect(screen.queryByText('Merge and continue')).toBeNull();
+  });
+
+  it('shows no step block for a conflict, an upload, a stuck run or pairing', () => {
+    show(
+      ['resolve_conflict', 'upload_file', 'unstick', 'pair'].map((kind) =>
+        step({ id: `machine:${kind}`, kind: kind as ListedHumanStep['kind'], who: 'anyone', due: 'now', state: 'due', blocks: [] }),
+      ),
+    );
+    expect(screen.queryAllByTestId('human-step')).toHaveLength(0);
+    expect(screen.queryByTestId('due-steps')).toBeNull();
+    expect(hasDueSteps([step({ id: 'machine:resolve_conflict', kind: 'resolve_conflict', state: 'due' })])).toBe(false);
+  });
+
+  it('labels a review label as Decide', () => {
+    show([step({ id: 'machine:rl', kind: 'review_label', who: 'qa', due: 'now', state: 'due', blocks: [] })]);
+    expect(screen.getByTestId('step-group').textContent).toBe('Decide');
   });
 });

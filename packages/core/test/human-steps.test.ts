@@ -9,7 +9,7 @@ import { hash } from '../src/app/text-hash.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import type { RelationScanRow } from '../src/domain/relation-scan.js';
 import { sentenceHash } from '../src/domain/relation-scan.js';
-import { PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, defaultStepBlocks, derivedSteps, dueText, environmentOf, humanSteps, unknownEnvironmentText, isHumanStepDue, isForViewer, stepsForViewer, storedBlockProgress, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
+import { HUMAN_STEP_GROUP, HUMAN_STEP_KINDS, isHousekeepingStep, PREDICTED_ROLLOUT_TITLE, blockProgress, compactStep, defaultStepBlocks, derivedSteps, dueText, environmentOf, humanSteps, unknownEnvironmentText, isHumanStepDue, isForViewer, stepsForViewer, storedBlockProgress, upcomingSteps, yourTurn } from '../src/domain/human-steps.js';
 import { armOf, armView, armsStored, rolloutStages } from '../src/domain/rollout-stages.js';
 import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import type { DecisionAttributes } from '../src/domain/attributes.js';
@@ -732,5 +732,15 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
       });
       expect((await failing.create(ADMIN, input())).ok).toBe(true);
     });
+  });
+});
+
+describe('step groups (s15t246)', () => {
+  it('puts every kind in one of Decide, Answer, Do or housekeeping', () => {
+    expect(Object.keys(HUMAN_STEP_GROUP).sort()).toEqual([...HUMAN_STEP_KINDS].sort());
+    expect(HUMAN_STEP_GROUP.review_label).toBe('decide');
+    expect(HUMAN_STEP_GROUP.answer).toBe('answer');
+    expect(HUMAN_STEP_GROUP.rollout).toBe('do');
+    for (const kind of ['merge', 'resolve_conflict', 'upload_file', 'unstick', 'pair'] as const) expect(isHousekeepingStep({ kind })).toBe(true);
   });
 });
