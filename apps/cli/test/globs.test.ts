@@ -317,6 +317,25 @@ describe('slop pick-up', () => {
     await expect(pickUpCommand(['s1t4'], run.deps)).rejects.toThrow(/already merged.*nothing but sign-off/s);
   });
 
+  it('accepts a merged glob that slop lets be picked up (open rollout steps) and says it is a rollout pick-up', async () => {
+    const run = setup({
+      get_glob: () => glob({ status: 'reviewing' }),
+      pick_up: () => glob({ status: 'in_progress', provisioning: 'ok', version: 4 }),
+    });
+    await pickUpCommand(['s1t4', '--json'], run.deps);
+    expect(run.slop.tools()).toEqual(['get_glob', 'pick_up']);
+    expect(JSON.parse(run.out.join(''))).toMatchObject({ id: 's1t4', branch: 's1t4', rollout: true });
+  });
+
+  it('prints the branch for an accepted merged glob without --json', async () => {
+    const run = setup({
+      get_glob: () => glob({ status: 'reviewing' }),
+      pick_up: () => glob({ status: 'in_progress', provisioning: 'ok', version: 4 }),
+    });
+    await pickUpCommand(['s1t4'], run.deps);
+    expect(run.out.join('')).toBe('s1t4\n');
+  });
+
   it('makes the links in a merged glob\'s refusal full with SLOP_URL', async () => {
     const run = setup({
       get_glob: () => glob({ status: 'reviewing' }),
