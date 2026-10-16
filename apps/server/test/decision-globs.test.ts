@@ -216,6 +216,8 @@ describe('decision globs', () => {
       const glob = await json<View>(picked);
       expect(glob.status).toBe('in_progress');
       expect(glob.allowedActions).toContain('decide');
+      // The answer carries the machine steps, so the card reads "investigating" before any live hint arrives.
+      expect((glob as View & { machineSteps?: { kind: string }[] }).machineSteps?.map((s) => s.kind)).toContain('recommendation');
     });
 
     it('reject needs a reason and an admin or PO, signs the glob off archived and hides it from the board and counts', async () => {
