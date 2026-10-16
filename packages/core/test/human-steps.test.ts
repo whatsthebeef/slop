@@ -485,7 +485,7 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV, OUTSIDER]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrapped(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrapped(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrapped(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -641,7 +641,7 @@ describe('a failed step, card suggestions and the automatic apply (GlobService)'
     });
 
     it("cross-board: allowed when the glob's creator is a member of the other board, a skipped result when not", async () => {
-      const other = unwrapped(await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+      const other = unwrapped(await boards.create(OUTSIDER, { name: 'other', repo: null, timeZone: 'UTC', environments: [] }));
       const foreign = unwrapped(await globs.create(OUTSIDER, input({ boardId: other.id })));
       const mine = await make();
       const refused = await globs.applyAutomatic(mine.id, await planHashOf(mine.id), [add(foreign.id, { gate: 'sign_off' })], DEV);

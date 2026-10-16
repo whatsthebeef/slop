@@ -37,7 +37,7 @@ describe('status dismissals', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV, OUTSIDER]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     id = `s${String(boardId)}t1`;
     await store.transaction((tx) => tx.insertGlob(fixture({ id, boardId }), null));

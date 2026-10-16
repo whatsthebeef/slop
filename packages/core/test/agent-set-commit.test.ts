@@ -57,7 +57,7 @@ describe('the agent set commit', () => {
     knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     service = new AgentSetCommitService({ store, clock, notifier, knowledge, repo: { committedVersion: () => Promise.resolve(committed) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId));
   });
 
@@ -122,7 +122,7 @@ describe('the agent set commit', () => {
     expect(await service.prepare(boardId)).toEqual({ kind: 'dropped' });
     expect(await agentSetGlobs()).toHaveLength(0);
     expect(await service.prepare(boardId + 7)).toEqual({ kind: 'dropped' });
-    const noRepo = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'c', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const noRepo = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'c', repo: null, timeZone: 'UTC', environments: [] })).id;
     expect(await service.prepare(noRepo)).toEqual({ kind: 'dropped' });
   });
 
@@ -151,7 +151,7 @@ describe('a closed agent-set PR', () => {
     const knowledge = new KnowledgeService({ store, clock, catalog, notifier });
     const service = new AgentSetCommitService({ store, clock, notifier, knowledge, repo: { committedVersion: () => Promise.resolve(null) } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const boardId = unwrap(await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: 'acme/app', timeZone: 'UTC', environments: [] })).id;
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId));
     await service.prepare(boardId);
     const key = `agent-set:${String(boardId)}:`;

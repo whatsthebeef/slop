@@ -407,7 +407,6 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   );
 
   const deployable = board.environments.filter((e) => e.allowBranchDeploy);
-  const subDefault = board.environments.find((e) => e.subDefault === true);
   items.push(
     deployable.length === 0
       ? item(
@@ -417,21 +416,13 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
           'No environment takes branch deploys',
           settings,
         )
-      : subDefault === undefined
-        ? item(
-            'environments',
-            'Environments',
-            'missing',
-            'No environment is the default for subs',
-            settings,
-          )
-        : item(
-            'environments',
-            'Environments',
-            'ok',
-            `${deployable.map((e) => e.name).join(', ')}; subs default to ${subDefault.name}`,
-            null,
-          ),
+      : item(
+          'environments',
+          'Environments',
+          'ok',
+          deployable.map((e) => e.name).join(', '),
+          null,
+        ),
   );
 
   const MANUAL: Record<ManualReadinessKey, string> = {

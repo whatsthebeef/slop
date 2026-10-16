@@ -72,7 +72,7 @@ describe('the board keeps the latest signed-off globs', () => {
       onBoardCreated: () => Promise.resolve(),
     });
     await store.transaction((tx) => tx.upsertUser({ email: 'member@example.com', name: 'Member', active: true }));
-    const created = await boards.create('member@example.com', { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'production', allowBranchDeploy: false }] });
+    const created = await boards.create('member@example.com', { name: 'b', repo: null, timeZone: 'UTC', environments: [{ name: 'production', allowBranchDeploy: false }] });
     if (!created.ok) throw new Error(created.error.message);
     boardId = created.value.id;
     await store.transaction(async (tx) => {

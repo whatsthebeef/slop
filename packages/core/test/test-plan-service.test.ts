@@ -47,7 +47,6 @@ describe('the test plan artifact', () => {
       await boards.create(ADMIN, {
         name: 'demo',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

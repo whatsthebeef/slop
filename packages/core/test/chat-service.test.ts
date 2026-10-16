@@ -824,9 +824,9 @@ describe('ChatService reading the code', () => {
     usage.length = 0;
     boards = new BoardService({ store, notifier: new RecordingNotifier() });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    const made = unwrap(await boards.create(DEV, { name: 'demo', repo: 'acme/app', baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const made = unwrap(await boards.create(DEV, { name: 'demo', repo: 'acme/app', timeZone: 'UTC', environments: [] }));
     repoBoard = made.id;
-    bareBoard = unwrap(await boards.create(DEV, { name: 'bare', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    bareBoard = unwrap(await boards.create(DEV, { name: 'bare', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   /** A record on a board, so the model is called even when the question needs the code and the code can't be read. */

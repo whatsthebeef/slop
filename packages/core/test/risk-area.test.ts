@@ -192,7 +192,7 @@ describe('RiskAreaService', () => {
       await tx.upsertUser({ email: ADMIN, name: ADMIN, active: true });
       await tx.upsertUser({ email: DEV, name: DEV, active: true });
     });
-    boardId = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     await store.transaction((tx) => tx.upsertMember({ boardId, email: DEV, role: 'dev' }));
     service = new RiskAreaService({ store, clock: { now: () => now }, changes });
   });

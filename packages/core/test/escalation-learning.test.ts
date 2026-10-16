@@ -182,7 +182,7 @@ describe('escalation learning service', () => {
     notifier = new RecordingNotifier();
     const boards = new BoardService({ store, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     service = new EscalationLearningService({ store, clock: { now: () => NOW }, notifier });
   });
 

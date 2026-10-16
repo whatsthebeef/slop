@@ -97,7 +97,7 @@ const configFor = (method: AtfRunnerMethod, config: AtfRunnerConfig): AtfRunnerC
 };
 
 const observed = (board: Board): string[] =>
-  board.environments.filter((e) => e.role !== undefined).map((e) => e.name);
+  board.environments.map((e) => e.name);
 
 const NAME_TAKEN = 'Another runner of this board already has that name';
 

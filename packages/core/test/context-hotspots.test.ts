@@ -38,7 +38,7 @@ describe('get_context hotspots', () => {
     const notifier = new RecordingNotifier();
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'run-1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   it('is absent when hotspots are not configured', async () => {

@@ -73,7 +73,7 @@ describe('The code view over a local clone and the Postgres index', () => {
       await tx.upsertUser({ email: STRANGER, name: STRANGER, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: 'o/n', baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: 'o/n', timeZone: 'UTC', environments: [] })).id;
     host = new FakeCodeHost();
     clones = new CodeClones({ dir: join(work, 'clones'), host, remote: () => origin, now: () => clock });
     index = new CodeIndex(database.db);

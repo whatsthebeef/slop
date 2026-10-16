@@ -441,7 +441,7 @@ describe('through the service', () => {
       for (const email of [ADMIN, DEV, PO, 'outsider@example.com']) await tx.upsertUser({ email, name: email, active: true });
     });
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [{ name: 'staging', allowBranchDeploy: false }, { name: 'production', allowBranchDeploy: false }, { name: 'prod', allowBranchDeploy: false }] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await boards.setMember(ADMIN, boardId, PO, 'po'));
   });

@@ -156,7 +156,6 @@ describe('KB pipeline: drafting and approving drafts', () => {
       await boards.create(ADMIN, {
         name: 'b',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

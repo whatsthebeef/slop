@@ -123,7 +123,7 @@ describe('the board ATF setting', () => {
     });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: SERVER_ADMIN, name: SERVER_ADMIN, active: true }));
-    const created = await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
     boardId = created.value.id;
     version = created.value.version;
@@ -173,7 +173,7 @@ describe('the board ATF setting', () => {
     boards = new BoardService({ store, notifier: new RecordingNotifier(), atfPolicy: policy, serverAdmins: [SERVER_ADMIN], newExternalId: () => 'ext-2', clock: { now: () => NOW } });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: SERVER_ADMIN, name: SERVER_ADMIN, active: true }));
-    const created = unwrapOk(await boards.create(ADMIN, { name: 'c', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const created = unwrapOk(await boards.create(ADMIN, { name: 'c', repo: null, timeZone: 'UTC', environments: [] }));
     unwrapOk(await boards.setMember(ADMIN, created.id, SERVER_ADMIN, 'admin'));
     await store.transaction(async (tx) => {
       const b = await tx.getBoard(created.id);

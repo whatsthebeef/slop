@@ -54,7 +54,7 @@ describe('status dismissal routes', () => {
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: 'outsider@example.com', name: 'Out', active: true }));
     await store.transaction((tx) => tx.upsertUser({ email: OTHER, name: 'Other', active: true }));
-    const created = await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] });
+    const created = await boards.create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] });
     if (!created.ok) throw new Error(created.error.message);
     boardId = created.value.id;
     id = `s${String(boardId)}f1`;

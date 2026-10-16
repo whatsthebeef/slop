@@ -88,7 +88,6 @@ describe('review settings on a board', () => {
       await boards.create(ADMIN, {
         name: 'demo',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

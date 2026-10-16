@@ -142,7 +142,6 @@ describe('rollout steps: report a failed step, Merge and continue', () => {
       await boards.create(DEV, {
         name: 'b',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),
