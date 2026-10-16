@@ -53,6 +53,14 @@ When a run ID is given:
 - **A red base branch is not yours to fix.** When the PR's checks fail (auto-fix), call `get_glob` first. If `headChecks.inheritedFrom` is set (or `failedChecks.inherited` is true), the base branch fails the same way: do not patch its error in this branch (a second fix collides with the one the base's owner pushes). Do not push. Record it in the run's notes (an `Assumptions` attachment): the failing check and first error, and that it is inherited from the base since the glob named in `inheritedFrom.since`. Slop brings the branch up to date and re-runs the checks when the base goes green. If the checks still fail afterwards with `inheritedFrom` unset, the failure is this glob's: fix it.
 - Pick the investigator's recommended proposal.
 
+## Questions, steps and decisions
+
+Pick the right record for what you need from a person:
+
+- **Question** (`raise_question`): a choice only this glob's work depends on (scope, approach, an assumption to confirm), with 2-4 options. `blocking: 'start'` when work can't sensibly begin without it, `'merge'` when the code can be built but not merged without it, `'none'` when you record an assumption and carry on. A question never holds sign-off.
+- **Human step** (`add_human_step`): anything a person runs or does (commands, checks, pasting a result). **A command to run is never a question.** One-shot, environment-independent commands are once steps; environment ones are per-environment steps. A step's `blocks` (`sign_off`, `reviewing`, `dependants`) say what it holds.
+- **Decision glob** (`suggest_decision`, with a relation): a choice whose answer matters beyond this glob (a policy, a convention, something other globs will follow or wait on). Raise a decision glob and link it with a relation, rather than a question; the relation's gate says what it holds.
+
 ## Human steps
 
 Anything a person must do (a rollout, a setting, an install, a decision) is recorded as a human step, never as a note in prose.

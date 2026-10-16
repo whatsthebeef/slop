@@ -161,7 +161,17 @@ export const questionGateText = (questions: readonly OpenQuestion[]): string | n
 
 const trimmed = (v: string | undefined): string => (v ?? '').trim();
 
-/** Validates a question to raise: text, options, key; returns it cleaned. */
+const SHELL_COMMAND = /`\s*(?:\$\s*)?(?:sudo\s+)?(?:bash|sh|zsh|node|npx?|pnpm|yarn|git|gh|aws|curl|docker|kubectl|terraform|\.{0,2}\/[\w./-]+)\s[^`]*`/i;
+const ANSWER_ONLY_OPTION = /^(done|failed|ran it|ok|okay)$/i;
+
+/**
+ * Whether the text tells a person to run a command (a code span holding a shell command) and its options offer no real choice
+ * (none, or only done/failed): a command to run is a human step, not a question.
+ */
+export const isCommandQuestion = (text: string, options: readonly string[]): boolean =>
+  SHELL_COMMAND.test(text) && options.every((o) => ANSWER_ONLY_OPTION.test(o));
+
+/** Validates a question to raise: text, options, key; returns it cleaned. A command for a person to run is refused from an agent or routine. */
 export const checkNewQuestion = (input: NewQuestion): Result<NewQuestion> => {
   const text = trimmed(input.text);
   if (text === '') return invalidInput('A question needs text');
@@ -170,6 +180,9 @@ export const checkNewQuestion = (input: NewQuestion): Result<NewQuestion> => {
   if (options.length > MAX_QUESTION_OPTIONS) return invalidInput(`A question has at most ${String(MAX_QUESTION_OPTIONS)} options`);
   if (options.some((o) => o.length > MAX_QUESTION_OPTION)) return invalidInput(`An option is limited to ${String(MAX_QUESTION_OPTION)} characters`);
   if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) return invalidInput('A question\'s options must differ');
+  if ((input.raisedBy.kind === 'agent' || input.raisedBy.kind === 'routine') && isCommandQuestion(text, options)) {
+    return invalidInput('A command for a person to run is a human step, not a question: add it with add_human_step (due now, blocks merge). A question is a choice with options');
+  }
   const key = trimmed(input.key);
   if (key.length > MAX_QUESTION_KEY) return invalidInput(`A question key is limited to ${String(MAX_QUESTION_KEY)} characters`);
   return ok({

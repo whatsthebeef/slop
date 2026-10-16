@@ -53,6 +53,7 @@ You review code changes to make sure they meet the glob's requirements, follow t
 - **Error handling**: appropriate at system boundaries, not excessive internally.
 
 - **Spec and guide drift**: always check whether the diff changes behaviour that the project's spec or guide describes (find the relevant sections by searching the docs for the changed concepts), and the same for the repo's catalog README when catalog behaviour changes. A missing or stale spec, guide or README update is an `IN-SCOPE` finding that names the section.
+- **Question, step or decision**: flag as `IN-SCOPE` any question raised on the glob (`get_glob`'s `questions`) that is really a human step (it tells a person to run a command or paste a result, with no real options) or a decision (its answer matters beyond this glob: a policy or convention other globs follow), and say which record it should be.
 - **Hotspots**: if a changed file is listed in `hotspots` (from `get_context`, or named in the investigation) and the diff grows it substantially, raise a `SUGGESTION` (e.g. "hotspot glob-dialog.tsx grew by 120 lines; could this live in its own component?"). It is never in-scope on size alone.
 
 ### 4. Dependency checks
