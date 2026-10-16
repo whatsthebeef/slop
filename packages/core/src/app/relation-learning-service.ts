@@ -250,7 +250,8 @@ export class RelationLearningService {
     });
   }
 
-  private async viewIn(tx: Tx, boardId: number): Promise<RelationLearningView> {
+  /** The view without the member check, for callers already inside an authorised read (`get_context`). */
+  async viewIn(tx: Tx, boardId: number): Promise<RelationLearningView> {
     const { settings, stats } = await this.stateOf(tx, boardId);
     const postures = posturesOf(stats, settings);
     const sources = RELATION_LEARNING_SOURCES.map((s): RelationSourceView => ({ ...stats[s], posture: postures[s] }));

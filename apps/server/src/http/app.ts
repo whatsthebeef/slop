@@ -877,6 +877,15 @@ export const createApp = (deps: AppDeps) => {
     return withView(c, result);
   });
 
+  // "Make it a gate" on a weak link ("may relate"): it becomes a real relation (cycle and limit checks apply) and counts for its source.
+  app.post('/api/globs/:id/relations/:relationId/promote', async (c) => {
+    const body = await parse(c, versionSchema);
+    if (body instanceof Response) return body;
+    const result = await globs.promoteRelation(c.get('email'), c.req.param('id'), body.version, c.req.param('relationId'));
+    if (result.ok) void deps.outbox.drain(result.value.id).catch(() => undefined);
+    return withView(c, result);
+  });
+
   // Open questions (the glob view's Questions section). A person raises, answers or dismisses one; the web never passes a run ID, so
   // these are always a person's call. Answering writes the Clarifications attachment and releases what the question held.
   const raiseQuestionSchema = z.object({

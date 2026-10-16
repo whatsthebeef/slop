@@ -1,4 +1,4 @@
-import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, HotspotService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService } from '@slop/core';
+import type { AgentSetCommitService, ArtifactService, BoardService, Catalog, KnowledgePageService, FindingsService, IntakeLearningService, IntakeService, KnowledgeService, LearningJobService, RiskAreaService, EscalationLearningService, HotspotService, TypeLearningService, SizeCheckService, ContextReportService, ContextTuningService, SubLimitService, DependencyLearningService, RelationLearningService } from '@slop/core';
 import type { CodeHost } from '../codehost.js';
 import { repoOf } from '../codehost.js';
 import { readCommittedAgentSetVersion } from '../agent-set-executors.js';
@@ -96,6 +96,8 @@ export const mountKnowledge = (
     /** The learned sub size limit; absent: its route isn't mounted. */
     subLimit?: SubLimitService;
     dependencyLearning?: DependencyLearningService;
+    /** How readily relations are created per source (precision, recall, posture, pins); absent: its routes aren't mounted. */
+    relationLearning?: RelationLearningService;
     /** The board's risk areas; absent: their routes aren't mounted. */
     riskAreas?: RiskAreaService;
     escalations?: EscalationLearningService;
@@ -258,6 +260,18 @@ export const mountKnowledge = (
       const pattern = typeof body === 'object' && body !== null && 'pattern' in body && typeof body.pattern === 'string' ? body.pattern : undefined;
       return send(c, await dependencyLearning.reset(c.get('email'), Number(c.req.param('b')), pattern));
     });
+  }
+
+  // How readily each relation source creates gating relations (precision, recall, window, counts, posture), for members; admins pin
+  // thresholds or a source's posture (PUT) and drop pins (DELETE, optionally one with ?what=).
+  const { relationLearning } = deps;
+  if (relationLearning !== undefined) {
+    app.get('/api/boards/:b/relation-learning', async (c) => send(c, await relationLearning.view(c.get('email'), Number(c.req.param('b')))));
+    app.put('/api/boards/:b/relation-learning', async (c) => {
+      const body: unknown = await c.req.json().catch(() => null);
+      return send(c, await relationLearning.pin(c.get('email'), Number(c.req.param('b')), body));
+    });
+    app.delete('/api/boards/:b/relation-learning', async (c) => send(c, await relationLearning.resetPins(c.get('email'), Number(c.req.param('b')), c.req.query('what'))));
   }
 
   // The board's risk areas (learned and default) with their history, for members; admins reset them to the defaults.

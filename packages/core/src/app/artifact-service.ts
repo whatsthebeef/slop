@@ -11,6 +11,7 @@ import { isOpenQuestion, planChangedQuestion, questionsOf } from '../domain/ques
 import { actionState, preparationOf } from '../domain/action-glob.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
+import type { RelationLearningView } from '../domain/relation-learning.js';
 import type { SearchHit } from '../domain/search.js';
 import type { Glob } from '../domain/types.js';
 import { actorOf, fixOf, modeOf, workKindOf } from '../domain/types.js';
@@ -25,6 +26,7 @@ import { groupSection, handoverOf } from './context/handover-section.js';
 import { hotspotsOfGlob } from './context/hotspot-section.js';
 import { inboxSection } from './context/inbox-section.js';
 import { investigationSummary } from './context/investigation-section.js';
+import { relationLearningSection } from './context/relation-learning-section.js';
 import { sizeContext } from './context/size-section.js';
 import type { InvestigationReactor } from './investigation-service.js';
 import type { SizeAssessor } from './size-check-service.js';
@@ -67,6 +69,8 @@ export class ArtifactService {
       related?: (tx: Tx, glob: Glob) => Promise<readonly SearchHit[]>;
       /** The board's conflict hotspots at `now` (`HotspotService.hotspots`), for `get_context`. */
       hotspots?: (boardId: number, now: string) => Promise<{ readonly windowDays: number; readonly hotspots: readonly Hotspot[] }>;
+      /** How readily each relation source creates gating relations on the board, for `get_context` (`RelationLearningService.viewIn`). */
+      relationLearning?: { viewIn(tx: Tx, boardId: number): Promise<RelationLearningView> };
       /** Re-judges a glob's size when its plan.md is saved in Planning. */
       sizeCheck?: SizeAssessor;
       /** Re-infers a glob's relations after its plan or investigation changed; never throws. */
@@ -248,6 +252,7 @@ export class ArtifactService {
       const inbox = await inboxSection(tx, globId);
       const group = await groupSection(tx, this.deps.clock, glob);
       const hotspotView = this.deps.hotspots === undefined ? null : await this.deps.hotspots(glob.boardId, this.deps.clock.now());
+      const relationLearning = this.deps.relationLearning === undefined ? null : await this.deps.relationLearning.viewIn(tx, glob.boardId);
       const state = actionState(glob);
       return ok({
         glob: {
@@ -326,6 +331,7 @@ export class ArtifactService {
                 plan?.content ?? '',
               ),
             }),
+        ...(relationLearning === null ? {} : { relationLearning: relationLearningSection(relationLearning) }),
         ...(sizeCheck === null ? {} : { size: sizeContext(sizeCheck, (await tx.getSizeThreshold(glob.boardId)).minParallel) }),
         ...(group === null ? {} : { group }),
         fetch:

@@ -86,6 +86,16 @@ export class CodeIndex implements CodeViewUsage {
     return rows.filter((r) => !inside.has(r.from));
   }
 
+  /** Import edges from any of `from` to any of `to`, for the post-merge relation check. */
+  async importEdges(boardId: number, from: readonly string[], to: readonly string[]): Promise<{ from: string; to: string }[]> {
+    if (from.length === 0 || to.length === 0) return [];
+    const rows = await this.db
+      .select({ from: schema.codeImports.fromPath, to: schema.codeImports.toPath })
+      .from(schema.codeImports)
+      .where(and(eq(schema.codeImports.boardId, boardId), inArray(schema.codeImports.toPath, [...to]), inArray(schema.codeImports.fromPath, [...from])));
+    return rows;
+  }
+
   /** The indexed files at or under each path (a folder expands to its files; a file is itself). */
   async filesUnder(boardId: number, path: string): Promise<string[]> {
     const rows = await this.db

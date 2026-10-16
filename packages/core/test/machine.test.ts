@@ -1711,7 +1711,7 @@ describe('conflicts flagged after a merge', () => {
 
   it('a merge queues the recheck of other globs with an open PR only', () => {
     const merged = value(m.merged(glob({ status: 'pr_open' }), { sha: 'm1' }, ctx(null)));
-    expect(effectKinds(merged)).toEqual(['flag_conflicts', 'release_waiting', 'check_rollout_paths']);
+    expect(effectKinds(merged)).toEqual(['flag_conflicts', 'release_waiting', 'check_relations_after_merge', 'check_rollout_paths']);
     const open = value(m.baseMerged(glob({ status: 'in_progress', pr }), { since: 's1t2' }, ctx(null)));
     expect(open.effects).toEqual([{ kind: 'check_conflict', globId: 's1t1', generation: 1, since: 's1t2' }]);
     expect(value(m.baseMerged(glob({ status: 'in_progress', pr: null }), { since: 's1t2' }, ctx(null))).effects).toEqual([]);

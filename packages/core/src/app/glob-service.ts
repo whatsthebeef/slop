@@ -37,8 +37,8 @@ import { doThisCommands, scriptPathOf } from '../domain/action-script.js';
 import type { ActionScript, ScriptCheck } from '../domain/action-script.js';
 import type { CodeView } from './code-view.js';
 import { CodeViewUnavailable } from '../domain/code-view.js';
-import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, UNTIL_WORDS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, isEmptyWrite, isExplicit, isMet, normaliseUntil, pickUpWarning, relationUniverse, startIds, OTHER_BOARD_GLOB, toState, wouldCycle } from '../domain/relations.js';
-import type { AwaitedDependency, DoneRelation, ExternalGlob, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, Supersession, TitleInfo, ToState } from '../domain/relations.js';
+import { MAX_AFTER, MAX_RELATIONS, NO_RELATIONS, UNTIL_WORDS, defaultUntil, NO_WRITE, applyWrite, doneOf, draftOf, awaitedOf, checkRelation, checkRelationShape, hasMerged, holdingOf, isActive, verdictOf, isEmptyWrite, isExplicit, isMet, normaliseUntil, pickUpWarning, relationUniverse, startIds, OTHER_BOARD_GLOB, toState, wouldCycle } from '../domain/relations.js';
+import type { AwaitedDependency, DoneRelation, ExternalGlob, HeldBack, Holding, NewRelation, RelationFacts, RelationsView, RelationWrite, Supersession, TitleInfo, ToState, WeakRelation } from '../domain/relations.js';
 import { globIdsIn, idSentences, sentenceHash } from '../domain/relation-scan.js';
 import type { AutomaticAdd, AutomaticRelations, AutomaticResult, MentionOrigin, RelationListExtras, RelationScanRow, RelationSuggestion } from '../domain/relation-scan.js';
 import { suggestionIdOf } from '../domain/relation-scan.js';
@@ -3962,7 +3962,7 @@ export class GlobService implements AutomaticRelations {
 
   /** A relation of another glob that waits for this one, as the viewer sees it. */
   private heldBackView(r: Relation, other: Glob | undefined, e: ExternalGlob | undefined): HeldBack {
-    const base = { relationId: r.id, gate: r.gate, until: r.until, reason: r.reason, source: r.source };
+    const base = { relationId: r.id, gate: r.gate, until: r.until, reason: r.reason, source: r.source, ...verdictOf(r) };
     if (e?.hidden === true) return { ...base, from: OTHER_BOARD, fromTitle: null, external: e };
     return { ...base, from: r.from, fromTitle: other?.title ?? null, ...(e === undefined ? {} : { external: e }) };
   }
@@ -3988,12 +3988,31 @@ export class GlobService implements AutomaticRelations {
       holdsBack.push(this.heldBackView(r, other, other === undefined ? undefined : await side(other.boardId)));
     }
     const supersessions = await this.supersessionsOf(tx, viewer, glob);
+    const weak = await this.weakOf(tx, viewer, glob);
     return {
       holding: holdingOf(withStates, titles).map((h) => holdingView(h, seen.external.get(h.to))),
       holdsBack,
       done: doneOf(withStates, titles).map((d) => doneView(d, seen.external.get(d.to))),
+      ...(weak.length === 0 ? {} : { weak }),
       ...supersessions,
     };
+  }
+
+  /** The glob's weak links ("may relate", not dismissed): they hold nothing, so they come from their own read and never touch the gate facts. */
+  private async weakOf(tx: Tx, viewer: string | null, glob: Glob): Promise<WeakRelation[]> {
+    const rows = (await tx.listWeakRelationsFrom([glob.id])).filter(isActive);
+    if (rows.length === 0) return [];
+    const reach = await this.reachOf(tx, rows.map((r) => r.to));
+    const side = this.sideOf(tx, viewer, glob.boardId);
+    const out: WeakRelation[] = [];
+    for (const r of rows) {
+      const to = reach.globs.get(r.to);
+      const e = to === undefined ? undefined : await side(to.boardId);
+      const base = { relationId: r.id, gate: r.gate, until: r.until, reason: r.reason, source: r.source, state: reach.states.get(r.to) ?? ('missing' as const) };
+      if (e?.hidden === true) out.push({ ...base, to: OTHER_BOARD, toTitle: null, state: 'open', external: e });
+      else out.push({ ...base, to: r.to, toTitle: to?.title ?? null, ...(e === undefined ? {} : { external: e }) });
+    }
+    return out;
   }
 
   /** `supersededBy` on a glob that was superseded, `supersedes` on the one that supersedes others (each only when there is one). */
