@@ -289,8 +289,11 @@ describe('glob view: escalation, dependencies and edit fields', () => {
     expect(screen.getByTestId('related-holding').textContent).toContain('s1t5');
     expect(screen.getByTestId('related-holds-back').textContent).toContain("can't merge until this is merged and rolled out");
     const done = screen.getByTestId('related-done');
-    expect(done.tagName).toBe('DETAILS');
-    expect(done.hasAttribute('open')).toBe(false);
+    expect(done.tagName).not.toBe('DETAILS');
+    expect(done.querySelector('details')).toBeNull();
+    expect(screen.getByTestId('related').querySelector('details')).toBeNull();
+    expect(done.className).toContain('text-muted-foreground');
+    expect(done.textContent).toContain('No longer holding (1)');
     expect(done.textContent).toContain('s1t0');
   });
 

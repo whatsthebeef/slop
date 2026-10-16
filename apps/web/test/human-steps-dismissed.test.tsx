@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HumanSteps } from '../src/components/human-steps';
@@ -36,27 +35,26 @@ const dismissed = (id: string, reason: string): ListedHumanStep =>
   step({ id, state: 'dismissed', dismissedReason: reason, doneBy: 'ann@x.com', doneAt: '2026-10-15T09:00:00.000Z' });
 
 describe('Dismissed human steps', () => {
-  it('collapses dismissed steps into one "N dismissed" line; open and done steps stay listed and the heading ignores dismissed ones', () => {
+  it('lists dismissed steps inline and muted under a plain label; open and done steps stay listed and the heading ignores dismissed ones', () => {
     renderSteps([step({ id: 'a', state: 'due' }), step({ id: 'b', state: 'done' }), dismissed('c', 'wrong'), dismissed('d', 'dup')]);
     expect(screen.getAllByTestId('due-step')).toHaveLength(1);
     expect(screen.getAllByTestId('human-step')).toHaveLength(1);
-    expect(screen.getByTestId('dismissed-toggle').textContent).toBe('2 dismissed ▸');
-    expect(screen.queryAllByTestId('dismissed-step')).toHaveLength(0);
+    expect(screen.getByTestId('dismissed-label').textContent).toBe('Dismissed (2)');
+    expect(screen.getAllByTestId('dismissed-step')).toHaveLength(2);
+    expect(screen.getByTestId('dismissed-steps').className).toContain('text-muted-foreground');
+    expect(screen.getByTestId('dismissed-steps').querySelector('details, button')).toBeNull();
     expect(screen.getByTestId('human-steps-toggle').textContent).toContain('More steps (1)');
   });
 
-  it('expands to each dismissed step with its reason, who and when', async () => {
+  it('shows each dismissed step with its reason, who and when', () => {
     renderSteps([step({ id: 'a', state: 'due' }), dismissed('c', 'wrong host')]);
-    await userEvent.click(screen.getByTestId('dismissed-toggle'));
-    expect(screen.getByTestId('dismissed-toggle').textContent).toBe('1 dismissed ▾');
     expect(screen.getByTestId('dismissed-title').textContent).toBe('Step c');
     expect(screen.getByTestId('dismissed-reason').textContent).toBe('wrong host');
     expect(screen.getByTestId('dismissed-who').textContent).toBe(' (by ann@x.com on 2026-10-15)');
   });
 
-  it('renders a dismissal reason as Markdown, with no raw markers', async () => {
+  it('renders a dismissal reason as Markdown, with no raw markers', () => {
     renderSteps([step({ id: 'a', state: 'due' }), dismissed('c', 'wrong **host**, use `h2`')]);
-    await userEvent.click(screen.getByTestId('dismissed-toggle'));
     const reason = screen.getByTestId('dismissed-reason');
     expect(reason.textContent).toBe('wrong host, use h2');
     expect(reason.querySelector('strong')?.textContent).toBe('host');

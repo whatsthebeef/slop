@@ -231,7 +231,7 @@ const AppliesTo = ({
   );
 };
 
-/** Earlier recommendations, newest first, collapsed at the foot of the block; the latest is the block's recommendation. */
+/** Earlier recommendations, newest first, under a plain label at the foot of the block; the latest is the block's recommendation. */
 export const DecisionAssessment = ({ glob, all = false }: { glob: GlobView; all?: boolean }) => {
   const has = (glob.artifacts ?? []).some((a) => a.kind === 'assessment' && a.label === '');
   const versions = useQuery({
@@ -242,16 +242,16 @@ export const DecisionAssessment = ({ glob, all = false }: { glob: GlobView; all?
   const older = [...(versions.data ?? [])].slice(0, all ? undefined : -1).reverse();
   if (older.length === 0) return null;
   return (
-    <details className='grid gap-2' data-testid='assessment-history'>
-      <summary className='cursor-pointer text-xs font-semibold text-muted-foreground'>Earlier recommendations ({older.length})</summary>
-      <div className='mt-2 grid gap-2'>
+    <div className='grid gap-2' data-testid='assessment-history'>
+      <h4 className='text-xs font-semibold text-muted-foreground'>Earlier recommendations ({older.length})</h4>
+      <div className='grid gap-2'>
         {older.map((v) => (
           <div key={v.version} className='rounded border p-3'>
             <CollapsibleMarkdown content={v.content} commands />
           </div>
         ))}
       </div>
-    </details>
+    </div>
   );
 };
 
@@ -311,18 +311,18 @@ const EarlierRecommendations = ({ glob }: { glob: GlobView }) => {
   );
 };
 
-/** A learning's Evidence and history, collapsed: the evidence behind it, what it is aimed at, the flags raised and the recommendations before the latest. */
+/** A learning's Evidence and history, as plain text under a label (never a collapsible inside the section): the evidence behind it, what it is aimed at, the flags raised and the recommendations before the latest. */
 const EvidenceAndHistory = ({ glob, attributes, deciders }: { glob: GlobView; attributes: DecisionAttributes; deciders: boolean }) => (
-  <details className='grid gap-2' data-testid='evidence-history'>
-    <summary className='cursor-pointer text-xs font-semibold text-muted-foreground'>Evidence and history</summary>
-    <div className='mt-2 grid gap-3'>
+  <div className='grid gap-2' data-testid='evidence-history'>
+    <h4 className='text-xs font-semibold text-muted-foreground'>Evidence and history</h4>
+    <div className='grid gap-3'>
       <EvidenceSummary glob={glob} attributes={attributes} />
       {attributes.signal !== undefined && <SignalFigures signal={attributes.signal} />}
       <LearningFacts glob={glob} attributes={attributes} deciders={deciders} />
       <AssessmentFlags glob={glob} />
       <EarlierRecommendations glob={glob} />
     </div>
-  </details>
+  </div>
 );
 
 const day = (iso: string) => iso.slice(0, 10);
