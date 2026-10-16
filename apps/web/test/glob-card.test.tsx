@@ -255,6 +255,13 @@ describe('card rows', () => {
       expect(bottom?.className).toContain('justify-between');
       expect(bottom?.textContent).toContain('Implementer: john.bower@x.com');
     });
+    it('shares the group tag row on the right, with no avatar in the bottom row, for a grouped glob', () => {
+      const root = dom(markup(prOpen({ group: 'glob-groups', implementer: 'john.bower@x.com' })));
+      const row = root.querySelector('[data-testid="card-group-row"]');
+      expect(row?.querySelector('[data-testid="group-chip"], [data-testid="card-chips"]')).not.toBeNull();
+      expect(row?.lastElementChild?.textContent).toContain('JB');
+      expect(root.querySelector('[data-testid="card-bottom"]')?.textContent ?? '').not.toContain('JB');
+    });
     it('shows the planner while unassigned', () => {
       const g = view({ implementer: null, planner: 'ann@x.com', runs: [] });
       expect(avatar(g)?.lastElementChild?.textContent).toContain('AN');
