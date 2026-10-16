@@ -201,6 +201,18 @@ describe('dependency learning', () => {
     expect((await create({ plan: 'Add a migration' })).impliedAfter?.[0]?.paths).toEqual(['db/migrations/1.sql']);
   });
 
+  it('a learned need that would close a cycle through a cross-board relation is not written (R1-3)', async () => {
+    const g1 = await create({ type: 'same' });
+    const g2 = await create({ type: 'same' });
+    const other = unwrap(await boards.create(ADMIN, { name: 'Other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const x = unwrap(await globs.create(ADMIN, input({ boardId: other, type: 'same' })));
+    // g2 -> x (stored on board 1) and x -> g1 (stored on board 2): learning g1 -> g2 would close g1 -> g2 -> x -> g1.
+    for (const row of [relation(g2.id, x.id, { boardId }), relation(x.id, g1.id, { boardId: other })]) store.state.relations.set(row.id, row);
+
+    expect(await learning.onFailed(g1.id, `Blocked on unmerged ${g2.id}`)).toEqual([]);
+    expect(relationsOf(g1.id)).toEqual([]);
+  });
+
   it('a run failing for unmerged prerequisites adds a learned need that blocks starting again', async () => {
     const prerequisite = await create({ type: 'same' });
     const stuck = await create({ type: 'same' });

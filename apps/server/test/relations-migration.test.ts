@@ -152,6 +152,42 @@ describe('needs and splits become relations (migration 0067)', () => {
     expect(all.filter((r) => r.gate === 'start')).toHaveLength(4);
   });
 
+  it('gives every migrated relation the kind waits (migration 0081) and keys uniqueness on from, to, gate and kind', async () => {
+    const kinds = await database.db.execute<{ kind: string; n: number }>(sql`select kind, count(*)::int as n from relations group by kind`);
+    expect(kinds).toEqual([{ kind: 'waits', n: 7 }]);
+    const indexes = await database.db.execute<{ indexname: string }>(sql`select indexname from pg_indexes where tablename = 'relations' order by indexname`);
+    const names = indexes.map((i) => i.indexname);
+    expect(names).toContain('relations_from_to_gate_kind_idx');
+    expect(names).not.toContain('relations_from_to_gate_idx');
+    // A supersession on the same pair and gate is a different row; a second of the same kind is refused.
+    const insert = (id: string, kind: string) =>
+      database.db.execute(
+        sql`insert into relations (id, board_id, from_glob, to_glob, gate, "until", evidence, source, kind, created_at)
+            values (${id}, 1, 's1t1', 's1t2', 'start', 'merged', '[]'::jsonb, 'person', ${kind}, now())`,
+      );
+    await insert('k1', 'superseded_by');
+    await expect(insert('k2', 'superseded_by')).rejects.toThrow();
+    await expect(insert('k3', 'waits')).rejects.toThrow();
+    await database.db.execute(sql`delete from relations where id = 'k1'`);
+  });
+
+  it('creates relation_scans (migration 0082) with its key, index and board cascade', async () => {
+    const columns = await database.db.execute<{ column_name: string }>(sql`select column_name from information_schema.columns where table_name = 'relation_scans'`);
+    expect(columns.map((c) => c.column_name).sort()).toEqual(
+      ['board_id', 'created_at', 'decided_at', 'decision', 'gate', 'glob_id', 'kind', 'mentioned_id', 'model', 'reason', 'relation_id', 'sentence', 'sentence_hash', 'state'].sort(),
+    );
+    const insert = (hash: string) =>
+      database.db.execute(
+        sql`insert into relation_scans (glob_id, mentioned_id, sentence_hash, board_id, kind, decision, sentence, state, created_at)
+            values ('s1t1', 's1t2', ${hash}, 2, 'mention', 'history', 'x', 'done', now())`,
+      );
+    await insert('h1');
+    await expect(insert('h1')).rejects.toThrow();
+    await insert('h2');
+    await database.db.execute(sql`delete from boards where id = 2`);
+    expect(await database.db.execute(sql`select 1 from relation_scans`)).toHaveLength(0);
+  });
+
   it('is idempotent: running the backfill again adds nothing', async () => {
     const before = (await rows()).length;
     const folder = new URL('../drizzle/0067_relations.sql', import.meta.url).pathname;
@@ -159,6 +195,20 @@ describe('needs and splits become relations (migration 0067)', () => {
       await database.db.execute(sql.raw(statement));
     }
     expect((await rows()).length).toBe(before);
+  });
+
+  // The 0067 test above re-ran its old SQL, which makes the old unique index again: 0081 drops it again.
+  it('is idempotent: running 0081 and 0082 again changes nothing', async () => {
+    const before = (await rows()).length;
+    for (const file of ['0081_relations_kind.sql', '0082_relation_scans.sql']) {
+      for (const statement of (await readFile(new URL(`../drizzle/${file}`, import.meta.url).pathname, 'utf8')).split('--> statement-breakpoint')) {
+        await database.db.execute(sql.raw(statement));
+      }
+    }
+    expect((await rows()).length).toBe(before);
+    const indexes = await database.db.execute<{ indexname: string }>(sql`select indexname from pg_indexes where tablename in ('relations', 'relation_scans')`);
+    expect(indexes.map((i) => i.indexname)).toEqual(expect.arrayContaining(['relations_from_to_gate_kind_idx', 'relation_scans_board_state_idx']));
+    expect(indexes.map((i) => i.indexname)).not.toContain('relations_from_to_gate_idx');
   });
 
   it('migrated rows hold no cycle under the gate-aware check', async () => {
