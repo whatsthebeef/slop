@@ -106,7 +106,10 @@ export const BoardShell = () => {
   const [fullScreen, setFullScreen] = useState(false);
   const [focusToken, setFocusToken] = useState(0);
   // The conversation stays open across pages and while the panel is closed; the pages say where the person is.
-  const [chatId, setChatId] = useState<number | null>(null);
+  // It is kept per board: a chat belongs to one board, so another board's id must never be asked for here.
+  const [chatIds, setChatIds] = useState<Readonly<Record<number, number | null>>>({});
+  const chatId = chatIds[boardId] ?? null;
+  const setChatId = (id: number | null) => setChatIds((all) => ({ ...all, [boardId]: id }));
   const [page, setPage] = useState<PageContext>(BOARD_PAGE);
   const wide = useMedia(WIDE_QUERY);
   // Below `sm` the chat covers the whole view, and can't step back to a side panel.

@@ -369,6 +369,11 @@ export const ChatPanel = ({
   const chats = ['chats', boardId] as const;
   const messages = useQuery({ queryKey: messagesKey, queryFn: () => (chatId === null ? Promise.resolve([]) : api.chatMessages(boardId, chatId)), enabled: chatId !== null });
   const mine = useQuery({ queryKey: ['chat-feedback', boardId, chatId], queryFn: () => (chatId === null ? Promise.resolve([]) : api.myChatFeedback(boardId, chatId)), enabled: chatId !== null });
+  // A conversation that is gone (deleted, or another person's on a shared browser) is dropped quietly: a new chat shows instead.
+  const gone = messages.error instanceof RequestError && messages.error.status === 404;
+  useEffect(() => {
+    if (gone) onChatChange(null);
+  }, [gone, onChatChange]);
   const past = useQuery({ queryKey: chats, queryFn: () => api.chats(boardId) });
   const [showPast, setShowPast] = useState(false);
   const [question, setQuestion] = useState('');
@@ -536,7 +541,7 @@ export const ChatPanel = ({
         )}
         <div className={MESSAGE_LIST} aria-live='polite'>
           {messages.isPending && chatId !== null && <p className='text-muted-foreground'>Loading…</p>}
-          {messages.error !== null && <p className='text-destructive'>{messages.error.message}</p>}
+          {messages.error !== null && !gone && <p className='text-destructive'>{messages.error.message}</p>}
           {(chatId === null || shown.length === 0) && pending === null && (
             <div className='grid gap-2'>
               <p className='text-muted-foreground'>Ask why something was decided or built. Answers come from the board's records and slop's own help, with their sources.</p>
