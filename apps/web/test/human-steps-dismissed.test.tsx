@@ -50,7 +50,7 @@ describe('Dismissed human steps', () => {
     await userEvent.click(screen.getByTestId('dismissed-toggle'));
     expect(screen.getByTestId('dismissed-toggle').textContent).toBe('1 dismissed ▾');
     expect(screen.getByTestId('dismissed-title').textContent).toBe('Step c');
-    expect(screen.getByTestId('dismissed-reason').textContent).toBe(': wrong host');
+    expect(screen.getByTestId('dismissed-reason').textContent).toBe('wrong host');
     expect(screen.getByTestId('dismissed-who').textContent).toBe(' (by ann@x.com on 2026-10-15)');
   });
 
@@ -58,7 +58,7 @@ describe('Dismissed human steps', () => {
     renderSteps([step({ id: 'a', state: 'due' }), dismissed('c', 'wrong **host**, use `h2`')]);
     await userEvent.click(screen.getByTestId('dismissed-toggle'));
     const reason = screen.getByTestId('dismissed-reason');
-    expect(reason.textContent).toBe(': wrong host, use h2');
+    expect(reason.textContent).toBe('wrong host, use h2');
     expect(reason.querySelector('strong')?.textContent).toBe('host');
     expect(reason.querySelector('code')?.textContent).toBe('h2');
   });

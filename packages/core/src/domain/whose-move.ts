@@ -1,4 +1,4 @@
-import { isForViewer } from './human-steps.js';
+import { isForViewer, isMerged } from './human-steps.js';
 import type { HumanStep, HumanStepViewer, StepAction } from './human-steps.js';
 import type { Action } from './machine.js';
 import { DEFAULT_STALL_MINUTES, isInFlight, isStale, isWaitingStep, quietMinutes } from './machine-steps.js';
@@ -17,7 +17,7 @@ export const HOLDERS = ['you', 'human', 'machine', 'waiting', 'stalled', 'idle',
 export type Holder = (typeof HOLDERS)[number];
 
 /** Why a glob is stalled, which picks the wording of the step that hands it to a person. */
-export const STALL_CAUSES = ['failed', 'queued', 'quiet', 'nobody'] as const;
+export const STALL_CAUSES = ['failed', 'queued', 'quiet', 'nobody', 'deploy'] as const;
 export type StallCause = (typeof STALL_CAUSES)[number];
 
 export interface Move {
@@ -151,6 +151,12 @@ const stalled = (cause: StallCause, reason: string, label: string, since: string
 const earliest = (steps: readonly MachineStep[]): string | null =>
   steps.map((s) => s.startedAt).filter((t): t is string => t !== null).sort()[0] ?? null;
 
+/** How long a merged glob's rollout steps may wait on a deploy nobody reported before the card says so (a pipeline takes a few minutes). */
+export const DEPLOY_STALL_MINUTES = 15;
+
+/** The one wording of a rollout waiting on a deploy that never came: the card and status show just this. */
+export const DEPLOY_STALLED_LABEL = 'Deploy stalled';
+
 /** The short stall label for a merge conflict: the card's one wording, also the status line's text for a failed merge. */
 export const MERGE_CONFLICT_STALL_LABEL = 'stalled · merge conflict';
 
@@ -241,6 +247,16 @@ export const whoseMove = (
   // or the card would hide Start on a glob that is free to start.
   if (glob.status !== 'planning' && rollouts.length > 0 && quiet.length === 0 && !machineSteps.some((s) => s.state === 'failed')) {
     const first = rollouts[0];
+    // A merged glob whose steps all wait on a deploy that was never recorded (none running, none reported) is stalled, not waiting:
+    // nothing else will move it, so the card says so and offers Mark deployed.
+    const deployWait = rollouts.filter((s) => s.due.startsWith('after_deploy:'));
+    if (isMerged(glob) && deployWait.length === rollouts.length) {
+      const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(glob.updatedAt)) / 60_000));
+      if (minutes >= DEPLOY_STALL_MINUTES) {
+        const env = deployWait[0]?.due.slice('after_deploy:'.length) ?? 'an environment';
+        return stalled('deploy', `nothing is recorded as deployed to ${env} since the merge`, DEPLOY_STALLED_LABEL, glob.updatedAt, minutes);
+      }
+    }
     return { holder: 'waiting', reason: `waiting for ${first?.title ?? 'a step'}`, since: null, waitingOn: rollouts.map((s) => s.id) };
   }
 
@@ -337,6 +353,7 @@ const ACTION_TITLES: Readonly<Partial<Record<StepAction, string>>> = {
   start: 'Start',
   start_anyway: 'Start',
   open_session: 'Open session',
+  mark_deployed: 'Mark deployed',
 };
 
 /** What the unstick step needs beyond the move: the actions the viewer may take, and whether a run's session can be opened. */
@@ -358,7 +375,8 @@ export const unstickAction = (
 ): { readonly action: StepAction; readonly alternative?: Action } | null => {
   if (move.cause === undefined) return null;
   const allowed = options.allowed;
-  const ok = (a: StepAction): boolean => (a === 'open_session' ? options.session !== false : allowed === undefined || allowed.includes(a));
+  const ok = (a: StepAction): boolean =>
+    a === 'open_session' ? options.session !== false : a === 'mark_deployed' ? true : allowed === undefined || allowed.includes(a);
   const pair = ((): [StepAction, Action | undefined] => {
     switch (move.cause) {
       case 'failed':
@@ -368,6 +386,8 @@ export const unstickAction = (
         return ['open_session', 'pick_up'];
       case 'nobody':
         return glob.implementer === null ? ['start', 'pick_up'] : ['pick_up', 'start_anyway'];
+      case 'deploy':
+        return ['mark_deployed', undefined];
     }
   })();
   const [first, second] = pair;

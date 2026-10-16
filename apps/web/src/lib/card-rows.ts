@@ -1,4 +1,4 @@
-import { decisionOf, feedbackText, isHumanCategory, labelsWaiting, openFeedback, signOffText } from '@slop/core';
+import { DEPLOY_STALLED_LABEL, decisionOf, feedbackText, isHumanCategory, labelsWaiting, openFeedback, signOffText } from '@slop/core';
 import type { DecisionAttributes, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { OUTCOME_TEXT } from './decide-flow';
@@ -113,7 +113,7 @@ const feedbackTip = (glob: GlobView): string =>
 
 /**
  * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
- * sign-off, an escalation in Planning). A decision glob's turn is the status line's.
+ * sign-off, an escalation in Planning) or it has an open question. A decision glob's turn is the status line's.
  */
 export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewer): boolean => {
   // An action waits for a person until it is done or dismissed; a prepared one while the machine prepares or records is the machine's.
@@ -122,6 +122,8 @@ export const needsPerson = (glob: GlobView, now: string, viewer?: HumanStepViewe
     return glob.status === 'planning' || line?.state === 'ready' || line?.state === 'preparation_failed' || (line?.state === 'recording' && line.icon === 'human');
   }
   if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
+  // An open question is a person's to answer even when a higher-priority status holds the corner.
+  if (openQuestionsOf(glob).length > 0) return true;
   const icon = cornerStatus(glob, now, viewer)?.icon;
   return icon === 'human' || icon === 'needs-human';
 };
@@ -230,9 +232,9 @@ export const cornerStatus = (
   if (position?.holder === 'stalled') {
     const cause = specifics(position.label) || specifics(position.text) || 'nobody on it';
     // A cause that already carries its age ("no progress 12 min") is not given it twice.
-    const minutes = position.minutes !== null && position.minutes > 0 && !/\d+ min/.test(cause) ? ` · ${String(position.minutes)} min` : '';
+    const minutes = position.minutes !== null && position.minutes > 0 && !/\d+ min/.test(cause) && cause !== DEPLOY_STALLED_LABEL ? ` · ${String(position.minutes)} min` : '';
     // The stall's next step is a person's (the viewer's turn): the human outline with that action, not the warning.
-    if (status !== null && status.kind === 'ready') {
+    if (status !== null && status.kind === 'ready' && status.action !== 'mark_deployed') {
       const turn = yourTurnClick(status, glob);
       const click: ChipClick = turn.kind === 'act' ? { kind: 'section', target: cardTargets.actions() } : turn;
       return make('ready', 'human', status.text, status.tone, click, [position.tip, `Stalled: ${cause}${minutes}`, status.tip]);

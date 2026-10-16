@@ -43,6 +43,3 @@ export const questionChipTip = (glob: Pick<GlobView, 'questions'>): string | nul
 
 /** What the card's corner says for open questions. */
 export const questionText = (count: number): string => (count > 1 ? 'questions' : 'question');
-
-/** True when the glob has an open question (the board filter). */
-export const hasOpenQuestions = (glob: Pick<GlobView, 'questions'>): boolean => openQuestionsOf(glob).length > 0;

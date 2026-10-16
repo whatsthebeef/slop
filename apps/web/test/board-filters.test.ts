@@ -211,8 +211,8 @@ describe('board filters', () => {
     expect(toggleOption(kind, 'bug', 'bug')).toBe('');
   });
 
-  it('has the kind filter, the ID filter, the temporary group filter, the Only human toggle and the Arm system and Has open questions toggles', () => {
-    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['kind', 'id', 'group', 'human', 'arm', 'questions']);
+  it('has the kind filter, the ID filter, the temporary group filter, the Only human toggle and the Arm system toggle', () => {
+    expect(BOARD_FILTERS.map((f) => f.key)).toEqual(['kind', 'id', 'group', 'human', 'arm']);
   });
 
   it('ignores the removed yourTurn and move parameters and an old human value in links', () => {
@@ -303,13 +303,21 @@ describe('board filters', () => {
     });
   });
 
-  it('filters to globs with an open question', () => {
-    const q = { id: 'q1', text: 'Prod?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'start', raisedAt: NOW } as const;
-    const values = parse('kind=all&questions=1');
-    expect(values).toEqual({ questions: '1' });
-    expect(matchesFilters(view({ questions: [q] }), values)).toBe(true);
-    expect(matchesFilters(view({ questions: [{ ...q, answer: { text: 'Yes', by: 'a', at: NOW } }] }), values)).toBe(false);
-    expect(matchesFilters(view({}), values)).toBe(false);
-    expect(matchesFilters(view({}), parse('kind=all'))).toBe(true);
+  describe('open questions', () => {
+    const q = { id: 'q1', text: 'Prod?', raisedBy: { kind: 'intake', actor: null }, source: 'create', blocking: 'none', raisedAt: NOW } as const;
+
+    it('has no Has open questions toggle, and ignores an old questions=1 link', () => {
+      expect(BOARD_FILTERS.some((f) => f.label === 'Has open questions')).toBe(false);
+      expect(parse('questions=1')).toEqual(defaultFilters());
+      expect(writeFilters(new URLSearchParams('questions=1'), parse('questions=1')).toString()).toBe('questions=1');
+      expect(matchesFilters(view({ questions: [q] }), parse('questions=1'))).toBe(true);
+    });
+
+    it('Only human includes a glob with an open question even when the corner shows a machine status', () => {
+      const values = parse('human=1');
+      const running = view({ status: 'implementing', questions: [q] });
+      expect(matchesFilters(running, values, { now: NOW })).toBe(true);
+      expect(matchesFilters({ ...running, questions: [{ ...q, answer: { text: 'Yes', by: 'a', at: NOW } }] }, values, { now: NOW })).toBe(false);
+    });
   });
 });

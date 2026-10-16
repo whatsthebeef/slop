@@ -108,6 +108,48 @@ describe('due steps block', () => {
     expect(write).toHaveBeenCalledWith('aws codebuild list-report-groups');
   });
 
+  describe('run order (s15b164)', () => {
+    const order = (commands: string[] | undefined, path = 'scripts/rollout/s14t14.sh') => {
+      show([step({ id: 'a', state: 'due', script: { path }, commands })]);
+      const run = screen.getByTestId('step-run');
+      return [...run.querySelectorAll('[data-testid="step-command"], [data-testid="step-script-path"]')].map((c) => c.textContent);
+    };
+
+    it('shows commands that already run the script as written, with no extra script row', () => {
+      const cmds = ['git checkout master', 'git pull', 'bash scripts/rollout/s14t14.sh --dry-run', 'bash scripts/rollout/s14t14.sh', 'unset AWS_PROFILE'];
+      expect(order(cmds)).toEqual(cmds);
+      expect(screen.getAllByTestId('step-script-path')).toHaveLength(2);
+    });
+
+    it('inserts the script run between the setup and the cleanup', () => {
+      expect(order(['git checkout master', 'git pull', 'aws sso login --profile p', 'export AWS_PROFILE=p', 'unset AWS_PROFILE'])).toEqual([
+        'git checkout master',
+        'git pull',
+        'aws sso login --profile p',
+        'export AWS_PROFILE=p',
+        'bash scripts/rollout/s14t14.sh',
+        'unset AWS_PROFILE',
+      ]);
+    });
+
+    it('shows just the run command for a script-only step', () => {
+      expect(order(undefined)).toEqual(['bash scripts/rollout/s14t14.sh']);
+    });
+
+    it("puts the script after the setup in s14b3's step", () => {
+      expect(
+        order(['git checkout master', 'git pull', 'aws sso login --sso-session pl', 'export AWS_PROFILE=x', 'unset AWS_PROFILE'], 'scripts/rollout/s14t14-nonprod-permission-set.sh'),
+      ).toEqual([
+        'git checkout master',
+        'git pull',
+        'aws sso login --sso-session pl',
+        'export AWS_PROFILE=x',
+        'bash scripts/rollout/s14t14-nonprod-permission-set.sh',
+        'unset AWS_PROFILE',
+      ]);
+    });
+  });
+
   it('leaves empty fields out, so an old free-text step still renders as its detail alone', () => {
     show([step({ id: 'a', state: 'due', detail: 'Just do it', commands: [] })]);
     const card = screen.getByTestId('due-step');
@@ -208,6 +250,20 @@ describe('steps grouped by stage', () => {
     expect(screen.getAllByTestId('due-step')).toHaveLength(1);
     expect(screen.getByTestId('due-steps').textContent).toContain('A step needs you');
     expect(screen.getAllByTestId('quiet-toggle').map((el) => el.textContent)).toEqual(['After the deploy to production: 1 step, not due yet ▸']);
+  });
+
+  it('lists only the next stage, greyed and open, once the glob is merged and waiting on a deploy', () => {
+    const glob = { ...coreGlob(), status: 'reviewing', pr: { number: 1, state: 'merged', headSha: 'abc' }, list: 'doing', branch: 's1t1', currentRun: null, humanSteps: [deploy('a', 'staging'), deploy('b', 'production')] } as GlobView;
+    render(
+      <MemoryRouter>
+        <HumanSteps glob={glob} canAdd environments={['staging', 'production']} onMarkDeployed={vi.fn(() => Promise.resolve(true))} onAdd={vi.fn(() => Promise.resolve(true))} onComplete={vi.fn(() => Promise.resolve(true))} onDismiss={vi.fn(() => Promise.resolve(true))} />
+      </MemoryRouter>,
+    );
+    const groups = screen.getAllByTestId('quiet-steps');
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.getAttribute('data-stage')).toBe('staging');
+    expect(groups[0]?.getAttribute('data-upcoming')).toBe('true');
+    expect(screen.getAllByTestId('step-title')).toHaveLength(1);
   });
 
   it('marks a due once step with a once marker in the needs-you block', () => {

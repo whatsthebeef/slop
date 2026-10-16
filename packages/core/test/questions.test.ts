@@ -168,6 +168,21 @@ describe('planChangedQuestion', () => {
   });
 });
 
+describe('question commands', () => {
+  it('checks and trims them', () => {
+    expect(checkNewQuestion(ask({ commands: ['a', 'b', 'c', 'd', 'e', 'f'] })).ok).toBe(false);
+    expect(checkNewQuestion(ask({ commands: ['x'.repeat(301)] })).ok).toBe(false);
+    expect(checkNewQuestion(ask({ commands: ['one\ntwo'] })).ok).toBe(false);
+    const ok = checkNewQuestion(ask({ commands: [' git status ', ' '] }));
+    expect(ok.ok && ok.value.commands).toEqual(['git status']);
+  });
+
+  it('are stored on the raised question', () => {
+    const t = value(m.raiseQuestion(glob({ type: 'sub', status: 'implementing', runs: [run()] }), ask({ blocking: 'merge', commands: ['bash x.sh'] }), ctx(dev)));
+    expect(t.glob.questions?.[0]?.commands).toEqual(['bash x.sh']);
+  });
+});
+
 describe('raising a question (row Q1)', () => {
   it('stores it with the next ID and logs QuestionRaised', () => {
     const t = value(m.raiseQuestion(glob({ type: 'sub', status: 'implementing', runs: [run()] }), ask({ blocking: 'merge', options: ['a', 'b'] }), ctx(dev)));
@@ -373,5 +388,16 @@ describe('the merge gate and open merge questions', () => {
     expect(m.allowedActions(open({ questions: [stored()] }), dev)).toContain('merge');
     const same = glob({ type: 'same', questions: [stored({ blocking: 'merge' })] });
     expect(m.allowedActions(same, dev)).toContain('start');
+  });
+});
+
+describe('questionLine titles', () => {
+  it('is the first sentence, without code spans, cut at a word', async () => {
+    const { questionLine } = await import('../src/domain/questions.js');
+    expect(questionLine({ text: 'Pre-merge check (review finding #4). Run `bash .reviews/s14b3-pool-trigger-check.sh <profile>` in the repo.' })).toBe('Pre-merge check (review finding #4).');
+    expect(questionLine({ text: 'Run `x`.' })).toBe('Run `x`.'.replace(/`/g, ''));
+    const long = questionLine({ text: `${'word '.repeat(40)}end` });
+    expect(long.length).toBeLessThanOrEqual(100);
+    expect(long.endsWith(' word…') || long.endsWith('word…')).toBe(true);
   });
 });

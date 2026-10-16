@@ -22,6 +22,7 @@ import {
   readStepsOpen,
   scriptArtifactPath,
   scriptCopyText,
+  runLines,
   scriptRunCommand,
   scriptSourceUrl,
   stateText,
@@ -38,7 +39,7 @@ import { cn } from '@/lib/utils';
 import { HumanIcon } from './actor-icons';
 import { SectionToggle } from './section-toggle';
 import { StepDetail } from './step-detail';
-import { InlineMarkdown, MarkdownView } from './markdown-view';
+import { MarkdownView } from './markdown-view';
 import { stripMarkdown } from '@/lib/markdown-text';
 import { blocksReadOnly } from '@/lib/blocking-item';
 import { Button } from './ui/button';
@@ -180,16 +181,18 @@ const ScriptRow = ({
   glob,
   script,
   source,
+  command,
 }: {
   glob: GlobView;
   script: HumanStepScript;
   source: ScriptSource;
+  command?: string;
 }) => {
   if ('path' in script) {
     const sourceUrl = scriptSourceUrl(source.repo, script.path, scriptRef(glob, source.baseBranch));
     return (
       <CommandBox
-        command={scriptRunCommand(script.path)}
+        command={command ?? scriptRunCommand(script.path)}
         testId="step-script-path"
         copyId="step-copy"
         extra={
@@ -252,7 +255,7 @@ const CopyButton = ({ copyText }: { copyText: () => Promise<string> }) => {
 const Field = ({ label, text, testId }: { label: string; text: string; testId: string }) => (
   <div className="min-w-0 break-words text-xs [overflow-wrap:anywhere]" data-testid={testId}>
     <span className="text-muted-foreground">{label}:</span>
-    <MarkdownView content={text} bare />
+    <MarkdownView content={text} bare commands />
   </div>
 );
 
@@ -290,10 +293,14 @@ const StepFields = ({
       {(script !== null || commands.length > 0) && (
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1" data-testid="step-run">
           <span className="text-[11px] text-muted-foreground">Run</span>
-          {script !== null && <ScriptRow glob={glob} script={script} source={source} />}
-          {commands.map((command, i) => (
-            <CommandBox key={`${String(i)}:${command}`} command={command} />
-          ))}
+          {script !== null && !('path' in script) && <ScriptRow glob={glob} script={script} source={source} />}
+          {runLines(commands, script !== null && 'path' in script ? script.path : null).map((line, i) =>
+            line.script && script !== null && 'path' in script ? (
+              <ScriptRow key={`${String(i)}:${line.command}`} glob={glob} script={script} source={source} command={line.command} />
+            ) : (
+              <CommandBox key={`${String(i)}:${line.command}`} command={line.command} />
+            ),
+          )}
         </div>
       )}
       {verify !== '' && <Field label="Check it worked" text={verify} testId="step-verify" />}
@@ -445,16 +452,24 @@ const QuietGroup = ({
   busy,
   onMarkDeployed,
   render,
+  upcoming = false,
 }: {
   group: StageGroup;
   busy: boolean;
+  /** The next stage of a merged glob: its steps are listed, greyed, since the glob waits for them to fall due. */
+  upcoming?: boolean;
   onMarkDeployed?: (env: string) => Promise<boolean>;
   render: (step: ListedHumanStep) => ReactNode;
 }) => {
-  const [shown, setShown] = useState(false);
+  const [shown, setShown] = useState(upcoming);
   const env = deployEnv(group);
   return (
-    <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground' data-testid='quiet-steps' data-stage={group.stage}>
+    <div
+      className={`grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground ${upcoming ? 'opacity-60' : ''}`}
+      data-testid='quiet-steps'
+      data-stage={group.stage}
+      data-upcoming={upcoming ? 'true' : undefined}
+    >
       <div className='flex flex-wrap items-center gap-2'>
         <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='quiet-toggle' onClick={() => setShown(!shown)}>
           {groupText(group)} {shown ? '▾' : '▸'}
@@ -486,14 +501,12 @@ const DismissedSteps = ({ steps }: { steps: readonly ListedHumanStep[] }) => {
               <span className='line-through' data-testid='dismissed-title'>
                 {stripMarkdown(s.title)}
               </span>
-              <span data-testid='dismissed-reason'>
-                {s.dismissedReason == null || s.dismissedReason === '' ? null : (
-                  <>
-                    : <InlineMarkdown text={s.dismissedReason} />
-                  </>
-                )}
-              </span>
               {dismissalText(s) !== '' && <span data-testid='dismissed-who'> ({dismissalText(s)})</span>}
+              {s.dismissedReason != null && s.dismissedReason !== '' && (
+                <div data-testid='dismissed-reason'>
+                  <MarkdownView content={s.dismissedReason} bare commands />
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -599,6 +612,8 @@ export const HumanSteps = ({
   const quiet = live.filter(isQuietStep);
   const steps = live.filter((s) => !due.includes(s) && !quiet.includes(s));
   const dismissed = all.filter(isDismissedStep);
+  // Merged and rolling out: only the next stage's steps are listed (greyed until they fall due), not every later one.
+  const rolledOut = glob.pr?.state === 'merged' && due.length === 0;
   const [toggled, setToggled] = useState<boolean | null>(() => (startOpen ? true : collapsed ? false : readStepsOpen()));
   const stepsOpenByDefault = defaultStepsOpen([...steps, ...quiet]);
   const [busy, setBusy] = useState(false);
@@ -690,9 +705,10 @@ export const HumanSteps = ({
                   ))}
                 </ul>
               )}
-              {stageGroups(quiet, environments).map((group) => (
+              {(rolledOut ? stageGroups(quiet, environments).slice(0, 1) : stageGroups(quiet, environments)).map((group) => (
                 <QuietGroup
                   key={group.stage}
+                  upcoming={rolledOut}
                   group={group}
                   busy={busy}
                   {...(wrappedMark === undefined ? {} : { onMarkDeployed: wrappedMark })}

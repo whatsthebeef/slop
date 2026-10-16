@@ -126,6 +126,31 @@ describe('whoseMove: priority', () => {
     expect(move(g, {}, { stored: [rollout] })).toMatchObject({ holder: 'waiting', reason: 'waiting for Deploy the host stack' });
   });
 
+  describe('a merged glob whose rollout steps wait on a deploy', () => {
+    const step = (env: string): StoredHumanStep => ({
+      id: `hs-${env}`, boardId: 1, globId: 's1t1', kind: 'rollout', title: `Check ${env}`, detail: null, who: 'admin', due: `after_deploy:${env}`, state: 'open',
+      blocks: ['sign_off'], check: null, script: null, why: null, permissions: null, commands: [], verify: null, origin: 'rollout-section',
+      createdBy: dev.email, createdAt: NOW, doneBy: null, doneAt: null, dismissedReason: null, dueSince: null,
+    });
+    const merged = (minutes: number) => glob({ status: 'reviewing', runs: [], pr: { number: 1, state: 'merged', headSha: head }, updatedAt: minutesAgo(minutes) });
+
+    it('is waiting just after the merge, while a pipeline may still report the deploy', () => {
+      expect(move(merged(2), {}, { stored: [step('demo')] })).toMatchObject({ holder: 'waiting' });
+    });
+
+    it('is stalled as "Deploy stalled" once nothing was recorded for a while, with Mark deployed as the way forward', () => {
+      const m = move(merged(40), {}, { stored: [step('demo'), step('dev')] });
+      expect(m).toMatchObject({ holder: 'stalled', cause: 'deploy', label: 'Deploy stalled' });
+      expect(m.reason).toContain('demo');
+      expect(unstickStep(m, { implementer: null })).toMatchObject({ action: 'mark_deployed', title: 'Mark deployed' });
+    });
+
+    it('is not stalled while a deploy of it is running', () => {
+      const deploy = { deploys: [{ id: 'd1', environment: 'demo', sha: head, state: 'running' as const, requestedAt: NOW, runningSince: NOW, url: null }] };
+      expect(move(merged(40), deploy, { stored: [step('demo')] }).holder).not.toBe('stalled');
+    });
+  });
+
   it('a predicted rollout placeholder is not a wait in Planning: the glob is free to start', () => {
     const placeholder: StoredHumanStep = {
       id: 'hs-2',
