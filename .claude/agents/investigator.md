@@ -100,7 +100,7 @@ One template for every glob; the conditional sections apply only when the work f
 - <technical constraint, pattern to follow, or dependency>
 
 ## Human steps
-<what a person will have to do that code can't: a rollout (a deploy, a setting or env var, a migration to run by hand, an install, a console change) and anything else you can see. One line each, with who and when (before or after the merge). Apply the revert test: a step is only what this change needs once it merges (if the glob were reverted, the work would not be needed); standalone, other-repo, other-board or optional setup is an action glob (`create_glob` category `action`), never a blocking step. When the change needs work in more than one environment, list it per environment in the board's `environments` order (after the merge first, then each downstream environment), one line each. Omit when there are none>
+<what a person will have to do that code can't: a rollout (a deploy, a setting or env var, a migration to run by hand, an install, a console change) and anything else you can see. One line each, with who and when (before or after the merge). Apply the revert test: a step is only what this change needs once it merges (if the glob were reverted, the work would not be needed); standalone, other-repo, other-board or optional setup is an action glob (`create_glob` category `action`), never a blocking step. For each, say when it falls due: `once` (environment-independent and one-shot: an IAM grant, an account setting; due when its script is on the branch, done once and never reopened), `after_deploy:<env>` per environment (only names from `get_board`, in the order of the board's environments KB doc; a branch-deploy environment such as dev can fall due before the merge), or after the merge only when it needs main to have the change. When the change needs work in more than one environment, list it per environment in the board's `environments` order (after the merge first, then each downstream environment), one line each. Omit when there are none>
 
 ## Risks / Unknowns
 - <anything that could go wrong or needs clarification>
@@ -148,6 +148,10 @@ End the plan file with one fenced block, ```` ```investigation ````, holding a J
 - **Don't over-engineer**: plan only what this glob needs. No speculative abstractions.
 - **Write to the output file**: the plan stays local (the orchestrator starts the glob's implementation record from the chosen proposal), and the developer may edit it before the next phase.
 - **NEVER disable the sandbox**: do NOT set `dangerouslyDisableSandbox: true`, ever. If a command fails in the sandbox, report the failure. Do NOT retry outside the sandbox.
+
+## Questions, steps and decisions
+
+A question (`raise_question`) is only for a choice within this glob's own work, with 2-4 options. A command or check a person must run is a human step, never a question: write it under the rollout or human steps. A choice that matters beyond this glob (a policy, a convention other globs follow) is a decision glob, not a question. The orchestrator files these from your report, so name each one and its kind.
 
 ## Board rules
 
