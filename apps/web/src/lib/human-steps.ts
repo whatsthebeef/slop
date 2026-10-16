@@ -1,6 +1,6 @@
-import { blockProgress, dueText, isInFlight, isMerged, isOpenStep, yourTurn } from '@slop/core';
+import { blockProgress, dueText, isInFlight, isMerged, isOpenStep, listOf, yourTurn } from '@slop/core';
 import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer, MachineStep } from '@slop/core';
-import type { ListedHumanStep } from './api';
+import type { GlobView, ListedHumanStep } from './api';
 import { stripMarkdown } from './markdown-text';
 import { globPath } from './glob-section';
 import { readSectionOpen, writeSectionOpen } from './section-open';
@@ -97,6 +97,15 @@ export const approveHold = (glob: Glob & { readonly humanSteps?: readonly Listed
   if (blockProgress(steps, 'sign_off').open === 0) return null;
   const first = steps.find((s) => s.source !== 'machine' && s.blocks.includes('sign_off') && isOpenStep(s));
   return `Waits for the rollout${first === undefined ? '' : `: ${stepName(first)}`}`;
+};
+
+/**
+ * Whether review (the QA, CR and FR blocks and their actions) is open: the glob is in Reviewing, or signed off with its labels
+ * kept. A merged glob whose rollout steps are due stays in Doing, and nothing review-related shows until they are done.
+ */
+export const reviewOpen = (glob: Pick<GlobView, 'status'> & Partial<Pick<GlobView, 'list'>>): boolean => {
+  const list = glob.list ?? listOf(glob.status);
+  return list === 'reviewing' || list === 'signed_off';
 };
 
 /** One key for every glob: the viewer's last toggle of the Human steps section. */

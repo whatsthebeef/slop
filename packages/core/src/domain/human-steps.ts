@@ -406,6 +406,9 @@ export const openRolloutSteps = (
 /** The refusal and the status text while a glob's rollout holds back its sign-off: "Rollout pending (1 of 3)". */
 export const rolloutPending = (progress: BlockProgress): string => `Rollout pending (${progress.open} of ${progress.total})`;
 
+/** What a glob in Doing with rollout steps due says about review: it opens in Reviewing, once the steps are done. */
+export const reviewOpensWhenDone = (progress: BlockProgress): string => `${rolloutPending(progress)}: review opens when they're done`;
+
 /** The same, for stored steps (what the machine and the dependants read, with no glob to work due-ness out from). */
 export const storedBlockProgress = (stored: readonly Pick<StoredHumanStep, 'state' | 'blocks'>[], block: HumanStepBlock): BlockProgress => {
   const holding = stored.filter((s) => s.state !== 'dismissed' && s.blocks.includes(block));

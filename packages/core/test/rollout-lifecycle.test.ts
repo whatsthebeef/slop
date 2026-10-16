@@ -31,14 +31,18 @@ describe('lifecycle with open blocking steps (pure)', () => {
     expect(approve(reviewing(), { open: 0, total: 2 }).glob.status).toBe('signed_off');
   });
 
-  it('refuses to approve a merged glob\'s label while a step holds sign-off back, and still takes other changes', () => {
-    const refused = machine.reviewLabel(reviewing(), 'CR', { kind: 'approve' }, ctx(po), { open: 1, total: 2 });
+  it('refuses every label command on a merged glob in Doing while a step holds sign-off back, saying review opens later', () => {
+    const open = { open: 1, total: 2 };
+    const refused = machine.reviewLabel(reviewing(), 'CR', { kind: 'approve' }, ctx(po), open);
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.error.message).toContain('Rollout pending (1 of 2)');
-    const asked = unwrap(machine.reviewLabel(reviewing(), 'CR', { kind: 'submit_items', items: ['Check it'] }, ctx(po), { open: 1, total: 2 }));
-    expect(asked.glob.labels.CR).toBe('added');
+    if (!refused.ok) expect(refused.error.message).toContain("review opens when they're done");
+    const asked = machine.reviewLabel(reviewing(), 'CR', { kind: 'submit_items', items: ['Check it'] }, ctx(po), open);
+    expect(asked.ok).toBe(false);
+    // Once the steps are done the same commands go through, and labels set earlier were kept.
+    expect(unwrap(machine.reviewLabel(reviewing(), 'CR', { kind: 'submit_items', items: ['Check it'] }, ctx(po), { open: 0, total: 2 })).glob.labels.CR).toBe('added');
     const approved = reviewing({ labels: { CR: 'approved' } });
-    expect(unwrap(machine.reviewLabel(approved, 'CR', { kind: 'approve' }, ctx(po), { open: 1, total: 2 })).changed).toBe(false);
+    expect(machine.reviewLabel(approved, 'CR', { kind: 'approve' }, ctx(po), open).ok).toBe(false);
   });
 
   it('refuses to sign off a decision while steps are open, saying how many', () => {

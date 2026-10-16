@@ -70,7 +70,7 @@ import {
   startQuestions,
 } from './questions.js';
 import type { NewQuestion, OpenQuestion, QuestionRaiser } from './questions.js';
-import { rolloutPending } from './human-steps.js';
+import { rolloutPending, reviewOpensWhenDone } from './human-steps.js';
 import type { BlockProgress } from './human-steps.js';
 import type {
   Actor,
@@ -1705,6 +1705,10 @@ export const reviewLabel = (
   if (from === undefined) {
     return invalidTransition(glob, actor, `${name} is not required on this glob`);
   }
+  // A merged glob whose rollout steps are due sits in Doing: review belongs to Reviewing, so no label command applies yet.
+  if (glob.status === 'reviewing' && rollout !== null && rollout.open > 0) {
+    return invalidTransition(glob, actor, reviewOpensWhenDone(rollout));
+  }
   const items = glob.checklists[name] ?? [];
   const setState = (
     to: LabelState,
@@ -1817,7 +1821,6 @@ export const reviewLabel = (
     case 'approve':
       // Row 28 (and row 21 when it is the last label).
       if (from === 'approved') return unchanged(glob);
-      if (glob.status === 'reviewing' && rollout !== null && rollout.open > 0) return invalidTransition(glob, actor, rolloutPending(rollout));
       {
         const b = setState('approved', { open: openItems(items) });
         // Unsent drafts never became part of the review.

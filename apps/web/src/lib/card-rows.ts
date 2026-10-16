@@ -3,6 +3,7 @@ import type { DecisionAttributes, HumanStepViewer } from '@slop/core';
 import type { GlobView } from './api';
 import { OUTCOME_TEXT } from './decide-flow';
 import { cardTargets } from './card-targets';
+import { reviewOpen } from './human-steps';
 import { clickTip, positionClick, sentence, statusClick, tipLines, yourTurnClick } from './chip-actions';
 import type { ChipClick } from './chip-actions';
 import { onStandby, positionOf } from './position';
@@ -95,7 +96,7 @@ export const plainText = (text: string): string =>
 
 /** Whether the glob is merged and waits for a person's sign-off: a label is still to be approved. */
 const awaitingSignOff = (glob: GlobView): boolean =>
-  glob.status === 'reviewing' && Object.values(glob.labels).some((state) => state !== 'approved');
+  glob.status === 'reviewing' && reviewOpen(glob) && Object.values(glob.labels).some((state) => state !== 'approved');
 
 /** "Merged; QA and CR are waiting for a person to approve them." */
 const signOffTip = (labels: GlobView['labels']): string => {
@@ -255,7 +256,7 @@ export const cornerStatus = (
     return make(status.kind, icon, shortProblem(status, glob), status.tone, statusClick(status), [status.tip]);
   }
   // Open feedback on a label is the developer's turn (a run fixing it shows as the machine), and outranks sign-off.
-  if (glob.status === 'reviewing' && openFeedback(glob).length > 0 && (position === null || position.holder === 'machine')) {
+  if (glob.status === 'reviewing' && reviewOpen(glob) && openFeedback(glob).length > 0 && (position === null || position.holder === 'machine')) {
     const target = { kind: 'section', target: cardTargets.label() } as const;
     if (position?.holder === 'machine') {
       return make('machine', position.spinning ? 'machine-spinning' : 'machine', feedbackText('fixing feedback'), position.tone, target, [feedbackTip(glob)]);
