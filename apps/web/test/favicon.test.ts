@@ -14,7 +14,9 @@ describe('favicon', () => {
     expect(html).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
   });
   it('has a square viewBox', () => {
-    const [, , w, h] = /viewBox="([^"]+)"/.exec(svg)![1]!.split(/\s+/).map(Number);
+    const viewBox = /viewBox="([^"]+)"/.exec(svg)?.[1] ?? '';
+    const [, , w, h] = viewBox.split(/\s+/).map(Number);
+    expect(viewBox).not.toBe('');
     expect(w).toBe(h);
   });
   it('switches to a light fill on dark tab bars', () => {
