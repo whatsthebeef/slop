@@ -8,8 +8,8 @@
 import { invalidInput, ok } from './errors.js';
 import type { Result } from './errors.js';
 import { isActionAttributes, isDecisionAttributes } from './attributes.js';
-import { RELATION_GATES } from './types.js';
-import type { Glob, Relation, RelationGate, RelationPatch, RelationSource, RelationUntil } from './types.js';
+import { RELATION_GATES, RELATION_UNTILS } from './types.js';
+import type { Glob, Relation, RelationGate, RelationKind, RelationPatch, RelationSource, RelationUntil } from './types.js';
 
 /**
  * Where the glob a relation points at stands. `merged`: Reviewing (a super that merged and continues is still `open`).
@@ -86,6 +86,11 @@ export interface RelationFacts {
   readonly relations: readonly Relation[];
   /** The state of each `to` (a missing entry reads as deleted). */
   readonly states: ReadonlyMap<string, ToState>;
+  /**
+   * The `to` ids on another board than the holder. Text built from the facts (refusals, the `Waiting` event note, failure reasons) is
+   * viewer-independent and stored, so it names these as "a glob on another board" and never prints the id or where it stands.
+   */
+  readonly external?: ReadonlySet<string>;
 }
 
 export const NO_RELATIONS: RelationFacts = { relations: [], states: new Map() };
@@ -94,7 +99,12 @@ export const NO_RELATIONS: RelationFacts = { relations: [], states: new Map() };
 export interface Unmet {
   readonly relation: Relation;
   readonly state: ToState;
+  /** `to` is on another board: its id and state stay out of any text. */
+  readonly external?: boolean;
 }
+
+/** What text says in place of the id of a glob on another board. */
+export const OTHER_BOARD_GLOB = 'a glob on another board';
 
 /** The relations of one gate that still hold (not lifted, `to` not there yet), in the order they were made. */
 export const unmet = (facts: RelationFacts, gate: RelationGate): Unmet[] =>
@@ -102,7 +112,8 @@ export const unmet = (facts: RelationFacts, gate: RelationGate): Unmet[] =>
     .filter((r) => r.gate === gate)
     .flatMap((relation) => {
       const state = facts.states.get(relation.to) ?? 'missing';
-      return isMet(relation, state) ? [] : [{ relation, state }];
+      if (isMet(relation, state)) return [];
+      return facts.external?.has(relation.to) === true ? [{ relation, state, external: true }] : [{ relation, state }];
     });
 
 /** Every active start relation of a glob, whether or not it is met: what the glob starts after. */
@@ -114,22 +125,32 @@ export const startIds = (relations: readonly Relation[]): string[] => [
 // Words
 
 export const GATE_WORDS: Readonly<Record<RelationGate, string>> = { start: 'start', merge: 'merge', sign_off: 'sign off' };
-export const UNTIL_WORDS: Readonly<Record<RelationUntil, string>> = { merged: 'merged', decided: 'decided', done: 'done', signed_off: 'signed off' };
+/** `merged` also waits for the rollout (a merged glob's open rollout steps keep it holding), so it reads "merged and rolled out". */
+export const UNTIL_WORDS: Readonly<Record<RelationUntil, string>> = { merged: 'merged and rolled out', decided: 'decided', done: 'done', signed_off: 'signed off' };
+
+/** Accepts `rolled_out` as another way to write `until: 'merged'` (the wire value stays `merged`); null for anything else. */
+export const normaliseUntil = (value: string): RelationUntil | null => {
+  const v = value.trim().toLowerCase();
+  if (v === 'rolled_out' || v === 'merged_and_rolled_out') return 'merged';
+  return (RELATION_UNTILS as readonly string[]).includes(v) ? (v as RelationUntil) : null;
+};
 
 /** "can't start until s15f82 is merged": what one relation says, for a refusal or a row. */
-export const holdWords = (r: Pick<Relation, 'gate' | 'to' | 'until'>): string =>
-  `can't ${GATE_WORDS[r.gate]} until ${r.to} is ${UNTIL_WORDS[r.until]}`;
+export const holdWords = (r: Pick<Relation, 'gate' | 'to' | 'until'>, external = false): string =>
+  `can't ${GATE_WORDS[r.gate]} until ${external ? OTHER_BOARD_GLOB : r.to} is ${UNTIL_WORDS[r.until]}`;
 
 /** Why one unmet relation holds, as shown on the glob: "Waits for s15t7 to merge", "Waits for s15t7: <reason>", ... */
-export const waitNote = ({ relation, state }: Unmet): string => {
-  const { to, reason, source } = relation;
+export const waitNote = ({ relation, state, external }: Unmet): string => {
+  const { reason, source } = relation;
+  const to = external === true ? OTHER_BOARD_GLOB : relation.to;
+  if (external === true && relation.gate === 'start' && relation.until === 'merged') return `Waits for ${to} to merge`;
   if (relation.gate === 'start' && relation.until === 'merged') {
     if (state === 'open' && reason !== null && (source === 'learned' || source === 'inferred')) return `Waits for ${to}: ${reason}`;
     switch (state) {
       case 'planning':
         return `Waits for ${to} to merge (it is in Planning)`;
       case 'rollout':
-        return `Waits for the rollout of ${to} to be done (it has merged)`;
+        return `Waits for the rollout of ${to} to be done (it has merged; its rollout steps are open)`;
       default:
         return `Waits for ${to} to merge`;
     }
@@ -148,6 +169,8 @@ export type AwaitedState = 'open' | 'planning' | 'rollout' | 'question';
 export interface AwaitedDependency {
   readonly id: string;
   readonly state: AwaitedState;
+  /** `id` is on another board: texts built from it name "a glob on another board" instead. */
+  readonly external?: boolean;
   /** Why it waits, as shown on the glob: "Waits for s15t7 to merge", ... */
   readonly why: string;
 }
@@ -156,7 +179,17 @@ const awaitedState = (state: ToState): AwaitedState => (state === 'planning' || 
 
 /** What the glob still waits for before it can start: its unmet start relations, one line each. */
 export const awaitedOf = (facts: RelationFacts): AwaitedDependency[] =>
-  unmet(facts, 'start').map((u) => ({ id: u.relation.to, state: awaitedState(u.state), why: waitNote(u) }));
+  unmet(facts, 'start').map((u) => ({
+    id: u.relation.to,
+    state: awaitedState(u.state),
+    ...(u.external === true && { external: true }),
+    why: waitNote(u),
+  }));
+
+/** What stored or shown text calls a waited-for glob: its id, or a stub for one on another board. */
+export const awaitedName = (a: Pick<AwaitedDependency, 'id' | 'external'>): string => (a.external === true ? OTHER_BOARD_GLOB : a.id);
+/** The ids an event records for what a glob waits for (a stub for each glob on another board). */
+export const awaitedNames = (awaited: readonly Pick<AwaitedDependency, 'id' | 'external'>[]): string[] => awaited.map(awaitedName);
 
 /** One line for a glob that waits: "Waits for s15t7 to merge", joined for several. */
 export const waitSummary = (awaited: readonly AwaitedDependency[]): string => awaited.map((a) => a.why).join('; ');
@@ -165,7 +198,7 @@ export const waitSummary = (awaited: readonly AwaitedDependency[]): string => aw
 export const pickUpWarning = (awaited: readonly AwaitedDependency[]): string | null =>
   awaited.length === 0
     ? null
-    : `${awaited.map((a) => a.id).join(', ')} hasn't merged yet; this branch lacks ${awaited.length === 1 ? 'its' : 'their'} changes`;
+    : `${awaited.map(awaitedName).join(', ')} hasn't merged yet; this branch lacks ${awaited.length === 1 ? 'its' : 'their'} changes`;
 
 /** What a glob waits for, in a form that reads in a refusal: "Waits for s15t7 to merge (use Start now)". */
 export const refusalText = (awaited: readonly AwaitedDependency[]): string => `${waitSummary(awaited)} (use Start now)`;
@@ -181,6 +214,8 @@ export interface NewRelation {
   readonly reason: string | null;
   readonly evidence: readonly string[];
   readonly source: RelationSource;
+  /** Absent means `waits`. */
+  readonly kind?: RelationKind;
   /** The group it is set for, when it is one of a group-wide decision's relations. */
   readonly group?: string | null;
 }
@@ -294,20 +329,54 @@ export const wouldCycle = (relations: readonly Relation[], draft: RelationDraft)
   return false;
 };
 
+/** Most relation rows a cycle check reads beyond the glob's own board. */
+export const RELATION_UNIVERSE_CAP = 1000;
+
 /**
- * Checks a relation a person, an agent or slop wants to add: not to itself, `to` on this board, within the limit for the
- * glob and gate, and no cycle. `board` is every relation of the board (read under the board's relation lock), `lookup` finds
- * any glob's board by ID.
+ * The relations a cycle check must see: `base` (the glob's board) plus everything reachable forward from `targets`, across boards.
+ * A cycle through a new edge needs a path from its `to` back to its `from`, and that path may run through other boards even when
+ * the edge itself is local. Over `RELATION_UNIVERSE_CAP` rows beyond the base it refuses rather than guesses. Every relation
+ * writer uses it under the instance-wide relations lock.
+ */
+export const relationUniverse = async (
+  listFrom: (ids: string[]) => Promise<readonly Relation[]>,
+  base: readonly Relation[],
+  targets: readonly string[],
+): Promise<Result<Relation[]>> => {
+  const rows = new Map(base.map((r) => [r.id, r]));
+  const seen = new Set<string>();
+  let frontier = [...new Set(targets)];
+  let added = 0;
+  while (frontier.length > 0) {
+    const batch = frontier.filter((id) => !seen.has(id));
+    for (const id of batch) seen.add(id);
+    frontier = [];
+    if (batch.length === 0) break;
+    for (const r of await listFrom(batch)) {
+      frontier.push(r.to);
+      if (rows.has(r.id)) continue;
+      rows.set(r.id, r);
+      added++;
+      if (added > RELATION_UNIVERSE_CAP) return invalidInput('the relation graph is too large to check');
+    }
+  }
+  return ok([...rows.values()]);
+};
+
+/**
+ * Checks a relation a person, an agent or slop wants to add: not to itself, `to` exists (on any board: the caller checks that
+ * the actor may view it), within the limit for the glob and gate, and no cycle. `board` is every relation in play (the glob's
+ * board plus the forward closure of `to`, read under the relations lock), `lookup` finds any glob by ID. `_boardId` is kept
+ * so existing callers compile; it no longer limits `to` to one board.
  */
 export const checkRelation = (
   draft: RelationDraft,
-  boardId: number,
+  _boardId: number,
   board: readonly Relation[],
   lookup: (id: string) => Pick<Glob, 'boardId'> | undefined,
 ): Result<null> => {
   if (draft.from === draft.to) return invalidInput('A glob cannot wait for itself');
-  const other = lookup(draft.to);
-  if (other === undefined || other.boardId !== boardId) return invalidInput(`No glob ${draft.to} on this board`);
+  if (lookup(draft.to) === undefined) return invalidInput(`No glob ${draft.to}`);
   const same = board.filter((r) => r.from === draft.from && r.gate === draft.gate && r.to !== draft.to && !lifted(r));
   if (same.length >= MAX_RELATIONS) return invalidInput(`A glob can have at most ${MAX_RELATIONS} relations for one gate`);
   if (wouldCycle(board, draft)) {
@@ -337,6 +406,13 @@ export const startReaches = (relations: readonly Relation[], from: string, targe
 // ---------------------------------------------------------------------------
 // What holds a glob back, as the views and whose-move read it
 
+/** The other board's side of a cross-board relation. `hidden`: the viewer is not a member of that board, so the glob's id and title are left out. */
+export interface ExternalGlob {
+  readonly boardId: number;
+  readonly boardName: string | null;
+  readonly hidden: boolean;
+}
+
 /** What a holding or a relation row says about the glob it points at. */
 export interface TitleInfo {
   readonly title: string;
@@ -360,6 +436,8 @@ export interface Holding {
   readonly state: ToState;
   readonly reason: string | null;
   readonly source: RelationSource;
+  /** Set when `to` is on another board: its name, and whether the viewer may not see it (then `to` is `another board` and `toTitle` null). */
+  readonly external?: ExternalGlob;
 }
 
 /**
@@ -429,6 +507,8 @@ export interface HeldBack {
   readonly until: RelationUntil;
   readonly reason: string | null;
   readonly source: RelationSource;
+  /** Set when `from` is on another board (see `Holding.external`). */
+  readonly external?: ExternalGlob;
 }
 
 /** How a relation of this glob stopped holding: its `to` reached `until` or was deleted, or a person dismissed or overrode it. */
@@ -446,11 +526,30 @@ export interface DoneRelation {
   readonly how: DoneHow;
 }
 
+/** One side of a supersession: the glob that supersedes this one, or one this glob supersedes. */
+export interface Supersession {
+  readonly id: string;
+  readonly title: string | null;
+  readonly reason: string | null;
+  readonly source: RelationSource;
+  /** The relation's ID, so it can be dismissed. */
+  readonly relationId?: string;
+  /** Set when the other glob is on a board the viewer can't see (then `id` is `another board` and `title` null). */
+  readonly hidden?: boolean;
+  readonly external?: ExternalGlob;
+}
+
 /** The glob's relations in three groups: what holds it back now, what it holds back, and what no longer holds. */
 export interface RelationsView {
   readonly holding: readonly Holding[];
   readonly holdsBack: readonly HeldBack[];
   readonly done: readonly DoneRelation[];
+  /** The glob that supersedes this one (absent from older servers; null: none). */
+  readonly supersededBy?: Supersession | null;
+  /** The globs this one supersedes. */
+  readonly supersedes?: readonly Supersession[];
+  /** How many relations on other boards the viewer can't see wait for this glob. */
+  readonly waitedOnByOtherBoards?: number;
 }
 
 /** The relations of the glob that no longer hold, with how each stopped (dismissals and overrides first, then met and deleted). */

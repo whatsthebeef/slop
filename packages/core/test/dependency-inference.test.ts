@@ -343,6 +343,21 @@ describe('dependency inference', () => {
     expect(JSON.stringify(note?.data.notes)).toContain(`Dropped the need on ${second.id}`);
   });
 
+  it('never creates a cycle that runs through another board (R1-3)', async () => {
+    const first = await create({ type: 'same' });
+    const second = await create({ type: 'same' });
+    const other = unwrap(await boards.create(ADMIN, { name: 'Other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const abroad = unwrap(await globs.create(ADMIN, input({ boardId: other, type: 'same' })));
+    // second -> abroad (stored on board 1), abroad -> first (stored on board 2): first -> second would close the loop.
+    unwrap(await globs.addRelation(ADMIN, second.id, null, { to: abroad.id }));
+    unwrap(await globs.addRelation(ADMIN, abroad.id, null, { to: first.id }));
+    answer = edges({ id: second.id, kind: 'needs', reason: 'uses its endpoint' });
+    await inference.refresh(first.id);
+    expect(edgesOf(await current(first.id))).toEqual([]);
+    const note = store.state.events.find((e) => e.globId === first.id && e.type === 'EdgesInferred');
+    expect(JSON.stringify(note?.data.notes)).toContain(`Dropped the need on ${second.id}`);
+  });
+
   it('a glob that has started holds nothing, so nothing is written for it', async () => {
     const provider = await create({ type: 'same' });
     const running = await create({ type: 'sub', after: [] });

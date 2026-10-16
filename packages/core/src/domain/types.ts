@@ -309,9 +309,18 @@ export type RelationGate = (typeof RELATION_GATES)[number];
 /** What `to` must reach for the gate to open: merged, decided (a decision glob's outcome), done (an action glob's outcome) or signed off. */
 export const RELATION_UNTILS = ['merged', 'decided', 'done', 'signed_off'] as const;
 export type RelationUntil = (typeof RELATION_UNTILS)[number];
-/** Who set a relation: a person, slop's inference, slop's learning from outcomes, an agent, or (old rows only; nothing creates it now) a split. */
-export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent'] as const;
+/**
+ * Who set a relation: a person, slop's inference, slop's learning from outcomes, an agent, or (old rows only; nothing creates it now) a split.
+ * `auto`: slop's automatic pass read the glob's text and added it (shown "added automatically", dismissible); reason rules treat it like `agent`.
+ */
+export const RELATION_SOURCES = ['person', 'inferred', 'learned', 'split', 'agent', 'auto'] as const;
 export type RelationSource = (typeof RELATION_SOURCES)[number];
+/**
+ * What a relation row means. `waits`: `from` can't pass `gate` until `to` reaches `until`. `superseded_by`: `from` is superseded by
+ * `to` (gate and until are inert placeholders). The list methods the gate code reads return only `waits` rows.
+ */
+export const RELATION_KINDS = ['waits', 'superseded_by'] as const;
+export type RelationKind = (typeof RELATION_KINDS)[number];
 
 /**
  * One glob held back by another: `from` can't pass `gate` until `to` reaches `until`. Stored in the `relations` table, not on
@@ -331,6 +340,8 @@ export interface Relation {
   /** Files or symbols that show it. */
   readonly evidence: readonly string[];
   readonly source: RelationSource;
+  /** `waits` (the default; absent on a row written before supersedes) or `superseded_by`. */
+  readonly kind?: RelationKind;
   /** The group this relation was set for ("every glob in group X waits for D"); null for an ordinary one. Set on each glob's own row. */
   readonly group: string | null;
   /** Set when a person dismissed it as not a dependency, with the plan hash then (a changed plan may infer it again). */

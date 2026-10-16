@@ -7,11 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
 import { api, RequestError } from '@/lib/api';
 import type { GlobView, NewGlob } from '@/lib/api';
+import { lacksReason } from '@/lib/status-line';
 import { groupNames } from '@/lib/group-names';
 import { boardGroupPath, groupPath, holdText, movableIn, progressText, regroupNotice } from '@/lib/group-page';
 import { globKey, globsKey, useLiveBoard } from '@/lib/live';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/toast';
+import { UNTIL_WORDS } from '@slop/core';
 import type { GroupSummary, GroupView } from '@slop/core';
 
 const REFRESH_MS = 10_000;
@@ -145,7 +147,7 @@ export const GroupPageView = ({
                       <Link className='font-mono underline' to={globHref(boardId, h.to)}>
                         {h.to}
                       </Link>
-                      {h.toIsDecision ? ' (decision)' : ''} {h.gate} until {h.until}
+                      {h.toIsDecision ? ' (decision)' : ''} {h.gate} until {UNTIL_WORDS[h.until]}
                     </span>
                   ))}
                 </div>
@@ -192,7 +194,13 @@ export const GroupPageView = ({
                 </Link>
                 {r.toTitle !== null && <span className='text-xs'>{r.toTitle}</span>}
                 {r.toIsDecision && <span className='rounded bg-muted px-1.5 text-xs'>decision</span>}
-                <span className='text-xs'>until {r.until}</span>
+                <span className='text-xs'>until {UNTIL_WORDS[r.until]}</span>
+                {(r.reason ?? '') !== '' && <span className='text-xs text-muted-foreground'>: {r.reason}</span>}
+                {lacksReason(r) && (
+                  <span className='rounded bg-muted px-1.5 text-xs text-muted-foreground' data-testid={`no-reason-${r.id}`}>
+                    no reason given
+                  </span>
+                )}
                 <span className='ml-auto flex gap-1.5 text-xs'>
                   {r.crosses && (
                     <span className='rounded border border-required-border px-1.5' data-testid='relation-crosses'>

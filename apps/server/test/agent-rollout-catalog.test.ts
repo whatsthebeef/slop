@@ -109,3 +109,37 @@ describe('catalog agents: an action waits for its script', () => {
     });
   }
 });
+
+describe('catalog agents: relations carry a reason and reach across boards', () => {
+  for (const name of ['implementer', 'orchestrator']) {
+    it(`has the ${name} pass relations explicitly with a reason, as holds or supersedes where they fit`, async () => {
+      const text = await agent(name);
+      expect(text).toContain("A prerequisite on another board's glob is a relation to that glob (cross-board), not prose");
+      expect(text).toContain('`holds` (alias `follows_up`');
+      expect(text).toContain('`supersedes`');
+      expect(text).toContain('never rely on prose alone');
+    });
+  }
+
+  it('has the orchestrator pass reasons, read the reply and report a failed rollout step', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('`needs`/`after` WITH `reason`');
+    expect(text).toContain('`relations: [{to, reason}]`');
+    expect(text).toContain('`ignoredAfter`, `waitingFor`, `holds` and `typeNote`');
+    expect(text).toContain('fix the plan if an id was ignored');
+    expect(text).toContain('`fail_human_step`');
+    expect(text).toContain('this step failed: is there a fix glob?');
+  });
+
+  it('has the implementer read ignoredAfter and put the order between rollout steps in Why and a relation', async () => {
+    const text = await agent('implementer');
+    expect(text).toContain('read `ignoredAfter` and `waitingFor` in the reply');
+    expect(text).toContain("An ordering between rollout steps goes in the step's `Why:`");
+  });
+
+  it('has the investigator say agents pass the relation reason through on create', async () => {
+    const text = await agent('investigator');
+    expect(text).toContain('agents pass it through on create');
+    expect(text).toContain('A glob on another board is a valid `to`.');
+  });
+});

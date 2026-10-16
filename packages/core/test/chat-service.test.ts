@@ -519,6 +519,28 @@ describe('ChatService', () => {
     });
   });
 
+  describe('live board state and relations', () => {
+    it('names a prerequisite on another board only when the asker can view that board', async () => {
+      const other = await store.transaction((tx) => tx.insertBoard({ name: 'o', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }));
+      await store.transaction(async (tx) => {
+        await tx.upsertMember({ boardId: other.id, email: OTHER, role: 'dev' });
+        await tx.insertGlob(makeGlob({ boardId: other.id, id: 's9t1', title: 'Secret work', status: 'implementing' }), null);
+        await tx.insertGlob(makeGlob({ boardId: boardId, id: 's1t1', title: 'Mine', status: 'planning' }), null);
+        await tx.insertGlob(makeGlob({ boardId: boardId, id: 's1t2', title: 'Local prerequisite', status: 'planning' }), null);
+        const base = { boardId, from: 's1t1', gate: 'start' as const, until: 'merged' as const, reason: null, evidence: [], source: 'person' as const, group: null, dismissedAt: null, dismissedPlanHash: null, overriddenAt: null, createdAt: NOW };
+        await tx.insertRelation({ ...base, id: 'r1', to: 's9t1' });
+        await tx.insertRelation({ ...base, id: 'r2', to: 's1t2' });
+      });
+      unwrap(await ask('what is open', {}, DEV));
+      const asked = llm.requests[0]?.prompt ?? '';
+      expect(asked).toContain('s1t2');
+      expect(asked).not.toContain('s9t1');
+      llm.requests = [];
+      unwrap(await ask('what is open', {}, OTHER));
+      expect(llm.requests[0]?.prompt).toContain('s9t1');
+    });
+  });
+
   describe('slop help and misses', () => {
     const help = [{ ref: 'docs/guide.md#watch-signals', title: 'Slop guide: Watch signals', text: 'Watch signals tell a decision glob to keep watching something after it merges. Use them when a choice can only be judged later.', url: 'https://github.com/whatsthebeef/slop/blob/main/docs/guide.md' }];
     const indexHelp = () => new SearchIndexer({ store, clock: { now: () => NOW }, embedder: new FakeEmbedder(), changes: { mergedDiff: () => Promise.resolve(null) }, llm, help }).syncBoard(boardId);

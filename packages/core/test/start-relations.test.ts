@@ -95,16 +95,18 @@ describe('start relations', () => {
     expect(second.runs).toHaveLength(1);
   });
 
-  it('refuses unknown ids, ids on another board and a glob waiting for itself', async () => {
+  it('refuses unknown ids, ids on a board the actor is not a member of (the same answer) and a glob waiting for itself', async () => {
+    const OUTSIDER = 'outsider@example.com';
+    await store.transaction((tx) => tx.upsertUser({ email: OUTSIDER, name: OUTSIDER, active: true }));
     const other = unwrap(
-      await boards.create(ADMIN, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
     );
-    unwrap(await boards.setMember(ADMIN, other.id, DEV, 'dev'));
-    const foreign = unwrap(await globs.create(ADMIN, input({ boardId: other.id })));
+    const foreign = unwrap(await globs.create(OUTSIDER, input({ boardId: other.id })));
     const unknown = await globs.create(ADMIN, input({ type: 'sub', after: ['s99t99'] }));
     expect(!unknown.ok && unknown.error.code).toBe('invalid_input');
     const wrongBoard = await globs.create(ADMIN, input({ type: 'sub', after: [foreign.id] }));
-    expect(!wrongBoard.ok && wrongBoard.error.message).toContain('on this board');
+    expect(!wrongBoard.ok && wrongBoard.error.code).toBe('invalid_input');
+    expect(!wrongBoard.ok && wrongBoard.error.message).toBe(`No glob ${foreign.id}`);
     const mine = await create();
     const self = await globs.update(DEV, mine.id, mine.version, { after: [mine.id] });
     expect(!self.ok && self.error.message).toContain('itself');
@@ -372,6 +374,115 @@ describe('start relations', () => {
       // The person's own relation can be dismissed too (the ✕ on a relation they added).
       const mine = [...store.state.relations.values()].find((r) => r.from === second.id && r.to === first.id);
       expect(unwrap(await globs.dismissRelation(DEV, second.id, once.version, mine?.id ?? '')).version).toBe(once.version + 1);
+    });
+  });
+
+  // Bug 1: a start relation to a target that merged was dropped even when its rollout still held its dependants.
+  describe('a relation to a target that merged', () => {
+    /** The target: merged, with an open rollout step that holds its dependants (state `rollout`). */
+    const rollingOut = async (): Promise<Glob> => {
+      const target = await create();
+      await merge(target.id);
+      unwrap(await globs.addHumanStep(ADMIN, target.id, null, { title: 'Turn it on', kind: 'rollout', blocks: ['sign_off', 'dependants'] }));
+      return target;
+    };
+    /** The target: merged and fully rolled out (no open step), so nothing is left to wait for. */
+    const rolledOut = async (): Promise<Glob> => {
+      const target = await create();
+      await merge(target.id);
+      return target;
+    };
+    const modes: readonly [string, (to: string) => Partial<CreateGlobInput>][] = [
+      ['an explicit sub with after', (to) => ({ type: 'sub', after: [to] })],
+      ['an untyped create (the type was not chosen) with after', (to) => ({ type: 'sub', typeChosen: false, after: [to] })],
+      ['a start relation in relations (needs)', (to) => ({ type: 'sub', relations: [{ to, gate: 'start' }] })],
+      [
+        'an input-only (intake) create with after',
+        (to) => ({
+          type: 'sub',
+          typeChosen: false,
+          plan: null,
+          title: 'Add a column',
+          after: [to],
+          intake: { request: 'Add a column', source: 'web', categoryConfidence: null, reason: null, model: null, promptVersion: null, examples: [] },
+        }),
+      ],
+    ];
+
+    for (const [name, patch] of modes) {
+      it(`${name}: an unmerged target holds the glob in Planning with no run`, async () => {
+        const target = await create();
+        const waiter = await create(patch(target.id));
+        expect(needsOf(waiter.id)).toEqual([target.id]);
+        expect(waiter.status).toBe('planning');
+        expect(waiter.waiting).not.toBeNull();
+        expect(waiter.runs).toEqual([]);
+      });
+
+      it(`${name}: a target merged with an open rollout step keeps the relation and the glob waits`, async () => {
+        const target = await rollingOut();
+        const waiter = await create(patch(target.id));
+        expect(needsOf(waiter.id)).toEqual([target.id]);
+        expect(waiter.status).toBe('planning');
+        expect(waiter.waiting).not.toBeNull();
+        expect(waiter.runs).toEqual([]);
+        expect(kinds()).not.toContain('fire_routine');
+        const view = unwrap(await globs.get(DEV, waiter.id));
+        expect(view.waitingFor.map((w) => w.state)).toEqual(['rollout']);
+        expect(view.waitingFor[0]?.why).toContain('rollout');
+      });
+
+      it(`${name}: a target merged and rolled out holds nothing and is not recorded`, async () => {
+        const target = await rolledOut();
+        const waiter = await create(patch(target.id));
+        expect(needsOf(waiter.id)).toEqual([]);
+        expect(waiter.status).not.toBe('planning');
+        expect(waiter.runs).toHaveLength(1);
+      });
+    }
+
+    it('createWithNotes reports the ignored target and why, and keeps the one that holds', async () => {
+      const done = await rolledOut();
+      const rolling = await rollingOut();
+      const created = unwrap(await globs.createWithNotes(ADMIN, input({ type: 'sub', after: [done.id, rolling.id] })));
+      expect(needsOf(created.glob.id)).toEqual([rolling.id]);
+      expect(created.notes.ignoredAfter).toEqual([{ id: done.id, why: `${done.id} is merged and rolled out` }]);
+      expect(created.notes.holds).toEqual([]);
+      expect(created.notes.typeNote).toBeNull();
+    });
+
+    it('createWithNotes says when a non-admin untyped create became a same, and keeps its relation', async () => {
+      const target = await create();
+      const made = unwrap(await globs.createWithNotes(DEV, input({ type: 'sub', typeChosen: false, after: [target.id] })));
+      expect(made.glob.type).toBe('same');
+      expect(made.notes.typeNote).toContain('same');
+      expect(needsOf(made.glob.id)).toEqual([target.id]);
+    });
+
+    it('an action keeps a relation to a target whose rollout is open, and drops one that is rolled out', async () => {
+      const rolling = await rollingOut();
+      const done = await rolledOut();
+      const action = unwrap(await globs.create(ADMIN, input({ category: 'action', type: null, title: 'Do it', after: [rolling.id, done.id] })));
+      expect(needsOf(action.id)).toEqual([rolling.id]);
+    });
+
+    it('update after keeps a rollout-held target and drops a rolled-out one', async () => {
+      const rolling = await rollingOut();
+      const done = await rolledOut();
+      const g = await create();
+      const updated = unwrap(await globs.update(DEV, g.id, g.version, { after: [rolling.id, done.id] }));
+      expect(updated.version).toBeGreaterThan(g.version);
+      expect(needsOf(g.id)).toEqual([rolling.id]);
+    });
+
+    it('a rollout-held target releases the waiter once its rollout step is done', async () => {
+      const target = await rollingOut();
+      const waiter = await create({ type: 'sub', after: [target.id] });
+      const step = [...store.state.humanSteps.values()].find((s) => s.globId === target.id);
+      expect((await current(waiter.id)).status).toBe('planning');
+      unwrap(await globs.completeHumanStep(ADMIN, target.id, step?.id ?? '', null));
+      // Closing the last step releases what waited for the rollout.
+      expect((await current(waiter.id)).status).toBe('implementing');
     });
   });
 });
