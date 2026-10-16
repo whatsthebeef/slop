@@ -1,5 +1,5 @@
-import { blockProgress, dueText, isInFlight, isMerged, isOpenStep, listOf, yourTurn } from '@slop/core';
-import type { Glob, HumanStepBlock, HumanStepScript, HumanStepViewer, MachineStep } from '@slop/core';
+import { HUMAN_STEP_GROUP, HUMAN_STEP_GROUP_LABEL, blockProgress, dueText, isInFlight, isMerged, isOpenStep, listOf, yourTurn } from '@slop/core';
+import type { Glob, HumanStepBlock, HumanStepGroup, HumanStepScript, HumanStepViewer, MachineStep } from '@slop/core';
 import type { GlobView, ListedHumanStep } from './api';
 import { stripMarkdown } from './markdown-text';
 import { globPath } from './glob-section';
@@ -10,6 +10,27 @@ const BLOCKING: readonly HumanStepBlock[] = ['sign_off', 'reviewing', 'dependant
 
 /** Steps the machine implies (Merge, Decide) have `machine:` IDs and are done by their own actions; only stored work steps are ticked here. */
 export const isWorkStep = (step: Pick<ListedHumanStep, 'id'>): boolean => !step.id.startsWith('machine:');
+
+/**
+ * The group a person sees a step in. A machine step takes its kind's group; a stored work step is a Do (a rollout, a once step, an old work kind)
+ * unless it is a decision, an answer or a review label.
+ */
+export const stepGroup = (step: Pick<ListedHumanStep, 'id' | 'kind'>): HumanStepGroup => {
+  const group = HUMAN_STEP_GROUP[step.kind];
+  return isWorkStep(step) && group === 'housekeeping' ? 'do' : group;
+};
+
+/** Slop's own next move (Merge, Fix conflict, Upload, Retry, Pick up): the primary action and the corner status show it, never a step block. */
+export const isHousekeeping = (step: Pick<ListedHumanStep, 'id' | 'kind'>): boolean => stepGroup(step) === 'housekeeping';
+
+/** The steps the glob view lists as blocks: Decide, Answer and Do only. */
+export const personSteps = (steps: readonly ListedHumanStep[]): ListedHumanStep[] => steps.filter((s) => !isHousekeeping(s));
+
+/** The label a step carries: Decide, Answer or Do. */
+export const stepGroupLabel = (step: Pick<ListedHumanStep, 'id' | 'kind'>): string => {
+  const group = stepGroup(step);
+  return group === 'housekeeping' ? step.kind.replace(/_/g, ' ') : HUMAN_STEP_GROUP_LABEL[group];
+};
 
 export const isBlockingStep = (step: Pick<ListedHumanStep, 'blocks'>): boolean => step.blocks.some((b) => BLOCKING.includes(b));
 
@@ -123,7 +144,7 @@ export const dueWorkSteps = (steps: readonly ListedHumanStep[]): ListedHumanStep
 export const isQuietStep = (step: ListedHumanStep): boolean => isWorkStep(step) && step.state === 'pending' && step.predicted !== true;
 
 /** Whether the glob view opens with the steps block at the top: some step is due. */
-export const hasDueSteps = (steps: readonly ListedHumanStep[] | undefined): boolean => dueWorkSteps((steps ?? []).filter((s) => !isDismissedStep(s))).length > 0;
+export const hasDueSteps = (steps: readonly ListedHumanStep[] | undefined): boolean => dueWorkSteps(personSteps(steps ?? []).filter((s) => !isDismissedStep(s))).length > 0;
 
 /** Who a step is for, in words. */
 export const whoText = (who: string): string => (who === 'anyone' ? 'anyone' : who.includes('@') ? who : `the ${who}`);

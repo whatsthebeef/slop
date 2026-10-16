@@ -236,11 +236,11 @@ describe('section markup', () => {
 
   it('renders each step with its icon, who, state, script links, check and tick', () => {
     const out = html(merged(steps));
-    expect(out).toContain('More steps (2)');
+    expect(out).toContain('More steps (1)');
+    expect(out).not.toContain('machine:merge');
     expect(out).toContain('data-testid="due-step"');
     expect(out).toContain('Roll out the host stack');
     expect(out).toMatch(/for the admin/);
-    expect(out).toContain('due now');
     expect(out).toContain('Your turn');
     expect(out).toContain('waits for fileAttachments to turn on');
     expect(out).toContain(`href="${scriptArtifactPath(glob().boardId, glob().id, { artifact: 'host' }).replace(/&/g, '&amp;')}"`);
