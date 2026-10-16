@@ -138,4 +138,11 @@ describe('Continue locally on the current run', () => {
     const ended = run('r1', { routineOwner: 'me@x.com' });
     expect(activityOf(view({ runs: [ended], currentRun: ended }), 'o/r', [], 'me@x.com').find((e) => e.id === 'run:r1:start')?.command).toBeNull();
   });
+  it('keeps a failed merge as a warn entry, once per failure', () => {
+    const failure = { reason: 'conflicts\nmore', at: T(12), kind: 'merge' as const };
+    const entries = activityOf(view({ failure }), 'o/r');
+    const merge = entries.filter((e) => e.id.startsWith('failure:'));
+    expect(merge).toHaveLength(1);
+    expect(merge[0]).toMatchObject({ text: 'Merge failed: conflicts', actor: 'warn', at: T(12) });
+  });
 });

@@ -266,7 +266,7 @@ describe('the blocks above the action button', () => {
       labels: {},
     };
 
-    it('shows no problem block for a merging glob, and the corner status still says it', () => {
+    it('shows no problem block for a merging glob, and the corner status reads running checks', () => {
       renderGlob(
         view({
           ...calm,
@@ -278,7 +278,7 @@ describe('the blocks above the action button', () => {
       );
       expect(screen.queryByTestId('problem-block')).toBeNull();
       expect(screen.queryByTestId('dismiss-message')).toBeNull();
-      expect(screen.getByTestId('header-status').textContent).toContain('merging');
+      expect(screen.getByTestId('header-status').textContent).toContain('running checks');
     });
 
     it('shows the due steps and no Rollout problem block for a merged glob with steps due', () => {

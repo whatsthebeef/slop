@@ -79,7 +79,7 @@ describe('shared status line', () => {
     expect(top(g)).toBeNull();
     expect(positionOf(g, NOW)).toMatchObject({
       holder: 'waiting',
-      text: 'checks running',
+      text: 'running checks',
       onChecks: true,
     });
   });
