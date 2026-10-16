@@ -250,9 +250,9 @@ export interface CodeHost {
   /**
    * Re-runs the failed jobs of the workflow runs that failed on `sha`, once per commit: `rerun` when it asked for
    * them, `already_rerun` when a failed run on the commit is already a re-run (so a redelivered event never re-runs
-   * twice), `unavailable` when the host refused (the integration lacks permission) or nothing could be re-run.
+   * twice; `force`, a person's Retry checks, skips that guard), `unavailable` when the host refused (the integration lacks permission) or nothing could be re-run.
    */
-  rerunFailedJobs(repo: Repo, sha: string): Promise<'rerun' | 'already_rerun' | 'unavailable'>;
+  rerunFailedJobs(repo: Repo, sha: string, opts?: { force?: boolean }): Promise<'rerun' | 'already_rerun' | 'unavailable'>;
   /** Merges the base branch into the PR's branch (GitHub's update-branch) when it's behind, at exactly `sha`. */
   updateBranch(repo: Repo, prNumber: number, sha: string): Promise<'updating' | 'up_to_date' | 'conflict'>;
   /**

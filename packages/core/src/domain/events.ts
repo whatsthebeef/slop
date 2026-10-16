@@ -293,6 +293,8 @@ export type Effect =
    * not generation-checked); the outbox keeps one pending job per board and delays it a few seconds, so a burst runs once.
    */
   | { readonly kind: 'recheck_overlaps'; readonly globId: string; readonly boardId: number }
+  /** Re-run the failed jobs of the checks on the PR head `sha` (Retry checks), whatever an earlier re-run did. */
+  | { readonly kind: 'rerun_checks'; readonly globId: string; readonly generation: number; readonly sha: string }
   /** Put the glob's type and environment on its PR as labels (`slop:<type>`, `env:<name>`). */
   | { readonly kind: 'sync_pr_labels'; readonly globId: string; readonly generation: number }
   /**
