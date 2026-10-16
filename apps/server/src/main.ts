@@ -328,7 +328,6 @@ const suggestLlm = trackLlm(
   new BedrockLlm({ id: config.SUGGEST_MODEL, configKey: 'SUGGEST_MODEL' }, config.BEDROCK_REGION, recordUsage, null),
   config.SUGGEST_MODEL,
 );
-const suggestService = new SuggestService({ store, clock, notifier: hub, knowledge, llm: suggestLlm, model: config.SUGGEST_MODEL });
 
 // Haiku: splitting and classifying review findings, and checking bug reports for the learned sub limit.
 const findingsLlm = trackLlm(
@@ -367,6 +366,9 @@ const codeClones = new CodeClones({
 });
 const codeIndex = new CodeIndex(db);
 const codeView = new GitCodeView({ clones: codeClones, index: codeIndex, board: boardOf, host: github });
+
+// Suggest reads a hotspot file's size and merge history from the code view.
+const suggestService = new SuggestService({ store, clock, notifier: hub, knowledge, llm: suggestLlm, model: config.SUGGEST_MODEL, codeView });
 // The size check: the intake model judges a plan's independent parts and proposes workstreams; a failing model leaves the text estimate.
 const sizeCheck = new SizeCheckService({ store, clock, notifier: hub, llm: intakeLlm, codeView, embedder, onRechecked: (id): Promise<void> => globs.reconcileSizeCheck(id) });
 // Slop builds each glob's dependency tree with the intake model: at create, and again when a plan is saved or an investigation pushed.

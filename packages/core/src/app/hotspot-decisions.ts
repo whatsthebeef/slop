@@ -22,6 +22,10 @@ const SYSTEM = [
   'then "Done when" lines a reviewer can check. Do not repeat the numbers you were given. Do not write code.',
 ].join(' ');
 
+/** Said when every conflict fell within a day: one burst of related work, which may not recur. */
+const burstNote = (hotspot: Hotspot): string =>
+  hotspot.burst === true ? ' All of them fell within one day (a burst of related work), so weigh whether the file keeps conflicting or only did once.' : '';
+
 /** Said when workstreams of one run conflicted on the file: parallel work inside a glob needs the split too. */
 const workstreamNote = (hotspot: Hotspot): string[] =>
   hotspot.workstreamConflicts === undefined
@@ -78,7 +82,7 @@ export class HotspotDecisions {
           boardId,
           actor,
           title: headline,
-          payload: `${headline}\n\n${proposal}\n\n## Conflicts\n\nGlobs that conflicted on it: ${hotspot.globs.join(', ')}.${hotspot.workstreamConflicts === undefined ? '' : ` ${String(hotspot.workstreamConflicts)} conflicts were between workstreams integrated within a glob.`}\n`,
+          payload: `${headline}\n\n${proposal}\n\n## Conflicts\n\nGlobs that conflicted on it: ${hotspot.globs.join(', ')}.${hotspot.workstreamConflicts === undefined ? '' : ` ${String(hotspot.workstreamConflicts)} conflicts were between workstreams integrated within a glob.`}${burstNote(hotspot)}\n`,
           attributes: { scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: hotspot.path }, channel: 'mined', outcome: null },
           creationKey: hotspotKey(hotspot.path, now),
           group: decisionGroup({ scope: { kind: 'future_work', ref: null }, origin: { kind: 'hotspot', path: hotspot.path }, channel: 'mined', outcome: null }, null),
@@ -117,6 +121,7 @@ export class HotspotDecisions {
             `File: ${hotspot.path}`,
             `Conflicts: ${String(hotspot.conflicts)} (${String(hotspot.real)} real) across ${hotspot.globs.join(', ')}.`,
             ...workstreamNote(hotspot),
+            ...(hotspot.additive === undefined ? [] : [`${String(hotspot.additive)} were purely additive.${burstNote(hotspot)}`]),
             '',
             'Its content (cut if long):',
             body,
