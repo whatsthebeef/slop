@@ -38,6 +38,8 @@ import { CLOSING_EDGE_KINDS, defaultFix, defaultWorkKind, fixOf, isHumanCategory
 import { criterionOf } from './escalation-learning.js';
 import { isReplaceableInferred, mergeImplied, mergeInferred } from './exclusive-paths.js';
 import {
+  awaitedNames,
+  OTHER_BOARD_GLOB,
   awaitedOf,
   holdWords,
   NO_RELATIONS,
@@ -377,7 +379,7 @@ class Builder {
     const awaited = startHoldsOf(this.glob, relations);
     if (awaited.length > 0)
       return this.set({ waiting: { since: this.glob.waiting?.since ?? this.ctx.now } }).event('Waiting', {
-        for: awaited.map((a) => a.id),
+        for: awaitedNames(awaited),
         note: waitSummary(awaited),
       });
     return this.set({ waiting: null })
@@ -675,7 +677,7 @@ export const create = (
   if (listOf(status) === 'doing') b.ensureProvisioned();
   if (held)
     b.event('Waiting', {
-      for: awaited.map((a) => a.id),
+      for: awaitedNames(awaited),
       note: waitSummary(awaited),
     });
   else if (type === 'sub' || autoStart) b.queueRun(actor.email);
@@ -894,7 +896,7 @@ export const startAnyway = (
   const b = new Builder(glob, ctx)
     .relationEdits(overrideEdits(relations.relations, ctx.now))
     .event('HoldOverridden', {
-      for: awaited.map((a) => a.id),
+      for: awaitedNames(awaited),
       ...(overriding.length === 0 ? {} : { questions: overriding.map((q) => q.id) }),
     });
   // An investigation is still running: the start waits for it, with the hold already overridden.
@@ -1043,7 +1045,7 @@ export const pickUp = (
     glob.status === 'planning' ? awaitedOf(options.relations ?? NO_RELATIONS) : [];
   b.event('PickedUp', {
     takeOver: false,
-    ...(unmerged.length > 0 && { waitingFor: unmerged.map((a) => a.id) }),
+    ...(unmerged.length > 0 && { waitingFor: awaitedNames(unmerged) }),
   });
   if (environmentChanged) setEnvironment(b, environment);
   return b.done();
@@ -1374,7 +1376,7 @@ export const startAgain = (
   if (awaited.length > 0) {
     b.set({ waiting: { since: ctx.now } })
       .status('planning')
-      .event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+      .event('Waiting', { for: awaitedNames(awaited), note: waitSummary(awaited) });
     return b.done();
   }
   b.status(initialStatus(glob.type));
@@ -1489,7 +1491,7 @@ const mergeGate = (relations: RelationFacts | undefined): Unmet[] => (relations 
 
 /** "Can't merge until s15f82 is merged": what the unmet relations of a gate say, for a refusal. */
 const gateText = (held: readonly Unmet[]): string => {
-  const text = held.map((u) => holdWords(u.relation)).join('; ');
+  const text = held.map((u) => holdWords(u.relation, u.external === true)).join('; ');
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 };
 
@@ -1713,7 +1715,7 @@ export const reviewLabel = (
     const allApproved = Object.values(labels).every((s) => s === 'approved');
     const signOffHeld = relations === undefined ? [] : unmet(relations, 'sign_off');
     if (glob.status === 'reviewing' && allApproved && (rollout === null || rollout.open === 0)) {
-      if (signOffHeld.length > 0) b.event('SignOffHeld', { for: signOffHeld.map((u) => u.relation.to) });
+      if (signOffHeld.length > 0) b.event('SignOffHeld', { for: signOffHeld.map((u) => (u.external === true ? OTHER_BOARD_GLOB : u.relation.to)) });
       else releaseWaiting(b.set({ signedOffAt: ctx.now }).status('signed_off'), glob);
     } else if (glob.status === 'signed_off' && !allApproved) {
       b.set({ signedOffAt: null }).status('reviewing');
@@ -2069,7 +2071,7 @@ export const changeFields = (
         b.set({
           waiting: { since: ctx.now },
           ...(impliedAfter === undefined ? {} : { impliedAfter }),
-        }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+        }).event('Waiting', { for: awaitedNames(awaited), note: waitSummary(awaited) });
       }
     } else if (wasHeld) {
       b.set({ waiting: null })
@@ -2665,7 +2667,7 @@ const holdMerge = (
   asks: readonly OpenQuestion[],
   ctx: Context,
 ): Builder => {
-  const waitingFor = held.map((u) => u.relation.to);
+  const waitingFor = held.map((u) => (u.external === true ? OTHER_BOARD_GLOB : u.relation.to));
   const questions = asks.map((q) => q.id);
   const same =
     glob.mergeHold != null &&
@@ -3019,7 +3021,7 @@ export const liftRiskAreaEscalation = (
     .event('FieldsChanged', { type: { from: 'same', to: 'sub' }, note });
   const awaited = startHoldsOf(glob, relations ?? NO_RELATIONS);
   if (awaited.length > 0) {
-    b.set({ waiting: { since: ctx.now } }).event('Waiting', { for: awaited.map((a) => a.id), note: waitSummary(awaited) });
+    b.set({ waiting: { since: ctx.now } }).event('Waiting', { for: awaitedNames(awaited), note: waitSummary(awaited) });
   } else {
     b.status('implementing').queueRun(glob.creator);
   }

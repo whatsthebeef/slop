@@ -183,7 +183,7 @@ describe('rollout steps: report a failed step, Merge and continue', () => {
     await rest(`/api/globs/${globId}/human-steps/${stepId}/complete`, { note: `ran it, token ${TOKEN}` });
     expect((await stepsOf()).find((s) => s.id === stepId)?.state).toBe('done');
 
-    const failed = await rest(`/api/globs/${globId}/human-steps/${stepId}/failed`, {
+    const failed = await rest(`/api/globs/${globId}/steps/${stepId}/fail`, {
       note: `AccessDenied on iam:PassRole\nAWS_SECRET=${TOKEN}`,
       version: merged.glob.version,
     });
@@ -205,19 +205,19 @@ describe('rollout steps: report a failed step, Merge and continue', () => {
 
   it('refuses a failed report from a non-member, an empty note, a stale version and an unknown step', async () => {
     const stepId = (await stepsOf())[0]?.id ?? '';
-    expect((await rest(`/api/globs/${globId}/human-steps/${stepId}/failed`, { note: 'x' }, 'outsider@example.com')).status).toBeGreaterThanOrEqual(403);
-    expect((await rest(`/api/globs/${globId}/human-steps/${stepId}/failed`, { note: '' })).status).toBe(422);
-    expect((await rest(`/api/globs/${globId}/human-steps/${stepId}/failed`, { note: 'x', version: 999 })).status).toBe(409);
-    expect((await rest(`/api/globs/${globId}/human-steps/hs_nope/failed`, { note: 'x' })).status).toBe(404);
+    expect((await rest(`/api/globs/${globId}/steps/${stepId}/fail`, { note: 'x' }, 'outsider@example.com')).status).toBeGreaterThanOrEqual(403);
+    expect((await rest(`/api/globs/${globId}/steps/${stepId}/fail`, { note: '' })).status).toBe(422);
+    expect((await rest(`/api/globs/${globId}/steps/${stepId}/fail`, { note: 'x', version: 999 })).status).toBe(409);
+    expect((await rest(`/api/globs/${globId}/steps/hs_nope/fail`, { note: 'x' })).status).toBe(404);
   });
 
-  it('report_step_failed over MCP: masked, next generation, step reopened; complete_human_step takes a note', async () => {
+  it('fail_human_step over MCP: masked, next generation, step reopened; complete_human_step takes a note', async () => {
     const stepId = await readySame();
     await land();
     const before = await current();
     const done = await tool('complete_human_step', { id: globId, stepId, note: `done by hand ${TOKEN}` });
     expect(done.error).toBe(false);
-    const reported = await tool('report_step_failed', { id: globId, stepId, note: `boom ${TOKEN}`, version: before.glob.version });
+    const reported = await tool('fail_human_step', { id: globId, stepId, note: `boom ${TOKEN}`, version: before.glob.version });
     expect(reported.error).toBe(false);
     expect(reported.body.generation ?? (await current()).glob.generation).toBe(before.glob.generation + 1);
     const after = await current();
@@ -229,13 +229,13 @@ describe('rollout steps: report a failed step, Merge and continue', () => {
     const events = await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['RolloutStepFailed'], [globId]));
     expect(events.filter((e) => e.type === 'RolloutStepFailed')).toHaveLength(1);
     // An empty note is refused by the tool's schema.
-    expect((await tool('report_step_failed', { id: globId, stepId, note: '' })).error).toBe(true);
+    expect((await tool('fail_human_step', { id: globId, stepId, note: '' })).error).toBe(true);
   });
 
   it('merge continue, fail the step, merge again: the steps are due again and sign-off waits', async () => {
     const stepId = await readySame();
     await land();
-    expect((await rest(`/api/globs/${globId}/human-steps/${stepId}/failed`, { note: 'it failed' })).status).toBe(200);
+    expect((await rest(`/api/globs/${globId}/steps/${stepId}/fail`, { note: 'it failed' })).status).toBe(200);
     // The new generation: a new PR, checks pass, Merge and continue again.
     await globs.applyEvent(globId, (g, ctx) => machine.provisioned(g, { branch: g.id, pr: { number: 9, headSha: 'f00dfeed' } }, ctx));
     await globs.applyEvent(globId, (g, ctx) => machine.prReadyForReview(g, { number: 9, headSha: 'f00dfeed' }, ctx));

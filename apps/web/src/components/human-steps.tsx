@@ -62,8 +62,11 @@ interface StepActions {
   readonly onAdd: (step: { title: string; detail?: string; who?: string; due?: string }) => Promise<boolean>;
   readonly onComplete: (stepId: string) => Promise<boolean>;
   readonly onDismiss: (stepId: string, reason: string) => Promise<boolean>;
-  /** A rollout step failed: the note starts a new run on a fresh branch. Without it the Failed… button is hidden. */
-  readonly onFailStep?: (stepId: string, note: string) => Promise<boolean>;
+  /**
+   * "It failed": the step's run did not work (the note says how). A rollout step of a merged glob starts the glob's next generation
+   * on a fresh branch; any other step stays open and slop asks whether a glob fixes it. Without it a due step has no such button.
+   */
+  readonly onFail?: (stepId: string, note: string) => Promise<boolean>;
 }
 
 const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
@@ -309,9 +312,10 @@ const DismissForm = ({ busy, onDismiss, onClose }: { busy: boolean; onDismiss: (
 
 export const FAILED_WARNING = 'Paste only what is needed; remove keys, tokens and passwords. Slop masks common ones, not all.';
 export const FAILED_CONSEQUENCE = 'This starts a new run on a fresh branch from master.';
+export const FAILED_ASKS_FIX = 'The step stays open and slop asks on the card whether a glob fixes it.';
 
-/** The note form a failed rollout step needs: what went wrong, with the output. One submit at a time. */
-const FailForm = ({ busy, onFail, onClose }: { busy: boolean; onFail: (note: string) => Promise<boolean>; onClose: () => void }) => {
+/** The note a failed step needs: what went wrong, with the output, and what reporting it does. One submit at a time. */
+const FailForm = ({ busy, nextGeneration, onFail, onClose }: { busy: boolean; nextGeneration: boolean; onFail: (note: string) => Promise<boolean>; onClose: () => void }) => {
   const [note, setNote] = useState('');
   const sending = useRef(false);
   const text = note.trim();
@@ -346,7 +350,7 @@ const FailForm = ({ busy, onFail, onClose }: { busy: boolean; onFail: (note: str
         {FAILED_WARNING}
       </span>
       <span className='text-[11px] text-muted-foreground' data-testid='fail-consequence'>
-        {FAILED_CONSEQUENCE}
+        {nextGeneration ? FAILED_CONSEQUENCE : FAILED_ASKS_FIX}
       </span>
       <div className='flex flex-wrap gap-2'>
         <Button size='sm' type='submit' disabled={busy || text === ''} data-testid='fail-confirm'>
@@ -367,9 +371,9 @@ const FailForm = ({ busy, onFail, onClose }: { busy: boolean; onFail: (note: str
 const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; step: ListedHumanStep; mine: boolean; busy: boolean; actions: StepActions; source: ScriptSource }) => {
   const [dismissing, setDismissing] = useState(false);
   const [failing, setFailing] = useState(false);
-  const { onFailStep } = actions;
-  // Only a rollout step can fail into a new run; the server refuses other kinds.
-  const canFail = onFailStep !== undefined && step.kind === 'rollout';
+  const { onFail } = actions;
+  // A rollout step of a merged glob fails into the glob's next generation; any other step asks for a fix glob.
+  const nextGeneration = step.kind === 'rollout' && glob.status === 'reviewing';
   const waits = step.check != null && step.check !== '';
   return (
     <li className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border bg-background p-3 text-sm' data-testid='due-step' data-kind={step.kind}>
@@ -398,15 +402,15 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
           <Button size='sm' variant='outline' disabled={busy} data-testid='due-dismiss' onClick={() => setDismissing(true)}>
             Dismiss…
           </Button>
-          {canFail && (
+          {onFail !== undefined && (
             <Button size='sm' variant='outline' disabled={busy} data-testid='due-failed' onClick={() => setFailing(true)}>
-              Failed…
+              It failed
             </Button>
           )}
         </div>
       )}
       {dismissing && <DismissForm busy={busy} onDismiss={(text) => actions.onDismiss(step.id, text)} onClose={() => setDismissing(false)} />}
-      {failing && canFail && <FailForm busy={busy} onFail={(note) => onFailStep(step.id, note)} onClose={() => setFailing(false)} />}
+      {failing && onFail !== undefined && <FailForm busy={busy} nextGeneration={nextGeneration} onFail={(note) => onFail(step.id, note)} onClose={() => setFailing(false)} />}
     </li>
   );
 };
@@ -602,7 +606,7 @@ export const HumanSteps = ({
     onAdd: guarded(actions.onAdd),
     onComplete: guarded(actions.onComplete),
     onDismiss: guarded(actions.onDismiss),
-    ...(actions.onFailStep === undefined ? {} : { onFailStep: guarded(actions.onFailStep) }),
+    ...(actions.onFail === undefined ? {} : { onFail: guarded(actions.onFail) }),
   };
   const wrappedMark = onMarkDeployed === undefined ? undefined : guarded(onMarkDeployed);
   const left = steps.filter((s) => (s.state === 'due' || s.state === 'pending') && s.predicted !== true).length;

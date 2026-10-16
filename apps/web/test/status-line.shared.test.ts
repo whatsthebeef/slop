@@ -173,7 +173,7 @@ describe('an action waiting for its script', () => {
   it('names the glob even when the script path is not on the view, and keeps the generic tip for another hold', () => {
     expect(holdLine(action({ script: null }))?.tip).toBe("Its script is written by s1t1, which hasn't merged to main yet.");
     const other = holdLine(action({ script: null, holding: [hold('s1t2', { state: 'planning' })] }));
-    expect(other?.tip).toBe('Waits for s1t2 (Planning)');
+    expect(other?.tip).toBe('Waits for s1t2 to be merged and rolled out (Planning) (no reason given)');
     expect(other?.icon).toBe('human');
   });
 
@@ -191,9 +191,9 @@ describe('an action waiting for its script', () => {
   it('disables Done with the reason, for any role, and the status line says what it waits for', () => {
     const waiting = waitingFor(action(), ['dismiss_action', 'delete'], 'qa');
     expect(waiting).toMatchObject([
-      { action: 'complete_action', label: 'Done', tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`, why: 'for s1t1 to merge' },
+      { action: 'complete_action', label: 'Done', tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`, why: 'for s1t1 to be merged and rolled out' },
     ]);
-    expect(top(action())?.full).toBe('Done waits for s1t1 to merge');
+    expect(top(action())?.full).toBe('Done waits for s1t1 to be merged and rolled out');
   });
 
   it('disables Done for a script that is not on main yet when nothing else holds it', () => {

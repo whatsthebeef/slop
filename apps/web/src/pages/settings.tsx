@@ -18,6 +18,7 @@ import { matchesFilters } from '@/lib/board-filters';
 import { globPath } from '@/lib/glob-section';
 import { learnedPanelOf, learnedPath } from '@/lib/learned';
 import { usePageContext } from '@/lib/page-context';
+import { relationScanLine, spendBreakdown } from '@/lib/review-settings';
 
 /**
  * What a person chooses for the board, in collapsible groups (the last, System, collapsed by default). What slop has
@@ -43,9 +44,21 @@ export const SettingsPage = () => {
       <EnvironmentsGroup admin={admin} form={form} />
       {admin && <AtfRunnersGroup boardId={boardId} environments={board.environments} />}
       <AutomationGroup admin={admin} form={form} />
+      <RelationScanSpend boardId={boardId} />
       <ReportsGroup boardId={boardId} />
       <SystemGroup boardId={boardId} admin={admin} />
     </main>
+  );
+};
+
+/** What the automatic relation pass cost this month (the board's spend, source `relation_scan`); nothing until the spend loads. */
+export const RelationScanSpend = ({ boardId }: { boardId: number }) => {
+  const spend = useQuery({ queryKey: ['spend', boardId], queryFn: () => api.spend(boardId), refetchInterval: 5 * 60_000 });
+  if (spend.data === undefined) return null;
+  return (
+    <p className='text-xs text-muted-foreground' data-testid='relation-scan-spend' title={spendBreakdown(spend.data)}>
+      {relationScanLine(spend.data)}
+    </p>
   );
 };
 

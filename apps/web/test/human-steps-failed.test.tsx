@@ -21,8 +21,8 @@ const step = (over: Partial<ListedHumanStep> & Pick<ListedHumanStep, 'id' | 'sta
   ...over,
 });
 
-const show = (humanSteps: ListedHumanStep[], onFailStep?: (stepId: string, note: string) => Promise<boolean>) => {
-  const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+const show = (humanSteps: ListedHumanStep[], onFail?: (stepId: string, note: string) => Promise<boolean>, status: GlobView['status'] = 'reviewing') => {
+  const glob = { ...coreGlob(), status, list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
   render(
     <MemoryRouter>
       <HumanSteps
@@ -31,14 +31,14 @@ const show = (humanSteps: ListedHumanStep[], onFailStep?: (stepId: string, note:
         onAdd={vi.fn(() => Promise.resolve(true))}
         onComplete={vi.fn(() => Promise.resolve(true))}
         onDismiss={vi.fn(() => Promise.resolve(true))}
-        {...(onFailStep === undefined ? {} : { onFailStep })}
+        {...(onFail === undefined ? {} : { onFail })}
       />
     </MemoryRouter>,
   );
 };
 
-describe('failed rollout step', () => {
-  it('shows a note box, the credential warning and the consequence, and reports the note once', async () => {
+describe('failed step', () => {
+  it('shows a note box, the credential warning and, for a merged rollout step, that a new run starts; reports the note once', async () => {
     const onFail = vi.fn<(stepId: string, note: string) => Promise<boolean>>(() => Promise.resolve(true));
     show([step({ id: 'a', state: 'due' })], onFail);
     await userEvent.click(screen.getByTestId('due-failed'));
@@ -75,9 +75,19 @@ describe('failed rollout step', () => {
     expect(screen.getByTestId<HTMLTextAreaElement>('fail-note').value).toBe('boom');
   });
 
-  it('offers Failed… only for a rollout step and only when the page can send it', () => {
+  it('says the step stays open and asks for a fix glob for any other step, or a rollout step of an unmerged glob', async () => {
     show([step({ id: 'a', state: 'due', kind: 'done' })], vi.fn(() => Promise.resolve(true)));
-    expect(screen.queryByTestId('due-failed')).toBeNull();
+    await userEvent.click(screen.getByTestId('due-failed'));
+    expect(screen.getByTestId('fail-consequence').textContent).toBe('The step stays open and slop asks on the card whether a glob fixes it.');
+    cleanup();
+    show([step({ id: 'b', state: 'due' })], vi.fn(() => Promise.resolve(true)), 'in_progress');
+    await userEvent.click(screen.getByTestId('due-failed'));
+    expect(screen.getByTestId('fail-consequence').textContent).toBe('The step stays open and slop asks on the card whether a glob fixes it.');
+  });
+
+  it('offers It failed only when the page can send it', () => {
+    show([step({ id: 'a', state: 'due' })], vi.fn(() => Promise.resolve(true)));
+    expect(screen.getByTestId('due-failed').textContent).toBe('It failed');
     cleanup();
     show([step({ id: 'b', state: 'due' })]);
     expect(screen.queryByTestId('due-failed')).toBeNull();

@@ -75,7 +75,7 @@ describe('Start and Pick up during an investigation', () => {
     const glob = await investigated();
     const queued = unwrap(await globs.start(DEV, glob.id, glob.version));
     const other = unwrap(await globs.create(DEV, { boardId, title: 'Other', type: 'same', category: 'task', group: null, environment: null, autoTrigger: false, idempotencyKey: null }));
-    unwrap(await globs.addRelation(DEV, glob.id, null, { to: other.id, gate: 'start', until: 'merged' }, 'held_by', 'agent'));
+    unwrap(await globs.addRelation(DEV, glob.id, null, { to: other.id, gate: 'start', until: 'merged', reason: 'uses its helper' }, 'held_by', 'agent'));
     const investigation = machine.investigationRunning(queued);
     unwrap(await globs.applyEvent(glob.id, (g, c, f) => machine.investigationPushed(g, investigation?.runId ?? '', c, f.relations), { relations: true }));
     const held = await get(glob.id);

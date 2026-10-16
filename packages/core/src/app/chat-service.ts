@@ -500,7 +500,7 @@ export class ChatService {
 
     // The live state is built from the store, not from search, and goes in every question; it is last so a source
     // number from search keeps its place. With no open globs and no notifications there is nothing to add.
-    const state = await this.boardState(request.boardId);
+    const state = await this.boardState(email, request.boardId);
     const stateN = state === '' ? 0 : hits.length + 1;
     if (stateN > 0) tools.push('Read the board\'s live state');
     // Slop's own health and the board's recent failures and deploys go in when the question is about something not working.
@@ -813,11 +813,20 @@ export class ChatService {
     }
   }
 
-  private async boardState(boardId: number): Promise<string> {
+  private async boardState(email: string, boardId: number): Promise<string> {
     try {
-      return await this.deps.store.transaction(async (tx) =>
-        boardStateText(await tx.listGlobs(boardId, {}), await tx.listNotifications(boardId), await tx.listRelations(boardId)),
-      );
+      return await this.deps.store.transaction(async (tx) => {
+        const globs = await tx.listGlobs(boardId, {});
+        // A relation may point at a glob on another board: the asker hears of it only when they can view that board.
+        const local = new Set(globs.map((g) => g.id));
+        const relations = (await tx.listRelations(boardId));
+        const foreign = [...new Set(relations.filter((r) => !local.has(r.to)).map((r) => r.to))];
+        const hidden = new Set<string>();
+        for (const target of await tx.getGlobs(foreign)) {
+          if (target.boardId !== boardId && (await tx.getMember(target.boardId, email)) === null) hidden.add(target.id);
+        }
+        return boardStateText(globs, await tx.listNotifications(boardId), relations.filter((r) => !hidden.has(r.to)));
+      });
     } catch {
       return '';
     }

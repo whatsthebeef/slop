@@ -8,10 +8,11 @@ import {
   MERGE_CONFLICT_STALL_LABEL,
   MERGE_QUEUE_TIP,
   stuckHint,
+  UNTIL_WORDS,
   yourTurn,
 } from '@slop/core';
 import { stripMarkdown } from './markdown-text';
-import type { Action, Holding, HumanStepKind, HumanStepViewer, Role, StepAction } from '@slop/core';
+import type { Action, Holding, HumanStepKind, HumanStepViewer, RelationSource, Role, StepAction } from '@slop/core';
 import { rolloutLine } from './human-steps';
 import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-stages';
 import type { GlobView } from './api';
@@ -331,8 +332,8 @@ const actionWaiting = (glob: GlobView, actions: readonly Action[]): Waiting[] =>
   const { label, icon } = actionPresentation('complete_action', glob);
   const first = appliedHolding(glob, glob.holding ?? [])[0];
   if (first !== undefined) {
-    const tip = scriptHoldTip(glob, first) ?? `Waits for ${named(first)} to merge`;
-    return [{ action: 'complete_action', label, icon, tip, why: `for ${named(first)} to merge` }];
+    const tip = scriptHoldTip(glob, first) ?? `Waits for ${named(first)} to be ${UNTIL_WORDS[first.until]}`;
+    return [{ action: 'complete_action', label, icon, tip, why: `for ${named(first)} to be ${UNTIL_WORDS[first.until]}` }];
   }
   if (glob.script?.onBase !== false) return [];
   const why = `: script not on main yet: ${glob.script.path}`;
@@ -458,8 +459,25 @@ const startHolds = (glob: GlobView): readonly Holding[] =>
   glob.status === 'planning' || glob.status === 'failed' ? (glob.holding ?? []).filter((h) => h.gate === 'start') : [];
 
 /** What a holding names: the glob ID, or "decision s15k190" / "action s15a3" for human work. */
-const named = (h: Pick<Holding, 'to' | 'toIsDecision' | 'toIsAction'>): string =>
-  h.toIsDecision ? `decision ${h.to}` : h.toIsAction === true ? `action ${h.to}` : h.to;
+const named = (h: Pick<Holding, 'to' | 'toIsDecision' | 'toIsAction' | 'external'>): string =>
+  h.external?.hidden === true ? OTHER_BOARD_GLOB : h.toIsDecision ? `decision ${h.to}` : h.toIsAction === true ? `action ${h.to}` : h.to;
+
+/** What the viewer sees of a glob on a board they are not on: no id, no title. */
+export const OTHER_BOARD_GLOB = 'a glob on another board';
+
+/** Whether a relation is one a person or an agent added without saying why (inferred, learned, split and automatic ones carry their own). */
+export const lacksReason = (r: { readonly reason: string | null; readonly source: RelationSource }): boolean =>
+  (r.source === 'person' || r.source === 'agent') && (r.reason ?? '').trim() === '';
+
+/** The tail of a relation's line in a tip: ": <reason>", or " (no reason given)" for a person's or agent's relation without one. */
+const reasonTail = (r: { readonly reason: string | null; readonly source: RelationSource }): string =>
+  (r.reason ?? '').trim() !== '' ? `: ${r.reason ?? ''}` : lacksReason(r) ? ' (no reason given)' : '';
+
+/** What a hold waits for, for a tip: "s15t220 (board Ops) to be merged and rolled out" (the until is spelled out only for `merged`). */
+const waitsForWords = (h: Holding): string => {
+  const board = h.external !== undefined && !h.external.hidden && h.external.boardName !== null ? ` (board ${h.external.boardName})` : '';
+  return `${named(h)}${board}${h.until === 'merged' ? ` to be ${UNTIL_WORDS.merged}` : ''}`;
+};
 
 export interface BlockedParts {
   /** The names to say: glob IDs, and "decision <id>" for a decision. */
@@ -502,7 +520,7 @@ const holdState = (state: Holding['state']): string => {
 /** What the tip says glob waits for, each with its state and why: "s15f41 (Planning): uses humanSteps()". */
 export const chainTip = (glob: GlobView): string =>
   startHolds(glob)
-    .map((h) => `${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
+    .map((h) => `${named(h)}${h.external?.hidden === true ? '' : ` (${holdState(h.state)})`}${h.reason === null ? '' : `: ${h.reason}`}`)
     .join(', ');
 
 export interface HoldLine {
@@ -542,11 +560,33 @@ export const holdLine = (glob: GlobView): HoldLine | null => {
   return {
     text: `${GATE_WORDS[first.gate].head} · ${named(first)}${rest.length > 0 ? ` +${String(rest.length)}` : ''}`,
     tip: held
-      .map((h) => scriptHoldTip(glob, h) ?? `${GATE_WORDS[h.gate].tip} ${named(h)} (${holdState(h.state)})${h.reason === null ? '' : `: ${h.reason}`}`)
+      .map(
+        (h) =>
+          scriptHoldTip(glob, h) ??
+          `${GATE_WORDS[h.gate].tip} ${waitsForWords(h)}${h.external?.hidden === true ? '' : ` (${holdState(h.state)})`}${reasonTail(h)}`,
+      )
       .join('\n'),
     // A person will do an action once it is free, so it reads as theirs even while it waits.
     icon: first.toIsDecision || first.toIsAction === true || glob.category === 'action' ? 'human' : 'hourglass',
   };
+};
+
+/**
+ * The tip lines the relation features add to a card: what supersedes it, what waits for it and why ("s1t8 waits: needs the schema"),
+ * how many globs on other boards wait, and open suggestions. Each is absent when its field is (an older API sends none).
+ */
+export const relationTips = (glob: GlobView): string[] => {
+  const lines: string[] = [];
+  const by = glob.relations?.supersededBy;
+  if (by != null) lines.push(`Superseded by ${by.hidden === true ? OTHER_BOARD_GLOB : by.id}${reasonTail(by)}`);
+  for (const h of glob.holdsBack ?? glob.relations?.holdsBack ?? []) {
+    const from = h.external?.hidden === true ? OTHER_BOARD_GLOB : h.from;
+    lines.push(`${from} waits${reasonTail(h)}`);
+  }
+  const others = glob.relations?.waitedOnByOtherBoards ?? 0;
+  if (others > 0) lines.push(`${String(others)} ${others === 1 ? 'glob' : 'globs'} on other boards ${others === 1 ? 'waits' : 'wait'} for this`);
+  for (const s of glob.suggestions ?? []) lines.push(`Suggestion: ${s.text}`);
+  return lines;
 };
 
 export interface WorkstreamLine {

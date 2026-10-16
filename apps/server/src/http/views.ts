@@ -1,4 +1,4 @@
-import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
+import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationSuggestion, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
 import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -152,7 +152,7 @@ export const globView = (
 export const armField = (arm: Arm | null) => (arm === null ? {} : { arm });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; rolloutSteps?: number; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; rolloutSteps?: number; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null; suggestions?: readonly RelationSuggestion[] }) =>
   ({
     ...globView(v.glob, v.allowedActions, v.artifacts, v, v.humanSteps ?? null, v.relations, v.holding),
     waitingFor: v.waitingFor,
@@ -161,6 +161,8 @@ export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; a
     ...armField(v.arm ?? null),
     // The script an open action runs and whether the base branch has it (null `onBase`: not checked); null for any other glob.
     script: v.script ?? null,
+    // Open card suggestions (is it a prerequisite? supersedes? a failed step: link a glob?), only when there are some.
+    ...(v.suggestions === undefined || v.suggestions.length === 0 ? {} : { suggestions: v.suggestions }),
     // The glob's relations in groups: what holds it back (the same as `holding`), what it holds back, and what no longer holds.
     relations: v.relationGroups,
     // Why a person is needed and what to do first (null when nothing is wrong); the card and `sstor --glob` show it.
@@ -271,6 +273,29 @@ export const compactSizeProposal = <V extends { sizeCheck?: SizeCheck | null }>(
   const workstreams = proposal.workstreams.map(({ plan, ...rest }) => ({ ...rest, planSummary: plan.replace(/\s+/g, ' ').slice(0, PART_SUMMARY_CHARS), planChars: plan.length }));
   return { ...view, sizeCheck: { ...view.sizeCheck, proposal: { ...proposal, workstreams } } };
 };
+
+/** A suggestion's text as an agent's read carries it: the id to accept or dismiss, the kind and a clipped line. */
+const SUGGESTION_TEXT_CHARS = 160;
+
+/**
+ * The glob view with the card suggestions as a short list for MCP reads (`id`, `kind`, `mentioned`, a clipped `text`); the REST
+ * read carries them whole. The relations stay as `get_glob` always carried them: grouped, with `external` set where a relation
+ * points at another board (redacted by core for a viewer who is not a member of it).
+ */
+export const compactSuggestions = <V extends { suggestions?: readonly RelationSuggestion[] }>(view: V): V =>
+  view.suggestions === undefined
+    ? view
+    : {
+        ...view,
+        suggestions: view.suggestions.map(({ id, kind, mentioned, gate, stepId, text }) => ({
+          id,
+          kind,
+          mentioned,
+          ...(gate === undefined ? {} : { gate }),
+          ...(stepId === undefined ? {} : { stepId }),
+          text: text.length <= SUGGESTION_TEXT_CHARS ? text : `${text.slice(0, SUGGESTION_TEXT_CHARS)}…`,
+        })),
+      };
 
 const KB_TEXT_CHARS = 400;
 const clip = (text: string): string => (text.length <= KB_TEXT_CHARS ? text : `${text.slice(0, KB_TEXT_CHARS)}…`);
