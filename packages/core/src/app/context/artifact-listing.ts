@@ -14,8 +14,8 @@ export interface ArtifactListing {
 /** Attachments with these labels always come inline: agents must follow them and pass them verbatim. */
 export const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
 
-/** Label prefixes that also come inline: a failed rollout step's note is the next generation's in-scope feedback. */
-const INLINE_LABEL_PREFIXES = ['rollout step failed'];
+/** Label prefixes that also come inline: a failed rollout step's note, or a failed action run's output, is the next round's feedback. */
+const INLINE_LABEL_PREFIXES = ['rollout step failed', 'action run failed'];
 
 export const isInlineLabel = (label: string): boolean => {
   const lower = label.toLowerCase();

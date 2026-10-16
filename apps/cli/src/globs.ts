@@ -26,7 +26,7 @@ export const GLOB_USAGE = 'glob <id> [--json]';
 export const HANDOVER_USAGE = 'handover <id> [--json]';
 export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]';
 export const NEW_USAGE =
-  'new [--mode sub|same|super | --same|--sub|--super] [--fix] [--routine] [--env <name>] [--after <id>[,<id>...]] [--json] <prompt...>';
+  'new [--mode sub|same|super | --same|--sub|--super] [--fix] [--routine] [--env <name>] [--after <id>[,<id>...]] [--action [--prepare [--record branch|artifact|attachment]]] [--json] <prompt...>';
 export const READY_USAGE = 'ready [<id>] [--json]';
 export const MERGE_USAGE = 'merge [<id>] [--continue] [--json]';
 
@@ -78,8 +78,9 @@ type GlobView = z.infer<typeof globSchema>;
 
 const createdSchema = z.object({
   id: z.string(),
-  branch: z.string(),
-  type: z.string(),
+  /** An action has none unless it is prepared on a branch. */
+  branch: z.string().optional(),
+  type: z.string().nullable(),
   category: z.string(),
   actor: z.string().optional(),
   mode: z.string().optional(),
@@ -89,6 +90,7 @@ const createdSchema = z.object({
   provisioning: z.string(),
   after: z.array(z.string()).optional(),
   waiting: z.boolean().optional(),
+  actionState: z.string().optional(),
 });
 
 /** The hand-over brief get_glob returns (see Handover in packages/core/src/domain/handover.ts); null when nothing is wrong. */
@@ -198,7 +200,7 @@ function liveRun(glob: GlobView): GlobView['currentRun'] {
 }
 
 /** Who works on a glob and how, with the fix flag and work kind; an older slop sends only the type and category. */
-function kindFields(glob: Pick<GlobView, 'type' | 'category' | 'actor' | 'mode' | 'fix' | 'workKind'>): Record<string, unknown> {
+function kindFields(glob: Pick<GlobView, 'category' | 'actor' | 'mode' | 'fix' | 'workKind'> & { readonly type: string | null }): Record<string, unknown> {
   const human = glob.category === 'decision' || glob.category === 'action';
   return {
     actor: glob.actor ?? (human ? 'human' : 'machine'),
@@ -209,7 +211,7 @@ function kindFields(glob: Pick<GlobView, 'type' | 'category' | 'actor' | 'mode' 
 }
 
 /** "machine same fix": the short form of who, how and whether it fixes something. */
-function describeKind(glob: Pick<GlobView, 'type' | 'category' | 'actor' | 'mode' | 'fix' | 'workKind'>): string {
+function describeKind(glob: Pick<GlobView, 'category' | 'actor' | 'mode' | 'fix' | 'workKind'> & { readonly type: string | null }): string {
   const kind = kindFields(glob);
   return `${String(kind.actor)} ${String(kind.mode)}${kind.fix === true ? ' fix' : ''}`;
 }
@@ -422,10 +424,12 @@ function boardSetting(settings: Settings): number {
 export async function newCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
   const { flags, values, positionals } = parseArgs(
     args,
-    [...Object.keys(TYPE_FLAGS), ...Object.keys(CATEGORY_FLAGS), '--fix', '--routine', '--json'],
+    [...Object.keys(TYPE_FLAGS), ...Object.keys(CATEGORY_FLAGS), '--fix', '--routine', '--json', '--action', '--prepare'],
     NEW_USAGE,
-    ['--env', '--after', '--mode'],
+    ['--env', '--after', '--mode', '--record'],
   );
+  if (flags.has('--action')) return newAction(flags, values, positionals, deps);
+  if (flags.has('--prepare') || values.has('--record')) throw new UsageError(`--prepare and --record are for --action\nusage: slop ${NEW_USAGE}`);
   const environment = values.get('--env');
   const after = (values.get('--after') ?? '')
     .split(',')
@@ -491,6 +495,53 @@ export async function newCommand(args: readonly string[], deps: GlobDeps): Promi
   deps.stdout(
     `${glob.id} [${describeKind(glob)}] ${glob.status}: branch ${glob.branch}; ${who}\n`,
   );
+}
+
+const RECORDS: ReadonlySet<string> = new Set(['branch', 'artifact', 'attachment']);
+
+/**
+ * `slop new --action`: something a person does (an action). With `--prepare` a routine first prepares what they run, kept as
+ * `--record` says (default: a branch). The first line is the title; a longer text is the plan.
+ */
+async function newAction(
+  flags: ReadonlySet<string>,
+  values: ReadonlyMap<string, string>,
+  positionals: readonly string[],
+  deps: GlobDeps,
+): Promise<void> {
+  const clash = ['--same', '--sub', '--super', '--fix', '--routine', '--env', '--mode', ...Object.keys(CATEGORY_FLAGS)].find((f) => flags.has(f) || values.has(f));
+  if (clash !== undefined) throw new UsageError(`${clash} is for code work, not an action\nusage: slop ${NEW_USAGE}`);
+  const prepare = flags.has('--prepare');
+  const record = values.get('--record');
+  if (record !== undefined && !prepare) throw new UsageError('--record needs --prepare');
+  if (record !== undefined && !RECORDS.has(record)) throw new UsageError('--record is branch, artifact or attachment');
+  const after = (values.get('--after') ?? '').split(',').map((id) => id.trim()).filter((id) => id !== '');
+  for (const id of after) requireGlobId(id, NEW_USAGE);
+  const text = positionals.join(' ').trim();
+  if (text === '') throw new UsageError(`usage: slop ${NEW_USAGE}`);
+  const created = createdSchema.safeParse(
+    await deps.client.call('create_glob', {
+      board: boardSetting(deps.settings),
+      idempotencyKey: deps.newIdempotencyKey(),
+      actor: 'human',
+      mode: 'action',
+      title: text,
+      ...(prepare ? { prepare: true, ...(record === undefined ? {} : { record }) } : {}),
+      ...(after.length === 0 ? {} : { after, reason: 'the action needs it first' }),
+    }),
+  );
+  if (!created.success) throw new SlopError('create_glob: unexpected response from slop');
+  const glob = created.data;
+  if (flags.has('--json')) {
+    printJson(deps, { id: glob.id, branch: glob.branch ?? null, type: glob.type, category: glob.category, ...kindFields(glob), status: glob.status, actionState: glob.actionState ?? null, waiting: glob.waiting === true, after: glob.after ?? [] });
+    return;
+  }
+  const what = !prepare
+    ? 'a person does it, then marks it done'
+    : glob.actionState === 'waiting'
+      ? `waits for ${(glob.after ?? after).join(', ')}, then a routine prepares it`
+      : 'a routine is preparing it; it shows "ready to run" when done';
+  deps.stdout(`${glob.id} [${describeKind(glob)}] ${glob.status}: ${what}\n`);
 }
 
 // Untracked paths `slop init`, sstor and the agents leave in a worktree; not worth a warning.

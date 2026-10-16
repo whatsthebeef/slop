@@ -1,5 +1,5 @@
 import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationSuggestion, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, actionState, preparationOf, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
@@ -17,6 +17,8 @@ export const kindView = (glob: Glob) => ({
   fixSource: glob.fixSource ?? 'inferred',
   workKind: workKindOf(glob),
   workKindSource: glob.workKindSource ?? 'inferred',
+  // An action only: where a prepared one stands (open, waiting, preparing, preparation_failed, ready, recording, closed) and how it is prepared.
+  ...(actionState(glob) === null ? {} : { actionState: actionState(glob), preparation: preparationOf(glob) }),
 });
 
 /** What a caller says about who works on a glob and how: the new fields, and the old `category` and `type` as aliases. */

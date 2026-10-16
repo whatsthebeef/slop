@@ -68,6 +68,14 @@ describe('slop put-artifact', () => {
     expect(calls[0]?.args).toEqual({ id: 's1t4', kind: 'test_plan', content: '| Name | Status | Location | Description |' });
   });
 
+  it('stores a rollout_script under its label, and only with one', async () => {
+    const { calls, deps } = setup({ 'run.sh': '#!/bin/sh\n' });
+    await putArtifactCommand(['s1a2', '--kind', 'rollout_script', '--label', 'action: iam', '--file', 'run.sh', '--run', 'r1'], deps);
+    expect(calls[0]?.args).toEqual({ id: 's1a2', kind: 'rollout_script', label: 'action: iam', runId: 'r1', content: '#!/bin/sh\n' });
+    await expect(putArtifactCommand(['s1a2', '--kind', 'rollout_script', '--file', 'run.sh'], deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(putArtifactCommand(['s1a2', '--kind', 'postplan', '--label', 'x', '--file', 'run.sh'], deps)).rejects.toBeInstanceOf(UsageError);
+  });
+
   it('reads stdin for --file -', async () => {
     const { calls, deps } = setup({ '-': 'from stdin' });
     await putArtifactCommand(['s1t4', '--kind', 'postplan', '--file', '-'], deps);

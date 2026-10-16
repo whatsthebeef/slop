@@ -114,6 +114,8 @@ const step = (
 const runKind = (glob: Glob, run: Run): MachineStepKind => {
   if (run.purpose === 'investigate') return 'investigate';
   if (run.purpose === 'resolve_conflict') return 'resolve_conflict';
+  // A preparation round is an implementing run: it writes what the person will run.
+  if (run.purpose === 'prepare') return 'implement';
   if (glob.status === 'reviewing') return 'answer_review';
   if (glob.headChecks?.state === 'failed' && glob.headChecks.inheritedFrom === undefined) return 'fix_checks';
   return 'implement';
