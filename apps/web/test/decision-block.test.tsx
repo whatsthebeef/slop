@@ -203,10 +203,11 @@ describe('the proposal block of a learning', () => {
     follows(recommendation, source);
     expect(screen.queryByText('Decide')).toBeNull();
     expect(screen.queryByText('What approving changes')).toBeNull();
-    // The evidence is behind the collapsed Evidence and history, not beside the why.
+    // The evidence is under the plain Evidence and history label, not beside the why, and nothing in it is a collapsible.
     const history = screen.getByTestId('evidence-history');
     expect(within(history).getByTestId('evidence-summary').textContent).toBe('Seen 3 times on 2 globs: s1t1, s1t2');
-    expect(history.hasAttribute('open')).toBe(false);
+    expect(history.tagName).not.toBe('DETAILS');
+    expect(history.querySelector('details')).toBeNull();
     expect(within(why).queryByTestId('evidence-summary')).toBeNull();
   });
 

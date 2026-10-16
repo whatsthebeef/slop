@@ -461,7 +461,7 @@ export const RelationsHeader = ({
 
 /**
  * The Related section of a work glob: what holds it back (with the gate in words, why and who said so), the decisions it waits
- * for, the glob it was split from, what it holds back, and what no longer holds (collapsed). Slop infers relations; a person can dismiss one
+ * for, the glob it was split from, what it holds back, and what no longer holds (inline, muted). Slop infers relations; a person can dismiss one
  * that isn't, or add one.
  */
 export const RelatedSection = ({
@@ -559,14 +559,14 @@ export const RelatedSection = ({
         </Group>
       )}
       {groups !== null && groups.done.length > 0 && (
-        <details data-testid="related-done">
-          <summary className="cursor-pointer font-medium">Done ({groups.done.length})</summary>
+        <div className="grid gap-0.5 text-muted-foreground" data-testid="related-done">
+          <span className="font-medium">No longer holding ({groups.done.length})</span>
           <ul className="ml-4 list-disc">
             {groups.done.map((r) => (
               <Row key={r.relationId} boardId={boardId} row={r} how={r.how} onDismiss={null} />
             ))}
           </ul>
-        </details>
+        </div>
       )}
           {adding && <AddRelationForm ctx={ctx} gates={decision ? ['start', 'merge'] : ['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={() => setAdding(false)} />}
         </>
