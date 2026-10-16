@@ -909,10 +909,10 @@ export const api = {
   /** An action glob: a person did it (the note says what they checked, optional). */
   completeAction: (id: string, version: number, note?: string) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/done`, note === undefined || note.trim() === '' ? { version } : { version, note: note.trim() }),
-  /** An action glob that is not needed after all (the reason is required). */
   /** A prepared action's run failed: the pasted output (secrets masked on the server) starts the next preparation round. */
   failAction: (id: string, version: number, output: string) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/fail`, { version, output: output.trim() }),
+  /** An action glob that is not needed after all (the reason is required). */
   dismissAction: (id: string, version: number, reason: string) =>
     request<GlobView>('POST', `/api/globs/${id}/actions/dismiss`, { version, reason: reason.trim() }),
   action: (id: string, action: ActionPath, version: number, anyway?: boolean) =>
