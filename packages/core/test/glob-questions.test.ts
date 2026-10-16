@@ -4,7 +4,7 @@ import { BoardService } from '../src/app/board-service.js';
 import { GlobService } from '../src/app/glob-service.js';
 import type { Result } from '../src/domain/errors.js';
 import * as machine from '../src/domain/machine.js';
-import { relationQuestion } from '../src/domain/questions.js';
+import { mergeQuestions, relationQuestion } from '../src/domain/questions.js';
 import type { NewQuestion } from '../src/domain/questions.js';
 import type { Glob } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -217,6 +217,45 @@ describe('open questions through the services', () => {
       expect(resumed.status).toBe('merging');
       expect(effectKinds().filter((k) => k === 'squash_merge')).toHaveLength(1);
       expect((await attachment(g.id, 'Clarifications'))?.content).toContain('**Answer (dev@example.com, 2026-10-05):** Accept as is');
+    });
+
+    /** A glob whose plan changed after its run, checks passed on HEAD, merge when green armed, the run watching. */
+    const planChanged = async (): Promise<Glob> => {
+      now = '2026-10-05T12:00:00.000Z';
+      const g = await working({ mergeMode: 'when_green', headChecks: { sha: HEAD, state: 'pending' } });
+      setGlob({ ...g, runs: g.runs.map((r) => ({ ...r, state: 'watching' as const })) });
+      now = '2026-10-05T13:00:00.000Z';
+      unwrap(await artifacts.putPlan(DEV, g.id, 'Plan v2', 1));
+      await globs.raisePlanChanged(g.id, 2);
+      unwrap(await globs.applyEvent(g.id, (x, c, f) => machine.checksCompleted(x, { sha: HEAD, passed: true }, c, f.relations), { relations: true }));
+      return g;
+    };
+
+    it('Re-run starts a run on the new plan and keeps the merge held until a new head is pushed', async () => {
+      const g = await planChanged();
+      const answered = unwrap(await globs.answerQuestion(DEV, g.id, 'q1', { answer: '', option: 'Re-run' }));
+      expect(answered.status).toBe('pr_open');
+      expect(effectKinds()).not.toContain('squash_merge');
+      expect(answered.runs.at(-1)).toMatchObject({ state: 'queued' });
+      expect(answered.runs.at(-2)).toMatchObject({ state: 'ended', outcome: 'superseded' });
+      expect(mergeQuestions(answered)).toHaveLength(1);
+      // Releasing again on the old head still merges nothing.
+      await globs.gateReleased(g.id);
+      expect(effectKinds()).not.toContain('squash_merge');
+      expect(code(await globs.merge(DEV, g.id, (await current(g.id)).version))).toBe('invalid_transition');
+      // A new head ends the hold.
+      expect(mergeQuestions({ ...answered, pr: { number: 7, state: 'ready', headSha: 'bbbb2222' } })).toHaveLength(0);
+    });
+
+    it('Accept as is and Follow up release the merge at once and start no run', async () => {
+      for (const option of ['Accept as is', 'Follow up']) {
+        const g = await planChanged();
+        const before = (await current(g.id)).runs.length;
+        const answered = unwrap(await globs.answerQuestion(DEV, g.id, 'q1', { answer: '', option }));
+        expect(answered.status).toBe('merging');
+        expect(answered.runs).toHaveLength(before);
+        store.state.outbox.length = 0;
+      }
     });
 
     it('queues nothing for the first plan before a run, or once the glob has merged', async () => {
