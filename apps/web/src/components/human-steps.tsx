@@ -16,6 +16,8 @@ import {
   isDismissedStep,
   isWorkStep,
   isQuietStep,
+  personSteps,
+  stepGroupLabel,
   PREDICTED_ROLLOUT_TEXT,
   readStepsOpen,
   scriptArtifactPath,
@@ -99,7 +101,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         <span className={cn('min-w-0 break-words font-medium [overflow-wrap:anywhere]', (step.state === 'dismissed' || step.state === 'done' || predicted) && 'text-muted-foreground', (step.state === 'dismissed' || step.state === 'done') && 'line-through')} data-testid='step-title'>
           {predicted ? PREDICTED_ROLLOUT_TEXT : stripMarkdown(step.title)}
         </span>
-        <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
+        <span className='font-mono text-[11px] text-muted-foreground' data-testid='step-group'>{stepGroupLabel(step)}</span>
         {step.due === 'once' && <OnceMarker />}
         {mine && !predicted && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
@@ -400,7 +402,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
         <span className='min-w-0 break-words font-medium [overflow-wrap:anywhere]' data-testid='step-title'>
           {stripMarkdown(step.title)}
         </span>
-        <span className='font-mono text-[11px] text-muted-foreground'>{step.kind.replace(/_/g, ' ')}</span>
+        <span className='font-mono text-[11px] text-muted-foreground' data-testid='step-group'>{stepGroupLabel(step)}</span>
         {step.due === 'once' && <OnceMarker />}
         {mine && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
@@ -589,7 +591,7 @@ export const HumanSteps = ({
   /** Tells slop the change is deployed to an environment (its after-deploy steps fall due); without it the group has no button. */
   onMarkDeployed?: (env: string) => Promise<boolean>;
 } & StepActions) => {
-  const all = glob.humanSteps ?? [];
+  const all = personSteps(glob.humanSteps ?? []);
   const live = all.filter((s) => !isDismissedStep(s));
   const due = dueWorkSteps(live);
   const quiet = live.filter(isQuietStep);
