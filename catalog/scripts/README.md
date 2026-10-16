@@ -57,7 +57,7 @@ Without the scripts: `POST <tokenUrl>` with HTTP Basic auth `clientId:clientSecr
 
 ## Deploy-live webhook (push, for runners that can't pull)
 
-Pull is the default: the runner's pipeline asks `atf-specs`. A runner whose system can only be called can have slop call it once a branch deploy has succeeded. The webhook is an extra setting of any runner, whatever its identity method. It has no screen yet: set it through the API.
+Pull is the default: the runner's pipeline asks `atf-specs`. A runner whose system can only be called can have slop call it when a deploy is live. Today slop queues no delivery on a dev branch deploy: ATF runs after the change is merged to main and deployed to int, started by the int pipeline, and slop does not track int deploys, so nothing sends this webhook until a queuer is added. The webhook is an extra setting of any runner, whatever its identity method. It has no screen yet: set it through the API.
 
 1. **Board admin:** `POST /api/boards/:b/atf-runners`, or `PATCH /api/boards/:b/atf-runners/:id`, with `config: {..., "webhook": {"url": "https://ci.example.com/hooks/slop"}}`. `PATCH`'s `config.webhook` is the whole setting: leave it out to turn delivery off.
 2. **URL rules:** `https`, no user name or password, a public host name (not `localhost`, a single label or an internal-looking suffix), and every address it resolves to must be public (private, loopback, link-local and other reserved ranges are refused). slop resolves the host when you set the webhook and again at every delivery, and connects to the address it resolved (the host name is the TLS name and the `Host` header). Redirects are not followed. The server must have `SIGNING_SECRET` set, or webhooks can't be turned on.

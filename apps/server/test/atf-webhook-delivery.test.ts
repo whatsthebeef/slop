@@ -538,7 +538,7 @@ describe('deploy-live delivery through the outbox', () => {
     }
   });
 
-  it('is queued by a succeeding branch deploy for subscribed runners only, once per deploy', async () => {
+  it('is not queued by a succeeding branch deploy (the int pipeline starts ATF)', async () => {
     const deploys = new DeployService({
       store,
       notifier: { publish: () => undefined },
@@ -567,7 +567,7 @@ describe('deploy-live delivery through the outbox', () => {
         .from(schema.outbox)
         .where(eq(schema.outbox.kind, 'deliver_atf_webhook'))
     ).filter((j) => j.globId === `board-${String(boardId)}`);
-    expect(queued.map((j) => j.effect)).toEqual([effect({ deployId: 'dep-running', deployedAt: AT })]);
+    expect(queued).toEqual([]);
   });
 
   describe.each([

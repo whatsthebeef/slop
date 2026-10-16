@@ -17,8 +17,8 @@ import type { Clock, Effect, EffectKind, RunnerWebhooks, Store } from '@slop/cor
 import type { Outcome, SettledExecutor } from './jobs/outbox.js';
 
 /**
- * Deploy-live webhooks (spec, ATF runners). A runner that subscribed gets a signed POST when a branch deploy has succeeded
- * in an environment it serves.
+ * Deploy-live webhooks (spec, ATF runners). A runner that subscribed gets a signed POST when a `deliver_atf_webhook` effect is
+ * executed (a dev branch deploy no longer queues one: ATF is started by the int pipeline).
  * The signing secret is slop's: made when the webhook is turned on, shown once, and kept sealed (AES-256-GCM under a key
  * derived from `SIGNING_SECRET`) in the runner's config, because an HMAC needs the secret itself, not a hash of it.
  */

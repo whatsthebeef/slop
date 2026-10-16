@@ -1,9 +1,7 @@
-import { webhookSubscribers } from '../domain/atf-runners.js';
 import * as deploys from '../domain/deploys.js';
 import type { Deploy, DeployChange, DeployIndicator } from '../domain/deploys.js';
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
-import type { Effect } from '../domain/events.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
 import { markStepsDue } from './step-due.js';
@@ -219,33 +217,16 @@ export class DeployService {
   }
 
   /**
-   * A branch deploy succeeded: the glob's `after_deploy:<environment>` steps fall due (before the merge too), a push-mode
-   * board's ATF project is started and runners that subscribed to the deploy-live webhook are told, all in the deploy's
-   * transaction. The outbox keeps one start per board, environment and commit and one delivery per runner and deploy.
+   * A branch deploy succeeded: the glob's `after_deploy:<environment>` steps fall due (before the merge too), in the
+   * deploy's transaction. ATF is not started here: it runs after the change is merged to main and deployed to int,
+   * started by the int pipeline.
    */
   private async deployed(dtx: DeployTx, deploy: Deploy): Promise<void> {
     const { tx } = dtx;
-    const now = this.deps.clock.now();
     const glob = await tx.getGlob(deploy.globId);
-    if (glob !== null && (await markStepsDue(tx, deploy.boardId, [glob.id], deploy.environment, now)).length > 0) dtx.due.push(glob);
-    const boardWide = `board-${String(deploy.boardId)}`;
-    const effects: Effect[] = [];
-    if ((await tx.getBoard(deploy.boardId))?.atf?.mode === 'push') {
-      effects.push({ kind: 'start_atf', globId: boardWide, boardId: deploy.boardId, environment: deploy.environment, sha: deploy.sha });
+    if (glob !== null && (await markStepsDue(tx, deploy.boardId, [glob.id], deploy.environment, this.deps.clock.now())).length > 0) {
+      dtx.due.push(glob);
     }
-    for (const runner of webhookSubscribers(await tx.listAtfRunners(deploy.boardId), deploy.environment)) {
-      effects.push({
-        kind: 'deliver_atf_webhook',
-        globId: boardWide,
-        boardId: deploy.boardId,
-        runnerId: runner.id,
-        deployId: deploy.id,
-        environment: deploy.environment,
-        sha: deploy.sha,
-        deployedAt: deploy.finishedAt ?? now,
-      });
-    }
-    await tx.enqueueEffects(effects);
   }
 
   private async enqueue(

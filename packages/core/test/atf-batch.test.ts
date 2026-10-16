@@ -237,17 +237,13 @@ describe('the ATF spec list for a branch deploy', () => {
     ).toEqual([{ spec: 'b', status: 'missing', tests: 0, failedTests: 0, durationMs: null }]);
   });
 
-  it('queues start_atf when a branch deploy succeeds, for a push board only', async () => {
-    await succeed('s1t1', D1);
-    expect(store.state.outbox.filter((e) => e.kind === 'start_atf')).toEqual([]);
+  it('queues no start_atf when a branch deploy succeeds, even for a push board (the int pipeline starts ATF)', async () => {
     await store.transaction(async (tx) => {
       const current = (await tx.getBoard(board.id)) ?? board;
       await tx.updateBoard({ ...current, atf: { provider: 'codebuild', region: 'us-east-1', project: 'atf', mode: 'push' } }, current.version);
     });
     store.state.outbox.length = 0;
     await succeed('s1t3', D2);
-    expect(store.state.outbox.filter((e) => e.kind === 'start_atf')).toEqual([
-      { kind: 'start_atf', globId: `board-${String(board.id)}`, boardId: board.id, environment: 'dev', sha: D2 },
-    ]);
+    expect(store.state.outbox.filter((e) => e.kind === 'start_atf')).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 # CodeBuild buildspec that runs a board's acceptance tests (ATF) and reports the result to slop. slop
-# doesn't start ATF: the board's pipeline does, as a stage after a branch deploy to a dev environment. Pass SLOP_ENVIRONMENT (the environment tested) and SLOP_SHA (the
+# doesn't start ATF: the board's pipeline does, as a stage after the change is merged to main and deployed to int (not on a dev branch deploy). Pass SLOP_ENVIRONMENT (the environment tested) and SLOP_SHA (the
 # commit it runs); for a run on a glob's branch, also SLOP_GLOB (the glob's ID).
 #
 # The tests themselves live in the repository's .sstor/atf.sh, which must write JUnit XML under

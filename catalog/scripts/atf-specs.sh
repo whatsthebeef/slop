@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # .sstor/atf-specs.sh [environment] [report dir]: asks slop which acceptance test (ATF) specs to run for the deploy
-# that was just made (a succeeded branch deploy of a glob), and exports the answer for .sstor/atf.sh. SOURCE it, so the exports reach the build's shell:
+# that was just made (the int pipeline runs ATF after the merge to main is deployed; slop resolves the list from the glob's succeeded branch deploy of that commit), and exports the answer for .sstor/atf.sh. SOURCE it, so the exports reach the build's shell:
 #
 #   . .sstor/atf-specs.sh "$SLOP_ENVIRONMENT" reports/atf      # (buildspec-atf.yml does this)
 #

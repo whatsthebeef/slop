@@ -438,7 +438,7 @@ describe('the registry and webhooks', () => {
   });
 });
 
-describe('queuing deploy-live deliveries when a branch deploy succeeds', () => {
+describe('a branch deploy does not queue ATF deliveries', () => {
   let store: MemoryStore;
   let deploys: DeployService;
   let boardId: number;
@@ -520,38 +520,24 @@ describe('queuing deploy-live deliveries when a branch deploy succeeds', () => {
     }
   });
 
-  it('queues one delivery per subscribed runner that serves the environment, carrying the deploy', async () => {
-    const deployId = await deploy('s1t1', SHA);
-    expect(deliveries()).toEqual(
-      ['a', 'b'].map((name) => ({
-        kind: 'deliver_atf_webhook',
-        globId: `board-${String(boardId)}`,
-        boardId,
-        runnerId: runnerIds[name],
-        deployId,
-        environment: 'dev',
-        sha: SHA,
-        deployedAt: START,
-      })),
-    );
-  });
-
-  it('queues nothing for a revoked runner or a failed deploy', async () => {
+  it('queues no ATF delivery or start when a branch deploy succeeds (the int pipeline starts ATF), and still makes after_deploy steps due', async () => {
     await store.transaction((tx) =>
-      tx.updateAtfRunner(boardId, runnerIds['a'] ?? 0, { enabled: false, revokedAt: START }),
+      tx.saveHumanSteps([
+        {
+          id: 'hs1', boardId, globId: 's1t1', kind: 'rollout', title: 'Check dev', detail: null, who: 'anyone', due: 'after_deploy:dev', state: 'open', blocks: [], check: null, script: null,
+          why: null, permissions: null, commands: [], verify: null, origin: 'rollout-section', createdBy: ADMIN, createdAt: START, doneBy: null, doneAt: null, dismissedReason: null, dueSince: null,
+        },
+      ]),
     );
     await deploy('s1t1', SHA);
-    expect(deliveries().map((e) => e.runnerId)).toEqual([runnerIds['b']]);
-    store.state.outbox.length = 0;
-    await deploy('s1t2', 'b'.repeat(40), false);
     expect(deliveries()).toEqual([]);
+    expect(store.state.outbox.filter((e) => e.kind === 'start_atf')).toEqual([]);
+    const steps = await store.transaction((tx) => tx.listHumanSteps(boardId, ['s1t1']));
+    expect(steps.map((s) => s.dueSince)).toEqual([START]);
   });
 
-  it('queues one delivery per runner and deploy: a repeated result queues nothing new', async () => {
-    const first = await deploy('s1t1', SHA);
-    unwrap(await deploys.finished(first, { succeeded: true, error: null }));
-    expect(deliveries()).toHaveLength(2);
-    await deploy('s1t2', 'c'.repeat(40));
-    expect(deliveries()).toHaveLength(4);
+  it('queues nothing for a failed deploy either', async () => {
+    await deploy('s1t2', 'b'.repeat(40), false);
+    expect(deliveries()).toEqual([]);
   });
 });

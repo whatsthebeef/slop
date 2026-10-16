@@ -228,7 +228,7 @@ export type Effect =
    */
   | { readonly kind: 'refresh_base_branch'; readonly globId: string; readonly boardId: number }
   /**
-   * A push-mode board's deploy of `sha` to `environment` has succeeded: start the board's ATF project with the specs its
+   * Start (no longer queued by a dev branch deploy: the int pipeline starts ATF; the executor stays) a push-mode board's deploy of `sha` to `environment`: start the board's ATF project with the specs its
    * glob's test plan listed. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`, not generation-checked);
    * dropped when a newer deploy has replaced `sha`; a failed start is logged and never blocks anything.
    */
@@ -240,7 +240,7 @@ export type Effect =
       readonly sha: string;
     }
   /**
-   * A deploy of `sha` to `environment` is live: tell one runner that subscribed to webhook delivery (signed POST of
+   * (No longer queued by a dev branch deploy; the executor stays.) A deploy of `sha` to `environment` is live: tell one runner that subscribed to webhook delivery (signed POST of
    * the deploy-live event). Board-wide like `start_atf` (`globId` is `board-<id>`, not generation-checked). The outbox keeps one
    * job per runner and deploy; dropped when the runner is gone or off, or a newer deploy replaced `sha`; a failed delivery is
    * retried with the outbox's backoff, never blocks anything.

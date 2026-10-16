@@ -145,7 +145,7 @@ const AtfSettings = ({
           )}
         </Field>
         <p className='text-xs text-muted-foreground'>
-          After each checked deploy slop starts the project with <code>SLOP_ATF_SPECS</code>, <code>SLOP_ATF_GREP</code>,{' '}
+          When started, slop gives the project <code>SLOP_ATF_SPECS</code>, <code>SLOP_ATF_GREP</code>,{' '}
           <code>SLOP_ENVIRONMENT</code> and <code>SLOP_SHA</code>. Someone with AWS access must allow{' '}
           <code>codebuild:StartBuild</code> on the project for slop's role (or for the role above, which must trust slop's
           role for <code>sts:AssumeRole</code>). A failed start never blocks anything.

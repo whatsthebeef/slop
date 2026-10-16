@@ -53,7 +53,7 @@ export const startAtf = async (effect: Effect, deps: AtfStartDeps): Promise<Outc
 };
 
 /**
- * Outbox executors for push-mode ATF. After a branch deploy succeeds, the board's ATF project is started with the
+ * Outbox executors for push-mode ATF (nothing queues `start_atf` since ATF moved to the int pipeline). The board's ATF project is started with the
  * specs the newly held globs' test plans listed. The batch is the same stored one the pull endpoint serves, and CodeBuild's
  * idempotency token (per board, environment and commit) makes a repeated start return the build already running. Nothing
  * here blocks: a superseded deploy, a board switched back to pull, or a refused batch ends the effect, and a start that
