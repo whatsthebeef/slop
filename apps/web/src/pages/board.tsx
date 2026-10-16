@@ -270,8 +270,7 @@ export const BoardPage = () => {
     if (linked !== null) void navigate(globPath(boardId, linked) + linkedTarget, { replace: true });
   }, [linked, linkedTarget, boardId, navigate]);
   const openGlob = (id: string, target: GlobTarget = {}) => void navigate(globPath(boardId, id, target));
-  // Deploy state (branch deploys, and the release and integration environments each glob is in) lives beside the
-  // globs; read it for the globs on the board.
+  // Deploy state (branch deploys and ATF results) lives beside the globs; read it for the globs on the board.
   const boardGlobIds = (globs.data ?? []).map((g) => g.id).sort();
   const deployState = useQuery({
     queryKey: [...deploysKey(boardId), boardGlobIds.join(',')],
