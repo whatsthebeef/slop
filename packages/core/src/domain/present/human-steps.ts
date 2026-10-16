@@ -213,6 +213,35 @@ export const stateText = (step: ListedHumanStep): string => {
 /** The command that runs a repo script: `bash <path>`, which works whether or not the file is executable. */
 export const scriptRunCommand = (path: string): string => `bash ${path}`;
 
+/** Whether a command runs the repo script at `path`: `bash <path>`, `sh <path>`, `./<path>` or the bare path, with or without flags. */
+export const runsScript = (command: string, path: string): boolean => {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(?:(?:bash|sh|zsh)\\s+)?(?:\\./)?${escaped}(?:\\s|$)`).test(command.trim());
+};
+
+/** A command that sets up a run (checkout, pull, sign-in, export, cd); the script runs after the leading ones. */
+const SETUP_COMMAND =
+  /^\s*(?:git\s+(?:checkout|switch|pull|fetch|merge)\b|cd\b|aws\s+sso\s+login\b|gh\s+auth\s+login\b|export\b)/;
+
+/** One line of a step's Run list: the command, and whether it runs the step's script (it then carries the "View script" link). */
+export interface RunLine {
+  readonly command: string;
+  readonly script: boolean;
+}
+
+/**
+ * A step's Run list in the order a person runs it. Commands that already run the script's path are shown as written (the script is
+ * not added again); otherwise the script's run command goes after the leading setup commands and before the rest.
+ */
+export const runLines = (commands: readonly string[], scriptPath: string | null): RunLine[] => {
+  if (scriptPath === null) return commands.map((command) => ({ command, script: false }));
+  const lines = commands.map((command) => ({ command, script: runsScript(command, scriptPath) }));
+  if (lines.some((line) => line.script)) return lines;
+  const at = commands.findIndex((command) => !SETUP_COMMAND.test(command));
+  const run = { command: scriptRunCommand(scriptPath), script: true };
+  return at === -1 ? [...lines, run] : [...lines.slice(0, at), run, ...lines.slice(at)];
+};
+
 /** Where a repo script is on GitHub: at the base branch once the glob has merged (the squash commit is there), else at the PR's head; null without a repo. */
 export const scriptSourceUrl = (
   repo: string | null | undefined,

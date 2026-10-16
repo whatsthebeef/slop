@@ -1,4 +1,4 @@
-import { fixOf, isHumanCategory, modeOf, needsPerson, hasOpenQuestions, armLabel } from '@slop/core';
+import { fixOf, isHumanCategory, modeOf, needsPerson, armLabel } from '@slop/core';
 import type { HumanStepViewer, Mode } from '@slop/core';
 import type { GlobView } from './api';
 
@@ -111,7 +111,7 @@ export const BOARD_FILTERS: BoardFilter[] = [
     label: 'Only human',
     control: 'toggle',
     normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
-    // The same status the card shows: only globs whose status is the human outline.
+    // The same status the card shows (the human outline), plus any glob with an open question.
     matches: (glob, _value, { now, viewer }) => needsPerson(glob, now, viewer),
   },
   {
@@ -121,14 +121,6 @@ export const BOARD_FILTERS: BoardFilter[] = [
     normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
     // Globs with a step a person must do at release (the card's "Arm system" label); human work has none.
     matches: (glob) => !isHumanCategory(glob.category) && armLabel(glob) !== null,
-  },
-  {
-    key: 'questions',
-    label: 'Has open questions',
-    control: 'toggle',
-    normalize: (raw) => (raw.trim() === '1' ? '1' : ''),
-    // Globs with an unanswered question (the card's Question chip); an older API sends none.
-    matches: (glob) => hasOpenQuestions(glob),
   },
 ];
 

@@ -21,6 +21,8 @@ export {
   personSteps,
   reviewOpen,
   rolloutLine,
+  runLines,
+  runsScript,
   scriptRunCommand,
   scriptSourceUrl,
   stateText,
@@ -29,7 +31,7 @@ export {
   stepMain,
   whoText,
 } from '@slop/core';
-export type { StepMain } from '@slop/core';
+export type { RunLine, StepMain } from '@slop/core';
 
 /** One key for every glob: the viewer's last toggle of the Human steps section. */
 const STORAGE_KEY = 'slop.human-steps-open';

@@ -1,7 +1,12 @@
 import { OTHER_BOARD_GLOB } from '../relations.js';
 import * as machine from '../machine.js';
 import { actionState, preparationOf } from '../action-glob.js';
-import { appliedHolding, MERGE_CONFLICT_STALL_LABEL, MERGE_QUEUE_TIP } from '../whose-move.js';
+import {
+  appliedHolding,
+  DEPLOY_STALLED_LABEL,
+  MERGE_CONFLICT_STALL_LABEL,
+  MERGE_QUEUE_TIP,
+} from '../whose-move.js';
 import {
   behindAdvice,
   behindWarning,
@@ -371,6 +376,14 @@ export const statusLine = (
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha, { rolloutSteps: glob.rolloutSteps ?? 0 });
+    // A rollout waiting on a deploy that never came is a stall: the warning says it in two words, the tooltip says what is missing.
+    if (glob.move?.holder === 'stalled' && glob.move.cause === 'deploy')
+      return make({
+        kind: 'stuck',
+        full: DEPLOY_STALLED_LABEL,
+        tone: 'text-required',
+        tip: `${DEPLOY_STALLED_LABEL}\n${glob.move.reason}`,
+      });
     // Merged with its rollout still open: how far it is, and whose turn.
     const rollout =
       glob.humanSteps === undefined
@@ -498,6 +511,7 @@ export const waitingFor = (
   ) {
     const head = glob.pr?.headSha ?? null;
     const checks = glob.headChecks;
+    const mergeHolds = appliedHolding(glob, glob.holding ?? []).filter((h) => h.gate === 'merge');
     const wait: Pick<Waiting, 'tip' | 'why' | 'running'> =
       head === null
         ? { tip: 'Waiting for the PR head', why: 'for the PR head', running: true }
@@ -514,11 +528,16 @@ export const waitingFor = (
                     : `${checks.inheritedFrom.base} is red`,
                 why: failedWhy(glob, head),
               }
-            : {
-                tip: `Waiting for the checks on ${head.slice(0, 7)} to pass`,
-                why: `for the checks on ${head.slice(0, 7)}`,
-                running: true,
-              };
+            : checks?.sha === head && checks.state === 'passed' && mergeHolds.length > 0
+              ? {
+                  tip: `Held for ${mergeHolds.map(waitsForWords).join(', ')}: Merge anyway merges it now`,
+                  why: `for ${mergeHolds.map(waitsForWords).join(', ')} (Merge anyway skips it)`,
+                }
+              : {
+                  tip: `Waiting for the checks on ${head.slice(0, 7)} to pass`,
+                  why: `for the checks on ${head.slice(0, 7)}`,
+                  running: true,
+                };
     waiting.push({ ...named('merge'), ...wait });
     if (glob.type === 'super') waiting.push({ ...named('merge_continue'), ...wait });
   }

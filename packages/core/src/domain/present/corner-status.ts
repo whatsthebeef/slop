@@ -1,5 +1,11 @@
 import { decisionOf } from '../decision-glob.js';
-import { feedbackText, labelsWaiting, openFeedback, signOffText } from '../whose-move.js';
+import {
+  DEPLOY_STALLED_LABEL,
+  feedbackText,
+  labelsWaiting,
+  openFeedback,
+  signOffText,
+} from '../whose-move.js';
 import { isHumanCategory } from '../types.js';
 import type { DecisionAttributes } from '../attributes.js';
 import type { HumanStepViewer } from '../human-steps.js';
@@ -39,6 +45,8 @@ export type StatusClick = GlobTarget;
 /** What the Your turn status opens: a stored work step (a rollout) the Human steps, a decision its block, a label its review, anything else the actions. */
 const yourTurnClick = (status: StatusLine): StatusClick => {
   if (status.work === true) return cardTargets.humanSteps();
+  // Mark deployed is on the Human steps section, beside the steps that wait for the deploy.
+  if (status.action === 'mark_deployed') return cardTargets.humanSteps();
   switch (status.turn) {
     case 'decide':
       return cardTargets.decision();
@@ -166,7 +174,7 @@ const feedbackTip = (glob: PresentableGlob): string =>
 
 /**
  * True when the glob needs a person now: its status shows the human outline (Your turn, a due rollout step, awaiting
- * sign-off, an escalation in Planning). A decision glob's turn is the status line's.
+ * sign-off, an escalation in Planning) or it has an open question. A decision glob's turn is the status line's.
  */
 export const needsPerson = (
   glob: PresentableGlob,
@@ -184,6 +192,8 @@ export const needsPerson = (
     );
   }
   if (decisionOf(glob) !== null) return statusLine(glob, now, viewer)?.kind === 'ready';
+  // An open question is a person's to answer even when a higher-priority status holds the corner.
+  if (openQuestionsOf(glob).length > 0) return true;
   const icon = cornerStatus(glob, now, viewer)?.icon;
   return icon === 'human' || icon === 'needs-human';
 };
@@ -365,7 +375,7 @@ export const cornerStatus = (
         ? ` · ${String(position.minutes)} min`
         : '';
     // The stall's next step is a person's (the viewer's turn): the human outline with that action, not the warning.
-    if (status !== null && status.kind === 'ready') {
+    if (status !== null && status.kind === 'ready' && status.action !== 'mark_deployed') {
       return make('ready', 'human', status.text, status.tone, yourTurnClick(status), [
         position.tip,
         `Stalled: ${cause}${minutes}`,
@@ -379,7 +389,10 @@ export const cornerStatus = (
         position.tip,
       ]);
     }
-    return make('stalled', 'alert', `${cause}${minutes}`, position.tone, cardTargets.actions(), [
+    // A deploy that never came: the steps waiting on it, with Mark deployed, are in the Human steps section.
+    const stalledClick =
+      position.label === DEPLOY_STALLED_LABEL ? cardTargets.humanSteps() : cardTargets.actions();
+    return make('stalled', 'alert', `${cause}${minutes}`, position.tone, stalledClick, [
       position.tip,
     ]);
   }
