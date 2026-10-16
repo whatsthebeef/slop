@@ -158,13 +158,13 @@ describe('Related: relations from a mention', () => {
     expect(screen.queryByTestId('mention-badge-s1t8')).toBeNull();
   });
 
-  it('lists a relation that was forced through as overridden in Done', async () => {
+  it('lists a relation that was forced through as overridden under No longer holding', async () => {
     const user = userEvent.setup();
     renderRelated(
       view({ relations: related({ done: [{ relationId: 'rel_d', to: 's1t7', toTitle: 'T', gate: 'merge', until: 'merged', reason: sentence, source: 'mention', how: 'overridden' }] }) }),
     );
     await user.click(screen.getByTestId('related-toggle'));
-    await user.click(screen.getByText('Done (1)'));
+    expect(screen.getByText('No longer holding (1)')).toBeTruthy();
     expect(screen.getByTestId('related-row-s1t7').textContent).toContain('(forced through)');
   });
 });

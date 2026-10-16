@@ -487,32 +487,29 @@ const QuietGroup = ({
   );
 };
 
-/** Dismissed steps behind one quiet line, collapsed until asked for; read-only. */
+/** Dismissed steps as a muted list under a plain label, always shown at the end of the section; read-only. */
 const DismissedSteps = ({ steps }: { steps: readonly ListedHumanStep[] }) => {
-  const [shown, setShown] = useState(false);
   if (steps.length === 0) return null;
   return (
     <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1 text-[11px] text-muted-foreground' data-testid='dismissed-steps'>
-      <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='dismissed-toggle' onClick={() => setShown(!shown)}>
-        {steps.length} dismissed {shown ? '▾' : '▸'}
-      </button>
-      {shown && (
-        <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1'>
-          {steps.map((s) => (
-            <li key={s.id} className='min-w-0 break-words [overflow-wrap:anywhere]' data-testid='dismissed-step'>
-              <span className='line-through' data-testid='dismissed-title'>
-                {stripMarkdown(s.title)}
-              </span>
-              {dismissalText(s) !== '' && <span data-testid='dismissed-who'> ({dismissalText(s)})</span>}
-              {s.dismissedReason != null && s.dismissedReason !== '' && (
-                <div data-testid='dismissed-reason'>
-                  <MarkdownView content={s.dismissedReason} bare commands />
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+      <span className='font-medium' data-testid='dismissed-label'>
+        Dismissed ({steps.length})
+      </span>
+      <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1'>
+        {steps.map((s) => (
+          <li key={s.id} className='min-w-0 break-words [overflow-wrap:anywhere]' data-testid='dismissed-step'>
+            <span className='line-through' data-testid='dismissed-title'>
+              {stripMarkdown(s.title)}
+            </span>
+            {dismissalText(s) !== '' && <span data-testid='dismissed-who'> ({dismissalText(s)})</span>}
+            {s.dismissedReason != null && s.dismissedReason !== '' && (
+              <div data-testid='dismissed-reason'>
+                <MarkdownView content={s.dismissedReason} bare commands />
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };
