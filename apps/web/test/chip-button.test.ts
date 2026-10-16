@@ -79,14 +79,22 @@ describe('KindMarker', () => {
   });
 
   it.each([
-    ['feature', { category: 'feature', type: 'same' }],
-    ['task', { category: 'task', type: 'same' }],
+    ['task', { category: 'task', type: 'same', workKind: 'maintenance' }],
     ['a bug with the fix flag off', { category: 'bug', type: 'sub', fix: false }],
   ] as const)('shows the task icon for %s, not nothing', (_name, glob) => {
     const html = renderToStaticMarkup(createElement(KindMarker, { glob }));
     expect(html).toContain('aria-label="task"');
     expect(html).toContain('lucide-list-checks');
     expect(html).toContain('text-muted-foreground');
+  });
+
+  it('shows the feature icon for a task counted as R&D, and the bug for a fix even then', () => {
+    const marker = (glob: Parameters<typeof KindMarker>[0]['glob']) => renderToStaticMarkup(createElement(KindMarker, { glob }));
+    const rnd = marker({ category: 'task', type: 'same', workKind: 'rnd' });
+    expect(rnd).toContain('aria-label="feature"');
+    expect(rnd).toContain('lucide-sparkles');
+    expect(marker({ category: 'feature', type: 'same' })).toContain('lucide-sparkles');
+    expect(marker({ category: 'task', type: 'same', fix: true, workKind: 'rnd' })).toContain('lucide-bug');
   });
 
   it('shows the scale for a decision and the running person, not the person icon, for an action', () => {

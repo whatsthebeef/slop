@@ -148,7 +148,8 @@ describe('GlobHeader', () => {
     });
 
     it.each([
-      ['a feature', { category: 'feature', type: 'same' }, 'task', 'lucide-list-checks'],
+      ['an R&D task', { category: 'task', type: 'same', workKind: 'rnd' }, 'feature', 'lucide-sparkles'],
+      ['a maintenance task', { category: 'task', type: 'same', workKind: 'maintenance' }, 'task', 'lucide-list-checks'],
       ['a task', { category: 'task', type: 'super' }, 'task', 'lucide-list-checks'],
       ['a bug', { category: 'bug', type: 'same' }, 'bug', 'lucide-bug'],
       ['a decision', { category: 'decision', type: null }, 'decision', 'lucide-scale'],
