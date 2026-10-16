@@ -122,7 +122,7 @@ describe('GlobHeader', () => {
       ['workstreams', () => view({ status: 'in_progress', ...live('active'), workstreams: { fannedOut: true, items: [{ name: 'W1', state: 'done', conflicts: [] }, { name: 'W2', state: 'waiting_decision', conflicts: [] }] } })],
       ['a merged glob whose deploy is still running', () => view({ status: 'reviewing', labels: { QA: 'required' }, pr: { number: 7, state: 'merged', headSha: head }, machineSteps: [{ id: 'm1', kind: 'deploy', state: 'running', startedAt: NOW, lastProgressAt: NOW, detail: 'prod', holdsBall: false }], humanSteps: [{ id: 'hs_1', kind: 'rollout', title: 'Run it', state: 'pending', who: 'admin', due: 'after_merge', blocks: ['sign_off'] }] })],
       ['a merge hold', () => view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [{ relationId: 'rel_1', to: 's1k1', toTitle: null, toIsDecision: true, gate: 'merge', until: 'decided', state: 'planning', reason: null, source: 'person' }] })],
-      ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
+      ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') })],
       ['checks running on a ready sub', () => prOpen({ type: 'sub', headChecks: { sha: head, state: 'pending' } })],
       ['checks running on a same awaiting merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: ['merge'] })],
       ['checks running on a draft', () => prOpen({ pr: { number: 289, state: 'draft', headSha: head }, headChecks: { sha: head, state: 'pending' } })],
@@ -214,8 +214,8 @@ describe('GlobHeader', () => {
     // Slop merges these once the checks pass; the board's base here is `develop`, and `behind` is cleared after a base merge.
     const moved = { sha: 'aaaaaaa1111', state: 'pending' as const };
     const merging: readonly [string, () => GlobView, string][] = [
-      ['status merging, checks pending', () => view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'pending' } }), 'merging when checks pass'],
-      ['an armed merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] }), 'merging when checks pass'],
+      ['status merging, checks pending', () => view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, headChecks: { sha: head, state: 'pending' } }), 'running checks'],
+      ['an armed merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, mergeMode: 'when_green', allowedActions: ['cancel_merge'] }), 'running checks'],
       ['status merging, head moved after a base merge', () => view({ status: 'merging', pr: { number: 7, state: 'ready', headSha: head }, headChecks: moved, behind: null }), 'merging from develop'],
       ['an armed merge, head moved after a base merge', () => prOpen({ headChecks: moved, behind: null, mergeMode: 'when_green', allowedActions: ['cancel_merge'] }), 'merging from develop'],
     ];

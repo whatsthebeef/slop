@@ -116,12 +116,11 @@ export const holdingReason = (holding: readonly Holding[]): string => {
 };
 
 /**
- * The one wording for checks in flight. Slop merges by itself when the checks pass ("merging when checks pass"), or is
- * catching up with the base first ("merging from main"); every other glob with checks running reads "checks running".
- * Whose-move uses only `CHECKS_RUNNING_TEXT`; the web composes the two merging variants (`apps/web/src/lib/check-wording.ts`).
+ * The one wording for checks in flight: "running checks", whether or not slop merges afterwards (the action row and the
+ * tooltip say which). While slop catches up with the base first it reads "merging from main" instead
+ * (`apps/web/src/lib/check-wording.ts`).
  */
-export const CHECKS_RUNNING_TEXT = 'checks running';
-export const MERGING_WHEN_CHECKS_PASS_TEXT = 'merging when checks pass';
+export const CHECKS_RUNNING_TEXT = 'running checks';
 export const mergingFromBaseText = (base: string): string => `merging from ${base}`;
 
 /**

@@ -70,9 +70,9 @@ describe('cornerStatus', () => {
     ['a ready sub', () => prOpen({ type: 'sub', headChecks: { sha: head, state: 'pending' } })],
     ['a same awaiting a person\'s merge', () => prOpen({ headChecks: { sha: head, state: 'pending' }, allowedActions: ['merge'] })],
     ['a draft', () => prOpen({ pr: { number: 289, state: 'draft', headSha: head }, headChecks: { sha: head, state: 'pending' } })],
-  ])('reads bare "checks running" in the corner for %s, with the head in the tooltip', (_name, make) => {
+  ])('reads bare "running checks" in the corner for %s, with the head in the tooltip', (_name, make) => {
     const status = cornerStatus(make(), NOW, { email: 'dev@example.com', role: 'dev' });
-    expect(status?.text).toBe('checks running');
+    expect(status?.text).toBe('running checks');
     expect(status?.tip).toContain(`Checks are running on ${head.slice(0, 7)}.`);
   });
 
@@ -205,7 +205,7 @@ describe('cornerStatus', () => {
   it('shows other waiting as an hourglass', () => {
     const g = prOpen({ ...live('watching'), headChecks: { sha: 'abc1234', state: 'pending' } });
     expect(at(g)).toMatchObject({ kind: 'waiting', icon: 'hourglass' });
-    expect(at(g)?.text).toMatch(/^checks running/);
+    expect(at(g)?.text).toMatch(/^running checks/);
   });
 
   it('shows standby as the machine icon and the word, with what it listens for in the tooltip', () => {
@@ -268,7 +268,7 @@ describe('cornerStatus tooltip lines are sentences', () => {
     ['waiting on prerequisites', () => ahead(['s1t1', 's1t2'])],
     ['escalated', escalated],
     ['your turn', () => prOpen({ allowedActions: ['merge'] })],
-    ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' } })],
+    ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' } })],
     ['merging', () => prOpen({ mergeMode: 'when_green' })],
   ];
   it.each(cases)('%s', (_name, make) => {
@@ -288,7 +288,7 @@ describe('cornerStatus text stays a word or two', () => {
     ['waiting on one prerequisite', () => ahead(['s1t1']), 'waiting · s1t1'],
     ['escalated', escalated, 'needs a'],
     ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'Merge'],
-    ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'checks running'],
+    ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'running checks'],
   ];
   it.each(situations)('%s: at most 3 words (not counting "+N"), no "(", ";" or digits but glob IDs and a "+N" count', (_name, make, expected) => {
     const text = cornerStatus(make(), NOW)?.text ?? '';

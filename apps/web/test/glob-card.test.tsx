@@ -155,7 +155,7 @@ describe('card rows', () => {
       ['stalled', stalledByConflict, 'alert', 'merge conflict', 'Merge conflict with main in'],
       ['your turn', () => prOpen({ allowedActions: ['merge'] }), 'human', 'Merge', 'Opens the glob.'],
       ['waiting on prerequisites', waitingOn, 'hourglass', 'waiting · s1t1 +3', 'Waits for s1t1 to be merged and rolled out (Doing)'],
-      ['checks running', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'checks running', 'Checks are running on d16d563'],
+      ['running checks', () => prOpen({ headChecks: { sha: head, state: 'pending' }, ...live('watching') }), 'hourglass', 'running checks', 'Checks are running on d16d563'],
       ['a problem', () => conflicting(), 'alert', 'conflicts with main', files[0] ?? ''],
     ];
     it.each(situations)('%s: exactly one status in the header, the icon and the words, the detail in the tip, no row under the title', (_name, make, icon, text, detail) => {
@@ -181,7 +181,7 @@ describe('card rows', () => {
       const statuses = root.querySelectorAll('[data-testid="card-status"]');
       expect(statuses).toHaveLength(1);
       expect(root.querySelector('[data-testid="card-header"]')?.contains(statuses[0] ?? null)).toBe(true);
-      expect(statuses[0]?.querySelector('.truncate')?.textContent).toMatch(/^merging/);
+      expect(statuses[0]?.querySelector('.truncate')?.textContent).toMatch(/^running checks/);
       expect(statuses[0]?.querySelector('.truncate')?.textContent).not.toMatch(/\b[0-9a-f]{7}\b/);
       // Outside the corner status (whose tooltip text is its own) the card never says it.
       statuses[0]?.remove();

@@ -17,15 +17,15 @@ const turn = (kind: StatusLine['turn']): StatusLine => ({ kind: 'ready', turn: k
 
 describe('tooltip sentences', () => {
   it('adds a full stop, leaves finished sentences alone and drops blanks', () => {
-    expect(sentence('merging when checks pass')).toBe('merging when checks pass.');
+    expect(sentence('running checks')).toBe('running checks.');
     expect(sentence('Opens the glob.  ')).toBe('Opens the glob.');
     for (const done of ['Done!', 'Done?', 'Needs a person:', 'Waiting…']) expect(sentence(done)).toBe(done);
     expect(sentence('   ')).toBe('');
   });
 
   it('splits multi-line parts, ends each line in a stop and drops empty lines', () => {
-    expect(tipLines(['Checks running on abc\nmerging when checks pass', '', 'Opens the glob.'])).toBe(
-      'Checks running on abc.\nmerging when checks pass.\nOpens the glob.',
+    expect(tipLines(['Checks running on abc\nrunning checks', '', 'Opens the glob.'])).toBe(
+      'Checks running on abc.\nrunning checks.\nOpens the glob.',
     );
   });
 });
