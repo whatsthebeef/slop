@@ -1,14 +1,19 @@
+import { webhookSubscribers } from '../domain/atf-runners.js';
 import * as deploys from '../domain/deploys.js';
 import type { Deploy, DeployChange, DeployIndicator } from '../domain/deploys.js';
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
+import type { Effect } from '../domain/events.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
+import { markStepsDue } from './step-due.js';
 
 /** A transaction, and the deploys written in it so far (to tell open boards after it commits). */
 interface DeployTx {
   readonly tx: Tx;
   readonly written: Deploy[];
+  /** Globs whose human steps fell due in it (their cards' Arm system and steps change). */
+  readonly due: Glob[];
 }
 
 export interface DeployServiceDeps {
@@ -205,7 +210,42 @@ export class DeployService {
       environment: deploy.environment,
       states: ['waiting', 'running'],
     });
-    return this.apply(dtx, deploys.finished(active, deploy, result, this.deps.clock.now()));
+    const change = deploys.finished(active, deploy, result, this.deps.clock.now());
+    const done = await this.apply(dtx, change);
+    // Only the write that finished it succeeded it (a repeated result changes nothing, so this runs once per deploy).
+    const finishedNow = change.writes.find((d) => d.id === deploy.id);
+    if (finishedNow?.state === 'succeeded') await this.deployed(dtx, finishedNow);
+    return done;
+  }
+
+  /**
+   * A branch deploy succeeded: the glob's `after_deploy:<environment>` steps fall due (before the merge too), a push-mode
+   * board's ATF project is started and runners that subscribed to the deploy-live webhook are told, all in the deploy's
+   * transaction. The outbox keeps one start per board, environment and commit and one delivery per runner and deploy.
+   */
+  private async deployed(dtx: DeployTx, deploy: Deploy): Promise<void> {
+    const { tx } = dtx;
+    const now = this.deps.clock.now();
+    const glob = await tx.getGlob(deploy.globId);
+    if (glob !== null && (await markStepsDue(tx, deploy.boardId, [glob.id], deploy.environment, now)).length > 0) dtx.due.push(glob);
+    const boardWide = `board-${String(deploy.boardId)}`;
+    const effects: Effect[] = [];
+    if ((await tx.getBoard(deploy.boardId))?.atf?.mode === 'push') {
+      effects.push({ kind: 'start_atf', globId: boardWide, boardId: deploy.boardId, environment: deploy.environment, sha: deploy.sha });
+    }
+    for (const runner of webhookSubscribers(await tx.listAtfRunners(deploy.boardId), deploy.environment)) {
+      effects.push({
+        kind: 'deliver_atf_webhook',
+        globId: boardWide,
+        boardId: deploy.boardId,
+        runnerId: runner.id,
+        deployId: deploy.id,
+        environment: deploy.environment,
+        sha: deploy.sha,
+        deployedAt: deploy.finishedAt ?? now,
+      });
+    }
+    await tx.enqueueEffects(effects);
   }
 
   private async enqueue(
@@ -256,13 +296,16 @@ export class DeployService {
   /** Runs a change in a transaction, then tells open boards which globs' deploys changed. */
   private async change<T>(work: (tx: DeployTx) => Promise<Result<T>>): Promise<Result<T>> {
     const written: Deploy[] = [];
-    const result = await this.deps.store.transaction((tx) => work({ tx, written }));
+    const due: Glob[] = [];
+    const result = await this.deps.store.transaction((tx) => work({ tx, written, due }));
     if (result.ok) {
       const globs = new Map(written.map((d) => [d.globId, d.boardId]));
       for (const [globId, boardId] of globs) {
         const hint: Hint = { kind: 'glob.deploys', boardId, globId };
         this.deps.notifier.publish(hint);
       }
+      // A step falling due changes the board's Arm system label and Human steps, which the deploys hint doesn't refresh.
+      for (const glob of due) this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: glob.version });
     }
     return result;
   }

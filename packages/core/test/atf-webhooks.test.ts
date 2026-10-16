@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AtfRunnerService } from '../src/app/atf-runner-service.js';
 import type { RunnerCredentialIssuer, RunnerWebhooks } from '../src/app/atf-runner-service.js';
-import { EnvironmentService } from '../src/app/environment-service.js';
+import { DeployService } from '../src/app/deploy-service.js';
 import { publicRunner, validateRunner, webhookSubscribers } from '../src/domain/atf-runners.js';
 import type { AtfRunner } from '../src/domain/atf-runners.js';
 import {
@@ -13,6 +13,7 @@ import {
 } from '../src/domain/atf-webhooks.js';
 import type { Result } from '../src/domain/errors.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
+import { glob } from './fixtures.js';
 
 const ADMIN = 'admin@example.com';
 const START = '2026-10-05T12:00:00.000Z';
@@ -113,17 +114,17 @@ describe('the deploy-live event', () => {
       boardName: 'demo',
       environment: 'staging',
       sha: 'a'.repeat(40),
-      deployId: 12,
+      deployId: 'dep-12',
       deployedAt: START,
-      deliveryId: webhookDeliveryId(3, 12),
+      deliveryId: webhookDeliveryId(3, 'dep-12'),
     });
     expect(JSON.parse(body)).toEqual({
       event: 'deploy.live',
-      id: 'atf-3-12',
+      id: 'atf-3-dep-12',
       board: { id: 7, name: 'demo' },
       environment: 'staging',
       sha: 'a'.repeat(40),
-      deployId: 12,
+      deployId: 'dep-12',
       deployedAt: START,
     });
   });
@@ -255,7 +256,7 @@ describe('the registry and webhooks', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+        environments: [{ name: 'staging', allowBranchDeploy: true }],
         sensitivePaths: [],
       });
       await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });
@@ -437,34 +438,32 @@ describe('the registry and webhooks', () => {
   });
 });
 
-describe('queuing deploy-live deliveries with the containment check', () => {
+describe('queuing deploy-live deliveries when a branch deploy succeeds', () => {
   let store: MemoryStore;
-  let environments: EnvironmentService;
+  let deploys: DeployService;
   let boardId: number;
   let runnerIds: Record<string, number>;
+  let n: number;
   const SHA = 'a'.repeat(40);
 
-  const deploy = (sha: string, eventId: string, succeeded = true) =>
-    environments.recordDeploy({
-      repo: 'acme/app',
-      environment: 'staging',
-      sha,
-      ref: null,
-      succeeded,
-      url: null,
-      at: START,
-      eventId,
-    });
-  const check = (sha: string) => environments.recordContainment(boardId, 'staging', sha, []);
+  /** A branch deploy of the glob's commit, run to the end. */
+  const deploy = async (globId: string, sha: string, succeeded = true) => {
+    const requested = unwrap(await deploys.requestFromPush(globId, sha));
+    const id = requested?.id ?? '';
+    unwrap(await deploys.finished(id, { succeeded, error: succeeded ? null : 'exit 1' }));
+    return id;
+  };
   const deliveries = () =>
     store.state.outbox.flatMap((e) => (e.kind === 'deliver_atf_webhook' ? [e] : []));
 
   beforeEach(async () => {
     store = new MemoryStore();
-    environments = new EnvironmentService({
+    n = 0;
+    deploys = new DeployService({
       store,
       notifier: new RecordingNotifier(),
       clock: { now: () => START },
+      newDeployId: () => `dep${String(++n)}`,
     });
     runnerIds = {};
     boardId = await store.transaction(async (tx) => {
@@ -476,8 +475,8 @@ describe('queuing deploy-live deliveries with the containment check', () => {
         timeZone: 'UTC',
         defaultRoutineOwner: null,
         environments: [
-          { name: 'staging', allowBranchDeploy: false, role: 'integration' },
-          { name: 'prod', allowBranchDeploy: false, role: 'release' },
+          { name: 'dev', allowBranchDeploy: true },
+          { name: 'qa', allowBranchDeploy: true },
         ],
         sensitivePaths: [],
       });
@@ -500,22 +499,29 @@ describe('queuing deploy-live deliveries with the containment check', () => {
         runnerIds[name] = runner?.id ?? 0;
       };
       const hook = { webhook: { url: URL_OK, secret: 'sealed' } };
-      await add('a', ['staging'], hook);
-      await add('b', ['staging', 'prod'], hook);
-      await add('prod only', ['prod'], hook);
-      await add('no hook', ['staging'], {});
-      await add('off', ['staging'], hook, false);
-      await add('url only', ['staging'], { webhook: { url: URL_OK } });
+      await add('a', ['dev'], hook);
+      await add('b', ['dev', 'qa'], hook);
+      await add('qa only', ['qa'], hook);
+      await add('no hook', ['dev'], {});
+      await add('off', ['dev'], hook, false);
+      await add('url only', ['dev'], { webhook: { url: URL_OK } });
+      for (const id of ['s1t1', 's1t2']) {
+        await tx.insertGlob(glob({ id, boardId: board.id, environment: 'dev', status: 'in_progress' }), null);
+      }
       return board.id;
     });
+    // insertBoard does not take a deploy integration; a branch deploy needs one.
+    const board = store.state.boards.get(boardId);
+    if (board !== undefined) {
+      store.state.boards.set(boardId, {
+        ...board,
+        deploy: { provider: 'codebuild', region: 'us-east-1', defaultProject: 'deploy', projects: {} },
+      });
+    }
   });
 
   it('queues one delivery per subscribed runner that serves the environment, carrying the deploy', async () => {
-    await deploy(SHA, 'aws:1');
-    store.state.outbox.length = 0;
-    expect(await check(SHA)).toBe('recorded');
-    const deployId =
-      (await store.transaction((tx) => tx.latestEnvironmentDeploy(boardId, 'staging')))?.id ?? 0;
+    const deployId = await deploy('s1t1', SHA);
     expect(deliveries()).toEqual(
       ['a', 'b'].map((name) => ({
         kind: 'deliver_atf_webhook',
@@ -523,39 +529,29 @@ describe('queuing deploy-live deliveries with the containment check', () => {
         boardId,
         runnerId: runnerIds[name],
         deployId,
-        environment: 'staging',
+        environment: 'dev',
         sha: SHA,
         deployedAt: START,
       })),
     );
   });
 
-  it('queues nothing for a revoked runner, a failed deploy or a replaced deploy', async () => {
+  it('queues nothing for a revoked runner or a failed deploy', async () => {
     await store.transaction((tx) =>
       tx.updateAtfRunner(boardId, runnerIds['a'] ?? 0, { enabled: false, revokedAt: START }),
     );
-    await deploy(SHA, 'aws:1');
-    await check(SHA);
+    await deploy('s1t1', SHA);
     expect(deliveries().map((e) => e.runnerId)).toEqual([runnerIds['b']]);
     store.state.outbox.length = 0;
-    // A failed deploy never becomes the environment's latest, so its commit has no check to deliver for.
-    await deploy('b'.repeat(40), 'aws:2', false);
-    expect(await check('b'.repeat(40))).toBe('stale');
-    expect(deliveries()).toEqual([]);
-    // A newer deploy replaced SHA: a late check for it is dropped before any delivery is queued.
-    await deploy('d'.repeat(40), 'aws:4');
-    expect(await check(SHA)).toBe('stale');
+    await deploy('s1t2', 'b'.repeat(40), false);
     expect(deliveries()).toEqual([]);
   });
 
-  it('queues one delivery per runner and deploy however often the check runs', async () => {
-    await deploy(SHA, 'aws:1');
-    await check(SHA);
-    await check(SHA);
-    await check(SHA);
+  it('queues one delivery per runner and deploy: a repeated result queues nothing new', async () => {
+    const first = await deploy('s1t1', SHA);
+    unwrap(await deploys.finished(first, { succeeded: true, error: null }));
     expect(deliveries()).toHaveLength(2);
-    await deploy('c'.repeat(40), 'aws:3');
-    await check('c'.repeat(40));
+    await deploy('s1t2', 'c'.repeat(40));
     expect(deliveries()).toHaveLength(4);
   });
 });
