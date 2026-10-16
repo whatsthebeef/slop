@@ -85,6 +85,8 @@ export interface ReadinessFacts {
    * the file is absent, 'unreadable' when it isn't valid, 'unknown' when slop couldn't read the repo.
    */
   readonly committedAgentSetVersion: number | null | 'unreadable' | 'unknown';
+  /** The committed agent set's hook scripts (`.claude/hooks/*`) that the committed `.claude/settings.json` doesn't register; empty when none or unread. */
+  readonly unregisteredHooks: readonly string[];
   /** The core areas no knowledge document has (see `missingCoreAreas`). */
   readonly missingCoreAreas: readonly CoreDocArea[];
   readonly ticks: ReadinessTicks;
@@ -353,13 +355,24 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
                   label: 'Agent set',
                 },
               )
-            : item(
-                'agent_set',
-                'Agent set in the repo',
-                'ok',
-                `Version ${String(committed)}`,
-                null,
-              ),
+            : facts.unregisteredHooks.length > 0
+              ? item(
+                  'agent_set',
+                  'Agent set in the repo',
+                  'missing',
+                  `${facts.unregisteredHooks.map((hook) => `Hook ${hook} is installed but not registered`).join('; ')} in .claude/settings.json on ${board.baseBranch}: routines never run it. The next agent-set commit registers it, or run slop init ${String(board.id)}`,
+                  {
+                    kind: 'knowledge',
+                    label: 'Agent set',
+                  },
+                )
+              : item(
+                  'agent_set',
+                  'Agent set in the repo',
+                  'ok',
+                  `Version ${String(committed)}`,
+                  null,
+                ),
   );
 
   const knowledge: ReadinessFix = { kind: 'knowledge', label: 'Knowledge' };

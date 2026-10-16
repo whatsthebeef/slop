@@ -22,6 +22,7 @@ const ready: ReadinessFacts = {
   claudeAllowsSlop: true,
   appEvents: { missing: [], settingsUrl: 'https://github.com/settings/apps/slop/permissions' },
   committedAgentSetVersion: 3,
+  unregisteredHooks: [],
   missingCoreAreas: [],
   ticks: { routines: true, routine_repo: true, claude_app: true },
   recentFailures: [],
@@ -150,6 +151,12 @@ describe('board readiness', () => {
     expect(states.repo_app).toBe('unknown');
     expect(states.sub_gate).toBe('unknown');
     expect(states.agent_set).toBe('unknown');
+  });
+
+  it('flags a hook script the committed settings do not register', () => {
+    const unregistered = readiness({ ...ready, unregisteredHooks: ['.claude/hooks/pre_push_checks.sh'] }).find((i) => i.key === 'agent_set');
+    expect(unregistered?.state).toBe('missing');
+    expect(unregistered?.detail).toContain('Hook .claude/hooks/pre_push_checks.sh is installed but not registered');
   });
 
   it('says an invalid agent-set file needs re-running slop init', () => {

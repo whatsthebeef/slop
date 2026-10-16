@@ -313,6 +313,61 @@ export const managedRepoFiles = (files: readonly { readonly path: string; readon
     .map((f) => ({ path: `.claude/${f.path}`, content: f.content, executable: f.path.startsWith('hooks/') }))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
+/** Where the repo's Claude Code settings live; the catalog's hook registrations are merged into it, never overwritten. */
+export const SETTINGS_REPO_PATH = '.claude/settings.json';
+
+/** The served `settings.json` as a repo file (the catalog's own text; the commit job merges it into the repo's), or null when the set has none. */
+export const settingsRepoFile = (files: readonly { readonly path: string; readonly content: string }[]): RepoFile | null => {
+  const served = files.find((f) => f.path === 'settings.json');
+  return served === undefined ? null : { path: SETTINGS_REPO_PATH, content: served.content, executable: false };
+};
+
+const hookCommandsOf = (group: unknown): string[] => {
+  if (!isJsonObject(group) || !isJsonArray(group.hooks)) return [];
+  return group.hooks.flatMap((hook) => (isJsonObject(hook) && typeof hook.command === 'string' ? [hook.command] : []));
+};
+
+/**
+ * The repo's settings with the catalog's `hooks` registered: a catalog group replaces the repo's group that runs the same
+ * command, or is added when none does. Every other key, permission and hook of the repo stays as it is, so merging twice
+ * gives the same text. An unreadable repo file is replaced by the catalog's hooks alone; an unreadable catalog leaves it as is.
+ */
+export const mergeHookSettings = (current: string | null, catalog: string): string => {
+  const incoming = parseJson(catalog);
+  const existing = current === null ? ({ ok: true, value: {} } as const) : parseJson(current);
+  if (!incoming.ok || !isJsonObject(incoming.value)) return current ?? catalog;
+  const base: JsonObject = existing.ok && isJsonObject(existing.value) ? existing.value : {};
+  const catalogHooks = isJsonObject(incoming.value.hooks) ? incoming.value.hooks : {};
+  const hooks = new Map<string, unknown>(isJsonObject(base.hooks) ? entriesOf(base.hooks) : []);
+  for (const [event, groups] of entriesOf(catalogHooks)) {
+    if (!isJsonArray(groups)) continue;
+    const merged: unknown[] = isJsonArray(hooks.get(event)) ? [...(hooks.get(event) as unknown[])] : [];
+    for (const group of groups) {
+      const commands = hookCommandsOf(group);
+      const at = merged.findIndex((have) => hookCommandsOf(have).some((c) => commands.includes(c)));
+      if (at >= 0) merged[at] = group;
+      else merged.push(group);
+    }
+    hooks.set(event, merged);
+  }
+  const out: Record<string, unknown> = { ...base };
+  if (hooks.size > 0) out.hooks = Object.fromEntries(hooks);
+  return `${JSON.stringify(out, null, 2)}\n`;
+};
+
+/** The hook commands a settings file registers, across every event; empty when it isn't valid settings JSON. */
+export const registeredHookCommands = (settings: string | null): string[] => {
+  const parsed = settings === null ? null : parseJson(settings);
+  if (parsed === null || !parsed.ok || !isJsonObject(parsed.value) || !isJsonObject(parsed.value.hooks)) return [];
+  return entriesOf(parsed.value.hooks).flatMap(([, groups]) => (isJsonArray(groups) ? groups.flatMap(hookCommandsOf) : []));
+};
+
+/** The hook scripts in a manifest's files that no command in the settings file runs, by path (`.claude/hooks/x.sh`). */
+export const unregisteredHooks = (manifestFiles: readonly string[], settings: string | null): string[] => {
+  const commands = registeredHookCommands(settings);
+  return manifestFiles.filter((f) => f.startsWith('.claude/hooks/') && !commands.some((c) => c.includes(f)));
+};
+
 /** The manifest's text, in the shape `slop init` writes (two-space JSON and a final newline). */
 export const agentSetManifest = (board: number, version: number, files: readonly RepoFile[], fetchedAt: string): string =>
   `${JSON.stringify({ board, version, files: files.map((f) => f.path), fetchedAt: fetchedAt.replace(/\.\d{3}Z$/, 'Z') }, null, 2)}\n`;

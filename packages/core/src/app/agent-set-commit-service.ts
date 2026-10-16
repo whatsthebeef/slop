@@ -1,4 +1,4 @@
-import { agentSetManifest, AGENT_SET_MANIFEST_PATH, managedRepoFiles } from '../domain/agent-set.js';
+import { agentSetManifest, AGENT_SET_MANIFEST_PATH, managedRepoFiles, settingsRepoFile } from '../domain/agent-set.js';
 import type { RepoFile } from '../domain/agent-set.js';
 import { ok } from '../domain/errors.js';
 import type { Result } from '../domain/errors.js';
@@ -23,7 +23,7 @@ Slop opened this glob because the board's agent set changed (an approved learnin
 
 - Slop's GitHub App commits the agents, commands and hooks of the current set to this branch, and \`.claude/slop-agent-set.json\` with its version. When the set changes again before this merges, the newer set is committed to the same branch and the title follows.
 - Review the diff against the committed version, then merge. Nobody edits these files by hand here: change the agent set through the Knowledge page, and slop commits it again.
-- Settings, \`.mcp.json\` and CLAUDE.md are merged into a checkout by \`sstor init\`; slop doesn't commit them.
+- The catalog's hook registrations are merged into \`.claude/settings.json\` (the repo's own keys stay as they are). \`.mcp.json\` and CLAUDE.md are merged into a checkout by \`sstor init\`; slop doesn't commit them.
 `;
 
 /** What the commit job does next for a board (see `AgentSetCommitService.prepare`). */
@@ -82,7 +82,8 @@ export class AgentSetCommitService {
     if (glob.provisioning !== 'ok') {
       return { kind: 'waiting', reason: `Waiting for the branch of ${glob.id}${glob.provisioning === 'failed' ? ' (its provisioning failed)' : ''}` };
     }
-    const managed = managedRepoFiles(set.value.files);
+    const settings = settingsRepoFile(set.value.files);
+    const managed = [...managedRepoFiles(set.value.files), ...(settings === null ? [] : [settings])].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     const manifest: RepoFile = {
       path: AGENT_SET_MANIFEST_PATH,
       content: agentSetManifest(boardId, version, managed, this.deps.clock.now()),
