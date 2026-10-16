@@ -585,6 +585,8 @@ describe('glob view: Activity log', () => {
     expect(failure?.textContent).toContain('reason');
     expect(failure?.textContent).not.toContain('line two');
     expect(failure?.getAttribute('title')).toContain('line two');
+    expect(failure?.className).toContain('text-red');
+    expect(failure?.querySelector('svg')?.getAttribute('class')).toContain('text-red');
     expect(screen.getByTestId('activity-show-all').textContent).toBe('Show less');
     await user.click(screen.getByTestId('activity-show-all'));
     expect(screen.getAllByTestId('activity-entry')).toHaveLength(8);
