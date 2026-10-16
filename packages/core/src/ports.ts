@@ -1,11 +1,10 @@
 import type { BoardSession } from './domain/board-sessions.js';
 import type { Deploy, DeployState } from './domain/deploys.js';
 import type { StoredHumanStep } from './domain/human-steps.js';
-import type { EnvironmentDeploy, GlobPresence, NewEnvironmentDeploy } from './domain/environments.js';
 import type { DecisionOrigin } from './domain/attributes.js';
 import type { DomainEvent, DomainEventType, Effect, EffectKind, OutboxJob } from './domain/events.js';
 import type { AtfRunner, AtfRunnerPatch, NewAtfRunner } from './domain/atf-runners.js';
-import type { AtfBatch, EnvironmentCommit, NewAtfBatch, NewTestRun, StoredRunSpec, TestRun } from './domain/test-runs.js';
+import type { NewTestRun, StoredRunSpec, TestRun } from './domain/test-runs.js';
 import type { BoardNotification } from './domain/notifications.js';
 import type { ChatMessage, ChatThread, NewChatMessage, NewChatThread } from './domain/chat.js';
 import type { ChatFeedback, ChatFeedbackFilter, NewChatFeedback } from './domain/chat-feedback.js';
@@ -56,16 +55,9 @@ export interface DeployFilter {
   readonly limit?: number;
 }
 
-export interface PresenceFilter {
-  readonly environment?: string;
-  readonly globIds?: readonly string[];
-  readonly contained?: boolean;
-}
-
-/** Test runs to list: the branch runs of these globs, and the environment runs at these commits (either may be short). */
+/** Test runs to list: the runs of these globs (branch runs, and environment runs attached to a glob's deploy). */
 export interface TestRunFilter {
   readonly globIds?: readonly string[];
-  readonly commits?: readonly EnvironmentCommit[];
 }
 
 /** Store access inside one transaction. Glob writes are conditional on the glob's version. */
@@ -83,7 +75,7 @@ export interface Tx {
   /** Writes `glob` if the stored version is still `expectedVersion`; returns false otherwise. */
   updateGlob(glob: Glob, expectedVersion: number): Promise<boolean>;
   /**
-   * Deletes the glob with its artifacts, review sources, findings, environment presence, branch test runs and its items
+   * Deletes the glob with its artifacts, review sources, findings, branch test runs and its items
    * in the search store (an item shared with other globs, a learning, only loses the link).
    * Its decisions go with it; decisions it took that older ones point at are released (their `replacedBy` cleared and
    * the item active again). Inbox items attached to it only lose the link (and become `kept` with their last one).
@@ -326,35 +318,11 @@ export interface Tx {
    */
   lockDeployQueue(boardId: number, environment: string): Promise<void>;
 
-  /** Records a release or integration deploy; false when the board already has its event ID (a redelivery). */
-  insertEnvironmentDeploy(deploy: NewEnvironmentDeploy): Promise<boolean>;
-  /** The environment's latest succeeded deploy (by deploy time): the commit it runs now. */
-  latestEnvironmentDeploy(boardId: number, environment: string): Promise<EnvironmentDeploy | null>;
-  /** The environment's deploys (any outcome), newest first, at most `limit`: how far back a deploy burst reaches. */
-  listEnvironmentDeploys(boardId: number, environment: string, limit: number): Promise<EnvironmentDeploy[]>;
-  /** Stamps `checkedAt` on the environment's deploy rows of `sha` (the containment check for them has run). */
-  markEnvironmentDeployChecked(boardId: number, environment: string, sha: string, at: string): Promise<void>;
-  /** Whether environments held globs when last checked, narrowed by the filter. */
-  listGlobPresence(boardId: number, filter: PresenceFilter): Promise<GlobPresence[]>;
-  /** Writes presence rows (insert or replace by glob and environment). */
-  saveGlobPresence(rows: readonly GlobPresence[]): Promise<void>;
-  /**
-   * Serialises an environment's containment checks until the transaction ends, so an older deploy's check can't
-   * overwrite a newer one's (a no-op where transactions don't overlap).
-   */
-  lockEnvironment(boardId: number, environment: string): Promise<void>;
-
   /** Records a test run; false when the board already has its event ID (a redelivery). */
   insertTestRun(run: NewTestRun): Promise<boolean>;
   /** The per-spec rows of these runs (runs without any have none). */
   listTestRunSpecs(runIds: readonly number[]): Promise<StoredRunSpec[]>;
-  /** The batch stored for an environment's commit (`sha` as given, exact match); null when none. */
-  getAtfBatch(boardId: number, environment: string, sha: string): Promise<AtfBatch | null>;
-  /** The environment's newest batch by creation time; null when it has none. */
-  latestAtfBatch(boardId: number, environment: string): Promise<AtfBatch | null>;
-  /** Stores the batch; when one exists for the board, environment and commit (a concurrent call) the stored one is returned and nothing changes. */
-  insertAtfBatch(batch: NewAtfBatch): Promise<AtfBatch>;
-  /** The board's test runs matching the filter (branch runs of its globs, or environment runs at its commits). */
+  /** The board's test runs matching the filter (runs of its globs). */
   listTestRuns(boardId: number, filter: TestRunFilter): Promise<TestRun[]>;
 
   /** The board's ATF runners, oldest first; revoked ones only when asked (their runs keep pointing at them). */

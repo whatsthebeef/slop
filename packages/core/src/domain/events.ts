@@ -222,20 +222,14 @@ export type Effect =
    */
   | { readonly kind: 'refresh_base_checks'; readonly globId: string; readonly boardId: number }
   /**
-   * A release or integration environment now runs `sha`: work out which recently merged globs (and which globs it
-   * held before, for rollbacks) that commit contains. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`,
-   * not generation-checked); dropped when a newer deploy to the environment has been recorded since.
+   * Read the code host's default branch and cache it as the board's base branch (a push, a settings change or start-up).
+   * Board-wide like `refresh_base_checks` (`globId` is `board-<id>`, not generation-checked); idempotent, and a host that
+   * can't answer keeps the stored value.
    */
-  | {
-      readonly kind: 'check_environment';
-      readonly globId: string;
-      readonly boardId: number;
-      readonly environment: string;
-      readonly sha: string;
-    }
+  | { readonly kind: 'refresh_base_branch'; readonly globId: string; readonly boardId: number }
   /**
-   * A push-mode board's deploy of `sha` to `environment` has been checked: start the board's ATF project with the specs its
-   * merged globs' test plans listed. Board-wide like `check_environment` (`globId` is `board-<id>`, not generation-checked);
+   * A push-mode board's deploy of `sha` to `environment` has succeeded: start the board's ATF project with the specs its
+   * glob's test plan listed. Board-wide like `refresh_base_checks` (`globId` is `board-<id>`, not generation-checked);
    * dropped when a newer deploy has replaced `sha`; a failed start is logged and never blocks anything.
    */
   | {
@@ -246,7 +240,7 @@ export type Effect =
       readonly sha: string;
     }
   /**
-   * A deploy of `sha` to `environment` is live and checked: tell one runner that subscribed to webhook delivery (signed POST of
+   * A deploy of `sha` to `environment` is live: tell one runner that subscribed to webhook delivery (signed POST of
    * the deploy-live event). Board-wide like `start_atf` (`globId` is `board-<id>`, not generation-checked). The outbox keeps one
    * job per runner and deploy; dropped when the runner is gone or off, or a newer deploy replaced `sha`; a failed delivery is
    * retried with the outbox's backoff, never blocks anything.
@@ -256,7 +250,7 @@ export type Effect =
       readonly globId: string;
       readonly boardId: number;
       readonly runnerId: number;
-      readonly deployId: number;
+      readonly deployId: string;
       readonly environment: string;
       readonly sha: string;
       /** When the deploy happened. */

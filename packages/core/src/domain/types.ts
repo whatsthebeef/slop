@@ -522,28 +522,10 @@ export interface Glob {
   readonly listSince?: string;
 }
 
-/**
- * What deploys an environment besides branch deploys, which slop observes: `integration` is deployed by the base
- * branch's own pipeline, `release` by release refs cut from it. Without a role slop doesn't track which globs it holds.
- */
-export const ENVIRONMENT_ROLES = ['integration', 'release'] as const;
-export type EnvironmentRole = (typeof ENVIRONMENT_ROLES)[number];
-
-/** How slop learns of an observed environment's deploys: a pipeline reports them (the default), or a person records each one. */
-export const ENVIRONMENT_DEPLOY_KNOWN = ['pipeline', 'manual'] as const;
-export type EnvironmentDeployKnown = (typeof ENVIRONMENT_DEPLOY_KNOWN)[number];
-
+/** A dev environment: a branch-deploy target. Slop doesn't track any other environment (int, staging, prod). */
 export interface Environment {
   readonly name: string;
   readonly allowBranchDeploy: boolean;
-  /** At most one per board: the environment a sub gets when it is created without one. */
-  readonly subDefault?: true;
-  /** Set when the board's pipelines deploy the base branch or a release ref here and report it to slop. */
-  readonly role?: EnvironmentRole;
-  /** Only with a role: `manual` when a person records each deploy in slop. Absent means a pipeline reports them (`report-deploy.sh`). */
-  readonly deployKnown?: 'manual';
-  /** At most one per board, and only a release environment: deploying a glob here before sign-off is warned about. */
-  readonly production?: true;
 }
 
 /**
