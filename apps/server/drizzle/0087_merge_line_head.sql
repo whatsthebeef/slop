@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS "globs_merge_head_idx" ON "globs" USING btree ("board_id") WHERE "globs"."status" = 'merging' and jsonb_typeof("globs"."data" #> '{mergeLine,head}') = 'object';

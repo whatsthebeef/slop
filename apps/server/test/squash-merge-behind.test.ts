@@ -23,7 +23,7 @@ const client = (read: { state: MergeState; behind?: boolean; sha?: string }, mer
         },
       }),
     mergeState: () => Promise.resolve({ sha: read.sha ?? 'h', state: read.state, behind: read.behind ?? false }),
-    // A board without a merge queue: the rules show none, so the merge goes the direct way.
+    // The rules show no queue, so the merge goes the direct way.
     queueRules: () => Promise.resolve({ enabled: false, required: [] }),
   });
   return { gh, calls };
@@ -66,7 +66,7 @@ describe('GitHub.squashMerge enforces green checks on an up-to-date head (slop b
     expect(await gh.squashMerge(REPO, GLOB, 7, 'h')).toEqual({ outcome: 'undecided' });
   });
 
-  it('a board without a merge queue never enqueues: a behind head is updated, a green one merged', async () => {
+  it('a behind head is updated, a green one merged (never enqueued)', async () => {
     const behind = client({ state: 'passed', behind: true }, ok, none);
     expect(await behind.gh.squashMerge(REPO, GLOB, 7, 'h')).toEqual({ outcome: 'updating' });
     const green = client({ state: 'passed' }, ok, none);

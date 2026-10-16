@@ -66,8 +66,6 @@ export interface ReadinessFacts {
   readonly branchRules: {
     readonly requiredChecks: readonly string[];
     readonly integrationBypasses: boolean | null;
-    /** Whether the base branch has a merge queue rule; absent when the host can't say. */
-    readonly mergeQueue?: boolean;
   } | null;
   /** Whether a workflow on the base branch runs `anthropics/claude-code-action`; null when slop can't read the repo. */
   readonly claudeWorkflow: boolean | null;
@@ -232,12 +230,6 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
   const rules = facts.branchRules;
   const gateRequired = rules?.requiredChecks.includes(facts.gateCheck) ?? null;
   const setupCommand = `catalog/scripts/setup-repo.sh ${repo ?? '<owner/repo>'} --app <slop-app-slug> --protect ${facts.gateCheck}`;
-  const queueNote =
-    rules?.mergeQueue === undefined
-      ? ''
-      : rules.mergeQueue
-        ? '; merge queue is on'
-        : `; merge queue is off (${setupCommand} turns it on): subs wait for an up-to-date head instead`;
   const rulesNote =
     rules === null || gateRequired === null
       ? `; make \`${facts.gateCheck}\` a required status check on ${board.baseBranch} so merges honour it (${setupCommand} creates the \`slop\` ruleset; slop can't read the branch's rules yet)`
@@ -245,7 +237,7 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
         ? `; \`${facts.gateCheck}\` is not a required status check on ${board.baseBranch}: run ${setupCommand} to create the \`slop\` ruleset`
         : rules.integrationBypasses === false
           ? `; \`${facts.gateCheck}\` is required on ${board.baseBranch} but slop's App can't bypass it, so subs that merge before their checks finish are refused: add the App to the ruleset's bypass list (${setupCommand} does)`
-          : `; \`${facts.gateCheck}\` is a required status check on ${board.baseBranch}${rules.integrationBypasses === true ? ", and slop's App can bypass the ruleset" : ''}${queueNote}`;
+          : `; \`${facts.gateCheck}\` is a required status check on ${board.baseBranch}${rules.integrationBypasses === true ? ", and slop's App can bypass the ruleset" : ''}`;
   const gateTitle = 'Checks workflow';
   items.push(
     facts.checksWorkflow === null

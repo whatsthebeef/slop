@@ -215,6 +215,9 @@ describe('services', () => {
     const stale = await globs.merge(DEV, passing.id, passing.version - 1);
     expect(!stale.ok && stale.error.code).toBe('version_conflict');
     expect(unwrap(await globs.merge(DEV, passing.id, passing.version)).status).toBe('merging');
+    expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'advance_merge_line', globId: 'board-1' });
+    // The line's turn makes it head, and the head's merge is queued.
+    expect((await globs.advanceMergeLine(glob.boardId))?.id).toBe(glob.id);
     expect(store.state.outbox.at(-1)).toMatchObject({ kind: 'squash_merge', globId: glob.id, sha: 'abc' });
   });
 

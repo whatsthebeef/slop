@@ -4,7 +4,7 @@ import { actionState, preparationOf } from '../action-glob.js';
 import {
   appliedHolding,
   MERGE_CONFLICT_STALL_LABEL,
-  MERGE_QUEUE_TIP,
+  mergeLineTip,
 } from '../whose-move.js';
 import {
   behindAdvice,
@@ -27,7 +27,7 @@ import { hasAfterMergeStep, ROLLOUT_AFTER_MERGE_TEXT } from './rollout-view.js';
 import type { PresentableGlob } from './facts.js';
 import {
   checksInFlightWhileMerging,
-  mergeQueueStatus,
+  mergeLineStatus,
   mergingChecksText,
 } from './check-wording.js';
 import { actionPresentation, type ActionIcon } from './action-presentation.js';
@@ -68,6 +68,8 @@ export interface StatusLine {
   readonly work?: true;
   /** The problem is a merge conflict: the card says it in a few words and the glob view lists the files. */
   readonly conflict?: true;
+  /** `merging`: the glob waits in the board's merge line (not the head): the card shows the hourglass, not the machine. */
+  readonly waiting?: true;
 }
 
 /**
@@ -279,8 +281,8 @@ export const statusCandidates = (
     const sha = glob.pr?.headSha ?? null;
     const short = sha === null ? 'the PR head' : sha.slice(0, 7);
     // Checks in flight read the shared merging wording ("running checks", or "merging from <base>" while catching up).
-    // In the host's merge queue it reads the queue wording instead.
-    const queued = mergeQueueStatus(glob);
+    // Waiting in the board's merge line it reads its place instead: only the head merges, and it does no work until its turn.
+    const queued = mergeLineStatus(glob);
     const merge =
       queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
     // A prepared action's merge is its record being written after Done.
@@ -294,7 +296,8 @@ export const statusCandidates = (
         tip:
           queued === null
             ? `Merging ${short}: slop merges it once the checks pass, and stops and says why if they fail${rollout}`
-            : `Merging ${short}: in the merge queue. ${MERGE_QUEUE_TIP}${rollout}`,
+            : `Merging ${short}: waiting in the merge line. ${mergeLineTip(glob.mergeLinePlace?.ahead ?? [])}${rollout}`,
+        ...(queued === null ? {} : { waiting: true as const }),
       }),
     );
   }

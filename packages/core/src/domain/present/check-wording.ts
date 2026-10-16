@@ -1,4 +1,4 @@
-import { CHECKS_RUNNING_TEXT, mergeQueueText, mergingFromBaseText } from '../whose-move.js';
+import { CHECKS_RUNNING_TEXT, mergeLineText, mergingFromBaseText } from '../whose-move.js';
 import { currentBehind } from '../readiness.js';
 import { modeOf } from '../types.js';
 import type { PresentableGlob } from './facts.js';
@@ -22,9 +22,12 @@ export const mergingChecksText = (glob: PresentableGlob, base?: string): string 
     ? mergingFromBaseText(glob.conflict?.base ?? currentBehind(glob)?.base ?? base ?? 'the base')
     : CHECKS_RUNNING_TEXT;
 
-/** What a glob in the code host's merge queue says ("in merge queue · N ahead", "merging" once its group merges); null when it isn't queued. */
-export const mergeQueueStatus = (glob: PresentableGlob): string | null =>
-  glob.mergeQueue == null ? null : mergeQueueText(glob.mergeQueue.position, glob.mergeQueue.state);
+/**
+ * What a glob waiting in its board's merge line says ("next to merge", "N ahead in the merge line"); null for the line's head
+ * (it reads "merging", or the checks wording while its checks run) and for a glob that is not in the line.
+ */
+export const mergeLineStatus = (glob: PresentableGlob): string | null =>
+  glob.status === 'merging' && glob.mergeLine != null && glob.mergeLine.head == null ? mergeLineText(glob.mergeLinePlace?.position ?? null) : null;
 
 /** The tooltip for checks running on a PR slop isn't merging: the head, what comes after they pass, and what a failure does. */
 export const checksRunningTip = (glob: PresentableGlob): string => {

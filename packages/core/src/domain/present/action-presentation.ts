@@ -207,7 +207,7 @@ export const actionPresentation = (
       return {
         label: 'Cancel merge',
         icon: null,
-        tip: 'Stops waiting for the checks, or takes a queued PR out of the merge queue; the PR stays open and Merge comes back',
+        tip: 'Stops waiting for the checks, or takes the glob out of the merge line; the PR stays open and Merge comes back',
         placement: 'more',
       };
     case 'merge_continue':

@@ -24,11 +24,12 @@ import { ARTIFACT_KINDS } from '../domain/knowledge.js';
 import type { Artifact, ArtifactSummary, Provenance } from '../domain/knowledge.js';
 import { HANDOVER_LABEL, handoverMarkdown, mergedPickUpNotice } from '../domain/handover.js';
 import type { Handover } from '../domain/handover.js';
-import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, InferenceSource, LabelName, Relation, RelationGate, RelationUntil, SlopType, WorkKind } from '../domain/types.js';
+import type { Actor, Board, Category, Escalation, Glob, ImpliedAfter, InferenceSource, LabelName, MergeLinePlace, Relation, RelationGate, RelationUntil, SlopType, WorkKind } from '../domain/types.js';
 import { parseWorkstreams, summariseWorkstreams } from '../domain/workstreams.js';
 import type { WorkstreamsSummary } from '../domain/workstreams.js';
 import { mergeImplied } from '../domain/exclusive-paths.js';
 import type { DependencyInferenceService, InferredEdge } from './dependency-inference-service.js';
+import { headCandidates, mergeLinePlaces } from '../domain/merge-line.js';
 import { deleteObjectEffect, knowledgePageEffect, recheckOverlapsEffect, writeRolloutEffect } from '../domain/events.js';
 import type { DomainEvent } from '../domain/events.js';
 import type { PendingEffect } from '../domain/machine-steps.js';
@@ -524,6 +525,8 @@ export interface GlobView extends RelationListExtras {
   readonly dismissedKeys: readonly string[];
   /** An open action's script and whether the base branch has it (null onBase: could not check); null when it names none. */
   readonly script?: ActionScript | null;
+  /** Where a merging glob stands in its board's merge line (1 is the head, `ahead` the IDs in front); absent for a glob not in the line. */
+  readonly mergeLinePlace?: MergeLinePlace;
 }
 
 /** The title of each glob and whether it is a decision or an action, for the holdings that name them. */
@@ -678,6 +681,8 @@ export class GlobService implements AutomaticRelations {
       const waited = await this.waitedOnBy(tx, glob.id, email);
       const groups = await this.relationGroupsOf(tx, glob, relations, email, seen);
       const suggestions = await this.suggestionsOf(tx, [glob.id]);
+      // The line is the board's other merging globs: one read, only for a glob that is in it.
+      const place = glob.status === 'merging' ? mergeLinePlaces(await tx.listGlobs(glob.boardId, { include: 'all', status: ['merging'] })).get(glob.id) : undefined;
       return ok({
         glob,
         allowedActions: machine.allowedActions(glob, actor.value, facts),
@@ -695,6 +700,7 @@ export class GlobService implements AutomaticRelations {
         handover: await handoverOf(tx, this.deps.clock, glob),
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
         script: check?.script ?? null,
+        ...(place === undefined ? {} : { mergeLinePlace: place }),
       });
     });
   }
@@ -3571,6 +3577,50 @@ export class GlobService implements AutomaticRelations {
       rollout: true,
       applies: 'any',
     });
+  }
+
+  /**
+   * Makes the next glob in the board's merge line its head when it has none (the `advance_merge_line` effect, and the reconcile
+   * sweep). Under the board's line lock it takes at most one head: the first by when it joined, skipping (and sending back to
+   * pr_open, held) a glob a `merge` relation or open merge question holds, and failing one whose conflict or red checks are
+   * already known. Idempotent; returns the head, or null when the line is empty or already has one.
+   */
+  async advanceMergeLine(boardId: number): Promise<Glob | null> {
+    const changed: Glob[] = [];
+    const head = await this.deps.store.transaction(async (tx) => {
+      changed.length = 0;
+      await tx.lockMergeLine(boardId);
+      const step = async (id: string, move: (glob: Glob, ctx: Context, facts: ActionFacts) => Result<Transition>): Promise<Glob | 'retry'> => {
+        const moved = await this.commandOnce(null, id, null, (glob, ctx, _board, facts) => move(glob, ctx, facts), { applies: 'any', relations: true }, tx);
+        if (moved === 'retry' || !moved.ok) return 'retry';
+        changed.push(moved.value);
+        return moved.value;
+      };
+      // A merging glob that predates the line joins it where its last change put it (once, when this ships).
+      for (const old of (await tx.listGlobs(boardId, { include: 'all', status: ['merging'] })).filter((g) => g.mergeLine == null)) {
+        await step(old.id, (glob, ctx) => machine.adoptIntoMergeLine(glob, ctx));
+      }
+      // Each pass makes a head or takes one candidate out of the line (a lost version race just reads again), so the passes are bounded.
+      const globs = await tx.listGlobs(boardId, { include: 'all', status: ['merging'] });
+      for (let pass = 0; pass < 2 * globs.length + 3; pass++) {
+        const [candidate] = headCandidates(await tx.listGlobs(boardId, { include: 'all', status: ['merging'] }));
+        if (candidate === undefined) return null;
+        const next = await step(candidate.id, (glob, ctx, facts) => machine.becomeMergeHead(glob, facts.relations, ctx));
+        if (next !== 'retry' && next.status === 'merging' && next.mergeLine?.head != null) return next;
+      }
+      return null;
+    });
+    for (const glob of changed) this.publish(glob);
+    return head;
+  }
+
+  /**
+   * The sweep's look at a merge line head: when its checks have been silent too long it asks for them again, and when they stay
+   * silent it fails the merge with the reason (which makes the next glob head). A no-op for any other glob.
+   */
+  async checkMergeHead(id: string): Promise<Result<Glob>> {
+    const nowMs = Date.parse(this.deps.clock.now());
+    return this.command(null, id, null, (glob, ctx) => machine.mergeHeadChecked(glob, nowMs, ctx), { applies: 'any' });
   }
 
   /** The background size refresh: never awaited, and a rejection (or a throw) is logged, never unhandled. */

@@ -15,9 +15,9 @@ import { parse } from 'yaml';
 
 const root = resolve(__dirname, '../../..');
 const files = ['.github/workflows/checks.yml', 'catalog/scripts/checks.yml'];
-// The repo's own workflow gates its jobs on the `changes` job (which runs for a merge group and plans everything) and adds a final `checks` job that must run even when a job before it failed or was skipped.
+// The repo's own workflow gates its jobs on the `changes` job (which plans everything for a push) and adds a final `checks` job that must run even when a job before it failed or was skipped.
 const aggregate = (file: string, name: string) => file.startsWith('.github') && name === 'checks';
-// A merge_group event has no pull_request object, so this draft guard evaluates true for it.
+// A push has no pull_request object, so this guard only skips draft PRs.
 const draftGuard = "${{ github.event_name == 'push' || !github.event.pull_request.draft }}";
 
 describe.each(files)('%s', (file) => {
@@ -26,11 +26,11 @@ describe.each(files)('%s', (file) => {
     jobs: Record<string, { if?: string }>;
   };
 
-  it('runs on merge_group checks_requested', () => {
-    expect(wf.on.merge_group?.types).toEqual(['checks_requested']);
+  it('has no merge_group trigger (slop merges through its own merge line)', () => {
+    expect(Object.keys(wf.on).sort()).toEqual(['pull_request', 'push']);
   });
 
-  it('skips no job for a merge group', () => {
+  it('skips no job except for a draft pull request', () => {
     for (const [name, job] of Object.entries(wf.jobs)) {
       if (aggregate(file, name)) continue;
       expect(

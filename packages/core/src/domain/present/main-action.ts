@@ -129,8 +129,10 @@ export const viewMainAction = (glob: PresentableGlob, viewer?: HumanStepViewer):
 const PROMOTION: readonly Action[] = ['cancel_merge', 'review_now', 'take_over', 'pick_up'];
 
 /**
- * The menu item to lead with when `mainAction` finds no natural main, so the split button never shows a lone ▾:
- * Cancel merge, Retry review, Pick up, else the first remaining item; none while the glob is merging. Never a destructive action (those stay in the
+ * The menu item to lead with when `mainAction` finds no natural main, so the split button has a main button
+ * wherever one is possible: Cancel merge, Retry review, Pick up, else the first remaining item; none while the glob is merging
+ * (a glob in the merge line then shows a lone ▾ with Cancel merge in the glob view, `actions.tsx`; an armed `pr_open` glob, not
+ * yet in the line, keeps Cancel merge as its main button). Never a destructive action (those stay in the
  * Reset area), and a person's own Review code only as the last resort (only the retry of a missing review leads). Null when
  * nothing is left, and the row then shows no actions.
  */

@@ -296,12 +296,12 @@ describe('A6: Failed starts another round on the same branch', () => {
 });
 
 describe('A7: Done on a prepared action', () => {
-  it('a branch record with passed checks starts the merge itself: merging, squash_merge, waiters released', () => {
+  it('a branch record with passed checks starts the merge itself: it joins the merge line, waiters released', () => {
     const g = prepared('ready', 'branch', { headChecks: { sha: 'aaa', state: 'passed' } });
     const t = unwrap(machine.completeAction(g, { note: 'applied in the console' }, ctx(dev)));
     expect(t.glob.status).toBe('merging');
     expect(t.glob.attributes).toMatchObject({ outcome: { kind: 'done', by: dev.email, note: 'applied in the console' } });
-    expect(kinds(t)).toEqual(['release_waiting', 'squash_merge']);
+    expect(kinds(t)).toEqual(['release_waiting', 'advance_merge_line']);
     expect(actionState(t.glob)).toBe('recording');
   });
 
@@ -379,7 +379,7 @@ describe('A8: the record merges', () => {
     const armed = unwrap(machine.completeAction(prepared('ready'), {}, ctx(dev))).glob;
     const pass = unwrap(machine.checksCompleted(armed, { sha: 'aaa', passed: true }, ctx(null)));
     expect(pass.glob.status).toBe('merging');
-    expect(kinds(pass)).toEqual(['squash_merge']);
+    expect(kinds(pass)).toEqual(['advance_merge_line']);
     const pushed = unwrap(machine.commitPushed(armed, { sha: 'bbb', runId: null }, ctx(null)));
     expect(pushed.glob.mergeMode).toBe('when_green');
     const red = unwrap(machine.checksCompleted(armed, { sha: 'aaa', passed: false }, ctx(null)));
@@ -631,6 +631,10 @@ describe('prepared actions through the service', () => {
     const ready = await current(made.id);
     const done = unwrap(await globs.completeAction(DEV, made.id, ready.version, 'applied'));
     expect(done).toMatchObject({ status: 'merging' });
+    expect(outbox('squash_merge')).toEqual([]);
+    expect(outbox('advance_merge_line')).toHaveLength(1);
+    // The board's line makes it head, and the head's merge is queued.
+    expect((await globs.advanceMergeLine(made.boardId))?.id).toBe(made.id);
     expect(outbox('squash_merge')).toHaveLength(1);
     expect(outbox('release_waiting').some((e) => e.globId === made.id)).toBe(true);
     const merged = unwrap(await globs.applyEvent(made.id, (g, c) => machine.merged(g, { sha: 'abc' }, c)));

@@ -240,6 +240,24 @@ describe('glob view: main button', () => {
     expect(screen.queryByTestId('more-cancel_merge')).toBeNull();
   });
 
+  it('a glob in the merge line has Cancel merge only in the ▾, never as the main button', async () => {
+    const user = userEvent.setup();
+    renderGlob(
+      view({
+        status: 'merging',
+        list: 'doing',
+        pr: { number: 7, state: 'ready', headSha: 'd16d563aaaa' },
+        headChecks: { sha: 'd16d563aaaa', state: 'passed' },
+        mergeLine: { joinedAt: new Date().toISOString() },
+        mergeLinePlace: { position: 3, ahead: ['s1t1', 's1t2'] },
+        allowedActions: ['cancel_merge', 'take_over', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent ?? '').not.toMatch(/Cancel merge/);
+    await user.click(screen.getByTestId('more-actions'));
+    expect((await screen.findByTestId('more-cancel_merge')).textContent).toContain('Cancel merge');
+  });
+
   it('is a split button: the main action with an icon-only ▾ joined to it', () => {
     renderGlob(view({ allowedActions: ['start', 'investigate', 'delete'] }));
     const split = screen.getByTestId('split-button');

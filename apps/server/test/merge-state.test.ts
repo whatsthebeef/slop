@@ -62,33 +62,3 @@ describe('classifyMergeState', () => {
     expect(classifyMergeState('clean', [run('completed', 'success')])).toBe('passed');
   });
 });
-
-describe('classifyMergeState with a merge queue', () => {
-  const named = (name: string, status: string, conclusion: string | null) => ({ name, status, conclusion });
-
-  it('a blocked head passes when every required check succeeded (the queue rule makes a green PR blocked)', () => {
-    const runs = [named('checks', 'completed', 'success')];
-    expect(classifyMergeState('blocked', runs, { required: ['checks'] })).toBe('passed');
-    // Without queue mode the same read stays pending.
-    expect(classifyMergeState('blocked', runs)).toBe('pending');
-  });
-
-  it('stays pending when a required check has not run, and with no names needs one success', () => {
-    expect(classifyMergeState('blocked', [named('lint', 'completed', 'success')], { required: ['checks'] })).toBe('pending');
-    expect(classifyMergeState('blocked', [named('lint', 'completed', 'success')], { required: [] })).toBe('passed');
-    expect(classifyMergeState('blocked', [named('lint', 'completed', 'skipped')], { required: [] })).toBe('pending');
-  });
-
-  it('a failed or unfinished run still decides first', () => {
-    const queue = { required: ['checks'] };
-    expect(classifyMergeState('blocked', [named('checks', 'completed', 'success'), named('x', 'completed', 'failure')], queue)).toBe('failed');
-    expect(classifyMergeState('blocked', [named('checks', 'completed', 'success'), named('x', 'in_progress', null)], queue)).toBe('pending');
-  });
-
-  it('leaves clean, unstable and conflict untouched', () => {
-    const queue = { required: ['checks'] };
-    expect(classifyMergeState('unstable', [named('checks', 'completed', 'success')], queue)).toBe('failed');
-    expect(classifyMergeState('dirty', [], queue)).toBe('conflict');
-    expect(classifyMergeState('clean', [named('checks', 'completed', 'success')], queue)).toBe('passed');
-  });
-});

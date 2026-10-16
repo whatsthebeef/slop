@@ -73,7 +73,7 @@ const logTail = async (request: Request, repo: Repo, jobId: number): Promise<str
 };
 
 /** Workflow events that test the commit itself; any other event (a comment, a review, a schedule, a manual run) only borrows its sha. */
-const TESTING_EVENTS = new Set(['push', 'merge_group']);
+const TESTING_EVENTS = new Set(['push']);
 
 /** The check suites of workflow runs on `sha` that were not triggered by a push to it, so their results say nothing about the commit. */
 const borrowedSuites = async (request: Request, repo: Repo, sha: string): Promise<Set<number>> => {

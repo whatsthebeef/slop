@@ -163,7 +163,7 @@ describe('handoverBrief', () => {
     expect(stalled?.why).toEqual(['The run has made no progress for 40 minutes.']);
     expect(stalled?.detail).toEqual([`Last progress: ${minutesAgo(40)}`, `Session: ${session}`]);
 
-    // A run that only watches a glob that is merging, armed or queued has nothing to report: no false stall.
+    // A run that only watches a glob that is merging (the head, or waiting in the merge line), or armed has nothing to report: no false stall.
     const watching = [run({ state: 'watching', lastProgressAt: minutesAgo(26) })];
     const checksPassed = { sha: HEAD, state: 'passed' as const };
     const waiting = [
@@ -173,16 +173,22 @@ describe('handoverBrief', () => {
         status: 'merging',
         runs: watching,
         headChecks: checksPassed,
-        mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' },
+        mergeLine: { joinedAt: NOW },
+      }),
+      open({
+        status: 'merging',
+        runs: watching,
+        headChecks: checksPassed,
+        mergeLine: { joinedAt: NOW, head: { since: NOW } },
       }),
     ];
     for (const g of waiting) expect(handoverBrief(g, facts())).toBeNull();
     // A run watching a ready PR whose checks passed waits for a person to merge it: no false stall. Failed checks still show.
     expect(handoverBrief(open({ runs: watching, headChecks: checksPassed }), facts())).toBeNull();
     expect(handoverBrief(open({ runs: watching, headChecks: { sha: HEAD, state: 'failed' as const, at: NOW } }), facts())?.why[0]).toContain('Checks failed');
-    // A glob that left Merging but still carries a stale queue entry is stalled like any other.
+    // A glob that left Merging but still carries a stale merge line place is stalled like any other.
     expect(
-      handoverBrief(open({ runs: watching, mergeQueue: { since: NOW, sha: HEAD, position: 2, state: 'queued' } }), facts())?.why,
+      handoverBrief(open({ runs: watching, mergeLine: { joinedAt: NOW } }), facts())?.why,
     ).toEqual(['The run has made no progress for 26 minutes.']);
     // The same quiet run on an open PR whose checks have not reported still shows.
     expect(handoverBrief(open({ runs: watching }), facts())?.why).toEqual(['The run has made no progress for 26 minutes.']);

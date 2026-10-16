@@ -112,6 +112,12 @@ describe('a sub whose PR is ready', () => {
   });
 
   const current = async () => unwrap(await globs.get(DEV, globId)).glob;
+  /** Takes an earlier test's merging globs out of the board's merge line: they would otherwise be ahead of this test's glob. */
+  const clearLine = async () => {
+    for (const other of await globs.peekAll(1, { include: 'all', status: ['merging'] })) {
+      if (other.id !== globId) await globs.applyEvent(other.id, (g, ctx) => machine.mergeFailed(g, 'test cleanup', ctx));
+    }
+  };
   const pending = async (kind: Effect['kind']) =>
     (await database.db.select().from(schema.outbox).where(eq(schema.outbox.globId, globId))).filter(
       (row) => row.kind === kind && row.state === 'pending',
@@ -196,6 +202,15 @@ describe('a sub whose PR is ready', () => {
     expect((await current()).status).toBe('pr_open');
     expect(await run('evaluate_sub_gate')).toEqual(['done']);
     expect((await current()).status).toBe('merging');
+    // Alone in the merge line it becomes head and reads its checks (the sub gate doesn't wait for them); the merge follows
+    // their pass: until then nothing is merged.
+    await clearLine();
+    await globs.advanceMergeLine((await current()).boardId);
+    await run('refresh_checks');
+    expect(await pending('squash_merge')).toEqual([]);
+    host.mergeStateNow = 'passed';
+    await globs.applyEvent(globId, (g, ctx) => machine.checksChanged(g, ctx));
+    await run('refresh_checks');
     await run('squash_merge');
     expect((await current()).status).toBe('reviewing');
     expect(host.lookups).toEqual([]);
@@ -269,6 +284,10 @@ describe('a sub whose PR is ready', () => {
     await handle(readyForReview());
     await run('evaluate_sub_gate');
     expect((await current()).status).toBe('merging');
+    await clearLine();
+    await globs.advanceMergeLine((await current()).boardId);
+    host.mergeStateNow = 'passed';
+    await run('refresh_checks');
     const { squashMerge, prState } = host;
     host.squashMerge = () => Promise.resolve({ outcome: 'refused', reason: 'Head branch was modified. Review and try the merge again.' });
     host.prState = () => Promise.resolve({ state: 'open', draft: false, headSha: MOVED, mergeSha: null });
