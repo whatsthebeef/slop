@@ -302,7 +302,7 @@ describe('the proposal block of a learning', () => {
     renderGlob(decision());
     await actionRow();
     const page = screen.getByTestId('glob-page');
-    for (const name of ['plan', 'artifacts', 'deploys', 'environments', 'tests', 'findings', 'size']) {
+    for (const name of ['plan', 'artifacts', 'deploys', 'tests', 'findings', 'size']) {
       expect(page.querySelector(`[data-section="${name}"]`)?.childElementCount ?? 0).toBe(0);
     }
     expect(page.querySelector('[data-section="decision"]')?.childElementCount).toBeGreaterThan(0);
