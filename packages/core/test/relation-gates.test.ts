@@ -200,6 +200,8 @@ describe('Merge anyway and Sign off anyway (machine)', () => {
       const t = unwrap(machine.mergeAnyway(open(), WHY, ctx(dev), { continue: false, facts: withSteps }));
       expect(t.glob).toMatchObject({ status: 'merging', mergeMode: null });
       expect(t.effects.some((e) => e.kind === 'squash_merge')).toBe(true);
+      // Kept open for the steps: the merge is observed as a rollout, not a close.
+      expect(t.events.find((e) => e.type === 'StatusChanged')?.data).toMatchObject({ to: 'merging', mode: 'rollout' });
       const pending = open({ headChecks: { sha: HEAD, state: 'pending' } });
       expect(message(machine.mergeAnyway(pending, WHY, ctx(dev), { continue: false, facts: withSteps }))).toBe('Required checks have not passed on the current head');
       expect(machine.allowedActions(open(), dev, withSteps)).toContain('merge_anyway');

@@ -113,6 +113,21 @@ describe('shared status line', () => {
     ]);
   });
 
+  it('names the merge relation that holds a ready PR with passing checks, and points at Merge anyway', () => {
+    const g = prOpen({
+      headChecks: { sha: head, state: 'passed' },
+      allowedActions: [],
+      holding: [
+        { relationId: 'r1', to: 's1t9', gate: 'merge', until: 'merged', reason: null, source: 'person', toIsDecision: false },
+      ],
+    } as never);
+    const [w] = waitingFor(g, [], 'dev');
+    expect(w).toMatchObject({ action: 'merge', label: 'Merge' });
+    expect(w?.tip).toContain('s1t9');
+    expect(w?.tip).toContain('Merge anyway');
+    expect(w?.tip).not.toContain('Waiting for the checks');
+  });
+
   it('says a super waits for the implementation record', () => {
     const g = view({
       type: 'super',
