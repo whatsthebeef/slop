@@ -137,11 +137,11 @@ const shorten = (text: string, max: number): string => {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 };
 
-/** The first sentence of a text, with fenced blocks and code spans taken out: plain words for a title. */
+/** The first sentence of a text, with fenced blocks and commands and long code spans taken out (a short word in backticks stays as a word): plain words for a title. */
 const firstSentence = (text: string): string => {
   const plain = text
     .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`]*`/g, ' ')
+    .replace(/`([^`]*)`/g, (_, code: string) => (code.length <= 20 && !/\s/.test(code) ? code : ' '))
     .replace(/\s+/g, ' ')
     .trim();
   if (plain === '') return text.replace(/`/g, '').replace(/\s+/g, ' ').trim();
