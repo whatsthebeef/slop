@@ -308,8 +308,24 @@ describe('slop pick-up', () => {
   });
 
   it('refuses a merged glob', async () => {
-    const run = setup({ get_glob: () => glob({ status: 'reviewing' }) });
-    await expect(pickUpCommand(['s1t4'], run.deps)).rejects.toThrow(/already merged/);
+    const run = setup({
+      get_glob: () => glob({ status: 'reviewing' }),
+      pick_up: () => {
+        throw new SlopError('invalid_transition: s1t4 is already merged (reviewing)\nWhat\'s left: nothing but sign-off.');
+      },
+    });
+    await expect(pickUpCommand(['s1t4'], run.deps)).rejects.toThrow(/already merged.*nothing but sign-off/s);
+  });
+
+  it('makes the links in a merged glob\'s refusal full with SLOP_URL', async () => {
+    const run = setup({
+      get_glob: () => glob({ status: 'reviewing' }),
+      pick_up: () => {
+        throw new SlopError('s1t4 is already merged\nThe commands are in the glob view: /globs/s1t4?section=human-steps');
+      },
+    });
+    run.deps.settings = { SLOP_URL: 'https://slop.test/' };
+    await expect(pickUpCommand(['s1t4'], run.deps)).rejects.toThrow('https://slop.test/globs/s1t4?section=human-steps');
   });
 
   it('gives up after the provisioning timeout', async () => {
