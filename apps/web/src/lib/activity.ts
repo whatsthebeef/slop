@@ -140,7 +140,24 @@ export const activityOf = (glob: GlobView, repo: string | null, steps: readonly 
     );
   }
 
-  // The glob's own failure is pinned at the top of the log in full, so the feed doesn't repeat it.
+  // A failed merge or a failed branch setup raises a problem block that goes once someone acts, so the feed keeps it. A run's
+  // own failure is already the run's entry above.
+  const failure = glob.failure;
+  if (failure != null && (failure.kind === 'merge' || failure.kind === 'provisioning')) {
+    const what = failure.kind === 'merge' ? 'Merge failed' : 'Branch setup failed';
+    const reason = oneLine(failure.reason);
+    out.push(
+      entry(
+        `failure:${failure.kind}:${failure.at}`,
+        'warn',
+        `${what}${reason === '' ? '' : `: ${reason}`}`,
+        failure.at,
+        null,
+        'open',
+        failure.conflict === undefined ? `${what}: ${failure.reason}` : [`${what}: ${failure.reason}`, ...failure.conflict.files].join('\n'),
+      ),
+    );
+  }
 
   // The escalation has its own chip and disclosure, so the feed doesn't repeat its reason.
 
