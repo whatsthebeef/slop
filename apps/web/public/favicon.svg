@@ -1,1 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#7c6cf0"/><circle cx="12" cy="13" r="4" fill="#fff"/><circle cx="21" cy="19" r="5" fill="#fff" opacity=".8"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="373.5 175 498 498">
+  <style>
+    path { fill: #2b2e29; }
+    @media (prefers-color-scheme: dark) { path { fill: #ece8dd; } }
+  </style>
+  <path d="M 808 243 L 715 187 L 706 187 L 698 193 L 692 204 L 693 214 L 697 219 L 728 237 L 729 240 L 559 488 L 554 486 L 510 458 L 499 458 L 494 461 L 475 485 L 446 525 L 439 539 L 434 554 L 432 565 L 433 589 L 436 601 L 445 622 L 457 640 L 464 647 L 476 655 L 492 660 L 514 661 L 528 659 L 545 654 L 561 646 L 578 633 L 591 619 L 605 599 L 631 556 L 634 546 L 629 537 L 583 504 L 752 256 L 755 254 L 786 273 L 793 276 L 797 276 L 804 273 L 813 260 L 813 249 Z" fill-rule="evenodd" clip-rule="evenodd"/>
+</svg>
