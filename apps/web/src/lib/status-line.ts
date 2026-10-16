@@ -58,6 +58,16 @@ export interface StatusLine {
   readonly conflict?: true;
 }
 
+/**
+ * The kinds that mean something is wrong and someone must act: they get the red problem block with a dismiss control. The
+ * rest are normal states (merging, checks running, base red, queued, rollout steps due) that the corner status and its
+ * tooltip already say, so they never get a block.
+ */
+const PROBLEM_KINDS: ReadonlySet<StatusLine['kind']> = new Set(['provisioning', 'checks', 'failure', 'investigation-failed', 'stuck']);
+
+/** True when the status line is a real problem rather than a normal state. */
+export const isProblemLine = (line: Pick<StatusLine, 'kind'>): boolean => PROBLEM_KINDS.has(line.kind);
+
 /** The longest label a Your turn chip shows: one or two words; the step's full title goes in the tooltip. */
 const TURN_LABEL_MAX = 24;
 
