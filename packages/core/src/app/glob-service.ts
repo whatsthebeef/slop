@@ -62,6 +62,7 @@ import type { DependencyLearningService } from './dependency-learning-service.js
 import type { ClassifyAtCreateInput, CreateDecision, CreatePrerequisite } from './relation-scan-service.js';
 import { embedRequest, snapshotOf } from './intake-learning-service.js';
 import { inferenceReasonOf } from './intake-service.js';
+import { pickEnvironment } from '../domain/environment-pick.js';
 import type { WorkInference } from './intake-service.js';
 import { checkFrom } from './size-check-service.js';
 import { hash } from './text-hash.js';
@@ -2172,7 +2173,16 @@ export class GlobService implements AutomaticRelations {
       // No type was chosen and it resolved to a sub (auto-merges) although the work touches a risk area: ask instead of guessing.
       const typeAsk = input.typeChosen === false && input.type === 'sub' ? await this.riskTypeQuestion(tx, board.id, input, planText, this.deps.clock.now()) : null;
       const questions = typeAsk === null ? input.questions : [...(input.questions ?? []), typeAsk];
-      const createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(questions === undefined ? {} : { questions }) };
+      let createInput: CreateInput = { ...input, id, impliedAfter: implied, ...(questions === undefined ? {} : { questions }) };
+      // Nobody chose an environment: a code glob that will have a branch gets one no other open glob is using, when there is one.
+      if (input.environment === null && !isHumanCategory(input.category) && input.type !== 'super') {
+        const open = await tx.listGlobs(board.id, {});
+        const picked = pickEnvironment(board.environments, open, open.length === 0 ? [] : await tx.latestDeploys(board.id, open.map((g) => g.id)));
+        if (picked !== null) {
+          const reason = [input.inferenceReason ?? null, `Environment ${picked.reason}`].filter((t) => t !== null).join('. ');
+          createInput = { ...createInput, environment: picked.environment, inferenceReason: reason };
+        }
+      }
       const ctx = await this.context(actor.value, board);
       const created0 = machine.create(createInput, board, ctx, relations);
       if (!created0.ok) return created0;
