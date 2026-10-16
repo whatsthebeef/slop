@@ -516,8 +516,6 @@ export const BoardPage = () => {
                       lock={motion.locks[glob.id]}
                       bump={bumps[glob.id]}
                       tag={motion.tags[glob.id]}
-                      deploy={deployState.data?.indicators[glob.id]}
-                      environments={deployState.data?.environments?.[glob.id]}
                       atf={deployState.data?.atf?.[glob.id]}
                       viewer={viewer}
                       waitingOnThis={waitingOn.get(glob.id) ?? 0}
