@@ -3,7 +3,7 @@ import { derivedSteps } from './human-steps.js';
 import { missingCoreDocNotice } from './core-docs.js';
 import type { CoreDocArea } from './core-docs.js';
 import type { RaisedNotification } from './notifications.js';
-import type { Board, CheckFailure, Glob } from './types.js';
+import type { BehindBase, Board, CheckFailure, Glob } from './types.js';
 import { isMergeHeld } from './relations.js';
 import { DEFAULT_SUB_GATE_CHECK, subGateWorkflowPath } from './merge-policy.js';
 
@@ -580,12 +580,25 @@ const conflictHint = (glob: Glob): string | null => {
 };
 
 /**
+ * The recorded distance from the base, unless a push has moved the PR head since it was read: advice already acted on
+ * (the base merged in and pushed) must not show while the recompute is still on its way, or after a missed webhook.
+ * A record without a head (written before heads were recorded) is kept.
+ */
+export const currentBehind = (glob: Pick<Glob, 'behind' | 'pr'>): BehindBase | null => {
+  const behind = glob.behind;
+  if (behind == null) return null;
+  const head = glob.pr?.headSha ?? null;
+  if (behind.headSha != null && head !== null && behind.headSha !== head) return null;
+  return behind;
+};
+
+/**
  * The early warning on a glob in Doing whose branch lacks commits from the base branch, before any conflict exists:
  * "main is 4 merges ahead; 6 files changed on both sides". Null when it is up to date, not in Doing, or already in
  * conflict (the conflict hint says more).
  */
-export const behindWarning = (glob: Glob): string | null => {
-  const behind = glob.behind;
+export const behindWarning = (glob: Pick<Glob, 'behind' | 'pr' | 'status' | 'conflict'>): string | null => {
+  const behind = currentBehind(glob);
   if (
     behind == null ||
     behind.behindBy <= 0 ||

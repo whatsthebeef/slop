@@ -412,7 +412,7 @@ export const codeHostExecutors = (
     },
 
     check_behind: async (effect, glob, { globs }) => {
-      if (effect.kind !== 'check_behind' || glob?.pr == null || glob.status !== 'in_progress') return 'dropped';
+      if (effect.kind !== 'check_behind' || glob?.pr == null || (glob.status !== 'in_progress' && glob.status !== 'pr_open')) return 'dropped';
       const repo = await repoFor(glob.boardId);
       if (repo === null) return 'dropped';
       const found = await host.behindBase(repo, glob.pr.number);

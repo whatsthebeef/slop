@@ -133,6 +133,19 @@ describe('the behind-main warning', () => {
     expect(await pending('check_behind')).toHaveLength(0);
   });
 
+  it('recomputes behind after a push to a glob already back in review, clearing the stale record', async () => {
+    host.compare = { behindBy: 2, files: [] };
+    await handle(delivery(globId));
+    await run('check_behind');
+    expect(await behind()).toMatchObject({ behindBy: 2 });
+    await database.db.update(schema.globs).set({ status: 'pr_open' }).where(eq(schema.globs.id, globId));
+    host.compare = { behindBy: 0, files: [] };
+    await handle(delivery(globId));
+    await run('check_behind');
+    expect(await behind()).toBeNull();
+    await database.db.update(schema.globs).set({ status: 'in_progress' }).where(eq(schema.globs.id, globId));
+  });
+
   it('tells the code view when the base branch (and only the base branch) received a push', async () => {
     basePushes.length = 0;
     await handle(delivery('unrelated'));

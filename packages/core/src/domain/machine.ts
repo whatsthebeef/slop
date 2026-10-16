@@ -1206,6 +1206,7 @@ export const behindChecked = (
 ): Result<Transition> => {
   if (!hasOpenPr(glob)) return unchanged(glob);
   const before = glob.behind ?? null;
+  const headSha = glob.pr?.headSha ?? null;
   if (found.behindBy <= 0) {
     if (before === null) return unchanged(glob);
     return new Builder(glob, ctx)
@@ -1215,6 +1216,7 @@ export const behindChecked = (
   }
   if (
     before?.base === found.base &&
+    (before.headSha ?? null) === headSha &&
     before.behindBy === found.behindBy &&
     before.files.join('\n') === found.files.join('\n')
   ) {
@@ -1225,6 +1227,7 @@ export const behindChecked = (
     behindBy: found.behindBy,
     files: [...found.files],
     at: ctx.now,
+    headSha,
   };
   return new Builder(glob, ctx)
     .set({ behind })
@@ -2289,8 +2292,9 @@ export const commitPushed = (
   if (glob.conflict != null && glob.pr !== null) {
     b.effect({ kind: 'check_conflict', globId: glob.id, generation: glob.generation, since: null });
   }
-  // Doing: look again at how far the branch is behind the base (the card warns before a conflict exists).
-  if (glob.status === 'in_progress' && glob.pr !== null) {
+  // Doing or in review: look again at how far the branch is behind the base (the card warns before a conflict exists).
+  // A push that merged the base in must clear the record even when it also sends a ready PR back to review.
+  if ((glob.status === 'in_progress' || glob.status === 'pr_open') && glob.pr !== null) {
     b.effect({ kind: 'check_behind', globId: glob.id, generation: glob.generation });
   }
   // A ready PR picked up into Doing and pushed with no conflict flagged goes back to review; a flagged one waits for the recheck.
