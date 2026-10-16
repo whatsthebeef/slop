@@ -396,6 +396,24 @@ describe('question and branch lines on the card', () => {
   });
 });
 
+describe('environment and deploy labels on the card', () => {
+  it('shows no environment, deploy or branch label for a glob deployed to demo and on int', () => {
+    const deployed = {
+      deploy: { environment: 'demo', state: 'live', sha: 'abc1234def', waiting: false },
+      environments: [{ environment: 'int', role: 'integration', production: false, sha: 'abc1234def', since: NOW, warning: 'before_sign_off' }],
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <GlobCard {...base()} {...(deployed as object)} moves={[]} glob={view({ status: 'pr_open', branch: 's1t1' })} repo='a/b' />
+      </MemoryRouter>,
+    );
+    const root = dom(html);
+    expect(root.querySelector('[data-testid="deploy-chip"]')).toBeNull();
+    expect(root.querySelector('[data-testid="environment-chip"]')).toBeNull();
+    expect(html).not.toMatch(/demo|\bint\b|before sign-off/);
+  });
+});
+
 describe('independent review on the card', () => {
   const reviewed = (findings: number, headSha: string | null = head) =>
     view({
