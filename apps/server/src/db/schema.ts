@@ -1089,7 +1089,7 @@ export const atfRunners = pgTable(
   (t) => [uniqueIndex('atf_runners_name_idx').on(t.boardId, sql`lower(${t.name})`).where(sql`${t.revokedAt} is null`)],
 );
 
-/** ATF runs reported by pipelines: on a glob's branch, or against the commit an environment ran. */
+/** ATF runs reported by pipelines: on a glob's branch, or after a branch deploy to a dev environment (the deploying glob's id). */
 export const testRuns = pgTable(
   'test_runs',
   {
@@ -1098,7 +1098,7 @@ export const testRuns = pgTable(
       .notNull()
       .references(() => boards.id, { onDelete: 'cascade' }),
     kind: text('kind').notNull(),
-    /** Set for a branch run; null for a run against an environment. */
+    /** The glob the run belongs to; null only on legacy rows from before environments were dev-only (the 0085 migration deletes them). */
     globId: text('glob_id'),
     environment: text('environment'),
     sha: text('sha').notNull(),
