@@ -55,9 +55,16 @@ const yourTurnClick = (status: StatusLine): StatusClick => {
 const statusClick = (status: StatusLine): StatusClick =>
   status.kind === 'rollout' ? cardTargets.humanSteps() : cardTargets.actions();
 
-/** Which icon leads the status: the machine (spinning while a step runs), a warning, a person, an hourglass, or "needs a <person>". */
+/** Which icon leads the status: the machine or a person (spinning while their step is in progress), a warning, an hourglass, or "needs a <person>". */
 export type StatusIcon =
-  'machine' | 'machine-spinning' | 'alert' | 'human' | 'hourglass' | 'needs-human' | 'check';
+  | 'machine'
+  | 'machine-spinning'
+  | 'human-spinning'
+  | 'alert'
+  | 'human'
+  | 'hourglass'
+  | 'needs-human'
+  | 'check';
 
 export interface CornerStatus {
   /** What the status is about, for styling and tests: stalled, needs-human, ready, a problem's kind, decided (a learning's outcome), machine, human, waiting, standby. */

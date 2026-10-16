@@ -5,7 +5,7 @@ interface ActorIconProps {
   readonly className?: string;
   /** True where adjacent text already says it: the icon is then hidden from screen readers. */
   readonly decorative?: boolean;
-  /** True while a machine step is running: the icon turns (not for people who prefer reduced motion). */
+  /** True while work is in progress: the icon turns (not for people who prefer reduced motion). */
   readonly working?: boolean;
 }
 
@@ -21,9 +21,9 @@ export const MachineIcon = ({ className, decorative = false, working = false }: 
 );
 
 /** A person: the work or the judgement happens in a person's session (lucide UserRound, s15t104). */
-export const HumanIcon = ({ className, decorative = false }: ActorIconProps) => (
+export const HumanIcon = ({ className, decorative = false, working = false }: ActorIconProps) => (
   <UserRound
-    className={cn(SIZE, className)}
+    className={cn(SIZE, working && 'animate-spin motion-reduce:animate-none', className)}
     strokeWidth={2}
     {...(decorative ? { 'aria-hidden': true } : { 'aria-label': 'human', role: 'img' })}
   />

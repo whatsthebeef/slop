@@ -370,6 +370,13 @@ describe('pending clicks', () => {
     expect(p.notice).toBeNull();
   });
 
+  it('a pending Pick up or take over reads picking up with the spinning person, not the machine', () => {
+    for (const kind of ['pick_up', 'take_over'] as const) {
+      const p = holdsRules(prOpen({ allowedActions: [kind], pendingAction: click(kind) }));
+      expect(p.status).toMatchObject({ kind: 'pending', text: 'picking up', icon: 'human-spinning' });
+    }
+  });
+
   it('a pending Fix conflict reads fixing conflict', () => {
     const p = holdsRules(
       prOpen({
