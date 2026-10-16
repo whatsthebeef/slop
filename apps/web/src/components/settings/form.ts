@@ -19,7 +19,6 @@ export const useSettingsForm = (boardId: number) => {
   const [repo, setRepo] = useState('');
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [timeZone, setTimeZone] = useState('');
-  const [baseBranch, setBaseBranch] = useState('');
   const [deploy, setDeploy] = useState<DeployIntegration | null>(null);
   const [atf, setAtf] = useState<AtfIntegration | null>(null);
   const [effectCheckGlobs, setEffectCheckGlobs] = useState('');
@@ -31,7 +30,6 @@ export const useSettingsForm = (boardId: number) => {
     if (board.data === undefined) return;
     setEnvs([...board.data.environments]);
     setTimeZone(board.data.timeZone);
-    setBaseBranch(board.data.baseBranch);
     setRepo(board.data.repo ?? '');
     setDeploy(board.data.deploy);
     // Optional: an older server doesn't send it.
@@ -48,7 +46,6 @@ export const useSettingsForm = (boardId: number) => {
       return api.updateSettings(boardId, board.data.version, {
         environments: envs,
         timeZone,
-        baseBranch,
         repo: repo.trim() === '' ? null : repo.trim(),
         deploy,
         atf,
@@ -63,7 +60,6 @@ export const useSettingsForm = (boardId: number) => {
       toast('Settings saved');
       void client.invalidateQueries({ queryKey: ['board', boardId] });
       void client.invalidateQueries({ queryKey: ['repo-connection', boardId] });
-      void client.invalidateQueries({ queryKey: ['board-environments', boardId] });
     },
     onError: (e) => toast(message(e)),
   });
@@ -77,8 +73,6 @@ export const useSettingsForm = (boardId: number) => {
     setEnvs,
     timeZone,
     setTimeZone,
-    baseBranch,
-    setBaseBranch,
     deploy,
     setDeploy,
     atf,

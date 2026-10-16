@@ -101,7 +101,7 @@ describe('create_glob relations over MCP (Postgres)', () => {
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       await tx.upsertUser({ email: ADMIN, name: 'Admin', active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     const llmOff = new IntakeService({ store, llm: { complete: () => Promise.reject(new LlmUnavailable('off', 'none')) } });
     admin = await connect(ADMIN, globs, llmOff);

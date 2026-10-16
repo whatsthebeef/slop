@@ -95,7 +95,6 @@ describe('action outcomes (REST)', () => {
     const created = await boards.create(DEV, {
       name: 'b',
       repo: null,
-      baseBranch: 'main',
       timeZone: 'UTC',
       environments: [],
     });

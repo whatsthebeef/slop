@@ -51,7 +51,7 @@ describe('Learned task categorisation in Postgres', () => {
     ({ database, drop } = await createTestDatabase('intake_learning'));
     store = new PgStore(database.db);
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) }, embedder });
     learning = new IntakeLearningService({ store, clock, embedder });
   });

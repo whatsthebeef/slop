@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # .sstor/atf-specs.sh [environment] [report dir]: asks slop which acceptance test (ATF) specs to run for the deploy
-# that was just made, and exports the answer for .sstor/atf.sh. SOURCE it, so the exports reach the build's shell:
+# that was just made (the int pipeline runs ATF after the merge to main is deployed; slop resolves the list from the glob's succeeded branch deploy of that commit), and exports the answer for .sstor/atf.sh. SOURCE it, so the exports reach the build's shell:
 #
 #   . .sstor/atf-specs.sh "$SLOP_ENVIRONMENT" reports/atf      # (buildspec-atf.yml does this)
 #
@@ -30,8 +30,8 @@
 #   SLOP_ENVIRONMENT, SLOP_SHA   the environment tested and the commit it runs (the first argument overrides the
 #                  environment; the commit falls back to CODEBUILD_RESOLVED_SOURCE_VERSION when that is a SHA)
 #   SLOP_ATF_ENDPOINT      the full URL to ask, instead of $SLOP_URL/integrations/boards/$SLOP_BOARD/atf-specs
-#   SLOP_ATF_WAIT          seconds to wait for slop to finish checking the deploy (default 120)
-#   SLOP_ATF_POLL_SECONDS  seconds between asks while it is checking (default: what slop says, at most 30)
+#   SLOP_ATF_WAIT          seconds to wait for slop to see the branch deploy succeed (default 120)
+#   SLOP_ATF_POLL_SECONDS  seconds between asks while it waits (default: what slop says, at most 30)
 #
 # When slop starts the build itself (a push-mode board) the list is already in SLOP_ATF_SPECS (even if empty), and
 # this script asks for nothing. It never fails the pipeline: any problem is a warning, the list stays empty and
@@ -177,7 +177,7 @@ slop_atf_specs() {
         fi
         [ -n "$poll" ] || poll=15
         if [ "$(date +%s)" -ge "$deadline" ]; then
-          echo "atf-specs: slop hadn't finished checking the deploy after ${wait_s}s; running the default suite" >&2
+          echo "atf-specs: slop hadn't seen the deploy succeed after ${wait_s}s; running the default suite" >&2
           rm -f "$body" "$headers"
           return 0
         fi

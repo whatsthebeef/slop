@@ -133,7 +133,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   server.registerTool(
     'get_board',
     {
-      description: "A board's settings: repo, base branch, environments, time zone, and its enabled integrations (integrations.deploy: how branch deploys run, or null; integrations.atf: how the ATF stage gets its spec list after a deploy, or null).",
+      description: "A board's settings: repo, environments (its dev environments, where branch deploys run), time zone, and its enabled integrations (integrations.deploy: how branch deploys run, or null; integrations.atf: how the ATF stage gets its spec list after a deploy, or null).",
       inputSchema: { board: z.number().int().describe('Board ID (the number in a glob ID: s1t4 is on board 1)') },
     },
     async ({ board }) =>
@@ -177,7 +177,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
           .min(1)
           .optional()
           .describe(
-            "One of the board's environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to staging\"), and a sub gets the board's default for subs",
+            "One of the board's dev environments that allows branch deploys. Without one, intake suggests an environment the request targets (\"deploy to danzig\"), else slop picks a free one",
           ),
         autoTrigger: z.boolean().optional().describe('Same only: start a routine run straight away'),
         inboxItem: z
@@ -1463,7 +1463,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'add_human_step',
     {
       description:
-        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge, once or after_deploy:<env> (falls due once a deploy of the glob's merge to <env> is recorded or mark_environment_deployed is called, and holds nothing back unless `blocks` says so; <env> must be one of the board's environments from get_board, or the step is refused). `once` (or `once: true`) is a one-shot command inside the change that takes effect by being run, not by deploying (an IAM grant, an account setting): it has no environment, falls due as soon as its `script` path is on the glob's branch (at once when it has none), stays done once done, is never reopened when a later step fails, and holds back sign-off like an after-merge step. `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
+        "Add a step only a person can do to a glob (a rollout, a setting, a manual task). A rollout step (the default kind) falls due after the merge and holds back the glob's sign-off and the globs that need it, until it is ticked or dismissed. `who`: implementer, admin, po, qa, anyone or an email. `due`: now, after_merge, once, downstream or after_deploy:<env> (falls due once a branch deploy of the glob to <env> succeeds or mark_environment_deployed is called, and holds nothing back unless `blocks` says so; <env> must be one of the board's dev environments from get_board, or the step is refused). `downstream` (or `downstream: true`) is the step for the rest of the pipeline (int, staging, production: whatever the board's environments doc names, which slop doesn't track): it falls due once the glob is merged, holds back nothing (no sign-off, dependants, merge or review), keeps the glob on Arm system until a person ticks it, even after sign-off, and `blocks` is refused. Put the commands for that part in it; write the step that runs now (on the dev environment or after the merge) as its own step. `once` (or `once: true`) is a one-shot command inside the change that takes effect by being run, not by deploying (an IAM grant, an account setting): it has no environment, falls due as soon as its `script` path is on the glob's branch (at once when it has none), stays done once done, is never reopened when a later step fails, and holds back sign-off like an after-merge step. `script`: {artifact: label} or {path: repo path} (slop shows its run command itself). `why`, `permissions`, `commands` and `verify` are plain-text fields the glob view lays out; `detail` holds anything else. Members only; pass the glob version you read to have it checked. Agents never run steps that change paid infrastructure or IAM: write them here for a person.",
       inputSchema: {
         id: z.string(),
         version: z.number().int().optional(),
@@ -1485,6 +1485,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         who: z.string().optional(),
         due: z.string().optional(),
         once: z.boolean().optional().describe('A one-shot command inside the change: no environment, due when its script is on the branch, never reopened'),
+        downstream: z.boolean().optional().describe('The step for the rest of the pipeline: due once merged, holds nothing back, a person ticks it (same as due downstream)'),
         blocks: z.array(z.enum(HUMAN_STEP_BLOCKS)).optional(),
         check: z.string().optional().describe('A capability slop can verify'),
         script: z.union([z.object({ artifact: z.string() }), z.object({ path: z.string() })]).optional(),
@@ -1537,7 +1538,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
     'mark_environment_deployed',
     {
       description:
-        "Say that an environment now runs a glob's merge, for boards that report no deploys: the glob's open `after_deploy:<env>` steps for it fall due (once; a rollback later doesn't undo it). Logged on the glob as EnvironmentMarkedDeployed, not Deployed; it changes no status and not the glob's version. `environment` must be one the board lists. Members only.",
+        "Say that one of the board's dev environments now runs the glob, for boards whose branch deploys slop doesn't see: the glob's open `after_deploy:<env>` steps for it fall due (once; a rollback later doesn't undo it). Logged on the glob as EnvironmentMarkedDeployed, not Deployed; it changes no status and not the glob's version. `environment` must be one of the board's dev environments from get_board; the rest of the pipeline is a downstream step, ticked by a person. Members only.",
       inputSchema: { id: z.string(), environment: z.string().min(1) },
     },
     async ({ id, environment }) => reply(await globs.markEnvironmentDeployed(email, id, environment)),

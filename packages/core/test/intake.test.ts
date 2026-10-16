@@ -27,7 +27,7 @@ describe('intake', () => {
     store = new MemoryStore();
     const notifier = new RecordingNotifier();
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     const globs = new GlobService({ store, notifier, clock: { now: () => '2026-10-05T12:00:00.000Z' }, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) } });
     unwrap(await globs.create(DEV, { boardId, title: 'x', type: 'same', category: 'task', group: 'Device Sync', environment: null, autoTrigger: false, idempotencyKey: null }));
     intake = new IntakeService({ store, llm: { complete: () => Promise.resolve(answer) } });

@@ -128,7 +128,7 @@ describe('Settings page', () => {
     await screen.findByTestId('system-capabilities');
     const page = document.body;
     expect(page.querySelectorAll('[title]')).toHaveLength(0);
-    const described = ['Repository (owner/name)', 'Base branch', 'Working-hours time zone', 'Reviewer model', 'Comment on GitHub from this severity up', 'Paths the reviewer skips', 'Reviewer tool calls per review'];
+    const described = ['Repository (owner/name)', 'Working-hours time zone', 'Reviewer model', 'Comment on GitHub from this severity up', 'Paths the reviewer skips', 'Reviewer tool calls per review'];
     for (const label of described) {
       const control = screen.getByLabelText(label);
       const hint = document.getElementById(control.getAttribute('aria-describedby') ?? '');
@@ -138,30 +138,24 @@ describe('Settings page', () => {
       const hint = document.getElementById(screen.getByTestId(testId).getAttribute('aria-describedby') ?? '');
       expect(hint?.textContent ?? '', testId).not.toBe('');
     }
-    expect(screen.getByTestId('environment-hints').textContent).toContain('subs created without an environment get this one');
+    expect(screen.getByTestId('environment-hints').textContent).toContain('Each new code glob gets a free one');
   });
 
-  it("shows how each observed environment's deploys are known, and Record a deploy for a manual one (s15t239)", async () => {
+  it('lists only each environment\'s name and branch-deploy flag, and keeps no release or base-branch settings', async () => {
     api.board.mockResolvedValue({
       ...board('admin'),
       environments: [
         { name: 'dev', allowBranchDeploy: true },
-        { name: 'staging', allowBranchDeploy: false, role: 'integration' },
-        { name: 'prod', allowBranchDeploy: false, role: 'release', production: true, deployKnown: 'manual' },
+        { name: 'demo', allowBranchDeploy: false },
       ],
     });
     renderPage();
     await screen.findByTestId('environments');
-    const known = (name: string) => screen.getByLabelText<HTMLSelectElement>(`How ${name}'s deploys are known`);
-    // No role, nothing to report or record.
-    expect(known('dev').disabled).toBe(true);
-    expect(known('staging').value).toBe('pipeline');
-    expect(known('prod').value).toBe('manual');
-    const hints = screen.getAllByTestId('deploy-known-hint').map((h) => h.textContent);
-    expect(hints[0]).toContain('report-deploy.sh');
-    expect(hints[1]).toContain("You record each release in slop; its globs' after-deploy steps fall due");
-    expect(screen.getAllByRole('button', { name: 'Record a deploy' })).toHaveLength(1);
-    expect(screen.getByTestId('record-deploy-prod')).toBeTruthy();
+    expect(screen.getAllByLabelText('Environment name').map((i) => (i as HTMLInputElement).value)).toEqual(['dev', 'demo']);
+    expect(screen.getAllByRole('checkbox', { name: 'branch deploys' }).map((c) => (c as HTMLInputElement).checked)).toEqual([true, false]);
+    const page = document.body.textContent;
+    for (const gone of ['default for subs', 'production', 'no pipeline', "deploys are known", 'Record a deploy', 'Base branch']) expect(page).not.toContain(gone);
+    expect(screen.queryByLabelText('Base branch')).toBeNull();
   });
 
   it('remembers which groups are open, for this viewer', async () => {
@@ -199,14 +193,14 @@ describe('Settings page', () => {
     const admin = renderPage();
     await screen.findByTestId('settings-group-board');
     expect(screen.getAllByRole('button', { name: 'Save settings' }).length).toBeGreaterThan(0);
-    expect(screen.getByLabelText<HTMLInputElement>('Base branch').disabled).toBe(false);
+    expect(screen.getByLabelText<HTMLInputElement>('Working-hours time zone').disabled).toBe(false);
     admin.unmount();
 
     api.board.mockResolvedValue(board('dev'));
     renderPage();
     await screen.findByTestId('settings-group-board');
     expect(screen.queryByRole('button', { name: 'Save settings' })).toBeNull();
-    expect(screen.getByLabelText<HTMLInputElement>('Base branch').disabled).toBe(true);
+    expect(screen.getByLabelText<HTMLInputElement>('Working-hours time zone').disabled).toBe(true);
   });
 
   describe('old links', () => {

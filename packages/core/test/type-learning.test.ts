@@ -163,7 +163,6 @@ describe('type corrections', () => {
       await new BoardService({ store, notifier }).create(ADMIN, {
         name: 'b',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),
@@ -281,7 +280,6 @@ describe('type corrections', () => {
       await new BoardService({ store, notifier: new RecordingNotifier() }).create(ADMIN, {
         name: 'b2',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

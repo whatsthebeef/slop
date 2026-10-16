@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ArtifactService } from '../src/app/artifact-service.js';
-import { EnvironmentService } from '../src/app/environment-service.js';
+import { DeployService } from '../src/app/deploy-service.js';
 import { TestRunService } from '../src/app/test-run-service.js';
 import type { AtfBatchAnswer } from '../src/app/test-run-service.js';
+import type { Result } from '../src/domain/errors.js';
 import * as testRuns from '../src/domain/test-runs.js';
 import type { Board } from '../src/domain/types.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -12,7 +13,7 @@ const board: Board = {
   ...baseBoard,
   environments: [
     { name: 'dev', allowBranchDeploy: true },
-    { name: 'staging', allowBranchDeploy: false, role: 'integration' },
+    { name: 'qa', allowBranchDeploy: true },
   ],
   atf: { provider: 'codebuild', region: 'us-east-1', project: 'atf', mode: 'pull' },
 };
@@ -27,53 +28,45 @@ const plan = (specs: string[], grep?: string): string =>
 
 const at = (minutes: number): string => new Date(Date.UTC(2026, 9, 5, 10, minutes)).toISOString();
 
-const ready = (answer: Awaited<ReturnType<TestRunService['atfBatch']>>) => {
-  if (!answer.ok || answer.value.status !== 'ready')
-    throw new Error(`not ready: ${JSON.stringify(answer)}`);
-  return answer.value.batch;
+const unwrap = <T>(result: Result<T>): T => {
+  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+  return result.value;
 };
-const status = (
-  answer: Awaited<ReturnType<TestRunService['atfBatch']>>,
-): AtfBatchAnswer['status'] | 'error' => (answer.ok ? answer.value.status : 'error');
+const ready = (answer: Awaited<ReturnType<TestRunService['atfBatch']>>) => {
+  if (!answer.ok || answer.value.status !== 'ready') throw new Error(`not ready: ${JSON.stringify(answer)}`);
+  return answer.value;
+};
+const status = (answer: Awaited<ReturnType<TestRunService['atfBatch']>>): AtfBatchAnswer['status'] | 'error' =>
+  answer.ok ? answer.value.status : 'error';
 
-describe('the ATF batch for a deploy', () => {
+describe('the ATF spec list for a branch deploy', () => {
   let store: MemoryStore;
   let service: TestRunService;
-  let environments: EnvironmentService;
+  let deploys: DeployService;
   let artifacts: ArtifactService;
+  let n = 0;
   let now = at(0);
 
-  const deploy = (sha: string, eventId: string, minute: number) =>
-    environments.recordDeploy({
-      repo: 'acme/app',
-      environment: 'staging',
-      sha,
-      ref: null,
-      succeeded: true,
-      url: null,
-      at: at(minute),
-      eventId,
-    });
-  const check = (sha: string, globIds: string[]) =>
-    environments.recordContainment(
-      board.id,
-      'staging',
-      sha,
-      globIds.map((globId) => ({ globId, mergeSha: `m-${globId}`, contained: true })),
-    );
+  /** A branch deploy of the glob's commit that ran and succeeded. */
+  const succeed = async (globId: string, sha: string) => {
+    const requested = unwrap(await deploys.requestFromPush(globId, sha));
+    if (requested === null) throw new Error('no deploy requested');
+    unwrap(await deploys.finished(requested.id, { succeeded: true, error: null }));
+    return requested.id;
+  };
 
   beforeEach(async () => {
     store = new MemoryStore();
     now = at(0);
+    n = 0;
     const clock = { now: () => now };
     const notifier = new RecordingNotifier();
     service = new TestRunService({ store, notifier, clock });
-    environments = new EnvironmentService({ store, notifier, clock });
+    deploys = new DeployService({ store, notifier, clock, newDeployId: () => `d${String(++n)}` });
     artifacts = new ArtifactService({ store, clock, notifier });
+    store.state.boards.set(board.id, { ...board, environments: [...board.environments], sensitivePaths: [] });
     await store.transaction(async (tx) => {
-      await tx.insertBoard({ ...board, environments: [...board.environments], sensitivePaths: [] });
-      for (const id of ['s1t1', 's1t2', 's1t3'])
-        await tx.insertGlob(glob({ id, status: 'reviewing' }), null);
+      for (const id of ['s1t1', 's1t2', 's1t3']) await tx.insertGlob(glob({ id, status: 'reviewing', environment: 'dev' }), null);
       await tx.upsertUser({ email: DEV, name: 'Dev', active: true });
       await tx.upsertMember({ boardId: board.id, email: DEV, role: 'dev' });
     });
@@ -82,113 +75,99 @@ describe('the ATF batch for a deploy', () => {
     await artifacts.putTestPlan(DEV, 's1t3', plan(['e2e/d.spec.ts']));
   });
 
-  it('is pending until the deploy is reported and its containment check has run', async () => {
-    expect(status(await service.atfBatch(board.id, 'staging', D1))).toBe('pending');
-    now = at(1);
-    await deploy(D1, 'aws:1', 1);
-    expect(status(await service.atfBatch(board.id, 'staging', D1))).toBe('pending');
-    now = at(2);
-    await check(D1, ['s1t1']);
-    expect(status(await service.atfBatch(board.id, 'staging', D1))).toBe('ready');
+  it('is pending until a branch deploy of the commit has succeeded', async () => {
+    expect(status(await service.atfBatch(board.id, 'dev', D1))).toBe('pending');
+    const requested = unwrap(await deploys.requestFromPush('s1t1', D1));
+    expect(status(await service.atfBatch(board.id, 'dev', D1))).toBe('pending');
+    unwrap(await deploys.finished(requested?.id ?? '', { succeeded: true, error: null }));
+    expect(status(await service.atfBatch(board.id, 'dev', D1))).toBe('ready');
   });
 
-  it('answers the union of the globs a deploy burst newly holds, once, with each spec and grep attributed', async () => {
-    await deploy(D1, 'aws:1', 1);
-    now = at(2);
-    await check(D1, ['s1t1', 's1t2']);
-    const batch = ready(await service.atfBatch(board.id, 'staging', D1));
+  it('is pending after a failed deploy, and refuses an environment the board does not have', async () => {
+    const requested = unwrap(await deploys.requestFromPush('s1t1', D1));
+    unwrap(await deploys.finished(requested?.id ?? '', { succeeded: false, error: 'exit 1' }));
+    expect(status(await service.atfBatch(board.id, 'dev', D1))).toBe('pending');
+    expect(status(await service.atfBatch(board.id, 'prod', D1))).toBe('error');
+    expect(status(await service.atfBatch(99, 'dev', D1))).toBe('error');
+  });
+
+  it("answers the deployed glob's specs and grep, attributed to it, without waiting for any check", async () => {
+    await succeed('s1t2', D1);
+    const batch = ready(await service.atfBatch(board.id, 'dev', D1));
+    expect(batch).toMatchObject({ environment: 'dev', sha: D1 });
+    expect(batch.specs).toEqual([
+      { spec: 'e2e/b.spec.ts', globIds: ['s1t2'] },
+      { spec: 'e2e/c.spec.ts', globIds: ['s1t2'] },
+    ]);
+    expect(batch.greps).toEqual([{ grep: '@smoke', globIds: ['s1t2'] }]);
+  });
+
+  it('unions the lists of the globs whose deploys put the commit there, each spec once', async () => {
+    await succeed('s1t1', D1);
+    // Another glob deployed the very same commit (a shared head): one union, attributed to both.
+    await store.transaction((tx) =>
+      tx.saveDeploys([
+        {
+          id: 'x1',
+          boardId: board.id,
+          environment: 'dev',
+          globId: 's1t2',
+          sha: D1,
+          state: 'succeeded',
+          trigger: 'push',
+          requestedBy: null,
+          requestedAt: at(1),
+          runningSince: at(1),
+          startedAt: at(1),
+          finishedAt: at(2),
+          providerRef: null,
+          url: null,
+          error: null,
+        },
+      ]),
+    );
+    const batch = ready(await service.atfBatch(board.id, 'dev', D1));
     expect(batch.specs).toEqual([
       { spec: 'e2e/a.spec.ts', globIds: ['s1t1'] },
       { spec: 'e2e/b.spec.ts', globIds: ['s1t1', 's1t2'] },
       { spec: 'e2e/c.spec.ts', globIds: ['s1t2'] },
     ]);
-    expect(batch.greps).toEqual([{ grep: '@smoke', globIds: ['s1t2'] }]);
-    // A later plan change doesn't alter the stored answer: a second call returns the same batch.
+  });
+
+  it("reads the glob's latest plan, and an empty list when it has none", async () => {
+    await succeed('s1t1', D1);
     now = at(3);
     await artifacts.putTestPlan(DEV, 's1t1', plan(['e2e/z.spec.ts']));
-    expect(ready(await service.atfBatch(board.id, 'staging', D1))).toEqual(batch);
-    expect(store.state.atfBatches).toHaveLength(1);
+    expect(ready(await service.atfBatch(board.id, 'dev', D1)).specs.map((s) => s.spec)).toEqual(['e2e/z.spec.ts']);
+    await store.transaction(async (tx) => {
+      await tx.insertGlob(glob({ id: 's1t9', status: 'reviewing', environment: 'qa' }), null);
+    });
+    await succeed('s1t9', D3);
+    expect(ready(await service.atfBatch(board.id, 'qa', D3))).toMatchObject({ specs: [], greps: [] });
   });
 
-  it('spans deploys nobody asked about: the later deploy runs everything newly held since the previous one', async () => {
-    await deploy(D1, 'aws:1', 1);
-    now = at(2);
-    await check(D1, ['s1t1']);
-    now = at(3);
-    await deploy(D2, 'aws:2', 3);
-    now = at(4);
-    await check(D2, ['s1t1', 's1t3']);
-    // D1's check came after the previous deploy's time, so the burst D1+D2 runs what both newly hold, once.
-    expect(status(await service.atfBatch(board.id, 'staging', D1))).toBe('superseded');
-    const batch = ready(await service.atfBatch(board.id, 'staging', D2));
-    expect(batch.specs).toEqual([
-      { spec: 'e2e/a.spec.ts', globIds: ['s1t1'] },
-      { spec: 'e2e/b.spec.ts', globIds: ['s1t1'] },
-      { spec: 'e2e/d.spec.ts', globIds: ['s1t3'] },
-    ]);
+  it('says superseded once a newer deploy has put another commit in the environment', async () => {
+    await succeed('s1t1', D1);
+    await succeed('s1t3', D2);
+    const answer = await service.atfBatch(board.id, 'dev', D1);
+    expect(answer).toEqual({ ok: true, value: { status: 'superseded', latestSha: D2 } });
+    expect(status(await service.atfBatch(board.id, 'dev', D2))).toBe('ready');
+    // Another environment is not affected.
+    expect(status(await service.atfBatch(board.id, 'qa', D1))).toBe('pending');
   });
 
-  it('stops at the previous batch: globs already run are not run again', async () => {
-    await deploy(D1, 'aws:1', 1);
-    now = at(2);
-    await check(D1, ['s1t1']);
-    now = at(3);
-    ready(await service.atfBatch(board.id, 'staging', D1));
-    now = at(4);
-    await deploy(D2, 'aws:2', 4);
-    now = at(5);
-    await check(D2, ['s1t1', 's1t2']);
-    const batch = ready(await service.atfBatch(board.id, 'staging', D2));
-    // s1t1 is still held but was newly held at D1 (before the previous batch): only s1t2's specs run now.
-    expect(batch.specs.map((s) => s.spec)).toEqual(['e2e/b.spec.ts', 'e2e/c.spec.ts']);
-    expect(batch.specs.every((s) => s.globIds.length === 1 && s.globIds[0] === 's1t2')).toBe(true);
+  it('matches an abbreviated commit', async () => {
+    await succeed('s1t1', D1);
+    expect(ready(await service.atfBatch(board.id, 'dev', D1.slice(0, 8))).sha).toBe(D1);
   });
 
-  it('is empty (the default suite) when no newly held glob has a list, and for a glob without a test plan', async () => {
-    await store.transaction((tx) => tx.insertGlob(glob({ id: 's1t9', status: 'reviewing' }), null));
-    await deploy(D1, 'aws:1', 1);
-    now = at(2);
-    await check(D1, ['s1t9']);
-    const batch = ready(await service.atfBatch(board.id, 'staging', D1));
-    expect(batch.specs).toEqual([]);
-    expect(batch.greps).toEqual([]);
-  });
-
-  it('says superseded for an older commit, pending for one it has not heard of, and refuses unobserved environments', async () => {
-    await deploy(D1, 'aws:1', 1);
-    await deploy(D2, 'aws:2', 2);
-    const old = await service.atfBatch(board.id, 'staging', D1);
-    expect(old.ok && old.value).toEqual({ status: 'superseded', latestSha: D2 });
-    expect(status(await service.atfBatch(board.id, 'staging', D3))).toBe('pending');
-    const dev = await service.atfBatch(board.id, 'dev', D1);
-    expect(!dev.ok && dev.error.code).toBe('invalid_input');
-    const nobody = await service.atfBatch(99, 'staging', D1);
-    expect(!nobody.ok && nobody.error.code).toBe('not_found');
-  });
-
-  it('matches an abbreviated commit to the deploy', async () => {
-    await deploy(D1, 'aws:1', 1);
-    now = at(2);
-    await check(D1, ['s1t1']);
-    expect(ready(await service.atfBatch(board.id, 'staging', D1.slice(0, 8))).sha).toBe(D1);
-  });
-
-  it('adds a missing row for each batch spec the run did not report, and none when it reported no specs', async () => {
-    await deploy(D1, 'aws:1', 1);
-    now = at(2);
-    await check(D1, ['s1t1', 's1t2']);
-    ready(await service.atfBatch(board.id, 'staging', D1));
-    const passed = {
-      spec: 'e2e/a.spec.ts',
-      status: 'passed',
-      tests: 3,
-      failedTests: 0,
-      durationMs: 10,
-    } as const;
+  it('adds a missing row for each listed spec the run did not report, and none when it reported no specs', async () => {
+    await succeed('s1t2', D1);
+    const passed = { spec: 'e2e/b.spec.ts', status: 'passed', tests: 3, failedTests: 0, durationMs: 10 } as const;
     const report = {
       repo: 'acme/app',
       sha: D1,
-      environment: 'staging',
+      environment: 'dev',
       branch: null,
       passed: 3,
       failed: 0,
@@ -199,17 +178,54 @@ describe('the ATF batch for a deploy', () => {
     await service.recordAtf({ ...report, eventId: 'aws:r1', specs: [passed] });
     await service.recordAtf({ ...report, eventId: 'aws:r2' });
     const [first, second] = store.state.testRuns;
-    const rows = await store.transaction((tx) =>
-      tx.listTestRunSpecs([first?.id ?? 0, second?.id ?? 0]),
-    );
+    const rows = await store.transaction((tx) => tx.listTestRunSpecs([first?.id ?? 0, second?.id ?? 0]));
     expect(rows.map((r) => [r.testRunId === first?.id, r.spec, r.status])).toEqual([
-      [true, 'e2e/a.spec.ts', 'passed'],
-      [true, 'e2e/b.spec.ts', 'missing'],
+      [true, 'e2e/b.spec.ts', 'passed'],
       [true, 'e2e/c.spec.ts', 'missing'],
     ]);
   });
 
-  it('computes missing rows without a batch as none, and the pure helper skips reported specs', () => {
+  it('attaches an environment run to the glob whose deploy put the commit there, and ignores one nobody deployed', async () => {
+    await succeed('s1t1', D1);
+    await succeed('s1t3', D2);
+    const report = { repo: 'acme/app', environment: 'dev', branch: null, passed: 2, failed: 1, skipped: 0, url: null, at: null, specs: [] };
+    expect(await service.recordAtf({ ...report, sha: D1, eventId: 'e1' })).toEqual([board.id]);
+    // Without a commit it tested what the environment runs now.
+    expect(await service.recordAtf({ ...report, sha: null, eventId: 'e2' })).toEqual([board.id]);
+    expect(await service.recordAtf({ ...report, sha: 'eeeeeee5555', eventId: 'e3' })).toEqual([]);
+    expect(await service.recordAtf({ ...report, environment: 'prod', sha: D1, eventId: 'e4' })).toEqual([]);
+    expect(store.state.testRuns.map((r) => [r.globId, r.environment, r.sha])).toEqual([
+      ['s1t1', 'dev', D1],
+      ['s1t3', 'dev', D2],
+    ]);
+    const state = await service.boardState(board.id, ['s1t1', 's1t3']);
+    expect(state.get('s1t1')).toMatchObject([{ scope: 'environment', environment: 'dev', sha: D1, failing: true }]);
+    expect(state.get('s1t3')?.[0]).toMatchObject({ scope: 'environment', sha: D2 });
+  });
+
+  it('shows a run as an environment run only while the glob has a deploy of that commit there', () => {
+    const run: testRuns.TestRun = {
+      id: 1,
+      boardId: 1,
+      kind: 'atf',
+      globId: 's1t1',
+      environment: 'dev',
+      sha: D1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      url: null,
+      finishedAt: at(5),
+      eventId: 'e',
+      runnerId: null,
+    };
+    const g = { id: 's1t1', pr: null };
+    expect(testRuns.atfIndicators(g, [run], [{ globId: 's1t1', environment: 'dev', sha: D1 }]).map((i) => i.scope)).toEqual(['environment']);
+    expect(testRuns.atfIndicators(g, [run], []).map((i) => i.scope)).toEqual(['branch']);
+    expect(testRuns.atfIndicators(g, [run], [{ globId: 's1t2', environment: 'dev', sha: D1 }]).map((i) => i.scope)).toEqual(['branch']);
+  });
+
+  it('computes missing rows for a list, and the pure helper skips reported specs', () => {
     expect(
       testRuns.missingSpecs(
         [
@@ -221,48 +237,13 @@ describe('the ATF batch for a deploy', () => {
     ).toEqual([{ spec: 'b', status: 'missing', tests: 0, failedTests: 0, durationMs: null }]);
   });
 
-  it('bounds the window by the recent-merge days', () => {
-    const now2 = '2026-10-31T00:00:00.000Z';
-    expect(testRuns.batchWindowStart(null, null, now2, 30)).toBe('2026-10-01T00:00:00.000Z');
-    expect(testRuns.batchWindowStart('2026-09-01T00:00:00.000Z', null, now2, 30)).toBe(
-      '2026-10-01T00:00:00.000Z',
-    );
-    expect(
-      testRuns.batchWindowStart('2026-10-20T00:00:00.000Z', '2026-10-25T00:00:00.000Z', now2, 30),
-    ).toBe('2026-10-20T00:00:00.000Z');
-    expect(testRuns.batchWindowStart(null, '2026-10-25T00:00:00.000Z', now2, 30)).toBe(
-      '2026-10-25T00:00:00.000Z',
-    );
-  });
-
-  it('queues start_atf with the containment check for a push board only', async () => {
-    await deploy(D1, 'aws:1', 1);
-    store.state.outbox.length = 0;
-    now = at(2);
-    await check(D1, ['s1t1']);
-    expect(store.state.outbox).toEqual([]);
+  it('queues no start_atf when a branch deploy succeeds, even for a push board (the int pipeline starts ATF)', async () => {
     await store.transaction(async (tx) => {
       const current = (await tx.getBoard(board.id)) ?? board;
-      await tx.updateBoard(
-        {
-          ...current,
-          atf: { provider: 'codebuild', region: 'us-east-1', project: 'atf', mode: 'push' },
-        },
-        current.version,
-      );
+      await tx.updateBoard({ ...current, atf: { provider: 'codebuild', region: 'us-east-1', project: 'atf', mode: 'push' } }, current.version);
     });
-    await deploy(D2, 'aws:2', 3);
     store.state.outbox.length = 0;
-    now = at(4);
-    await check(D2, ['s1t1']);
-    expect(store.state.outbox).toEqual([
-      {
-        kind: 'start_atf',
-        globId: `board-${String(board.id)}`,
-        boardId: board.id,
-        environment: 'staging',
-        sha: D2,
-      },
-    ]);
+    await succeed('s1t3', D2);
+    expect(store.state.outbox.filter((e) => e.kind === 'start_atf')).toEqual([]);
   });
 });

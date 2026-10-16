@@ -159,7 +159,7 @@ describe('ATF client credentials (Cognito M2M)', () => {
           baseBranch: 'main',
           timeZone: 'UTC',
           defaultRoutineOwner: null,
-          environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+          environments: [{ name: 'staging', allowBranchDeploy: true }],
           sensitivePaths: [],
         });
         await tx.upsertMember({ boardId: created.id, email: ADMIN, role: 'admin' });

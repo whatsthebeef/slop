@@ -94,7 +94,7 @@ describe('The learned size check in Postgres', () => {
     ({ database, drop } = await createTestDatabase('size_check'));
     store = new PgStore(database.db);
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     size = new SizeCheckService({ store, clock, notifier, llm });
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'r' }, routines: { hasRoutine: () => Promise.resolve(true) }, sizeCheck: size });
     jobs = new LearningJobService({ store, clock, notifier, mining: new MiningService({ store, notifier }), sizeCheck: size, manifests: null });

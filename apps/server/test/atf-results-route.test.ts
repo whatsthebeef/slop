@@ -5,7 +5,7 @@ import {
   InboxService,
   TestRunService,
 } from '@slop/core';
-import type { AtfRunner, Board, Glob } from '@slop/core';
+import type { AtfRunner, Board, Deploy, Glob } from '@slop/core';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -52,6 +52,25 @@ const glob = (id: string, boardId: number): Glob => ({
   updatedAt: '2026-10-05T12:00:00.000Z',
   signedOffAt: null,
   doingSince: '2026-10-05T12:00:00.000Z',
+});
+
+/** A succeeded branch deploy of the glob's head commit. */
+const deployOf = (globId: string, boardId: number, id: string, environment: string): Deploy => ({
+  id,
+  boardId,
+  environment,
+  globId,
+  sha: D1,
+  state: 'succeeded',
+  trigger: 'push',
+  requestedBy: null,
+  requestedAt: '2026-10-05T12:00:00.000Z',
+  runningSince: '2026-10-05T12:00:00.000Z',
+  startedAt: '2026-10-05T12:00:00.000Z',
+  finishedAt: '2026-10-05T12:05:00.000Z',
+  providerRef: null,
+  url: null,
+  error: null,
 });
 
 /** A bearer `oidc:<runner id>` is that runner, standing in for the identity verifiers of later parts. */
@@ -182,8 +201,8 @@ describe('the ATF results endpoint and the runner registry routes', () => {
           defaultRoutineOwner: null,
           environments: [
             { name: 'dev1', allowBranchDeploy: true },
-            { name: 'staging', allowBranchDeploy: false, role: 'integration' },
-            { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
+            { name: 'staging', allowBranchDeploy: true },
+            { name: 'prod', allowBranchDeploy: true },
           ],
           sensitivePaths: [],
         });
@@ -200,6 +219,8 @@ describe('the ATF results endpoint and the runner registry routes', () => {
     await store.transaction(async (tx) => {
       await tx.insertGlob(glob('s9f1', board.id), null);
       await tx.insertGlob(glob('s8f1', other.id), null);
+      // An environment run belongs to the glob whose branch deploy put its commit there.
+      await tx.saveDeploys([deployOf('s9f1', board.id, 'd-staging', 'staging'), deployOf('s8f1', other.id, 'd-other', 'staging')]);
     });
     const created = await tokens.create(ADMIN, board.id);
     legacyToken = created.ok ? created.value.token : '';
@@ -339,9 +360,9 @@ describe('the ATF results endpoint and the runner registry routes', () => {
       expect(recorded).toEqual([expect.objectContaining({ board_id: board.id, passed: 4321 })]);
     });
 
-    it('ignores an environment the board stopped observing, as not an error for the pipeline', async () => {
-      const runner = await register('Unobserved');
-      // dev1 has no role, so the registry would refuse it; a list written before the board changed could still hold it.
+    it('ignores an environment with no branch deploy of the commit, as not an error for the pipeline', async () => {
+      const runner = await register('Undeployed');
+      // Nothing was deployed to dev1: the run has no glob to belong to.
       await store.transaction((tx) =>
         tx.updateAtfRunner(board.id, runner.id, { environments: ['dev1'] }),
       );

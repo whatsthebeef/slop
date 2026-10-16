@@ -57,7 +57,6 @@ describe('board sessions in Postgres', () => {
           await boards.create(DEV, {
             name: `b${i}`,
             repo: null,
-            baseBranch: 'main',
             timeZone: 'UTC',
             environments: [],
           }),
@@ -191,7 +190,6 @@ describe('board session routes', () => {
       await boards.create(OTHER, {
         name: 'theirs',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),
@@ -201,7 +199,6 @@ describe('board session routes', () => {
       await boards.create(OTHER, {
         name: 'not mine',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

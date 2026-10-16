@@ -4,7 +4,7 @@ import type { CheckFailure, DiffSummary, Glob } from '@slop/core';
 import { actorOf, classifyGitHubFailure, fixOf, machine, modeOf } from '@slop/core';
 import type { HealthSink } from '@slop/core';
 import { QueueDetectionError, REVIEW_CHECK } from '../codehost.js';
-import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, CommitGraph, ReleaseRefs, ReleaseTag, MergeQueueEntry, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
+import type { AppSettings, BehindBase, BranchFile, BranchRules, CodeHost, CommitFiles, MergeQueueEntry, MergeResult, MergeState, PostedReview, PrReviewComment, PrSnapshot, Repo, RepoConnection, ReportedCheck, ReviewDiff, TestMergeTarget } from '../codehost.js';
 import { readCancelledChecks, readCommitChecks, rerunFailedJobs } from './commit-checks.js';
 import { classifyMergeState } from './merge-state.js';
 import type { AppCredentialsStore } from './credentials.js';
@@ -58,7 +58,7 @@ const toEntry = (entry: z.infer<typeof queueEntry>): MergeQueueEntry => ({
  * Every glob's branch is its ID, created by slop with an empty first commit so a draft PR can
  * be opened before any work exists.
  */
-export class GitHub implements CodeHost, CommitGraph, ReleaseRefs {
+export class GitHub implements CodeHost {
   private readonly installations = new Map<string, Octokit>();
   private app: App | null = null;
   private appId: number | null = null;
@@ -407,6 +407,17 @@ export class GitHub implements CodeHost, CommitGraph, ReleaseRefs {
       .filter((run) => run.status === 'completed' && run.conclusion !== 'cancelled' && run.head_sha === sha)
       .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''))[0];
     return latest === undefined ? null : { sha, passed: latest.conclusion === 'success' };
+  }
+
+  async defaultBranch(repo: Repo): Promise<string | null> {
+    const gh = await this.octokit(repo);
+    try {
+      const { data } = await gh.request('GET /repos/{owner}/{repo}', { owner: repo.owner, repo: repo.name });
+      return data.default_branch === '' ? null : data.default_branch;
+    } catch (error) {
+      if (isStatus(error, 403, 404)) return null;
+      throw error;
+    }
   }
 
   async headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string; parent: string | null } | null> {
@@ -894,34 +905,6 @@ export class GitHub implements CodeHost, CommitGraph, ReleaseRefs {
       fileLines: Object.fromEntries((commit.files ?? []).map((f) => [f.filename, (f.additions ?? 0) + (f.deletions ?? 0)])),
       patches: Object.fromEntries((commit.files ?? []).flatMap((f) => (f.patch === undefined ? [] : [[f.filename, f.patch] as const]))),
     };
-  }
-
-  async contains(repo: Repo, descendant: string, ancestor: string, signal?: AbortSignal): Promise<boolean | null> {
-    const gh = await this.octokit(repo);
-    try {
-      // Only the status is read, so ask for the smallest page of commits.
-      const { data } = await gh.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
-        owner: repo.owner,
-        repo: repo.name,
-        basehead: `${ancestor}...${descendant}`,
-        per_page: 1,
-        request: { signal },
-      });
-      return data.status === 'ahead' || data.status === 'identical';
-    } catch (error) {
-      if (isStatus(error, 404, 422)) return null;
-      throw error;
-    }
-  }
-
-  async resolveRef(repo: Repo, ref: string): Promise<string | null> {
-    return (await this.headOf(repo, ref))?.sha ?? null;
-  }
-
-  async recentTags(repo: Repo, limit: number): Promise<ReleaseTag[]> {
-    const gh = await this.octokit(repo);
-    const { data } = await gh.request('GET /repos/{owner}/{repo}/tags', { owner: repo.owner, repo: repo.name, per_page: limit });
-    return data.map((tag) => ({ name: tag.name, sha: tag.commit.sha }));
   }
 
   private async compare(repo: Repo, basehead: string, signal?: AbortSignal): Promise<DiffSummary> {

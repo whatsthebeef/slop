@@ -236,6 +236,8 @@ export interface CodeHost {
   diffSummary(repo: Repo, sha: string): Promise<DiffSummary>;
   /** Lines changed (the commit's stats) and files touched by commit `sha` against its first parent: a merged sub's size. */
   commitDiffSummary(repo: Repo, sha: string, signal?: AbortSignal): Promise<DiffSummary>;
+  /** The repo's default branch (the board's base); null when the host can't say (unreachable, no access, no such repo). */
+  defaultBranch(repo: Repo): Promise<string | null>;
   /** The head commit of `ref` (a branch) and its subject line; null when the branch doesn't exist. */
   headOf(repo: Repo, ref: string): Promise<{ sha: string; subject: string; parent: string | null } | null>;
   /**
@@ -272,30 +274,4 @@ export interface CodeHost {
    * after `sha` (the revert is then left to a person).
    */
   revertCommit(repo: Repo, sha: string): Promise<'reverted' | 'moved'>;
-}
-
-/**
- * Commit ancestry on the code host, apart from `CodeHost` so its test fakes don't need it: release and integration
- * deploys are matched to globs by whether the deployed commit contains each glob's merge commit.
- */
-export interface CommitGraph {
-  /** Whether `descendant` contains `ancestor` (or is it); null when the host doesn't know either commit. */
-  contains(repo: Repo, descendant: string, ancestor: string, signal?: AbortSignal): Promise<boolean | null>;
-}
-
-/** A release tag and the commit it points at. */
-export interface ReleaseTag {
-  readonly name: string;
-  readonly sha: string;
-}
-
-/**
- * Refs on the code host, apart from `CodeHost` so its test fakes don't need it: a person recording a release by hand
- * names a branch, tag or commit, and slop needs the commit it means (and recent tags to offer).
- */
-export interface ReleaseRefs {
-  /** The commit `ref` (a branch, tag or sha) points at; null when the host doesn't know it. */
-  resolveRef(repo: Repo, ref: string): Promise<string | null>;
-  /** The repo's most recent tags, newest first. */
-  recentTags(repo: Repo, limit: number): Promise<ReleaseTag[]>;
 }

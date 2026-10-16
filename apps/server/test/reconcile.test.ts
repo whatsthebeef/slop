@@ -58,7 +58,7 @@ describe('reconcile: catching up on webhooks slop missed', () => {
       await tx.upsertMember({ boardId: board.id, email: DEV, role: 'admin' });
     });
     host = new FakeHost();
-    const boards = { recordBaseChecks: () => Promise.resolve(null) };
+    const boards = { recordBaseChecks: () => Promise.resolve(null), recordBaseBranch: () => Promise.resolve(false) };
     executors = codeHostExecutors(host, boardOf, new FileRoutines('/nonexistent/routines.json'), boards, () => new Date(nowMs).toISOString(), null, null, undefined, (task, message) => logged.push(`${task}: ${message}`));
   });
 

@@ -64,7 +64,7 @@ describe('start relations', () => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
     boardId = unwrap(
-      await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] }),
     ).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
@@ -99,7 +99,7 @@ describe('start relations', () => {
     const OUTSIDER = 'outsider@example.com';
     await store.transaction((tx) => tx.upsertUser({ email: OUTSIDER, name: OUTSIDER, active: true }));
     const other = unwrap(
-      await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(OUTSIDER, { name: 'other', repo: null, timeZone: 'UTC', environments: [] }),
     );
     const foreign = unwrap(await globs.create(OUTSIDER, input({ boardId: other.id })));
     const unknown = await globs.create(ADMIN, input({ type: 'sub', after: ['s99t99'] }));

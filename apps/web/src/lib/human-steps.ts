@@ -22,6 +22,7 @@ export {
   reviewOpen,
   rolloutLine,
   runLines,
+  runsOnText,
   runsScript,
   scriptRunCommand,
   scriptSourceUrl,

@@ -55,7 +55,7 @@ describe('reopening a merge (s15t72)', () => {
     knowledge = new KnowledgeService({ store, clock: { now: () => LATER }, catalog, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
     boardId = unwrap(
-      await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await new BoardService({ store, notifier }).create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] }),
     ).id;
     await store.transaction(async (tx) => {
       const kb = learningSeed(tx, TEST_KB_WRITES);

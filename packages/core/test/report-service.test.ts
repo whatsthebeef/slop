@@ -56,7 +56,7 @@ describe('ReportService', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV, PO, STRANGER]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await boards.setMember(ADMIN, boardId, PO, 'po'));
   });
@@ -119,7 +119,7 @@ describe('ReportService', () => {
   it('splits a person’s hours by board: one active glob across boards, each board counting only its own globs', async () => {
     const boards = new BoardService({ store, notifier: new RecordingNotifier() });
     // PO administers the other board; ADMIN (admin of the first board) is only a dev there.
-    const other = unwrap(await boards.create(PO, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const other = unwrap(await boards.create(PO, { name: 'other', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(PO, other, DEV, 'dev'));
     unwrap(await boards.setMember(PO, other, ADMIN, 'dev'));
     const task = unwrap(await globs.create(DEV, input()));

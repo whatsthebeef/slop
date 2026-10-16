@@ -4,6 +4,7 @@ import { DeployService } from '../src/app/deploy-service.js';
 import * as deploys from '../src/domain/deploys.js';
 import type { Deploy } from '../src/domain/deploys.js';
 import type { Result } from '../src/domain/errors.js';
+import type { StoredHumanStep } from '../src/domain/human-steps.js';
 import * as m from '../src/domain/machine.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
 import { NOW, board, ctx, dev, glob } from './fixtures.js';
@@ -250,6 +251,64 @@ describe('DeployService', () => {
     expect(refused.ok).toBe(false);
     expect(unwrap(await service.requestFromPush('s1t1', 'a1'))).toBeNull();
   });
+
+  describe('after_deploy steps on a dev environment', () => {
+    const step = (id: string, globId: string, due: StoredHumanStep['due']): StoredHumanStep => ({
+      id,
+      boardId: board.id,
+      globId,
+      kind: 'rollout',
+      title: `Check ${id}`,
+      detail: null,
+      who: 'anyone',
+      due,
+      state: 'open',
+      blocks: ['sign_off'],
+      check: null,
+      script: null,
+      why: null,
+      permissions: null,
+      commands: [],
+      verify: null,
+      origin: 'rollout-section',
+      createdBy: 'slop',
+      createdAt: NOW,
+      doneBy: null,
+      doneAt: null,
+      dismissedReason: null,
+      dueSince: null,
+    });
+    const steps = () => store.transaction((tx) => tx.listHumanSteps(board.id, ['s1t1', 's1t2']));
+
+    beforeEach(async () => {
+      await store.transaction((tx) =>
+        tx.saveHumanSteps([step('on-dev', 's1t1', 'after_deploy:dev'), step('on-prod', 's1t1', 'after_deploy:prod'), step('other', 's1t2', 'after_deploy:dev')]),
+      );
+    });
+
+    it("falls due once when the glob's branch deploy succeeds, before the merge, and not for other globs or environments", async () => {
+      unwrap(await service.requestFromPush('s1t1', 'a1'));
+      expect((await steps()).map((s) => s.dueSince)).toEqual([null, null, null]);
+      unwrap(await service.finished('d1', { succeeded: true, error: null }));
+      const due = Object.fromEntries((await steps()).map((s) => [s.id, s.dueSince]));
+      expect(due).toEqual({ 'on-dev': NOW, 'on-prod': null, other: null });
+      expect(notifier.hints).toContainEqual({ kind: 'glob.changed', boardId: board.id, globId: 's1t1', version: 1 });
+      // A repeated result changes nothing: no second hint, the stamp stays.
+      notifier.hints.length = 0;
+      unwrap(await service.finished('d1', { succeeded: true, error: null }));
+      expect(notifier.hints.filter((h) => h.kind === 'glob.changed')).toEqual([]);
+    });
+
+    it('does not fall due when the deploy fails, and queues no environment check', async () => {
+      unwrap(await service.requestFromPush('s1t1', 'a1'));
+      unwrap(await service.finished('d1', { succeeded: false, error: 'exit 1' }));
+      expect((await steps()).every((s) => s.dueSince === null)).toBe(true);
+      expect(store.state.outbox.map((e) => e.kind)).toEqual(['start_deploy']);
+      unwrap(await service.requestFromPush('s1t1', 'a2'));
+      unwrap(await service.finished('d2', { succeeded: true, error: null }));
+      expect(store.state.outbox.map((e) => e.kind)).toEqual(['start_deploy', 'start_deploy']);
+    });
+  });
 });
 
 describe('board deploy settings', () => {
@@ -259,7 +318,7 @@ describe('board deploy settings', () => {
     const admin = 'admin@example.com';
     await store.transaction((tx) => tx.upsertUser({ email: admin, name: admin, active: true }));
     const created = unwrap(
-      await boards.create(admin, { name: 'sandbox', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }),
+      await boards.create(admin, { name: 'sandbox', repo: null, timeZone: 'UTC', environments: [] }),
     );
     expect(created.deploy).toBeNull();
     const incomplete = await boards.updateSettings(admin, created.id, created.version, {
