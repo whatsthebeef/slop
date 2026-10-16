@@ -19,6 +19,9 @@ export interface CardMove {
   readonly icon: ActionIcon | null;
 }
 
+/** The actions the card runs in place, outside Planning, each after a confirming second click. */
+const IN_PLACE: readonly Action[] = ['resolve_conflict', 'merge'];
+
 export type CardList = 'planning' | 'doing' | 'reviewing' | 'signed_off';
 
 /**
@@ -28,9 +31,12 @@ export type CardList = 'planning' | 'doing' | 'reviewing' | 'signed_off';
 export const cardActions = (glob: GlobView, viewer?: HumanStepViewer): Action[] => {
   // No moves while slop is still creating the glob's branch and PR: a second action then would race the setup.
   if (glob.provisioning === 'pending') return [];
-  // Outside Planning the only button is Fix conflict, and only while it is the glob view's main action too.
-  if (glob.list !== 'planning')
-    return (glob.allowedActions ?? []).includes('resolve_conflict') && viewMainAction(glob, viewer) === 'resolve_conflict' ? ['resolve_conflict'] : [];
+  // Outside Planning the buttons are Fix conflict and Merge, only while the glob view's main action is that one too.
+  if (glob.list !== 'planning') {
+    const main = viewMainAction(glob, viewer);
+    const allowed = glob.allowedActions ?? [];
+    return main !== null && IN_PLACE.includes(main) && allowed.includes(main) ? [main] : [];
+  }
   const allowed = presentedActions(glob.allowedActions ?? []);
   const pickUp = (['pick_up', 'take_over'] as const).find((a) => allowed.includes(a));
   const start = allowed.includes('start') ? 'start' : undefined;
@@ -51,10 +57,18 @@ export const cardMoves = (glob: GlobView, viewer?: HumanStepViewer): { move: Car
   cardActions(glob, viewer).map((action) => {
     const { label: name, tip, icon } = actionPresentation(action, glob);
     // Fix conflict runs in place (the card stays in its list) and asks for a second click, as Merge does.
-    if (action === 'resolve_conflict')
+    if (action === 'resolve_conflict' || action === 'merge')
       return {
         target: glob.list,
-        move: { action, direction: 'none' as const, confirm: true, label: name, description: `${name} ${glob.id}: ${tip}`, icon },
+        move: {
+          action,
+          direction: 'none' as const,
+          confirm: true,
+          // Merge reads Merge whether it merges now or arms "merge when checks pass"; the tooltip says which.
+          label: action === 'merge' ? 'Merge' : name,
+          description: `${name} ${glob.id}: ${tip}`,
+          icon,
+        },
       };
     return {
       target: 'doing' as const,
