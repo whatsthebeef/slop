@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { explodeCommands } from '@/lib/command-text';
 import { copyOrSelect } from '@/lib/plan-text';
 import { Button } from './ui/button';
 import { barClass, barLabel, boxClass, COLLAPSED_REM, FADE_STYLE, needsCollapse } from '@/lib/collapsible';
@@ -64,12 +65,25 @@ export const InlineMarkdown = ({ text, className }: { text: string; className?: 
  * tables. react-markdown doesn't render raw HTML, so artifact content can't inject markup.
  */
 /** `components` swaps how chosen elements render (the test plan draws its `atf-specs` block as a list). */
-export const MarkdownView = ({ content, bare = false, components }: { content: string; bare?: boolean; components?: Components }) => (
+export const MarkdownView = ({
+  content,
+  bare = false,
+  components,
+  commands = false,
+}: {
+  content: string;
+  bare?: boolean;
+  components?: Components;
+  /** Human-step text: each inline shell command (`bash …`, `git …`) is lifted out of its sentence into its own copyable box. */
+  commands?: boolean;
+}) => (
   <div
     className={`${bare ? '' : 'rounded bg-muted p-3 '}text-sm leading-relaxed [&_code]:rounded [&_code]:bg-background [&_code]:px-1 [&_code]:text-xs [&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-medium [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-background [&_pre]:p-2 [&_table]:my-2 [&_table]:block [&_table]:overflow-x-auto [&_table]:text-xs [&_td]:border [&_td]:px-1.5 [&_td]:py-0.5 [&_th]:border [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:text-left [&_ul]:list-disc`}
     data-testid="markdown-view"
   >
-    <Markdown remarkPlugins={[remarkGfm]} components={{ ...COPY_COMPONENTS, ...components }}>{content}</Markdown>
+    <Markdown remarkPlugins={[remarkGfm]} components={{ ...COPY_COMPONENTS, ...components }}>
+      {commands ? explodeCommands(content) : content}
+    </Markdown>
   </div>
 );
 
@@ -82,10 +96,12 @@ export const CollapsibleMarkdown = ({
   content,
   startExpanded = false,
   components,
+  commands = false,
 }: {
   content: string;
   startExpanded?: boolean;
   components?: Components;
+  commands?: boolean;
 }) => {
   const [expanded, setExpanded] = useState(startExpanded);
   const [long, setLong] = useState(false);
@@ -110,7 +126,7 @@ export const CollapsibleMarkdown = ({
       <div className={boxClass(long, clipped)}>
         <div style={clipped ? { maxHeight: `${String(COLLAPSED_REM)}rem`, overflow: 'hidden', ...FADE_STYLE } : undefined} data-testid="markdown-fade">
           <div ref={natural}>
-            <MarkdownView content={content} bare components={components} />
+            <MarkdownView content={content} bare components={components} commands={commands} />
           </div>
         </div>
       </div>

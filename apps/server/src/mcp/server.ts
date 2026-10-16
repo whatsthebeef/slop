@@ -1,6 +1,6 @@
 import type { Relation, SlopType, ArtifactService, AttachmentService, BoardService, Deploy, IntakeRecord, DeployService, GlobService, InboxService, IntakeService, KnowledgeService, ReportService, Result, SearchService, ChatService, CodeViewService, SuggestService, GroupService, NewHumanStep, NewQuestion, StoredHumanStep } from '@slop/core';
 import { cleanFileName, inferenceReasonOf, invalidInput, isHumanCategory, machine, notFound, openQuestions, relationQuestion, startIds, startQuestions, resolveContentType, UPLOAD_TTL_SECONDS } from '@slop/core';
-import { ACTION_RECORD_KINDS, ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, MAX_QUESTION_ANSWER, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, OUTCOME_REASON_MAX, QUESTION_BLOCKING, QUESTION_SOURCES, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
+import { ACTION_RECORD_KINDS, ARTIFACT_KINDS, CATEGORIES, MAX_RELATION_REASON, MAX_QUESTION_ANSWER, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, OUTCOME_REASON_MAX, QUESTION_BLOCKING, QUESTION_SOURCES, WORK_CATEGORIES, ESCALATION_CRITERIA, MAX_SPLIT_PARTS, KB_ITEM_STATUSES, LABEL_NAMES, LEARNING_TYPES, MAX_QUERY_LENGTH, RISK_TIERS, SEARCH_MODES, SLOP_TYPES, SOURCE_TYPES, WORK_KINDS, STATUSES, HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS } from '@slop/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -410,7 +410,7 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         ...(openQuestions(glob).length === 0
           ? {}
           : {
-              questions: openQuestions(glob).map((q) => ({ id: q.id, text: q.text, ...(q.options === undefined ? {} : { options: q.options }), blocking: q.blocking })),
+              questions: openQuestions(glob).map((q) => ({ id: q.id, text: q.text, ...(q.options === undefined ? {} : { options: q.options }), ...(q.commands === undefined ? {} : { commands: q.commands }), blocking: q.blocking })),
             }),
         ...(glob.status === 'planning' && startQuestions(glob).length > 0 ? { held: true } : {}),
         // Never applied: intake thinks this takes effect by doing, not deploying. Say so; a person decides whether to recreate it as a prepared action.
@@ -930,16 +930,22 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
         id: z.string(),
         text: z.string().min(1).max(MAX_QUESTION_TEXT).describe('The question, in one or two sentences, with what you assumed meanwhile'),
         options: z.array(z.string().min(1).max(MAX_QUESTION_OPTION)).max(MAX_QUESTION_OPTIONS).optional().describe('Short answers the person can pick'),
+        commands: z
+          .array(z.string().min(1).max(MAX_QUESTION_COMMAND))
+          .max(MAX_QUESTION_COMMANDS)
+          .optional()
+          .describe('Shell commands the person needs to see, one per entry: each shows in its own copyable box. Never put a command inline in `text`'),
         blocking: z.enum(QUESTION_BLOCKING).optional().describe('merge (default), start or none'),
         key: z.string().min(1).max(120).optional().describe('A dedupe key: raising the same key again changes nothing'),
         source: z.enum(QUESTION_SOURCES).optional().describe('Where it comes from (default: run with a run ID, else other)'),
         runId: z.string().optional(),
       },
     },
-    async ({ id, text, options, blocking, key, source, runId }) => {
+    async ({ id, text, options, commands, blocking, key, source, runId }) => {
       const raised = await globs.raiseQuestion(email, id, {
         text,
         ...(options === undefined ? {} : { options }),
+        ...(commands === undefined ? {} : { commands }),
         ...(key === undefined ? {} : { key }),
         blocking: blocking ?? 'merge',
         source: source ?? (runId === undefined ? 'other' : 'run'),

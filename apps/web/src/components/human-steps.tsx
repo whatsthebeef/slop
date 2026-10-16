@@ -38,7 +38,7 @@ import { cn } from '@/lib/utils';
 import { HumanIcon } from './actor-icons';
 import { SectionToggle } from './section-toggle';
 import { StepDetail } from './step-detail';
-import { InlineMarkdown, MarkdownView } from './markdown-view';
+import { MarkdownView } from './markdown-view';
 import { stripMarkdown } from '@/lib/markdown-text';
 import { blocksReadOnly } from '@/lib/blocking-item';
 import { Button } from './ui/button';
@@ -252,7 +252,7 @@ const CopyButton = ({ copyText }: { copyText: () => Promise<string> }) => {
 const Field = ({ label, text, testId }: { label: string; text: string; testId: string }) => (
   <div className="min-w-0 break-words text-xs [overflow-wrap:anywhere]" data-testid={testId}>
     <span className="text-muted-foreground">{label}:</span>
-    <MarkdownView content={text} bare />
+    <MarkdownView content={text} bare commands />
   </div>
 );
 
@@ -494,14 +494,12 @@ const DismissedSteps = ({ steps }: { steps: readonly ListedHumanStep[] }) => {
               <span className='line-through' data-testid='dismissed-title'>
                 {stripMarkdown(s.title)}
               </span>
-              <span data-testid='dismissed-reason'>
-                {s.dismissedReason == null || s.dismissedReason === '' ? null : (
-                  <>
-                    : <InlineMarkdown text={s.dismissedReason} />
-                  </>
-                )}
-              </span>
               {dismissalText(s) !== '' && <span data-testid='dismissed-who'> ({dismissalText(s)})</span>}
+              {s.dismissedReason != null && s.dismissedReason !== '' && (
+                <div data-testid='dismissed-reason'>
+                  <MarkdownView content={s.dismissedReason} bare commands />
+                </div>
+              )}
             </li>
           ))}
         </ul>
