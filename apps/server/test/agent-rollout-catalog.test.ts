@@ -110,6 +110,68 @@ describe('catalog agents: an action waits for its script', () => {
   }
 });
 
+describe('catalog agents: pre-checks, prerequisites and off-process changes', () => {
+  it('has the implementer put pre-checks inside scripted infrastructure steps and say when one cannot be pre-checked', async () => {
+    const text = await agent('implementer');
+    expect(text).toContain('A scripted infrastructure step carries its pre-checks inside the script.');
+    expect(text).toContain('`precheck_iam_policy`');
+    expect(text).toContain('`precheck_cfn_change_set`');
+    expect(text).toContain('`precheck_buildspec`');
+    expect(text).toContain('`precheck_policy_json`');
+    expect(text).toContain('A step that cannot be pre-checked');
+    expect(text).toContain('bash catalog/scripts/step-template.test.sh');
+  });
+
+  it('has the investigator tie risk paths and rollout steps to pre-checks and list prerequisites', async () => {
+    const text = await agent('investigator');
+    expect(text).toContain('is a same, never a sub');
+    expect(text).toContain('implies a script with pre-checks');
+    expect(text).toContain('each prerequisite the step needs');
+  });
+
+  it("has the change reviewer check each step's prerequisites and the pre-checks inside scripted infrastructure steps", async () => {
+    const text = await agent('change_reviewer');
+    expect(text).toContain("a rollout step whose prerequisites don't exist");
+    expect(text).toContain('s14t13');
+    expect(text).toMatch(/missing prerequisite is an `IN-SCOPE` finding/);
+    expect(text).toContain('whose script has no pre-checks inside it');
+    expect(text).toContain('no `trap` cleanup of temporary resources');
+  });
+
+  it('has the orchestrator merge rollout globs with Merge and continue and work the checklist from get_glob', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('A glob with rollout steps is merged with Merge and continue.');
+    expect(text).toContain('`sstor --glob <id>`');
+    expect(text).toContain('call `get_glob` to see which steps are still due');
+  });
+
+  it('has the orchestrator start the next generation on a failed step and read the failure attachment', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain("A failed step starts the glob's next generation.");
+    expect(text).toContain('report it with `fail_human_step`');
+    expect(text).toContain('the glob id, step id and the error as a note');
+    expect(text).toContain('strip credentials');
+    expect(text).toContain('`Rollout step failed (generation N)`');
+    expect(text).toContain('fresh branch from master');
+    expect(text).toContain('returns it in full by default');
+  });
+
+  it('lists risk_path among the orchestrator\'s escalate_to_same criteria', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('`open_findings`, `risk_path` or `other`');
+  });
+
+  it('has the orchestrator update the steps for changes made outside the flow with the existing step tools, never running paid steps', async () => {
+    const text = await agent('orchestrator');
+    expect(text).toContain('Changes made outside the flow.');
+    expect(text).toContain('`complete_human_step` with a `note`');
+    expect(text).toContain('`dismiss_human_step` with a reason');
+    expect(text).toContain('`add_human_step`');
+    expect(text).toContain('an edit is a dismiss plus an add');
+    expect(text).toContain('never run steps that change paid infrastructure or IAM');
+  });
+});
+
 describe('catalog agents: relations carry a reason and reach across boards', () => {
   for (const name of ['implementer', 'orchestrator']) {
     it(`has the ${name} pass relations explicitly with a reason, as holds or supersedes where they fit`, async () => {

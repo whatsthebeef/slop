@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import { AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -408,13 +408,13 @@ export const createApp = (deps: AppDeps) => {
         const thresholds = stallThresholds(m.board);
         const holdings = new Map((everyone.ok ? everyone.value : []).map((r) => [r.glob.id, r.holding]));
         const stalled = list.filter(
-          (g) => whoseMove(g, humanSteps(g, {}, stored.get(g.id) ?? []), machineSteps(g), holdings.get(g.id) ?? [], now, { viewer, thresholds, complete: false }).holder === 'stalled',
+          (g) => whoseMove(g, humanSteps(g, { rolloutSteps: openRolloutSteps(stored.get(g.id) ?? []) }, stored.get(g.id) ?? []), machineSteps(g), holdings.get(g.id) ?? [], now, { viewer, thresholds, complete: false }).holder === 'stalled',
         ).length;
         const yourTurn = (everyone.ok ? everyone.value : []).reduce(
           (n, { glob, artifacts }) =>
             n +
             stepsForViewer(
-              humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, stored.get(glob.id) ?? []).filter((s) => s.state === 'due'),
+              humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }), rolloutSteps: openRolloutSteps(stored.get(glob.id) ?? []) }, stored.get(glob.id) ?? []).filter((s) => s.state === 'due'),
               glob,
               viewer,
             ).length,
@@ -587,7 +587,7 @@ export const createApp = (deps: AppDeps) => {
         // Whose move it is: the one position the card, the filters and the counts all read. Derived on every read, never stored.
         // Outbox effects, deploys and uploads aren't read here yet, so those steps are missing from the list's picture.
         const facts = machineSteps(glob, { effects: recommending.get(glob.id) ?? [] });
-        const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }) }, steps.get(glob.id) ?? []);
+        const human = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts) }), rolloutSteps: openRolloutSteps(steps.get(glob.id) ?? []) }, steps.get(glob.id) ?? []);
         const move = whoseMove(glob, human, facts, holding, now, { viewer, thresholds, complete: false });
         return {
           ...view,
@@ -764,7 +764,10 @@ export const createApp = (deps: AppDeps) => {
     'cancel-merge': (email: string, id: string, b: ActionBody) => globs.cancelMerge(email, id, b.version),
     'retry-merge': (email: string, id: string, b: ActionBody) => globs.retryMerge(email, id, b.version),
     // Supers: row 31, and the board's Ready for review (both need the latest postplan at the head).
-    'merge-continue': (email: string, id: string, b: ActionBody) => globs.merge(email, id, b.version, true),
+    'merge-continue': async (email: string, id: string, b: ActionBody) => {
+      const gate = await deps.mergeGate?.(email, id);
+      return gate !== undefined && !gate.ok ? gate : globs.merge(email, id, b.version, true);
+    },
     'mark-ready': async (email: string, id: string, b: ActionBody) => {
       const gate = await deps.readyGate?.(email, id);
       return gate !== undefined && !gate.ok ? gate : globs.requestReadyFromBoard(email, id, b.version);
@@ -941,9 +944,9 @@ export const createApp = (deps: AppDeps) => {
   });
 
   app.post('/api/globs/:id/human-steps/:stepId/complete', async (c) => {
-    const body = await parse(c, z.object({ version: stepVersion }));
+    const body = await parse(c, z.object({ version: stepVersion, note: z.string().max(OUTCOME_REASON_MAX).optional() }));
     if (body instanceof Response) return body;
-    return afterStep(c, await globs.completeHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.version ?? null));
+    return afterStep(c, await globs.completeHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.version ?? null, body.note));
   });
 
   app.post('/api/globs/:id/human-steps/:stepId/dismiss', async (c) => {
@@ -952,11 +955,14 @@ export const createApp = (deps: AppDeps) => {
     return afterStep(c, await globs.dismissHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.reason, body.version ?? null));
   });
 
-  // "It failed": a rollout step's run failed. The step stays open; slop asks whether a glob fixes it (a suggestion on the glob).
+  // "It failed": a step's run failed (the note is the pasted output, masked before it is stored). A rollout step of a merged glob
+  // starts the glob's next generation (a fresh branch from master, the failure as in-scope feedback; provisioning runs in the
+  // background, as start-again does); any other step stays open and slop asks whether a glob fixes it.
   app.post('/api/globs/:id/steps/:stepId/fail', async (c) => {
-    const body = await parse(c, z.object({ note: z.string().trim().min(1).max(2000), version: z.number().int().nullable().optional() }));
+    const body = await parse(c, z.object({ note: z.string().trim().min(1).max(100_000), version: z.number().int().nullable().optional() }));
     if (body instanceof Response) return body;
     const failed = await globs.failHumanStep(c.get('email'), c.req.param('id'), c.req.param('stepId'), body.note, body.version ?? null);
+    if (failed.ok) void deps.outbox.drain(failed.value.globId).catch(() => undefined);
     return afterStep(c, failed);
   });
 

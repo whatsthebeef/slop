@@ -53,6 +53,14 @@ describe('mainAction', () => {
     );
   });
 
+  it('leads with Merge and continue for a same that offers it instead of Merge, and not for a super', () => {
+    const ready = glob({ status: 'pr_open', pr: pr('ready') });
+    expect(pick(['merge_continue', 'review_now'], ready)).toBe('merge_continue');
+    expect(pick(['merge_continue', 'merge'], ready)).toBe('merge_continue');
+    expect(pick(['merge_continue', 'merge'], glob({ ...ready, type: 'super' }))).toBe('merge');
+    expect(pick(['merge_continue'], glob({ ...ready, type: 'super' }))).toBeNull();
+  });
+
   it('walks a decision glob: Pick up, then Decide, then Sign off', () => {
     expect(pick(['pick_up', 'delete'], glob(), true)).toBe('pick_up');
     expect(pick(['decide', 'delete'], glob({ status: 'in_progress' }), true)).toBe('decide');
@@ -65,7 +73,7 @@ describe('mainAction', () => {
 
   it('has no main button when nothing qualifies', () => {
     expect(pick([])).toBeNull();
-    expect(pick(['investigate', 'review_now', 'merge_continue'])).toBeNull();
+    expect(pick(['investigate', 'review_now', 'merge_continue'], glob({ type: 'super' }))).toBeNull();
   });
 
   it('leaves only recoveries ahead of a due blocking step', () => {

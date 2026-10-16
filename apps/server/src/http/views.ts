@@ -1,5 +1,5 @@
 import type { Arm, ActionScript, ScriptCheck, Category, InferenceSource, SlopType, WorkInference, WorkActor, WorkKind, Action, ArtifactSummary, AwaitedDependency, CompactHumanStep, DomainError, Glob, Handover, Holding, HumanStep, Relation, RelationFacts, RelationSuggestion, RelationsView, Role, SizeCheck, StoredHumanStep } from '@slop/core';
-import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
+import { HUMAN_CATEGORIES, SLOP_TYPES, defaultFix, defaultWorkKind, inferenceReasonOf, isHumanCategory, actorOf, categoryFor, storedCategory, blockProgress, checksExplanation, compactStep, fixOf, modeOf, workKindOf, humanSteps, openRolloutSteps, isActive, isExplicit, listWithSteps, machine, unresolved } from '@slop/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /** The globs a person, an agent or (an old row) a split said this one starts after (the old `after` list). */
@@ -152,11 +152,12 @@ export const globView = (
 export const armField = (arm: Arm | null) => (arm === null ? {} : { arm });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */
-export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null; suggestions?: readonly RelationSuggestion[] }) =>
+export const globViewOf = (v: { glob: Glob; allowedActions: readonly Action[]; artifacts: readonly ArtifactSummary[]; relations: readonly Relation[]; waitingFor: readonly AwaitedDependency[]; waitedOnBy: readonly string[]; holding: readonly Holding[]; relationGroups: RelationsView; sizeCheck?: SizeCheck | null; humanSteps?: readonly HumanStep[]; rolloutSteps?: number; arm?: Arm | null; handover?: Handover | null; dismissedKeys?: readonly string[]; script?: ActionScript | null; suggestions?: readonly RelationSuggestion[] }) =>
   ({
     ...globView(v.glob, v.allowedActions, v.artifacts, v, v.humanSteps ?? null, v.relations, v.holding),
     waitingFor: v.waitingFor,
     waitedOnBy: v.waitedOnBy,
+    ...(v.rolloutSteps === undefined ? {} : { rolloutSteps: v.rolloutSteps }),
     ...armField(v.arm ?? null),
     // The script an open action runs and whether the base branch has it (null `onBase`: not checked); null for any other glob.
     script: v.script ?? null,
@@ -211,14 +212,22 @@ export const globViewFor = (
         // Without the artifacts loaded the reviews are unknown, so no Retry review is guessed.
         ...(artifacts === null ? {} : { reviews: machine.reviewsOf(artifacts) }),
         ...(relations === undefined ? {} : { relations }),
+        // Merge and continue instead of Merge for a same with open rollout steps; Pick up on its merged glob.
+        rolloutSteps: openRolloutSteps(stored),
       },
     ),
     artifacts,
     null,
-    humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts ?? []) }) }, stored).map(compactStep),
+    humanSteps(
+      glob,
+      { recordAtHead: machine.recordAtHead(glob, { recordSha: machine.recordShaOf(artifacts ?? []) }), rolloutSteps: openRolloutSteps(stored) },
+      stored,
+    ).map(compactStep),
     relations?.relations ?? null,
     holding,
   ),
+  // The count the web reads for "Merge and continue" (it must not re-derive it from the steps).
+  rolloutSteps: openRolloutSteps(stored),
   ...(check === undefined ? {} : { script: check.script }),
 });
 

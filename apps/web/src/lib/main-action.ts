@@ -35,6 +35,7 @@ const FIXES: readonly Action[] = ['resolve_conflict', 'retry_autofix', 'retry_me
 
 /** Otherwise the state's next step: land it, hand it in, start it, work through a decision, or do an action. */
 const NEXT_STEPS: readonly Action[] = [
+  'merge_continue',
   'merge',
   'mark_ready',
   'start',
@@ -64,7 +65,10 @@ export const mainAction = (
   if (preferred !== undefined && available.includes(preferred)) return preferred;
   // The machine has failed again after a retry: a person takes over, and Retry moves into the menu.
   // Unless it has moved on since: a person fixed it, so landing it (Merge, or Mark ready) is allowed and leads instead.
-  const movedOn = available.includes('merge') || available.includes('mark_ready');
+  const movedOn =
+    available.includes('merge') ||
+    available.includes('mark_ready') ||
+    (glob.type !== 'super' && available.includes('merge_continue'));
   if (!stepFirst && !movedOn && failedRepeatedly(glob)) {
     const person = TAKE_OVERS.find((action) => available.includes(action));
     if (person !== undefined) return person;

@@ -14,6 +14,14 @@ export interface ArtifactListing {
 /** Attachments with these labels always come inline: agents must follow them and pass them verbatim. */
 export const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
 
+/** Label prefixes that also come inline: a failed rollout step's note is the next generation's in-scope feedback. */
+const INLINE_LABEL_PREFIXES = ['rollout step failed'];
+
+export const isInlineLabel = (label: string): boolean => {
+  const lower = label.toLowerCase();
+  return INLINE_LABELS.has(lower) || INLINE_LABEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
+};
+
 /** `include` entries: a kind (`local_review`, `local_review`, ...), `attachment:<label>`, or `all`. */
 export const wanted = (include: readonly string[], a: Artifact): boolean =>
   include.includes('all') ||

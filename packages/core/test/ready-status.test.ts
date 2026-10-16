@@ -20,6 +20,14 @@ describe('readyStatus', () => {
     expect(s?.tip).not.toMatch(/auto-fix/);
   });
 
+  it('says Merge and continue for a same with open rollout steps, and no longer names the refused --merge', () => {
+    const s = readyStatus(ready(), null, { rolloutSteps: 2 });
+    expect(s).toMatchObject({ kind: 'ready', text: 'Merge and continue' });
+    expect(s?.tip).toMatch(/^Merge and continue: checks passed/);
+    expect(s?.tip).not.toMatch(/--merge/);
+    expect(readyStatus(ready(), null, { rolloutSteps: 0 })?.text).toBe('Merge');
+  });
+
   it('adds the escalation reason to the tooltip', () => {
     const escalation = { reason: 'touches auth', criterion: 'auth_permissions', by: 'agent', at: NOW };
     expect(readyStatus(ready({ escalation }))?.tip).toMatch(/Needs a person because: touches auth/);

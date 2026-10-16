@@ -175,6 +175,15 @@ export const actionPresentation = (
         placement: 'more',
       };
     case 'merge_continue':
+      // A same offers it instead of Merge when it has rollout steps: the glob stays open for them, so it is the main step.
+      // A super keeps Merge (final) as its main step; this is its menu item.
+      if (glob.type !== 'super')
+        return {
+          label: 'Merge and continue',
+          icon: 'machine',
+          tip: 'Squash-merges; the glob stays open while you run the rollout steps from master, and sign-off waits',
+          placement: 'main',
+        };
       return {
         label: 'Merge & keep working',
         icon: 'machine',

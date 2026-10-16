@@ -17,7 +17,7 @@ import type { Clock, Notifier, Store, Tx } from '../ports.js';
 import { memberOf } from './access.js';
 import { addArtifact } from './artifact-write.js';
 import type { Ignored, PutOptions } from './artifact-write.js';
-import { INLINE_LABELS, describe, wanted } from './context/artifact-listing.js';
+import { isInlineLabel, describe, wanted } from './context/artifact-listing.js';
 import { AUTHORITY_STATEMENT, decisionsOfGlob, governingDecisions } from './context/decision-section.js';
 import type { GlobContext } from './context/glob-context.js';
 import { groupSection, handoverOf } from './context/handover-section.js';
@@ -229,7 +229,7 @@ export class ArtifactService {
       const testPlan = latest('test_plan');
       // listArtifacts returns the latest version of each (kind, label).
       const full = (a: Artifact) =>
-        (a.kind === 'attachment' && INLINE_LABELS.has(a.label.toLowerCase())) || wanted(include, a);
+        (a.kind === 'attachment' && isInlineLabel(a.label)) || wanted(include, a);
       // Legacy postplan rows were migrated into the record; they stay as history, not listed.
       const others = artifacts.filter((a) => ARTIFACT_ROLE[a.kind] !== 'payload' && ARTIFACT_ROLE[a.kind] !== 'record' && !full(a));
       const related = this.deps.related === undefined ? undefined : await this.deps.related(tx, glob);

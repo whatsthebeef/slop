@@ -254,7 +254,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
   }
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
-    const ready = readyStatus(glob, reviewSha);
+    const ready = readyStatus(glob, reviewSha, { rolloutSteps: glob.rolloutSteps ?? 0 });
     // Merged with its rollout still open: how far it is, and whose turn.
     const rollout = glob.humanSteps === undefined ? null : rolloutLine(glob, glob.humanSteps, viewer, glob.machineSteps);
     if (rollout !== null)
@@ -384,7 +384,9 @@ export const waitingFor = (glob: GlobView, actions: readonly Action[], role: Rol
               why: `for the checks on ${head.slice(0, 7)}`,
               running: true,
             };
-    waiting.push({ ...named('merge'), ...wait });
+    // A same with open rollout steps merges with Merge and continue, so that is the action that waits.
+    const rolloutSame = glob.type === 'same' && (glob.rolloutSteps ?? 0) > 0;
+    waiting.push({ ...named(rolloutSame ? 'merge_continue' : 'merge'), ...wait });
     if (glob.type === 'super') waiting.push({ ...named('merge_continue'), ...wait });
   }
   if (glob.type !== 'super') return waiting;

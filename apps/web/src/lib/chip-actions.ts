@@ -42,7 +42,11 @@ export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedA
     return allowed.includes(status.action) ? { kind: 'act', action: status.action, confirm: false } : { kind: 'section', target: cardTargets.actions() };
   switch (status.turn) {
     case 'merge':
-      return allowed.includes('merge') ? { kind: 'act', action: 'merge', confirm: true } : { kind: 'section', target: cardTargets.actions() };
+      // A same with rollout steps is offered Merge and continue instead of Merge.
+      if (allowed.includes('merge')) return { kind: 'act', action: 'merge', confirm: true };
+      return allowed.includes('merge_continue')
+        ? { kind: 'act', action: 'merge_continue', confirm: true }
+        : { kind: 'section', target: cardTargets.actions() };
     case 'done':
       return allowed.includes('mark_ready') ? { kind: 'act', action: 'mark_ready', confirm: false } : { kind: 'section', target: cardTargets.actions() };
     case 'decide':

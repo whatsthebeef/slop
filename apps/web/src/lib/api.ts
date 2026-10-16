@@ -151,6 +151,8 @@ export interface GlobView extends Glob {
   readonly gateCheck?: string;
   /** What a person must do on the glob, most pressing first: compact on the board list, in full on a single read; absent on an older API. */
   readonly humanSteps?: readonly ListedHumanStep[];
+  /** Open rollout steps holding back sign-off, counted by the server (a same with any is merged with Merge and continue); absent on an older API, read with `?.`. */
+  readonly rolloutSteps?: number;
   /** The "Arm system" label: the first stage with an open rollout step (an environment, or the base branch for after-merge) and that step's title; absent when no step is open or on an older API. */
   readonly arm?: Arm;
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
@@ -868,7 +870,10 @@ export const api = {
       `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`,
       {},
     ),
-  /** "It failed": a rollout step's run failed. The step stays open and slop asks whether a glob fixes it. The version is sent once, as given. */
+  /**
+   * "It failed": a step's run failed. A rollout step of a merged glob starts the glob's next generation; any other step stays open
+   * and slop asks whether a glob fixes it. The version is sent once, as given.
+   */
   failStep: (id: string, stepId: string, note: string, version?: number | null) =>
     request<GlobView>('POST', `/api/globs/${id}/steps/${encodeURIComponent(stepId)}/fail`, version === undefined ? { note } : { note, version }),
   /** A person's mark that the glob's change is deployed to the environment: its after-deploy steps fall due. */

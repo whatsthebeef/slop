@@ -1,5 +1,5 @@
 import type { Board, GlobService, NotificationService, Store } from '@slop/core';
-import { humanSteps, machineSteps, stalledNotification, STALLED_SOURCE_PREFIX, stallThresholds, whoseMove } from '@slop/core';
+import { humanSteps, openRolloutSteps, machineSteps, stalledNotification, STALLED_SOURCE_PREFIX, stallThresholds, whoseMove } from '@slop/core';
 
 const EVERY_MS = 2 * 60_000;
 
@@ -56,7 +56,7 @@ export class StallWatch {
     const thresholds = stallThresholds(board);
     const wanted = new Set<string>();
     for (const glob of list) {
-      const move = whoseMove(glob, humanSteps(glob, {}, stored.get(glob.id) ?? []), machineSteps(glob), holdings.get(glob.id) ?? [], now, { thresholds });
+      const move = whoseMove(glob, humanSteps(glob, { rolloutSteps: openRolloutSteps(stored.get(glob.id) ?? []) }, stored.get(glob.id) ?? []), machineSteps(glob), holdings.get(glob.id) ?? [], now, { thresholds });
       const raised = stalledNotification(glob, move);
       if (raised === null) continue;
       wanted.add(raised.source);

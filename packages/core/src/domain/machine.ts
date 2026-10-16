@@ -88,6 +88,7 @@ import type {
   LabelState,
   Labels,
   MergeConflict,
+  MergedPr,
   OpenConflict,
   Role,
   Run,
@@ -171,6 +172,8 @@ export interface ActionFacts {
   readonly baseBranch?: string;
   /** The work steps holding back sign-off, where loaded (sign-off is refused while any is open). */
   readonly rollout?: BlockProgress;
+  /** Open rollout steps holding back sign-off (`openRolloutSteps`), where loaded: a same with any lands with Merge and continue. */
+  readonly rolloutSteps?: number;
   /** The glob's stored independent reviews, where loaded (Retry review is offered only once they are known). */
   readonly reviews?: readonly IndependentReviewMeta[];
 }
@@ -940,6 +943,8 @@ export interface PickUpOptions {
   readonly environment?: string | null;
   /** The glob's relations: picking up a held glob works, and notes what hadn't merged. */
   readonly relations?: RelationFacts;
+  /** Open rollout steps holding back sign-off: a merged glob can be picked up only while it has any. */
+  readonly rolloutSteps?: number;
 }
 
 /** Rows 6–10: pick up, optionally taking over a routine run, optionally choosing the environment. */
@@ -1023,6 +1028,13 @@ export const pickUp = (
     case 'in_progress':
       // Rows 7 and 9.
       if (liveInvestigation(glob) === null) b.endRun('superseded', null, { cause: 'pick_up' });
+      b.set({ implementer: actor.email });
+      break;
+    case 'reviewing':
+      // Row 9a: a merged glob that is open for its rollout steps; no status change, no run to supersede.
+      if (glob.pr?.state !== 'merged' || (options.rolloutSteps ?? 0) === 0)
+        return invalidTransition(glob, actor, 'A merged glob can be picked up only while it has open rollout steps');
+      if (glob.implementer === actor.email) return environmentChanged ? setEnvironment(b, environment).done() : unchanged(glob);
       b.set({ implementer: actor.email });
       break;
     default:
@@ -1374,6 +1386,85 @@ export const startAgain = (
   return b.done();
 };
 
+/** Why a sub that gained rollout steps became a same (criterion `risk_path`). */
+export const ROLLOUT_ESCALATION_REASON = 'Has rollout steps: a person merges it with Merge and continue';
+
+/** A sub that has rollout steps becomes a same escalated for `risk_path` (row 13d), so it never merges itself with steps left dangling. */
+const asRolloutSame = (b: Builder, glob: Glob, ctx: Context): void => {
+  b.set({
+    type: 'same',
+    escalation: { reason: ROLLOUT_ESCALATION_REASON, criterion: 'risk_path', by: 'slop', at: ctx.now },
+    ...(glob.mergeHold == null ? {} : { mergeHold: null }),
+  })
+    .event('FieldsChanged', { type: { from: 'sub', to: 'same' } })
+    .event('Escalated', { reason: ROLLOUT_ESCALATION_REASON, criterion: 'risk_path' });
+};
+
+/**
+ * Row 13d: a work step that holds back sign-off was written for the glob (a person's, the implementation record's or the
+ * rollout check's). A sub before its merge becomes a same, so it never merges itself with steps left dangling, and an armed
+ * "merge when checks pass" is disarmed (Merge and continue takes its place). Anything else changes nothing, so the caller
+ * may run it after every step write.
+ */
+export const rolloutStepsAdded = (glob: Glob, ctx: Context): Result<Transition> => {
+  if (isHumanCategory(glob.category) || isAgentSetGlob(glob)) return unchanged(glob);
+  const b = new Builder(glob, ctx);
+  if (
+    glob.type === 'sub' &&
+    (glob.status === 'planning' || glob.status === 'implementing' || glob.status === 'in_progress' || glob.status === 'pr_open')
+  ) {
+    asRolloutSame(b, glob, ctx);
+    if (glob.pr !== null) b.effect({ kind: 'sync_pr_labels', globId: glob.id, generation: glob.generation });
+  }
+  if (isMergeArmed(glob)) b.set({ mergeMode: null }).event('MergeDisarmed', { reason: 'rollout_steps' });
+  return b.done();
+};
+
+/**
+ * Row 31a: a rollout step failed after the merge. The glob's next generation starts: the merged PR is kept in `prs` (a late
+ * observation of it is then a no-op), the branch is deleted and cut again from the base with a fresh draft PR, and a new run
+ * implements the fix (or the glob is the person's, with no run, when one implements it). The step stays open, so it is
+ * pending until the next merge and due again after it. The failure's note travels as an attachment the service stores.
+ */
+export const rolloutStepFailed = (
+  glob: Glob,
+  input: { readonly stepId: string; readonly title: string; readonly stepState: 'open' | 'done' | 'dismissed'; readonly mergeSha?: string | null },
+  ctx: Context,
+): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const landed = glob.pr;
+  if (glob.status !== 'reviewing' || landed === null || landed.state !== 'merged')
+    return invalidTransition(glob, actor, 'Only a merged glob that is open for its rollout steps can start its next generation');
+  if (input.stepState === 'dismissed') return invalidTransition(glob, actor, 'That rollout step was dismissed');
+  if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s again`);
+  const merged: MergedPr = { number: landed.number, mergeSha: input.mergeSha ?? '', mergedAt: ctx.now };
+  const b = new Builder(glob, ctx).endRun('superseded', null, { cause: 'rollout_step_failed' }).bumpGeneration();
+  const generation = b.current.generation;
+  // A sub that merged and then gained steps (the rollout check writes them after the merge) is a same from here on, so the
+  // fix generation never goes through the sub gate and merges itself with the reopened step unchecked.
+  if (glob.type === 'sub') asRolloutSame(b, glob, ctx);
+  // A person who implements the glob (a super's creator, or whoever picked it up) fixes it themselves; otherwise a run does.
+  const person = glob.type === 'super' || glob.implementer !== null;
+  b.set({
+    prs: glob.prs.some((p) => p.number === merged.number) ? glob.prs : [...glob.prs, merged],
+    pr: null,
+    headChecks: null,
+    labels: {},
+    checklists: {},
+    failure: null,
+    mergeMode: null,
+    conflict: null,
+    behind: null,
+    provisioning: 'none',
+    implementer: person ? (glob.implementer ?? glob.creator) : null,
+    ...(glob.mergeHold == null ? {} : { mergeHold: null }),
+  })
+    .event('RolloutStepFailed', { step: input.stepId, title: input.title, generation })
+    .effect({ kind: 'delete_branch', globId: glob.id, generation })
+    .status(person ? 'in_progress' : 'implementing');
+  return (person ? b : b.queueRun(actor.email)).done();
+};
+
 export interface MergeOptions {
   /** Row 31: Merge and continue (supers): the glob returns to in_progress once merged. */
   readonly continue: boolean;
@@ -1403,6 +1494,12 @@ const gateText = (held: readonly Unmet[]): string => {
   const text = held.map((u) => holdWords(u.relation, u.external === true)).join('; ');
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 };
+
+/** A same with open rollout steps (s15t228): a person merges it with Merge and continue, so plain Merge and arming are refused. */
+const hasRolloutSteps = (glob: Glob, facts: ActionFacts | undefined): boolean =>
+  glob.type === 'same' && (facts?.rolloutSteps ?? 0) > 0;
+
+export const ROLLOUT_MERGE_REFUSAL = 'Has rollout steps: use Merge and continue, which keeps the glob open for them';
 
 /** Why Merge can't be pressed on a ready same or super right now (not armed, no conflict, checks not failed), or null. */
 const mergeBlocker = (glob: Glob, relations?: RelationFacts): string | null => {
@@ -1436,12 +1533,16 @@ export const requestMerge = (
   if (blocked !== null) return invalidTransition(glob, actor, blocked);
   const head = glob.pr?.headSha ?? '';
   const passed = headChecksPassed(glob);
+  const rollout = hasRolloutSteps(glob, options.facts);
   if (options.continue) {
-    if (glob.type !== 'super')
-      return invalidTransition(glob, actor, 'Only a super can merge and continue');
+    if (glob.type !== 'super' && !rollout)
+      return invalidTransition(glob, actor, 'Only a super, or a same with rollout steps, can merge and continue');
     if (!passed) return invalidTransition(glob, actor, 'Required checks have not passed on the current head');
-    if (!recordAtHead(glob, options.facts ?? {}))
+    // A same's record is not required at the head: the steps are what Merge and continue is for.
+    if (glob.type === 'super' && !recordAtHead(glob, options.facts ?? {}))
       return invalidTransition(glob, actor, RECORD_NOT_AT_HEAD);
+  } else if (rollout) {
+    return invalidTransition(glob, actor, ROLLOUT_MERGE_REFUSAL);
   }
   if (!passed) {
     const b = new Builder(glob, ctx)
@@ -1454,8 +1555,9 @@ export const requestMerge = (
     return b.done();
   }
   return new Builder(glob, ctx)
-    .set({ mergeMode: options.continue ? 'continue' : null, mergeUpdates: 0, ...leavesQueue(glob) })
-    .status('merging', options.continue ? { mode: 'continue' } : {})
+    // A same with rollout steps lands as a plain merge (Reviewing, steps due): only a super keeps `mergeMode: 'continue'`.
+    .set({ mergeMode: options.continue && glob.type === 'super' ? 'continue' : null, mergeUpdates: 0, ...leavesQueue(glob) })
+    .status('merging', options.continue ? { mode: glob.type === 'super' ? 'continue' : 'rollout' } : {})
     .effect({ kind: 'squash_merge', globId: glob.id, generation: glob.generation, sha: head })
     .done();
 };
@@ -2930,10 +3032,14 @@ export const liftRiskAreaEscalation = (
  * A person decides an escalation was unnecessary: the glob is a sub again. On a ready PR whose checks passed, the sub
  * gate runs on the head, so a sub with nothing else to flag merges.
  */
-export const deescalate = (glob: Glob, ctx: Context): Result<Transition> => {
+export const deescalate = (glob: Glob, ctx: Context, facts: ActionFacts = {}): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.escalation == null || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only an escalated same can be made a sub again');
+  }
+  // A sub merges itself, which would leave the open rollout steps dangling (the same condition as `allowedActions`).
+  if (glob.escalation.criterion === 'risk_path' && (facts.rolloutSteps ?? 0) > 0) {
+    return invalidTransition(glob, actor, 'A same with open rollout steps cannot be made a sub: it must be merged with Merge and continue');
   }
   if (
     glob.status !== 'implementing' &&
@@ -3462,7 +3568,9 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     (glob.status === 'planning' ||
       glob.status === 'failed' ||
       glob.status === 'in_progress' ||
-      glob.status === 'pr_open');
+      glob.status === 'pr_open' ||
+      // A merged glob stays open while its rollout steps do (row 9a): a person runs them from a session.
+      (glob.status === 'reviewing' && (facts.rolloutSteps ?? 0) > 0));
   // The glob's own implementer is offered it too (row 8: a no-op that reopens their session), so their own glob is never a dead end.
   if (canPickUp) actions.push('pick_up');
   if (
@@ -3491,8 +3599,13 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (isMergeArmed(glob) || isMergeQueued(glob)) {
     if (!restricted) actions.push('cancel_merge');
   } else if (mergeBlocker(glob, facts.relations) === null) {
-    actions.push('merge');
-    if (headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
+    if (hasRolloutSteps(glob, facts)) {
+      // Merge and continue replaces Merge (and arming) once the checks have passed.
+      if (headChecksPassed(glob)) actions.push('merge_continue');
+    } else {
+      actions.push('merge');
+      if (headChecksPassed(glob) && recordAtHead(glob, facts)) actions.push('merge_continue');
+    }
   }
   if (
     !restricted &&
@@ -3507,6 +3620,8 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     canChooseType(actor.role, 'sub') &&
     glob.escalation != null &&
     glob.type === 'same' &&
+    // A same escalated for its rollout steps stays a same while they are open (a sub would merge itself, leaving them dangling).
+    !(glob.escalation.criterion === 'risk_path' && (facts.rolloutSteps ?? 0) > 0) &&
     ['implementing', 'in_progress', 'pr_open'].includes(glob.status)
   ) {
     actions.push('deescalate');

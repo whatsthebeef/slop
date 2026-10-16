@@ -8,7 +8,8 @@ import { inGroup } from '../domain/group-view.js';
 import { formatId, letterFor } from '../domain/ids.js';
 import * as machine from '../domain/machine.js';
 import { listOf } from '../domain/matrix.js';
-import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, defaultStepBlocks, humanSteps, isHumanStepDue, stateOf, storedBlockProgress } from '../domain/human-steps.js';
+import { HUMAN_STEP_BLOCKS, HUMAN_STEP_KINDS, PREDICTED_ROLLOUT_TITLE, defaultStepBlocks, humanSteps, isHumanStepDue, openRolloutSteps, stateOf, storedBlockProgress } from '../domain/human-steps.js';
+import { maskSecrets, maskedNote } from '../domain/mask-secrets.js';
 import { armView, rolloutWhen } from '../domain/rollout-stages.js';
 import type { Arm } from '../domain/rollout-stages.js';
 import { dueSinceFor, markStepsDue } from './step-due.js';
@@ -485,6 +486,8 @@ export interface GlobView extends RelationListExtras {
   readonly sizeCheck: SizeCheck | null;
   /** Everything a person must do on the glob: steps the machine implies and stored work steps, most pressing first. */
   readonly humanSteps: readonly HumanStep[];
+  /** Open rollout steps holding back sign-off (`openRolloutSteps`): the one count the views read, so none re-derives it from the steps. */
+  readonly rolloutSteps?: number;
   /** The stage the "Arm system" label names (the first environment with an open rollout step), null when no step is open. */
   readonly arm: Arm | null;
   /** Why a person is needed on the glob and what to do first; null when nothing is wrong. */
@@ -597,7 +600,7 @@ interface CommandOptions {
    * when the step succeeds, in the same transaction, and the glob's version moves even when the step changed nothing else.
    */
   readonly relationPlan?: (tx: Tx, glob: Glob, board: readonly Relation[], now: string) => Promise<Result<RelationWrite>>;
-  /** Read the work steps holding back sign-off into `facts.rollout`. */
+  /** Read the work steps holding back sign-off into `facts.rollout`, and how many real rollout steps are open into `facts.rolloutSteps`. */
   readonly rollout?: boolean;
   /** Runs before the step: checks input against the store. */
   readonly prepare?: (tx: Tx, glob: Glob) => Promise<Result<null>>;
@@ -642,9 +645,10 @@ export class GlobService implements AutomaticRelations {
       const artifacts = (await tx.listArtifactSummaries(glob.boardId, [glob.id])).sort(byKind);
       const relations = await this.relationFacts(tx, await tx.listRelationsFrom([glob.id]));
       const sizeCheck = await tx.getSizeCheck(glob.id);
-      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, ...scriptFacts(check) };
       const stored = await tx.listHumanSteps(glob.boardId, [glob.id]);
-      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts) }, stored);
+      const rolloutSteps = openRolloutSteps(stored);
+      const facts = { recordSha: machine.recordShaOf(artifacts), reviews: machine.reviewsOf(artifacts), relations, rolloutSteps, ...scriptFacts(check) };
+      const steps = humanSteps(glob, { recordAtHead: machine.recordAtHead(glob, facts), rolloutSteps }, stored);
       const board = await tx.getBoard(glob.boardId);
       // What the viewer may see of globs on other boards: the others' ids and titles are left out for a non-member.
       const seen = await this.seeOthers(tx, email, glob.boardId, [...new Set(relations.relations.map((r) => r.to))]);
@@ -663,6 +667,7 @@ export class GlobService implements AutomaticRelations {
         ...((suggestions.get(glob.id)?.length ?? 0) > 0 ? { suggestions: suggestions.get(glob.id) } : {}),
         sizeCheck,
         humanSteps: steps,
+        rolloutSteps,
         arm: board === null ? null : armView(steps, board),
         handover: await handoverOf(tx, this.deps.clock, glob),
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
@@ -931,6 +936,7 @@ export class GlobService implements AutomaticRelations {
       return ok(closed.find((c) => c.id === step.id) ?? step);
     });
     if (result.ok) {
+      await this.rolloutStepsWritten(id);
       this.deps.notifier.publish({ kind: 'glob.changed', boardId: result.value.boardId, globId: id, version: version ?? 0 });
       if (superseded.now) await this.afterStepsChanged(id);
       await this.requestScan(id, [title, input.why, input.detail].filter((t): t is string => t !== undefined && t.trim() !== '').join('\n'));
@@ -938,9 +944,24 @@ export class GlobService implements AutomaticRelations {
     return result;
   }
 
-  /** Ticks a work step (records who and when), then lets the glob move on if it was the last one holding it back. */
-  completeHumanStep(email: string, id: string, stepId: string, version: number | null): Promise<Result<StoredHumanStep>> {
-    return this.closeHumanStep(email, id, stepId, version, 'done', null);
+  /**
+   * Rollout steps that hold back sign-off now exist for the glob: it is merged with Merge and continue, never by itself. A sub
+   * becomes a same and an armed merge is disarmed (`machine.rolloutStepsAdded`); nothing happens without open steps.
+   */
+  private async rolloutStepsWritten(id: string): Promise<void> {
+    const open = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      return glob !== null && openRolloutSteps(await tx.listHumanSteps(glob.boardId, [id])) > 0;
+    });
+    if (open) await this.command(null, id, null, (glob, ctx) => machine.rolloutStepsAdded(glob, ctx));
+  }
+
+  /**
+   * Ticks a work step (records who and when), then lets the glob move on if it was the last one holding it back. An optional
+   * `note` (what was checked, or done by hand) is masked and kept in the step's event only.
+   */
+  completeHumanStep(email: string, id: string, stepId: string, version: number | null, note?: string): Promise<Result<StoredHumanStep>> {
+    return this.closeHumanStep(email, id, stepId, version, 'done', null, note);
   }
 
   /** Dismisses a wrong step with the reason; the glob moves on if nothing else holds it back. */
@@ -956,6 +977,7 @@ export class GlobService implements AutomaticRelations {
     version: number | null,
     to: 'done' | 'dismissed',
     reason: string | null,
+    note?: string,
   ): Promise<Result<StoredHumanStep>> {
     const closed = await this.deps.store.transaction(async (tx): Promise<Result<StoredHumanStep>> => {
       const glob = await tx.getGlob(id);
@@ -969,7 +991,8 @@ export class GlobService implements AutomaticRelations {
       const now = this.deps.clock.now();
       const step: StoredHumanStep = to === 'done' ? { ...found, state: 'done', doneBy: email, doneAt: now } : { ...found, state: 'dismissed', dismissedReason: reason, doneBy: email, doneAt: now };
       await tx.saveHumanSteps([step]);
-      await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: to } }]);
+      const kept = note === undefined ? '' : maskedNote(note);
+      await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: to, ...(kept === '' ? {} : { note: kept }) } }]);
       return ok(step);
     });
     if (!closed.ok) return closed;
@@ -990,11 +1013,86 @@ export class GlobService implements AutomaticRelations {
   }
 
   /**
-   * A person (or an agent) reports that a work step was done and failed (a rollout that did not provision). The step stays open, the
-   * glob logs `HumanStepFailed`, and one open card suggestion asks "is there a fix glob?" (no model call). Reporting the same step
-   * again while the suggestion is open adds nothing. Version-checked when a version is given.
+   * A rollout step failed after the merge (a member says so, with the output or a note): the glob's next generation starts,
+   * on a fresh branch from the base with a new run (or the person's, when one implements it). The note is masked and capped,
+   * and kept with the step's title and commands as an attachment, `Rollout step failed (generation N)` (N is the generation
+   * that failed), which the next run reads as in-scope feedback. A done step is reopened; it is due again after the next merge.
+   */
+  async failRolloutStep(email: string, id: string, stepId: string, note: string, version: number | null): Promise<Result<Glob>> {
+    const masked = maskedNote(note);
+    const found: { step: StoredHumanStep | null; mergeSha: string | null } = { step: null, mergeSha: null };
+    const result = await this.command(
+      email,
+      id,
+      version,
+      (glob, ctx) => {
+        const step = found.step;
+        if (step === null) return notFound(`No step ${stepId} on ${id}`);
+        return machine.rolloutStepFailed(glob, { stepId, title: step.title, stepState: step.state, mergeSha: found.mergeSha }, ctx);
+      },
+      {
+        prepare: async (tx, glob) => {
+          found.step = (await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === stepId) ?? null;
+          if (found.step === null) return notFound(`No step ${stepId} on ${id}`);
+          if (found.step.kind !== 'rollout') return invalidInput('Only a rollout step can be marked failed');
+          const merges = await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['Merged'], [id]);
+          const sha = merges.sort((a, b) => a.at.localeCompare(b.at)).at(-1)?.data.sha;
+          found.mergeSha = typeof sha === 'string' ? sha : null;
+          return ok(null);
+        },
+        record: async (tx, before, next) => {
+          const step = found.step;
+          if (step === null) return;
+          const now = this.deps.clock.now();
+          if (step.state === 'done') await tx.saveHumanSteps([{ ...step, state: 'open', doneBy: null, doneAt: null }]);
+          const commands = step.commands.map((c) => maskSecrets(c));
+          await addArtifact(tx, this.deps.clock, next, email, {
+            kind: 'attachment',
+            label: `Rollout step failed (generation ${before.generation})`,
+            content: [
+              `# Rollout step failed: ${step.title}`,
+              `Generation ${before.generation} merged${found.mergeSha === null ? '' : ` as ${found.mergeSha}`}; ${email} reported this step failing when run from the base branch. Generation ${next.generation} fixes it: change what is needed so the step passes, and do not repeat the failed attempt. The step is due again once that generation merges.`,
+              '## What was reported',
+              masked === '' ? '(no note)' : masked,
+              ...(commands.length === 0 ? [] : ['## The step\'s commands', ...commands.map((c) => `    ${c}`)]),
+            ].join('\n\n'),
+            link: null,
+            commitSha: null,
+            runId: null,
+            agentSetVersion: null,
+            reviewStats: null,
+          });
+          await tx.appendEvents([{ type: 'HumanStepChanged', globId: id, actor: email, at: now, data: { step: step.id, kind: step.kind, title: step.title, change: 'failed' } }]);
+        },
+      },
+    );
+    if (result.ok) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId: id });
+    return result;
+  }
+
+  /**
+   * A person (or an agent) reports that a work step was done and failed (a rollout that did not provision). The one entry for both
+   * kinds of failure: a rollout step of a merged glob that is open for its rollout (`reviewing`, PR merged) starts the glob's next
+   * generation (`failRolloutStep`; the caller drains the outbox) and the step comes back reopened. Any other step stays open, the
+   * glob logs `HumanStepFailed` (the note masked), and one open card suggestion asks "is there a fix glob?" (no model call).
+   * Reporting the same step again while the suggestion is open adds nothing. Version-checked when a version is given.
    */
   async failHumanStep(email: string, id: string, stepId: string, note: string, version: number | null): Promise<Result<StoredHumanStep>> {
+    const route = await this.deps.store.transaction(async (tx) => {
+      const glob = await tx.getGlob(id);
+      const step = glob === null ? undefined : (await tx.listHumanSteps(glob.boardId, [id])).find((s) => s.id === stepId);
+      return glob !== null && step?.kind === 'rollout' && glob.status === 'reviewing' && glob.pr?.state === 'merged';
+    });
+    if (route) {
+      const next = await this.failRolloutStep(email, id, stepId, note, version);
+      // The route was read in its own transaction: a glob that stopped being a merged one open for its rollout in between is
+      // refused by the machine, and then takes the suggestion path below, as it would have.
+      if (!next.ok && next.error.code !== 'invalid_transition') return next;
+      if (next.ok) {
+        const reopened = (await this.deps.store.transaction((tx) => tx.listHumanSteps(next.value.boardId, [id]))).find((s) => s.id === stepId);
+        return reopened === undefined ? notFound(`No step ${stepId} on ${id}`) : ok(reopened);
+      }
+    }
     const result = await this.deps.store.transaction(async (tx): Promise<Result<StoredHumanStep>> => {
       const glob = await tx.getGlob(id);
       if (glob === null) return notFound(`No glob ${id}`);
@@ -1005,7 +1103,7 @@ export class GlobService implements AutomaticRelations {
       if (step === undefined) return notFound(`No step ${stepId} on ${id}`);
       if (step.state !== 'open') return invalidInput(`The step "${step.title}" is already ${step.state}`);
       const now = this.deps.clock.now();
-      await tx.appendEvents([{ type: 'HumanStepFailed', globId: id, actor: email, at: now, data: { stepId, title: step.title, note: note.trim() } }]);
+      await tx.appendEvents([{ type: 'HumanStepFailed', globId: id, actor: email, at: now, data: { stepId, title: step.title, note: maskedNote(note) } }]);
       const asked = (await tx.listOpenSuggestions([id])).some((r) => r.kind === 'step_failed' && r.mentionedId === stepId);
       if (!asked) {
         await tx.upsertRelationScans([
@@ -1336,7 +1434,10 @@ export class GlobService implements AutomaticRelations {
     });
     if (changed === null) return;
     if (changed.scripts) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: changed.boardId, globId: id });
-    if (changed.steps) await this.afterStepsChanged(id);
+    if (changed.steps) {
+      await this.rolloutStepsWritten(id);
+      await this.afterStepsChanged(id);
+    }
     if (changed.gained.length > 0) await this.requestScan(id, changed.gained.join('\n'));
   }
 
@@ -1446,7 +1547,10 @@ export class GlobService implements AutomaticRelations {
     });
     if (changed === null) return false;
     if (changed.artifacts) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: changed.glob.boardId, globId: id });
-    if (changed.steps) await this.afterStepsChanged(id);
+    if (changed.steps) {
+      await this.rolloutStepsWritten(id);
+      await this.afterStepsChanged(id);
+    }
     this.deps.notifier.publish({ kind: 'glob.changed', boardId: changed.glob.boardId, globId: id, version: changed.glob.version });
     return true;
   }
@@ -2895,9 +2999,14 @@ export class GlobService implements AutomaticRelations {
             ? null
             : `An investigation has been running since ${investigating.since}${investigating.sessionUrl === null ? '' : ` (${investigating.sessionUrl})`}; the local session waits for it and reuses its result`;
         warning = [held, note].filter((w) => w !== null).join('. ') || null;
-        return machine.pickUp(glob, ctx, board, { takeOver, ...(environment === undefined ? {} : { environment }), ...(relations === undefined ? {} : { relations }) });
+        return machine.pickUp(glob, ctx, board, {
+          takeOver,
+          ...(environment === undefined ? {} : { environment }),
+          ...(relations === undefined ? {} : { relations }),
+          ...(facts.rolloutSteps === undefined ? {} : { rolloutSteps: facts.rolloutSteps }),
+        });
       },
-      { relations: true, applies: 'any', record: this.handoverRecorder(wrote) },
+      { relations: true, rollout: true, applies: 'any', record: this.handoverRecorder(wrote) },
     );
     if (result.ok) this.publishHandover(wrote, result.value);
     if (result.ok) return ok({ glob: result.value, warning });
@@ -2940,14 +3049,18 @@ export class GlobService implements AutomaticRelations {
     });
   }
 
-  /** Merge, or (`continueAfter`, supers) Merge and continue, which needs the latest implementation record at the head. */
+  /**
+   * Merge, or (`continueAfter`) Merge and continue: a super's, which needs the latest implementation record at the head, or a
+   * same's with open rollout steps, which lands as a plain merge and keeps the glob in Doing for the steps. A same with
+   * open rollout steps is refused a plain Merge.
+   */
   merge(email: string, id: string, version: number, continueAfter = false) {
     return this.command(
       email,
       id,
       version,
       (glob, ctx, _board, facts) => machine.requestMerge(glob, ctx, { continue: continueAfter, facts }),
-      { facts: continueAfter, relations: true },
+      { facts: continueAfter, relations: true, rollout: true },
     );
   }
 
@@ -3047,7 +3160,7 @@ export class GlobService implements AutomaticRelations {
   async deescalate(email: string, id: string, version: number) {
     const refused = await this.refuseTypeChoice(email, id, 'sub');
     if (refused !== null) return refused;
-    return this.command(email, id, version, (glob, ctx) => machine.deescalate(glob, ctx));
+    return this.command(email, id, version, (glob, ctx, _board, facts) => machine.deescalate(glob, ctx, facts), { rollout: true });
   }
 
   /** Make it a super: a person takes over a failed sub or same whose routine asked for pairing. Counts as a type correction. */
@@ -3856,9 +3969,10 @@ export class GlobService implements AutomaticRelations {
         options.relations === true
           ? { relations: await this.relationFacts(tx, rows ?? (await tx.listRelationsFrom([glob.id]))) }
           : {};
+      const storedSteps = options.rollout === true ? await tx.listHumanSteps(glob.boardId, [glob.id]) : [];
       const rollout =
         options.rollout === true
-          ? { rollout: storedBlockProgress(await tx.listHumanSteps(glob.boardId, [glob.id]), 'sign_off') }
+          ? { rollout: storedBlockProgress(storedSteps, 'sign_off'), rolloutSteps: openRolloutSteps(storedSteps) }
           : {};
       const facts: ActionFacts = { ...record, ...relations, ...rollout };
       const ctx = await this.context(actor, board, options.triggeredByCreator === true ? glob.creator : undefined);

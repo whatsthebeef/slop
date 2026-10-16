@@ -14,6 +14,7 @@ import {
   intakeAccuracy,
   outcomeDue,
   selectExamples,
+  wasCorrected,
 } from '../src/domain/intake-learning.js';
 import type { ExampleCandidate, GlobOutcome, IntakeSnapshot } from '../src/domain/intake-learning.js';
 import { FakeEmbedder } from '../src/testing/fake-embedder.js';
@@ -121,6 +122,19 @@ describe('collectOutcome', () => {
     });
     expect(outcome.tests.ciFailures).toBe(1);
     expect(outcome.final).toBe(true);
+  });
+
+  it('records a risk-path conversion as the gate\'s own, not a correction, with a plain note', () => {
+    const sub = snapshot({ globId: 's1t3', decisions: { ...snap.decisions, type: 'sub', category: 'task' } });
+    const outcome = collectOutcome({
+      ...base,
+      snapshot: sub,
+      now: '2026-10-04T00:00:00.000Z',
+      events: [event('SubReviewCompleted', 's1t3', '2026-10-02T12:00:00.000Z', { passed: false, cause: 'risk_path', changedLines: 12, limit: 2000 }, null)],
+    });
+    expect(outcome.corrections.subConverted).toBe('risk_path');
+    expect(wasCorrected(outcome)).toBe(false);
+    expect(selectExamples([{ snapshot: sub, outcome, distance: 0 }])[0]?.note).toBe('sub converted to same for a risk path');
   });
 
   it('reads the gate verdict, review stats, findings, effort and fix globs', () => {
