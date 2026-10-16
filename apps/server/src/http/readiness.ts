@@ -1,5 +1,5 @@
 import type { Board, BoardService, GlobService, NotificationService, ReadinessFacts, ReadinessItem, Store } from '@slop/core';
-import { allowsBot, appSettingsUrl, missingAppEvents, missingCoreAreas, readMergePolicy, readiness, recentRoutineFailures, runsClaudeAction, subGateCheckOf, subGateWorkflowPath, unreactedCheckFailures } from '@slop/core';
+import { allowsBot, appSettingsUrl, missingAppEvents, missingCoreAreas, parseAgentSetManifest, readMergePolicy, readiness, recentRoutineFailures, runsClaudeAction, SETTINGS_REPO_PATH, subGateCheckOf, subGateWorkflowPath, unregisteredHooks, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
@@ -63,17 +63,19 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
   let claudeAllowsSlop: boolean | null = null;
   let committedAgentSetVersion: number | 'unreadable' | null = null;
   let agentSetRead = false;
+  let unregistered: string[] = [];
   if (repo !== null && deps.host.configured) {
     try {
       const connection = await deps.host.connection(repo);
       repoConnected = connection.connected;
       installUrl = connection.installUrl === null ? null : `${connection.installUrl}?state=${String(board.id)}`;
       if (connection.connected) {
-        const [workflow, agentSet, claude, rules] = await Promise.all([
+        const [workflow, agentSet, claude, rules, claudeSettings] = await Promise.all([
           deps.host.readFile(repo, board.baseBranch, subGateWorkflowPath(gateCheck)),
           deps.host.readFile(repo, board.baseBranch, '.claude/slop-agent-set.json'),
           claudeWorkflows(deps.host, repo, board.baseBranch),
           deps.host.branchRules(repo, board.baseBranch),
+          deps.host.readFile(repo, board.baseBranch, SETTINGS_REPO_PATH),
         ]);
         branchRules = rules;
         claudeWorkflow = claude.length > 0;
@@ -83,6 +85,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
         checksWorkflow = workflow !== null;
         agentSetRead = true;
         committedAgentSetVersion = agentSet === null ? null : parseAgentSetVersion(agentSet);
+        unregistered = unregisteredHooks(parseAgentSetManifest(agentSet ?? '')?.files ?? [], claudeSettings);
       }
     } catch (error) {
       // An unreachable host leaves its items unknown rather than failing the checklist.
@@ -122,6 +125,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     claudeAllowsSlop,
     appEvents,
     committedAgentSetVersion: agentSetRead ? committedAgentSetVersion : 'unknown',
+    unregisteredHooks: unregistered,
     missingCoreAreas: missingCoreAreas(docs),
     ticks: board.readinessTicks,
     recentFailures: recentRoutineFailures(globs, since),

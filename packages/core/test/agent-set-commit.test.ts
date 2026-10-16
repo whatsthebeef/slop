@@ -109,10 +109,11 @@ describe('the agent set commit', () => {
     expect(ready.files.map((f) => [f.path, f.executable])).toEqual([
       ['.claude/agents/tester.md', false],
       ['.claude/hooks/after_push.sh', true],
+      ['.claude/settings.json', false],
       ['.claude/slop-agent-set.json', false],
     ]);
     const manifest = ready.files.at(-1);
-    expect(parseAgentSetManifest(manifest?.content ?? '')).toEqual({ version: 2, files: ['.claude/agents/tester.md', '.claude/hooks/after_push.sh'] });
+    expect(parseAgentSetManifest(manifest?.content ?? '')).toEqual({ version: 2, files: ['.claude/agents/tester.md', '.claude/hooks/after_push.sh', '.claude/settings.json'] });
     expect(JSON.parse(manifest?.content ?? '')).toMatchObject({ board: boardId, fetchedAt: '2026-10-05T12:00:00Z' });
   });
 

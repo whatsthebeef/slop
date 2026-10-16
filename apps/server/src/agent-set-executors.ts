@@ -1,4 +1,4 @@
-import { isAgentSetGlobOpen, parseAgentSetManifest, AGENT_SET_MANIFEST_PATH } from '@slop/core';
+import { isAgentSetGlobOpen, mergeHookSettings, parseAgentSetManifest, AGENT_SET_MANIFEST_PATH, SETTINGS_REPO_PATH } from '@slop/core';
 import type { AgentSetCommitService, Board, EffectKind, Glob } from '@slop/core';
 import { repoOf } from './codehost.js';
 import type { CodeHost } from './codehost.js';
@@ -43,9 +43,12 @@ export const agentSetExecutors = (
     // Merged or closed since `prepare` looked: a retry finds no open glob and opens the next one.
     const current = await globOf(branch);
     if (current === null || !isAgentSetGlobOpen(current)) return { state: 'pending', retryAfterMs: WAIT_MS, reason: `${branch} is no longer open` };
-    const paths = new Set(prepared.files.map((f) => f.path));
+    // settings.json is the repo's own file: the catalog's hooks are merged into what the branch holds, not written over it.
+    const settings = await host.readFile(repo, branch, SETTINGS_REPO_PATH);
+    const files = prepared.files.map((f) => (f.path === SETTINGS_REPO_PATH ? { ...f, content: mergeHookSettings(settings, f.content) } : f));
+    const paths = new Set(files.map((f) => f.path));
     const deletions = (previous?.files ?? []).filter((path) => !paths.has(path));
-    await host.commitToBranch(repo, branch, prepared.files, deletions, messageOf(prepared.board, prepared.version, previous?.version ?? null, prepared.files.length - 1));
+    await host.commitToBranch(repo, branch, files, deletions, messageOf(prepared.board, prepared.version, previous?.version ?? null, files.length - 1));
     // Slop's commit is the whole change: open the PR for review so the checks run and the card offers Merge.
     if (current.pr?.state === 'draft') await requestReady(branch);
     return 'done';
