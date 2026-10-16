@@ -45,7 +45,6 @@ import type {
   RunnerChange,
   RunnerInput,
   SpecStatus,
-  EnvironmentIndicator,
   BoardEnvironment,
   GlobEnvironment,
   MonthSpend,
@@ -357,10 +356,8 @@ export interface BoardDeploys {
   readonly indicators: Readonly<Record<string, DeployIndicator>>;
   /** Environments with a deploy running: Deploy now is disabled there for everyone. */
   readonly running: readonly string[];
-  /** The release and integration environments each glob is in. Optional: an older server doesn't send it, and a
-   * mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
-  readonly environments?: Readonly<Record<string, readonly EnvironmentIndicator[]>>;
-  /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional, as above. */
+  /** Each glob's ATF results: its branch run, and the runs against the environment commits holding it. Optional: an older server
+   * doesn't send it, and a mismatched dev pairing (vite on a branch, API on main) must not blank the board. */
   readonly atf?: Readonly<Record<string, readonly AtfRun[]>>;
 }
 
