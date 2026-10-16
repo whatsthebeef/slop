@@ -373,7 +373,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
   const [failing, setFailing] = useState(false);
   const { onFail } = actions;
   // A rollout step of a merged glob fails into the glob's next generation; any other step asks for a fix glob.
-  const nextGeneration = step.kind === 'rollout' && glob.status === 'reviewing';
+  const nextGeneration = step.kind === 'rollout' && glob.status === 'reviewing' && glob.pr?.state === 'merged';
   const waits = step.check != null && step.check !== '';
   return (
     <li className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded border bg-background p-3 text-sm' data-testid='due-step' data-kind={step.kind}>

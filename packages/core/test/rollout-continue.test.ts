@@ -501,6 +501,60 @@ describe('through the service', () => {
     expect((await globs.pickUp(DEV, g.id, signedOff.version, false)).ok).toBe(false);
   });
 
+  describe('failHumanStep routes a failed step', () => {
+    const mergedWith = async (patch: Partial<Glob> = {}) => {
+      const g = await readyGlob();
+      const rollout = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out the host stack' }));
+      const other = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Tell support', kind: 'action' }));
+      // A required label keeps sign-off waiting once the rollout step is ticked.
+      const done = await update(g.id, { status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'abc1234' }, labels: { CR: 'required' }, ...patch });
+      return { glob: done, rollout, other };
+    };
+    const suggestions = (id: string) => store.transaction((tx) => tx.listOpenSuggestions([id]));
+
+    it('a rollout step of a merged glob starts the next generation and comes back open', async () => {
+      const { glob, rollout } = await mergedWith();
+      const step = unwrap(await globs.failHumanStep(DEV, glob.id, rollout.id, 'Policy refused.', (await peek(glob.id)).version));
+      expect(step).toMatchObject({ id: rollout.id, state: 'open' });
+      expect((await peek(glob.id)).generation).toBe(glob.generation + 1);
+      expect((await attachments(glob.id)).map((a) => a.label)).toEqual([`Rollout step failed (generation ${glob.generation})`]);
+      expect(await suggestions(glob.id)).toHaveLength(0);
+    });
+
+    it('a done rollout step of a merged glob is reopened', async () => {
+      const { glob, rollout } = await mergedWith();
+      unwrap(await globs.completeHumanStep(DEV, glob.id, rollout.id, null));
+      const step = unwrap(await globs.failHumanStep(DEV, glob.id, rollout.id, 'it broke', null));
+      expect(step).toMatchObject({ state: 'open', doneBy: null });
+      expect((await peek(glob.id)).generation).toBe(glob.generation + 1);
+    });
+
+    it('any other step of the same merged glob gets the fix-glob suggestion and no new generation', async () => {
+      const { glob, other } = await mergedWith();
+      const step = unwrap(await globs.failHumanStep(DEV, glob.id, other.id, 'support was not told', null));
+      expect(step.state).toBe('open');
+      expect((await peek(glob.id)).generation).toBe(glob.generation);
+      expect((await suggestions(glob.id)).map((s) => [s.kind, s.mentionedId])).toEqual([['step_failed', other.id]]);
+      expect(await attachments(glob.id)).toHaveLength(0);
+    });
+
+    it('a rollout step of a glob that is not merged, or is signed off, takes the suggestion path', async () => {
+      for (const patch of [{ status: 'pr_open', pr: { number: 7, state: 'ready', headSha: 'abc1234' } }, { status: 'signed_off' }] as Partial<Glob>[]) {
+        const { glob, rollout } = await mergedWith(patch);
+        unwrap(await globs.failHumanStep(DEV, glob.id, rollout.id, 'it broke', null));
+        expect((await peek(glob.id)).generation).toBe(glob.generation);
+        expect((await suggestions(glob.id)).map((s) => s.kind)).toEqual(['step_failed']);
+      }
+    });
+
+    it('a stale version on the routed path is a version conflict', async () => {
+      const { glob, rollout } = await mergedWith();
+      const stale = await globs.failHumanStep(DEV, glob.id, rollout.id, 'x', glob.version + 5);
+      expect(!stale.ok && stale.error.code).toBe('version_conflict');
+      expect((await peek(glob.id)).generation).toBe(glob.generation);
+    });
+  });
+
   describe('failRolloutStep', () => {
     const setup = async (patch: Partial<Glob> = {}) => {
       const g = await readyGlob();

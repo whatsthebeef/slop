@@ -1085,9 +1085,13 @@ export class GlobService implements AutomaticRelations {
     });
     if (route) {
       const next = await this.failRolloutStep(email, id, stepId, note, version);
-      if (!next.ok) return next;
-      const reopened = (await this.deps.store.transaction((tx) => tx.listHumanSteps(next.value.boardId, [id]))).find((s) => s.id === stepId);
-      return reopened === undefined ? notFound(`No step ${stepId} on ${id}`) : ok(reopened);
+      // The route was read in its own transaction: a glob that stopped being a merged one open for its rollout in between is
+      // refused by the machine, and then takes the suggestion path below, as it would have.
+      if (!next.ok && next.error.code !== 'invalid_transition') return next;
+      if (next.ok) {
+        const reopened = (await this.deps.store.transaction((tx) => tx.listHumanSteps(next.value.boardId, [id]))).find((s) => s.id === stepId);
+        return reopened === undefined ? notFound(`No step ${stepId} on ${id}`) : ok(reopened);
+      }
     }
     const result = await this.deps.store.transaction(async (tx): Promise<Result<StoredHumanStep>> => {
       const glob = await tx.getGlob(id);

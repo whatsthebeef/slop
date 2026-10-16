@@ -870,7 +870,10 @@ export const api = {
       `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/complete`,
       {},
     ),
-  /** "It failed": a rollout step's run failed. The step stays open and slop asks whether a glob fixes it. The version is sent once, as given. */
+  /**
+   * "It failed": a step's run failed. A rollout step of a merged glob starts the glob's next generation; any other step stays open
+   * and slop asks whether a glob fixes it. The version is sent once, as given.
+   */
   failStep: (id: string, stepId: string, note: string, version?: number | null) =>
     request<GlobView>('POST', `/api/globs/${id}/steps/${encodeURIComponent(stepId)}/fail`, version === undefined ? { note } : { note, version }),
   /** A person's mark that the glob's change is deployed to the environment: its after-deploy steps fall due. */

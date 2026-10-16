@@ -22,7 +22,8 @@ const step = (over: Partial<ListedHumanStep> & Pick<ListedHumanStep, 'id' | 'sta
 });
 
 const show = (humanSteps: ListedHumanStep[], onFail?: (stepId: string, note: string) => Promise<boolean>, status: GlobView['status'] = 'reviewing') => {
-  const glob = { ...coreGlob(), status, list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+  const pr = status === 'reviewing' ? { number: 7, state: 'merged' as const, headSha: 'abc1234' } : null;
+  const glob = { ...coreGlob(), status, pr, list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
   render(
     <MemoryRouter>
       <HumanSteps
