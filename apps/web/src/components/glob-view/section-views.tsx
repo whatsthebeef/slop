@@ -19,7 +19,6 @@ import { DecisionAssessmentPanel, DecisionPanel } from './decision';
 import { DeploysPanel } from './deploys';
 import { EditFieldsSection } from './edit-fields';
 import type { GlobEdits } from './edit-fields';
-import { EnvironmentsPanel } from './environments';
 import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
@@ -107,7 +106,6 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
   plan: ({ ctx }) => <PlanSection ctx={ctx} />,
   decision: ({ ctx }) => <DecisionPanel ctx={ctx} />,
   deploys: ({ ctx }) => <DeploysPanel ctx={ctx} />,
-  environments: ({ ctx }) => <EnvironmentsPanel ctx={ctx} />,
   tests: ({ ctx }) => <TestsPanel ctx={ctx} />,
   'due-steps': ({ ctx, actions, onAddStep, onCompleteStep, onDismissStep, onFailStep }) => (
     <HumanSteps
