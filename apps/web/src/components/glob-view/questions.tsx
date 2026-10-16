@@ -1,6 +1,7 @@
 import type { OpenQuestion } from '@slop/core';
 import { useState } from 'react';
 import type { AnswerQuestionInput } from '@/lib/api';
+import { blocksReadOnly } from '@/lib/blocking-item';
 import { closedQuestionsOf, openQuestionsOf } from '@/lib/questions';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -19,11 +20,14 @@ const HOLDS: Readonly<Record<OpenQuestion['blocking'], string>> = {
 const OpenQuestionRow = ({
   question,
   disabled,
+  readOnly,
   onAnswer,
   onDismiss,
 }: {
   question: OpenQuestion;
   disabled: boolean;
+  /** Planning: the question shows its text with no buttons; the glob's Pick up / Start is the one action. */
+  readOnly: boolean;
   onAnswer: (questionId: string, input: AnswerQuestionInput) => Promise<boolean>;
   onDismiss: (questionId: string, note?: string) => Promise<boolean>;
 }) => {
@@ -54,7 +58,7 @@ const OpenQuestionRow = ({
           {raisedLine(question)}. {HOLDS[question.blocking]}.
         </span>
       </div>
-      {(question.options ?? []).length > 0 && (
+      {!readOnly && (question.options ?? []).length > 0 && (
         <div className="flex flex-wrap gap-2" data-testid="question-options">
           {(question.options ?? []).map((option) => (
             <Button
@@ -69,29 +73,31 @@ const OpenQuestionRow = ({
           ))}
         </div>
       )}
-      <form
-        className="flex flex-wrap items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (answer !== '') void run(() => onAnswer(question.id, { answer }));
-        }}
-      >
-        <Input
-          aria-label={`Answer ${question.id}`}
-          placeholder="Your answer"
-          className="min-w-0 flex-1"
-          value={text}
-          disabled={off}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <Button type="submit" disabled={off || answer === ''}>
-          Answer
-        </Button>
-        <Button type="button" variant="outline" disabled={off} onClick={() => setDismissing((d) => !d)}>
-          Dismiss
-        </Button>
-      </form>
-      {dismissing && (
+      {!readOnly && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (answer !== '') void run(() => onAnswer(question.id, { answer }));
+          }}
+        >
+          <Input
+            aria-label={`Answer ${question.id}`}
+            placeholder="Your answer"
+            className="min-w-0 flex-1"
+            value={text}
+            disabled={off}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <Button type="submit" disabled={off || answer === ''}>
+            Answer
+          </Button>
+          <Button type="button" variant="outline" disabled={off} onClick={() => setDismissing((d) => !d)}>
+            Dismiss
+          </Button>
+        </form>
+      )}
+      {!readOnly && dismissing && (
         <form
           className="flex flex-wrap items-center gap-2"
           data-testid="question-dismiss-form"
@@ -150,7 +156,7 @@ export const QuestionsSection = ({
         >
           <ul className="grid gap-2">
             {open.map((q) => (
-              <OpenQuestionRow key={q.id} question={q} disabled={busy} onAnswer={onAnswer} onDismiss={onDismiss} />
+              <OpenQuestionRow key={q.id} question={q} disabled={busy} readOnly={blocksReadOnly(glob)} onAnswer={onAnswer} onDismiss={onDismiss} />
             ))}
           </ul>
         </Block>
