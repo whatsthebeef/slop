@@ -269,8 +269,8 @@ describe('GlobHeader', () => {
           <GlobCard glob={g} viewer={admin} onOpen={() => undefined} onOpenSection={() => undefined} previewing={null} onPreview={() => undefined} onMove={() => undefined} onArrow={() => undefined} />
         </MemoryRouter>,
       );
-      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('do');
-      expect(header).toBe('do');
+      expect(container.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('rollout');
+      expect(header).toBe('rollout');
     });
 
     it('shows "ID · list" on the left and, with nothing happening, only the kind marker on the right', () => {

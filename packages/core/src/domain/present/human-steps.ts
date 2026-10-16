@@ -133,7 +133,7 @@ export const rolloutLine = (
   const [first] = open;
   const done = progress.total - progress.open;
   return {
-    text: 'do',
+    text: 'rollout',
     tip: [
       `Merged; ${String(done)} of ${String(progress.total)} rollout steps done${first === undefined ? '' : `: ${stepName(first)}`}`,
       ...open.slice(1).map(stepName),
