@@ -173,7 +173,7 @@ describe('layered agent set on a board', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, boardId));
   });
@@ -199,7 +199,7 @@ describe('layered agent set on a board', () => {
 
   it('moves on past a board whose writes keep conflicting, still bumping the boards after it', async () => {
     const boards = new BoardService({ store, notifier });
-    const later = unwrap(await boards.create(ADMIN, { name: 'c', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const later = unwrap(await boards.create(ADMIN, { name: 'c', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await knowledge.adoptCatalogAgentSet(ADMIN, later));
     catalogSet = { ...catalogSet, hash: 'h2' };
     // The first board loses every conditional write, as if something kept changing it.

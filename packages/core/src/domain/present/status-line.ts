@@ -3,7 +3,6 @@ import * as machine from '../machine.js';
 import { actionState, preparationOf } from '../action-glob.js';
 import {
   appliedHolding,
-  DEPLOY_STALLED_LABEL,
   MERGE_CONFLICT_STALL_LABEL,
   MERGE_QUEUE_TIP,
 } from '../whose-move.js';
@@ -384,14 +383,6 @@ export const statusLine = (
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha, { rolloutSteps: glob.rolloutSteps ?? 0 });
-    // A rollout waiting on a deploy that never came is a stall: the warning says it in two words, the tooltip says what is missing.
-    if (glob.move?.holder === 'stalled' && glob.move.cause === 'deploy')
-      return make({
-        kind: 'stuck',
-        full: DEPLOY_STALLED_LABEL,
-        tone: 'text-required',
-        tip: `${DEPLOY_STALLED_LABEL}\n${glob.move.reason}`,
-      });
     // Merged with its rollout still open: how far it is, and whose turn.
     const rollout =
       glob.humanSteps === undefined

@@ -162,7 +162,7 @@ describe('the intake rule: risk paths and rollout steps are a same', () => {
   beforeEach(async () => {
     store = new MemoryStore();
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: DEV, active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier: new RecordingNotifier() }).create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     intake = new IntakeService({ store, llm: { complete: () => Promise.resolve(JSON.stringify(answer)) } });
   });
 

@@ -53,7 +53,7 @@ describe('holds: a follow-up or fix glob holds back the glob it serves', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV, OUTSIDER]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -96,7 +96,7 @@ describe('holds: a follow-up or fix glob holds back the glob it serves', () => {
   it('refuses before creating: an unknown glob, a glob on a board the actor is not in, a cycle', async () => {
     const before = [...store.state.globs.keys()].length;
     expect(message(await globs.createWithNotes(ADMIN, input({ holds: ['s1t99'] })))).toBe('No glob s1t99');
-    const other = unwrap(await boards.create(OUTSIDER, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const other = unwrap(await boards.create(OUTSIDER, { name: 'other', repo: null, timeZone: 'UTC', environments: [] }));
     const foreign = unwrap(await globs.create(OUTSIDER, input({ boardId: other.id })));
     expect(message(await globs.createWithNotes(ADMIN, input({ holds: [foreign.id] })))).toBe(`No glob ${foreign.id}`);
     // The new glob waits for X and holds X back: a cycle.
@@ -128,7 +128,7 @@ describe('holds: a follow-up or fix glob holds back the glob it serves', () => {
   });
 
   it('holds across boards: the row lands on the other board\'s glob', async () => {
-    const other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] }));
+    const other = unwrap(await boards.create(ADMIN, { name: 'other', repo: null, timeZone: 'UTC', environments: [] }));
     const x = unwrap(await globs.create(ADMIN, input({ boardId: other.id, category: 'task' })));
     const made = unwrap(await globs.createWithNotes(ADMIN, input({ holds: [{ id: x.id, reason: 'a slop-side change it needs' }], by: 'agent' })));
     expect(rows(x.id)).toMatchObject([{ boardId: other.id, to: made.glob.id }]);

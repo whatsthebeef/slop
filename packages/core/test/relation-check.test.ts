@@ -181,7 +181,7 @@ describe('relation check (service)', () => {
       },
     });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   it('queues the check when a glob merges', async () => {

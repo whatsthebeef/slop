@@ -116,7 +116,6 @@ describe('The learned sub limit in Postgres', () => {
       await boards.create(ADMIN, {
         name: 'b',
         repo: 'acme/app',
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),
@@ -332,7 +331,6 @@ describe('The learned sub limit in Postgres', () => {
       await boards.create(ADMIN, {
         name: 'concurrent',
         repo: 'acme/other',
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

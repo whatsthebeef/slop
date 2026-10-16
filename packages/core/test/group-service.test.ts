@@ -91,7 +91,7 @@ describe('GroupService', () => {
     let n = 0;
     const clock = { now: () => '2026-10-13T12:00:00.000Z' };
     const boards = new BoardService({ store, notifier });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => `r${String((n += 1))}` }, routines: { hasRoutine: () => Promise.resolve(true) } });
     groups = new GroupService({ store, globs, boards, clock });

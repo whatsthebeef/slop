@@ -26,9 +26,8 @@ const METHOD_LABEL: Record<AtfRunnerMethod, string> = {
 const when = (at: string | null | undefined): string =>
   at == null ? 'never' : new Date(at).toLocaleString();
 
-/** The environments a runner may serve are the ones the board observes (those with a pipeline role), as the server checks. */
-const observedNames = (environments: readonly Environment[]): string[] =>
-  environments.filter((e) => e.role !== undefined).map((e) => e.name);
+/** The environments a runner may serve are the board's dev environments. */
+const observedNames = (environments: readonly Environment[]): string[] => environments.map((e) => e.name);
 
 const lines = (text: string): string[] =>
   text

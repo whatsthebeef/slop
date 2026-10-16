@@ -138,16 +138,38 @@ describe('whoseMove: priority', () => {
       expect(move(merged(2), {}, { stored: [step('demo')] })).toMatchObject({ holder: 'waiting' });
     });
 
-    it('is stalled as "Deploy stalled" once nothing was recorded for a while, with Mark deployed as the way forward', () => {
+    it('keeps waiting however long nothing is recorded: there is no deploy stall', () => {
       const m = move(merged(40), {}, { stored: [step('demo'), step('dev')] });
-      expect(m).toMatchObject({ holder: 'stalled', cause: 'deploy', label: 'Deploy stalled' });
-      expect(m.reason).toContain('demo');
-      expect(unstickStep(m, { implementer: null })).toMatchObject({ action: 'mark_deployed', title: 'Mark deployed' });
+      expect(m).toMatchObject({ holder: 'waiting', reason: 'waiting for Check demo' });
+      expect(m.cause).toBeUndefined();
+      expect(unstickStep(m, { implementer: null })).toBeNull();
     });
 
     it('is not stalled while a deploy of it is running', () => {
       const deploy = { deploys: [{ id: 'd1', environment: 'demo', sha: head, state: 'running' as const, requestedAt: NOW, runningSince: NOW, url: null }] };
       expect(move(merged(40), deploy, { stored: [step('demo')] }).holder).not.toBe('stalled');
+    });
+  });
+
+  describe('a downstream step', () => {
+    const downstream: StoredHumanStep = {
+      id: 'hs-down', boardId: 1, globId: 's1t1', kind: 'rollout', title: 'Run on int, staging, prod as each is released: Backfill', detail: null, who: 'anyone', due: 'downstream', state: 'open',
+      blocks: [], check: null, script: null, why: null, permissions: null, commands: [], verify: null, origin: 'rollout-section',
+      createdBy: dev.email, createdAt: NOW, doneBy: null, doneAt: null, dismissedReason: null, dueSince: null,
+    };
+    const merged = (minutes: number) => glob({ status: 'reviewing', runs: [], pr: { number: 1, state: 'merged', headSha: head }, updatedAt: minutesAgo(minutes) });
+
+    it('changes nothing about whose move it is, however long it stays open', () => {
+      for (const minutes of [2, 40, 600]) {
+        const m = move(merged(minutes), {}, { stored: [downstream] });
+        expect(m).toEqual(move(merged(minutes), {}, { stored: [] }));
+        expect(m.holder).not.toBe('waiting');
+        expect(m.reason).not.toContain('Backfill');
+      }
+    });
+
+    it('does not turn a signed-off glob into anything but done', () => {
+      expect(move(glob({ status: 'signed_off', runs: [], pr: { number: 1, state: 'merged', headSha: head } }), {}, { stored: [downstream] })).toMatchObject({ holder: 'done' });
     });
   });
 

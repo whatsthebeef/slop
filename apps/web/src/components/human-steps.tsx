@@ -1,4 +1,4 @@
-import { isForViewer, deployEnv, groupText, stageGroups, stripMarkdown, blocksReadOnly } from '@slop/core';
+import { isForViewer, groupText, stageGroups, stripMarkdown, blocksReadOnly } from '@slop/core';
 import type { HumanStepScript, HumanStepViewer, StageGroup } from '@slop/core';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -25,6 +25,7 @@ import {
   runLines,
   scriptRunCommand,
   scriptSourceUrl,
+  runsOnText,
   stateText,
   stepInput,
   whoText,
@@ -100,6 +101,7 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
         </span>
         <span className='font-mono text-[11px] text-muted-foreground' data-testid='step-group'>{stepGroupLabel(step)}</span>
         {step.due === 'once' && <OnceMarker />}
+        {step.due === 'downstream' && <DownstreamMarker />}
         {mine && !predicted && step.state === 'due' && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
       <div className='flex flex-wrap gap-x-3 break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]'>
@@ -124,6 +126,13 @@ const Step = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; ste
 const OnceMarker = () => (
   <span className='rounded-sm border px-1 font-mono text-[10px] text-muted-foreground' data-testid='step-once' title='A one-shot command: due when its script is on the branch, done once and never reopened'>
     once
+  </span>
+);
+
+/** Marks a downstream step: the change released further down the pipeline, which a person ticks; it holds nothing back. */
+const DownstreamMarker = () => (
+  <span className='rounded-sm border px-1 font-mono text-[10px] text-muted-foreground' data-testid='step-downstream' title='Does not block sign-off, dependants or the merge; tick it when the change is released further'>
+    doesn&apos;t block
   </span>
 );
 
@@ -277,8 +286,14 @@ const StepFields = ({
   const why = step.why?.trim() ?? '';
   const permissions = step.permissions?.trim() ?? '';
   const verify = step.verify?.trim() ?? '';
+  const runsOn = runsOnText(glob, step, source.baseBranch);
   return (
     <>
+      {runsOn !== null && (
+        <span className='text-[11px] text-muted-foreground' data-testid='step-runs-on'>
+          {runsOn}
+        </span>
+      )}
       {why !== '' && <Field label="Why" text={why} testId="step-why" />}
       {showDetail && detail !== '' && (
         <StepDetail detail={detail} />
@@ -407,6 +422,7 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
         </span>
         <span className='font-mono text-[11px] text-muted-foreground' data-testid='step-group'>{stepGroupLabel(step)}</span>
         {step.due === 'once' && <OnceMarker />}
+        {step.due === 'downstream' && <DownstreamMarker />}
         {mine && <span className='rounded-sm bg-foreground px-1 font-mono text-[10px] text-background'>Your turn</span>}
       </div>
       <span className='text-xs text-muted-foreground' data-testid='step-who'>
@@ -441,24 +457,19 @@ const DueStep = ({ glob, step, mine, busy, actions, source }: { glob: GlobView; 
 
 /**
  * One stage's steps that are not due yet, behind one quiet line ("After the deploy to production: 2 steps, not due yet"),
- * collapsed until asked for. An after-deploy group has "Mark deployed to <env>" beside it when the page can send it.
+ * collapsed until asked for.
  */
 const QuietGroup = ({
   group,
-  busy,
-  onMarkDeployed,
   render,
   upcoming = false,
 }: {
   group: StageGroup;
-  busy: boolean;
   /** The next stage of a merged glob: its steps are listed, greyed, since the glob waits for them to fall due. */
   upcoming?: boolean;
-  onMarkDeployed?: (env: string) => Promise<boolean>;
   render: (step: ListedHumanStep) => ReactNode;
 }) => {
   const [shown, setShown] = useState(upcoming);
-  const env = deployEnv(group);
   return (
     <div
       className={`grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-[11px] text-muted-foreground ${upcoming ? 'opacity-60' : ''}`}
@@ -470,11 +481,6 @@ const QuietGroup = ({
         <button type='button' className='justify-self-start' aria-expanded={shown} data-testid='quiet-toggle' onClick={() => setShown(!shown)}>
           {groupText(group)} {shown ? '▾' : '▸'}
         </button>
-        {env !== null && onMarkDeployed !== undefined && (
-          <button type='button' className='underline disabled:no-underline disabled:opacity-60' disabled={busy} data-testid='mark-deployed' onClick={() => void onMarkDeployed(env)}>
-            Mark deployed to {env}
-          </button>
-        )}
       </div>
       {shown && <ul className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>{group.steps.map(render)}</ul>}
     </div>
@@ -577,7 +583,6 @@ export const HumanSteps = ({
   collapsed = false,
   part = 'all',
   environments = [],
-  onMarkDeployed,
   ...actions
 }: {
   glob: GlobView;
@@ -596,8 +601,6 @@ export const HumanSteps = ({
   part?: 'due' | 'rest' | 'all';
   /** The board's environment names in promotion order: the order of the stage groups after the merge. */
   environments?: readonly string[];
-  /** Tells slop the change is deployed to an environment (its after-deploy steps fall due); without it the group has no button. */
-  onMarkDeployed?: (env: string) => Promise<boolean>;
 } & StepActions) => {
   const all = personSteps(glob.humanSteps ?? []);
   const live = all.filter((s) => !isDismissedStep(s));
@@ -638,7 +641,6 @@ export const HumanSteps = ({
     onDismiss: guarded(actions.onDismiss),
     ...(actions.onFail === undefined ? {} : { onFail: guarded(actions.onFail) }),
   };
-  const wrappedMark = onMarkDeployed === undefined ? undefined : guarded(onMarkDeployed);
   const left = steps.filter((s) => (s.state === 'due' || s.state === 'pending') && s.predicted !== true).length;
   const stepProps = (s: ListedHumanStep) => ({ glob, source: { repo, baseBranch }, step: s, mine: viewer !== undefined && isForViewer(s, glob, viewer), busy, actions: wrapped });
   return (
@@ -703,8 +705,6 @@ export const HumanSteps = ({
                   key={group.stage}
                   upcoming={rolledOut}
                   group={group}
-                  busy={busy}
-                  {...(wrappedMark === undefined ? {} : { onMarkDeployed: wrappedMark })}
                   render={(s) => <Step key={s.id} {...stepProps(s)} />}
                 />
               ))}

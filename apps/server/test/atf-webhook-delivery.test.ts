@@ -12,11 +12,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { z } from 'zod';
 import {
   AtfRunnerService,
-  EnvironmentService,
+  DeployService,
   WEBHOOK_HEADERS,
   webhookDeliveryId,
 } from '@slop/core';
-import type { Effect, GlobService } from '@slop/core';
+import type { Deploy, Effect, GlobService } from '@slop/core';
 import {
   WebhookSecrets,
   atfWebhookExecutors,
@@ -275,13 +275,32 @@ describe('the HTTPS transport', () => {
   });
 });
 
+/** A succeeded branch deploy of a glob's commit to staging. */
+const branchDeploy = (boardId: number, id: string, sha: string, at: string, state: Deploy['state'] = 'succeeded'): Deploy => ({
+  id,
+  boardId,
+  environment: 'staging',
+  globId: 's1t1',
+  sha,
+  state,
+  trigger: 'push',
+  requestedBy: null,
+  requestedAt: at,
+  runningSince: at,
+  startedAt: at,
+  finishedAt: state === 'succeeded' ? at : null,
+  providerRef: null,
+  url: null,
+  error: null,
+});
+
 describe('deploy-live delivery through the outbox', () => {
   let database: Database;
   let drop: () => Promise<void>;
   let store: PgStore;
   let boardId: number;
   let runnerId: number;
-  let deployId: number;
+  let deployId: string;
   const secrets = new WebhookSecrets(KEY);
   let secret: string;
   const sent: { target: PinnedTarget; post: WebhookPost }[] = [];
@@ -357,7 +376,7 @@ describe('deploy-live delivery through the outbox', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+        environments: [{ name: 'staging', allowBranchDeploy: true }],
         sensitivePaths: [],
       });
       boardId = board.id;
@@ -376,18 +395,8 @@ describe('deploy-live delivery through the outbox', () => {
         createdAt: AT,
       });
       runnerId = runner?.id ?? 0;
-      const inserted = await tx.insertEnvironmentDeploy({
-        boardId,
-        environment: 'staging',
-        sha: SHA,
-        ref: null,
-        succeeded: true,
-        url: null,
-        at: AT,
-        eventId: `aws:${String(boardId)}`,
-      });
-      expect(inserted).toBe(true);
-      deployId = (await tx.latestEnvironmentDeploy(boardId, 'staging'))?.id ?? 0;
+      deployId = `dep-${String(boardId)}`;
+      await tx.saveDeploys([branchDeploy(boardId, deployId, SHA, AT)]);
     });
     await database.db.delete(schema.outbox).where(eq(schema.outbox.kind, 'deliver_atf_webhook'));
   });
@@ -500,7 +509,7 @@ describe('deploy-live delivery through the outbox', () => {
       }),
     );
     await queue(effect({ runnerId: other?.id ?? 0 }));
-    await queue(effect({ deployId: deployId + 1000 }));
+    await queue(effect({ deployId: `${deployId}-later` }));
     expect(
       (
         await database.db
@@ -529,14 +538,15 @@ describe('deploy-live delivery through the outbox', () => {
     }
   });
 
-  it('is queued by the containment check for subscribed runners only, once per deploy', async () => {
-    const environments = new EnvironmentService({
+  it('is not queued by a succeeding branch deploy (the int pipeline starts ATF)', async () => {
+    const deploys = new DeployService({
       store,
       notifier: { publish: () => undefined },
       clock: { now: () => AT },
+      newDeployId: () => 'unused',
     });
-    await store.transaction((tx) =>
-      tx.insertAtfRunner({
+    await store.transaction(async (tx) => {
+      await tx.insertAtfRunner({
         boardId,
         name: 'no hook',
         method: 'oidc',
@@ -545,17 +555,19 @@ describe('deploy-live delivery through the outbox', () => {
         enabled: true,
         createdBy: ADMIN,
         createdAt: AT,
-      }),
-    );
-    expect(await environments.recordContainment(boardId, 'staging', SHA, [])).toBe('recorded');
-    expect(await environments.recordContainment(boardId, 'staging', SHA, [])).toBe('recorded');
+      });
+      await tx.saveDeploys([branchDeploy(boardId, 'dep-running', SHA, '2026-10-05T12:10:00.000Z', 'running')]);
+    });
+    expect((await deploys.finished('dep-running', { succeeded: true, error: null })).ok).toBe(true);
+    // A repeated result of the same deploy changes nothing.
+    expect((await deploys.finished('dep-running', { succeeded: true, error: null })).ok).toBe(true);
     const queued = (
       await database.db
         .select()
         .from(schema.outbox)
         .where(eq(schema.outbox.kind, 'deliver_atf_webhook'))
     ).filter((j) => j.globId === `board-${String(boardId)}`);
-    expect(queued.map((j) => j.effect)).toEqual([effect()]);
+    expect(queued).toEqual([]);
   });
 
   describe.each([
@@ -590,16 +602,7 @@ describe('deploy-live delivery through the outbox', () => {
       'a newer deploy replaced the commit',
       () =>
         store.transaction((tx) =>
-          tx.insertEnvironmentDeploy({
-            boardId,
-            environment: 'staging',
-            sha: 'f'.repeat(40),
-            ref: null,
-            succeeded: true,
-            url: null,
-            at: '2026-10-05T13:00:00.000Z',
-            eventId: `aws:newer${String(boardId)}`,
-          }),
+          tx.saveDeploys([branchDeploy(boardId, `newer-${String(boardId)}`, 'f'.repeat(40), '2026-10-05T13:00:00.000Z')]),
         ),
     ],
   ])('drops the delivery when %s', (_name, change) => {
@@ -694,7 +697,7 @@ describe('the runners routes with a webhook', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+        environments: [{ name: 'staging', allowBranchDeploy: true }],
         sensitivePaths: [],
       });
       await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });

@@ -134,7 +134,7 @@ describe('dependency inference', () => {
     await store.transaction(async (tx) => {
       for (const email of [ADMIN, DEV]) await tx.upsertUser({ email, name: email, active: true });
     });
-    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(ADMIN, boardId, DEV, 'dev'));
   });
 
@@ -346,7 +346,7 @@ describe('dependency inference', () => {
   it('never creates a cycle that runs through another board (R1-3)', async () => {
     const first = await create({ type: 'same' });
     const second = await create({ type: 'same' });
-    const other = unwrap(await boards.create(ADMIN, { name: 'Other', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    const other = unwrap(await boards.create(ADMIN, { name: 'Other', repo: null, timeZone: 'UTC', environments: [] })).id;
     const abroad = unwrap(await globs.create(ADMIN, input({ boardId: other, type: 'same' })));
     // second -> abroad (stored on board 1), abroad -> first (stored on board 2): first -> second would close the loop.
     unwrap(await globs.addRelation(ADMIN, second.id, null, { to: abroad.id }));

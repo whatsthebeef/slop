@@ -144,7 +144,7 @@ export const rolloutLine = (
 
 /**
  * The first open step that needs a person at release: a written (not predicted) rollout step, or any work step due after the
- * merge. A done or dismissed step is not open. Null when nobody has a step at release; the card's "Arm system" label.
+ * merge or downstream. A done or dismissed step is not open. Null when nobody has a step at release; the card's "Arm system" label.
  */
 export const needsRelease = (steps: readonly ListedHumanStep[]): ListedHumanStep | null =>
   steps.find(
@@ -152,7 +152,7 @@ export const needsRelease = (steps: readonly ListedHumanStep[]): ListedHumanStep
       isOpenStep(s) &&
       isWorkStep(s) &&
       s.predicted !== true &&
-      (s.kind === 'rollout' || s.due === 'after_merge'),
+      (s.kind === 'rollout' || s.due === 'after_merge' || s.due === 'downstream'),
   ) ?? null;
 
 /** Why a merged glob's labels can't be approved yet: the first sign-off-blocking step still open, or null when nothing holds them. */
@@ -194,6 +194,20 @@ export const hasDueSteps = (steps: readonly ListedHumanStep[] | undefined): bool
 /** Who a step is for, in words. */
 export const whoText = (who: string): string =>
   who === 'anyone' ? 'anyone' : who.includes('@') ? who : `the ${who}`;
+
+/**
+ * Where a work step's commands run: on the glob's dev environment, or against the base branch when it has none. Nothing for a
+ * downstream step (it runs further down the pipeline), a machine step or a prediction.
+ */
+export const runsOnText = (
+  glob: Pick<PresentableGlob, 'environment'>,
+  step: Pick<ListedHumanStep, 'id' | 'due' | 'predicted'>,
+  baseBranch: string | null,
+): string | null => {
+  if (!isWorkStep(step) || step.predicted === true || step.due === 'downstream') return null;
+  if (glob.environment != null && glob.environment !== '') return `Runs on ${glob.environment}`;
+  return baseBranch === null || baseBranch === '' ? null : `Runs against ${baseBranch}`;
+};
 
 /** The state as the section shows it: when a pending step falls due, who ticked a done one. */
 export const stateText = (step: ListedHumanStep): string => {

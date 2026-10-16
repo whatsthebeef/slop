@@ -41,8 +41,6 @@ import type {
   RunnerChange,
   RunnerInput,
   SpecStatus,
-  BoardEnvironment,
-  GlobEnvironment,
   MonthSpend,
   ReadinessItem,
   Environment,
@@ -717,7 +715,7 @@ export const api = {
   addSession: (id: number) => request<{ sessions: BoardSession[] }>('PUT', `/api/boards/${id}/session`),
   removeSession: (id: number) => request<{ sessions: BoardSession[] }>('DELETE', `/api/boards/${id}/session`),
 
-  createBoard: (input: { name: string; repo: string | null; baseBranch: string; timeZone: string; environments: Environment[] }) =>
+  createBoard: (input: { name: string; repo: string | null; timeZone: string; environments: Environment[] }) =>
     request<Board>('POST', '/api/boards', input),
   board: (id: number) => request<BoardView>('GET', `/api/boards/${id}`),
   updateSettings: (id: number, version: number, settings: Partial<Board>) =>
@@ -749,17 +747,6 @@ export const api = {
   /** Deploy indicators for the given globs, and the environments with a deploy running. */
   boardDeploys: (boardId: number, globIds: readonly string[]) =>
     request<BoardDeploys>('GET', `/api/boards/${boardId}/deploys?globs=${globIds.map(encodeURIComponent).join(',')}`),
-  globEnvironments: (id: string) =>
-    request<{ value: GlobEnvironment[] }>('GET', `/api/globs/${id}/environments`).then((r) => r.value),
-  /** The board's observed environments: how each one's deploys are known and the last one seen. */
-  boardEnvironments: (boardId: number) =>
-    request<{ value: BoardEnvironment[] }>('GET', `/api/boards/${boardId}/environments`).then((r) => r.value),
-  /** Recent release tags of the board's repo, offered when recording a deploy. */
-  releaseTags: (boardId: number) =>
-    request<{ value: { name: string; sha: string }[] }>('GET', `/api/boards/${boardId}/release-tags`).then((r) => r.value),
-  /** Records that a manual environment now runs `ref` (a branch, tag or commit; blank means the base branch's head). */
-  recordEnvironmentDeploy: (boardId: number, environment: string, ref: string) =>
-    request<{ value: unknown }>('POST', `/api/boards/${boardId}/environments/${encodeURIComponent(environment)}/deploys`, { ref }),
   globTests: (id: string) => request<GlobTestsView>('GET', `/api/globs/${id}/tests`).then((r) => r.value),
   /** The same read with the planned specs' results beside the runs. */
   globTestsView: (id: string) => request<GlobTestsView>('GET', `/api/globs/${id}/tests`),
@@ -822,9 +809,6 @@ export const api = {
    */
   failStep: (id: string, stepId: string, note: string, version?: number | null) =>
     request<GlobView>('POST', `/api/globs/${id}/steps/${encodeURIComponent(stepId)}/fail`, version === undefined ? { note } : { note, version }),
-  /** A person's mark that the glob's change is deployed to the environment: its after-deploy steps fall due. */
-  markEnvironmentDeployed: (id: string, env: string) =>
-    request<GlobView>('POST', `/api/globs/${id}/environments/${encodeURIComponent(env)}/deployed`, {}),
   dismissHumanStep: (id: string, stepId: string, reason: string) =>
     request<GlobView>('POST', `/api/globs/${id}/human-steps/${encodeURIComponent(stepId)}/dismiss`, { reason }),
   /** A script artifact's text, or null when there is none (the kind is served from a later part). */

@@ -87,7 +87,7 @@ export interface PresentableGlob extends Glob {
   readonly humanSteps?: readonly ListedHumanStep[];
   /** Open rollout steps holding back sign-off, counted by the server (a same with any is merged with Merge and continue); absent on an older API, read with `?.`. */
   readonly rolloutSteps?: number;
-  /** The "Arm system" label: the first stage with an open rollout step (an environment, or the base branch for after-merge) and that step's title; absent when no step is open or on an older API. */
+  /** The "Arm system" label: the title of the first open rollout step (a downstream step counts, signed off or not); absent when none is open or on an older API. */
   readonly arm?: Arm;
   /** Whose move it is, derived on every read (board list only; absent on an older API). */
   readonly move?: Move;

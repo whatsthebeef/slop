@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
-import type { NotificationSink, RaisedNotification, ReportedDeploy } from '@slop/core';
+import type { NotificationSink, RaisedNotification } from '@slop/core';
 
 /** What `scripts/dev.sh follow` writes after each poll that changed something. */
 const statusSchema = z.object({
@@ -26,21 +26,16 @@ const plural = (n: number, word: string): string => `${String(n)} ${word}${n ===
 
 /**
  * Local development only: reads the status `scripts/dev.sh follow` keeps for the main checkout, so the board
- * notifications say when the local server was updated to main (and what migrations ran) or why following is held, and
- * records the commit it runs as a deploy to the board's local integration environment (cards then show which
- * merged globs this server runs).
+ * notifications say when the local server was updated to main (and what migrations ran) or why following is held.
  */
 export class LocalFollowWatch {
   private timer: NodeJS.Timeout | null = null;
-  private recorded: string | null = null;
   /** The last unreadable status logged, so a bad file is logged once rather than every check. */
   private logged: string | null = null;
 
   constructor(
     private readonly file: string,
-    private readonly environment: string,
     private readonly notifications: NotificationSink,
-    private readonly recordDeploy: (deploy: ReportedDeploy) => Promise<number[]>,
     private readonly logError: (where: string, message: string) => void,
     private readonly now: () => number = Date.now,
     private readonly read: (file: string) => Promise<string> = (file) => readFile(file, 'utf8'),
@@ -53,22 +48,6 @@ export class LocalFollowWatch {
       const raised = describe(status, this.now());
       if (raised === null) await this.notifications.clear(null, LOCAL_FOLLOW_SOURCE);
       else await this.notifications.raise(raised);
-    } catch (error) {
-      this.logError('local follow', error instanceof Error ? error.message : String(error));
-    }
-    if (status.state === 'held' || this.recorded === status.sha) return;
-    try {
-      await this.recordDeploy({
-        repo: status.repo,
-        environment: this.environment,
-        sha: status.sha,
-        ref: null,
-        succeeded: true,
-        url: null,
-        at: status.at,
-        eventId: `local:${status.sha}`,
-      });
-      this.recorded = status.sha;
     } catch (error) {
       this.logError('local follow', error instanceof Error ? error.message : String(error));
     }

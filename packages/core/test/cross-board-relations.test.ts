@@ -66,8 +66,8 @@ describe('cross-board relations', () => {
     await store.transaction(async (tx) => {
       for (const email of [BOTH, ONE, TWO, NOBODY]) await tx.upsertUser({ email, name: email, active: true });
     });
-    b1 = unwrap(await boards.create(BOTH, { name: 'Board one', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
-    b2 = unwrap(await boards.create(BOTH, { name: 'Board two', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    b1 = unwrap(await boards.create(BOTH, { name: 'Board one', repo: null, timeZone: 'UTC', environments: [] })).id;
+    b2 = unwrap(await boards.create(BOTH, { name: 'Board two', repo: null, timeZone: 'UTC', environments: [] })).id;
     unwrap(await boards.setMember(BOTH, b1, ONE, 'dev'));
     unwrap(await boards.setMember(BOTH, b2, TWO, 'dev'));
   });

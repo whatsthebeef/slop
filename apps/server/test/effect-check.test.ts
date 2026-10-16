@@ -136,7 +136,6 @@ describe('Effect checks in Postgres', () => {
       await boards.create(ADMIN, {
         name: 'b',
         repo: null,
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

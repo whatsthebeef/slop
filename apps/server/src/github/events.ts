@@ -1,4 +1,4 @@
-import type { Board, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
+import type { Board, BoardService, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
 import { isWrongReply, machine, parseId, subGateCheckOf } from '@slop/core';
 import { FAILED_CONCLUSIONS } from './merge-state.js';
 import { eq, sql } from 'drizzle-orm';
@@ -18,7 +18,7 @@ const pushPayload = z.object({
   created: z.boolean().default(false),
   deleted: z.boolean().default(false),
   head_commit: z.object({ message: z.string() }).nullable().optional(),
-  repository,
+  repository: repository.extend({ default_branch: z.string().min(1).optional() }),
 });
 
 const pullRequestPayload = z.object({
@@ -102,6 +102,8 @@ export const githubDeliveryHandler =
   (deps: {
     db: Db;
     globs: GlobService;
+    /** Absent: a push's default branch isn't taken into the board (the read from the host still is). */
+    boards?: Pick<BoardService, 'recordBaseBranch'>;
     github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     /** The base branch of a board received a push (the code view fetches it). */
@@ -131,6 +133,7 @@ const handle = async (
   deps: {
     db: Db;
     globs: GlobService;
+    boards?: Pick<BoardService, 'recordBaseBranch'>;
     github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     onBasePush?: (boardId: number) => void;
@@ -174,6 +177,32 @@ const handle = async (
     }
   };
 
+  /**
+   * A push payload names the repo's default branch. When it differs from a board's cached base, take it now (the push
+   * itself may be to the new default) and queue a read from the host, which confirms it. One pending read per board.
+   */
+  const syncBaseBranch = async (repo: string, defaultBranch: string | undefined): Promise<void> => {
+    if (defaultBranch === undefined) return;
+    const rows = await deps.db.select().from(schema.boards).where(sql`lower(${schema.boards.repo}) = ${repo.toLowerCase()}`);
+    for (const board of rows.filter((b) => b.baseBranch !== defaultBranch)) {
+      // Through the service: the version bumps and a board.changed hint goes out.
+      await deps.boards?.recordBaseBranch(board.id, defaultBranch);
+      const globId = `board-${String(board.id)}`;
+      const [pending] = await deps.db
+        .select({ id: schema.outbox.id })
+        .from(schema.outbox)
+        .where(sql`${schema.outbox.kind} = 'refresh_base_branch' and ${schema.outbox.globId} = ${globId} and ${schema.outbox.state} = 'pending' and ${schema.outbox.attempts} = 0`)
+        .limit(1);
+      if (pending !== undefined) continue;
+      await deps.db.insert(schema.outbox).values({
+        kind: 'refresh_base_branch',
+        globId,
+        effect: { kind: 'refresh_base_branch', globId, boardId: board.id },
+      });
+      await deps.db.execute(sql`select pg_notify('slop_outbox', '')`);
+    }
+  };
+
   /** The base branch received a push: every glob in Doing on that board rereads how far its branch is behind it. */
   const queueBehind = async (branch: string, repo: string): Promise<void> => {
     const rows = await deps.db.select().from(schema.boards).where(eq(schema.boards.baseBranch, branch));
@@ -206,6 +235,7 @@ const handle = async (
     case 'push': {
       const push = pushPayload.parse(delivery.payload);
       const branch = push.ref.replace(/^refs\/heads\//, '');
+      await syncBaseBranch(push.repository.full_name, push.repository.default_branch);
       const glob = await globFor(branch, push.repository.full_name);
       if (glob === null && !push.deleted) await queueBehind(branch, push.repository.full_name);
       if (glob === null || push.deleted) return true;

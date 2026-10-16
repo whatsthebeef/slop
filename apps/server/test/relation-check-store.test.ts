@@ -60,7 +60,7 @@ describe('relation check in Postgres', () => {
     check = new RelationCheckService({ store, clock, changes, learning, index: { importEdges: (b, from, to) => index.importEdges(b, from, to) } });
     const boards = new BoardService({ store, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: DEV, name: 'Dev', active: true }));
-    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(DEV, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   afterAll(async () => {

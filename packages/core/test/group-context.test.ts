@@ -98,7 +98,7 @@ describe('get_context group section', () => {
     globs = new GlobService({ store, notifier, clock, ids: { runId: () => 'run-1' }, routines: { hasRoutine: () => Promise.resolve(true) } });
     artifacts = new ArtifactService({ store, clock, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: 'dev@example.com', name: 'dev', active: true }));
-    boardId = unwrap(await new BoardService({ store, notifier }).create('dev@example.com', { name: 'demo', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await new BoardService({ store, notifier }).create('dev@example.com', { name: 'demo', repo: null, timeZone: 'UTC', environments: [] })).id;
   });
 
   it('is absent for a glob with no group or no neighbours', async () => {

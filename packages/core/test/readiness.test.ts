@@ -7,7 +7,7 @@ const ready: ReadinessFacts = {
   board: {
     ...board,
     environments: [
-      { name: 'dev', allowBranchDeploy: true, subDefault: true },
+      { name: 'dev', allowBranchDeploy: true },
       { name: 'prod', allowBranchDeploy: false },
     ],
     agentSetVersion: 3,
@@ -142,7 +142,7 @@ describe('board readiness', () => {
     expect(byKey.architecture_doc).toMatchObject({ state: 'missing', fix: { kind: 'knowledge' } });
     expect(byKey.architecture_doc?.detail).toMatch(/No architecture document\. Run `\/kb-bootstrap \d+`/);
     expect(byKey.conventions_doc?.state).toBe('ok');
-    expect(byKey.environments?.detail).toMatch(/default for subs/);
+    expect(byKey.environments).toMatchObject({ state: 'ok', detail: 'dev' });
     expect(items.filter((i) => i.manual).map((i) => i.state)).toEqual(['missing', 'missing', 'missing']);
   });
 

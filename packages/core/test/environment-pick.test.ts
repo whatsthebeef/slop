@@ -7,10 +7,8 @@ import { glob } from './fixtures.js';
 const envs: Environment[] = [
   { name: 'dev', allowBranchDeploy: true },
   { name: 'danzig', allowBranchDeploy: true },
-  { name: 'int', allowBranchDeploy: true, role: 'integration' },
-  { name: 'staging', allowBranchDeploy: true, role: 'release' },
   { name: 'demo', allowBranchDeploy: true },
-  { name: 'prod', allowBranchDeploy: false, role: 'release', production: true },
+  { name: 'prod', allowBranchDeploy: false },
 ];
 
 const deploy = (globId: string, environment: string, requestedAt: string): Deploy => ({
@@ -32,7 +30,7 @@ const deploy = (globId: string, environment: string, requestedAt: string): Deplo
 });
 
 describe('pickEnvironment', () => {
-  it('gives three new globs one environment each, never int or staging', () => {
+  it('gives three new globs one environment each, never one that takes no branch deploys', () => {
     const open = [];
     const got: string[] = [];
     for (const id of ['s1t1', 's1t2', 's1t3']) {
@@ -74,7 +72,17 @@ describe('pickEnvironment', () => {
     expect(pickEnvironment(envs, open, [])?.environment).toBe('dev');
   });
 
+  it('breaks a full tie by the board order, whatever an old stored subDefault says', () => {
+    // A board saved before the sub default went still carries the key; it is not read.
+    const legacy: Environment[] = [
+      { name: 'dev', allowBranchDeploy: true },
+      { name: 'danzig', allowBranchDeploy: true, ...{ subDefault: true } },
+    ];
+    const open = [glob({ id: 's1t1', status: 'implementing', environment: 'dev' }), glob({ id: 's1t2', status: 'implementing', environment: 'danzig' })];
+    expect(pickEnvironment(legacy, open, [])?.environment).toBe('dev');
+  });
+
   it('picks nothing when there is no candidate', () => {
-    expect(pickEnvironment(envs.filter((e) => e.role !== undefined), [], [])).toBeNull();
+    expect(pickEnvironment(envs.filter((e) => !e.allowBranchDeploy), [], [])).toBeNull();
   });
 });

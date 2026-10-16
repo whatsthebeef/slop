@@ -1,4 +1,4 @@
-import type { BaseChecks, Board, BoardService, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
+import type { BaseChecks, Board, BoardService, Effect, Store, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, prepareInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
 import { hasBranchRecord, isOpenAction, isRepoAccessFailure, isSetupFailure, machine, preparationOf, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
@@ -36,6 +36,19 @@ const httpStatus = (error: unknown): number | null =>
   typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null;
 
 /**
+ * Queues a base-branch read for every board with a repo (start-up: a default branch renamed while slop was down is
+ * caught without a push). The executor is idempotent, so a repeated start queues harmless duplicates.
+ */
+export const queueBaseBranchRefreshes = async (store: Pick<Store, 'transaction'>): Promise<number> =>
+  store.transaction(async (tx) => {
+    const effects = (await tx.listAllBoards())
+      .filter((b) => b.repo !== null)
+      .map((b): Effect => ({ kind: 'refresh_base_branch', globId: `board-${String(b.id)}`, boardId: b.id }));
+    await tx.enqueueEffects(effects);
+    return effects.length;
+  });
+
+/**
  * Outbox executors for the code host (the GitHub App today). Each turns one effect into GitHub calls and feeds what
  * happened back through the state machine. Throwing makes the outbox retry with backoff.
  */
@@ -43,7 +56,7 @@ export const codeHostExecutors = (
   host: CodeHost,
   boardOf: (id: number) => Promise<Board | null>,
   routines: RoutineSource,
-  boards: Pick<BoardService, 'recordBaseChecks'>,
+  boards: Pick<BoardService, 'recordBaseChecks' | 'recordBaseBranch'>,
   now: () => string = () => new Date().toISOString(),
   health: HealthSink | null = null,
   notifications: Pick<NotificationService, 'syncMainRed' | 'raise' | 'clear'> | null = null,
@@ -293,6 +306,17 @@ export const codeHostExecutors = (
           ),
         { relations: true },
       );
+      return 'done';
+    },
+
+    // A host that can't answer throws (the outbox retries) or says null; either way the stored base stays.
+    refresh_base_branch: async (effect) => {
+      if (effect.kind !== 'refresh_base_branch') return 'dropped';
+      const board = await boardOf(effect.boardId);
+      const repo = board === null ? null : repoOf(board);
+      if (repo === null || !host.configured) return 'dropped';
+      const name = await host.defaultBranch(repo);
+      if (name !== null) await boards.recordBaseBranch(effect.boardId, name);
       return 'done';
     },
 

@@ -70,7 +70,7 @@ describe('the board list carries the workstreams of a fanned-out glob (Postgres)
     const boards = new BoardService(deps);
     const groups = new GroupService({ store, globs, boards, clock });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: ADMIN, active: true }));
-    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, baseBranch: 'main', timeZone: 'UTC', environments: [] })).id;
+    boardId = unwrap(await boards.create(ADMIN, { name: 'b', repo: null, timeZone: 'UTC', environments: [] })).id;
     const outbox = new OutboxRunner(database.db, { globs }, {}, () => undefined);
     app = createApp({ auth: new Auth(database.db, loadConfig({})), links: new SignedLinks('test'), boards, globs, groups, hub: notifier, outbox, onBoardCreated: () => Promise.resolve() });
   });

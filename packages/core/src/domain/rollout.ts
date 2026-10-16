@@ -40,6 +40,12 @@ export interface RolloutStep {
   readonly once: boolean;
   /** What the step says it holds back (`(blocks: sign_off, dependants)`); null when it doesn't say, so the default for its due applies. */
   readonly blocks: readonly HumanStepBlock[] | null;
+  /**
+   * Set on the downstream step: the rest of the pipeline's run of the step (due `downstream`, blocks nothing, a person ticks it). It
+   * names the environments it runs on (`(downstream: int, staging, prod)`), none for "the rest of the pipeline". Null on every other
+   * step, including the step a `(downstream)` flag was written on: that one is the dev/base run and its companion is this one.
+   */
+  readonly downstream: readonly string[] | null;
 }
 
 /**
@@ -62,6 +68,10 @@ export interface RolloutStep {
  * - A parenthesised suffix can carry more, as comma-separated `key: value` pairs in any order:
  *   `(env: production, blocks: sign_off, dependants, check: fileAttachments)`. `env` names the environment the step waits for
  *   a deploy to (none: it is due after the merge; the board's environments are checked when the record is read, see `reconcileRollout`).
+ *   `downstream` (or `downstream: int, staging, prod`) says the step must also run on the rest of the pipeline as each environment is released:
+ *   the step stays as written and a companion step follows it, titled `Run on <names or "the rest of the pipeline"> as each is released: <title>`,
+ *   with the step's Why, Permissions, Run, script and Check copied. The companion holds nothing back and a person ticks it. (A step whose `env`
+ *   is not one of the board's environments becomes that downstream step itself when the record is read, see `reconcileRollout`.)
  *   `once` (or `once: true`) marks a one-shot command inside the change: no environment (an `env` beside it is dropped), due as soon as its
  *   script is on the glob's branch, done once and never reopened. Use it for work that takes effect by being run (an IAM grant, a setting),
  *   not by deploying. `blocks` lists what an open step holds
@@ -104,11 +114,12 @@ export const parseRollout = (record: string): RolloutStep[] => {
     env: string | null;
     once: boolean;
     blocks: readonly HumanStepBlock[] | null;
+    downstream: readonly string[] | null;
   } | null = null;
   const finish = () => {
     if (current === null) return;
     const detail = trimBlank(current.detail).join('\n');
-    steps.push({
+    const written: RolloutStep = {
       kind: current.kind,
       title: current.title,
       detail: detail === '' ? null : detail,
@@ -126,7 +137,10 @@ export const parseRollout = (record: string): RolloutStep[] => {
       env: current.env,
       once: current.once,
       blocks: current.blocks,
-    });
+      downstream: null,
+    };
+    steps.push(written);
+    if (current.downstream !== null) steps.push(downstreamOf(written, current.downstream));
     current = null;
   };
   for (const line of lines) {
@@ -167,6 +181,7 @@ export const parseRollout = (record: string): RolloutStep[] => {
         env: parsed.env,
         once: parsed.once,
         blocks: parsed.blocks,
+        downstream: parsed.downstream,
       };
       if (parsed.overflow !== null) current.detail.push(parsed.overflow);
       for (const note of parsed.notes) current.detail.push(note);
@@ -244,6 +259,21 @@ export const parseRollout = (record: string): RolloutStep[] => {
   }
   finish();
   return uniqueTitles(steps);
+};
+
+/** The companion that runs a step on the rest of the pipeline: same work, its own title, nothing held back, no capability to tick it by. */
+const downstreamOf = (step: RolloutStep, names: readonly string[]): RolloutStep => {
+  const cut = shortTitle(`Run on ${names.length === 0 ? 'the rest of the pipeline' : names.join(', ')} as each is released: ${step.title}`);
+  return {
+    ...step,
+    title: cut.title,
+    detail: cut.overflow,
+    check: null,
+    env: null,
+    once: false,
+    blocks: null,
+    downstream: names,
+  };
 };
 
 interface Fence {
@@ -329,7 +359,7 @@ const withExports = (commands: readonly string[]): string[] => {
 };
 const KIND_PREFIX = /^(script|setting|manual)\s*:\s*(.*)$/i;
 const OPTIONS_SUFFIX = /\s*\(([^()]*)\)\s*$/;
-const KNOWN_OPTIONS: readonly string[] = ['env', 'blocks', 'check', 'once'];
+const KNOWN_OPTIONS: readonly string[] = ['env', 'blocks', 'check', 'once', 'downstream'];
 const ENV_NAME = /^[\w.-]+$/;
 /** A bold kind: `**manual:** x`, `**manual**: x` (or with `__`). */
 const BOLD_KIND = /^(\*\*|__)(script|setting|manual)(?:\s*:\s*\1|\1\s*:)\s*/i;
@@ -430,6 +460,7 @@ const titleOf = (text: string) => {
   let env: string | null = null;
   let blocks: HumanStepBlock[] | null = null;
   let once = false;
+  let downstream: string[] | null = null;
   const notes: string[] = [];
   const capability = (name: string): string | null => {
     if (isCapabilityName(name)) return name;
@@ -447,6 +478,15 @@ const titleOf = (text: string) => {
         else notes.push(`env: ${value} is not an environment name`);
       } else if (key === 'once') {
         once = !/^(false|no|0)$/i.test(value);
+      } else if (key === 'downstream') {
+        // `downstream` alone, or `downstream: int, staging`: the names are only for the companion's title.
+        if (!/^(false|no|0)$/i.test(value)) {
+          downstream = [];
+          for (const name of value.split(/[\s,+]+/).filter((w) => w !== '' && !/^true$/i.test(w))) {
+            if (ENV_NAME.test(name)) downstream.push(name);
+            else notes.push(`downstream: ${name} is not an environment name`);
+          }
+        }
       } else if (key === 'blocks') {
         blocks = [];
         for (const word of value.split(/[\s,+]+/).filter((w) => w !== '' && w !== 'none')) {
@@ -470,7 +510,7 @@ const titleOf = (text: string) => {
     env = null;
   }
   const cut = shortTitle(title);
-  return { kind, title: cut.title, check, notes, overflow: cut.overflow, env, once, blocks };
+  return { kind, title: cut.title, check, notes, overflow: cut.overflow, env, once, blocks, downstream: downstream === null ? null : [...new Set<string>(downstream)] };
 };
 
 const isBlock = (word: string): word is HumanStepBlock => HUMAN_STEP_BLOCKS.some((b) => b === word);
@@ -483,9 +523,10 @@ const isBlock = (word: string): word is HumanStepBlock => HUMAN_STEP_BLOCKS.some
 const optionPairs = (text: string): [string, string][] | null => {
   const pairs: [string, string][] = [];
   for (const segment of text.split(',')) {
-    // A bare `once` is the flag with no value.
-    if (/^\s*once\s*$/i.test(segment)) {
-      pairs.push(['once', 'true']);
+    // A bare `once` or `downstream` is the flag with no value.
+    const flag = /^\s*(once|downstream)\s*$/i.exec(segment);
+    if (flag?.[1] !== undefined) {
+      pairs.push([flag[1].toLowerCase(), 'true']);
       continue;
     }
     const keyed = /^\s*([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(segment);
@@ -580,7 +621,7 @@ The server image deploys on merge; drizzle migrations run when the server starts
 A person is needed only for: a script to run (stack deploys, one-off data updates), a setting or secret to put in production (a new setting without a default, or one that only matters in production), or something to do by hand.
 A step is an action after the merge that this change requires. It is not a note (information with no action), not a review or approval due before the merge, and not optional or per-board setup. Only state commands, settings and numbers the diff or record show.
 Write each step as a short imperative title (under 120 characters, no conditions or commands in it), then indented bullets: 'Why: <one sentence>', 'Permissions: <the exact login and rights, for a step run in a terminal>', one 'Run: <command>' line per command (no backticks, no Markdown), 'Check: <what you should see>'. Anything else a person needs goes in plain lines under the title.
-A step that can only be done after a deploy to another environment (for example production) ends its title with '(env: <environment name>)', using a name the record or diff shows; a step with no env is for right after the merge. A one-shot command that does not depend on an environment (an IAM grant, an account setting) ends its title with '(once)' and has no env. Add 'blocks: sign_off' there only when the glob must not be signed off before that step is done; steps after a deploy hold nothing back by default. Add 'check: <capability>' only when told that capability exists. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
+A step that can only be done after a deploy to one of the board's dev environments ends its title with '(env: <environment name>)', using a name the record or diff shows; a step with no env is for right after the merge. A step that must also run on the rest of the pipeline (int, staging, production), as each is released, ends its title with 'downstream' in the same parentheses, or 'downstream: <names>'; slop adds that second step and a person ticks it. A one-shot command that does not depend on an environment (an IAM grant, an account setting) ends its title with '(once)' and has no env. Add 'blocks: sign_off' there only when the glob must not be signed off before that step is done; steps after a deploy hold nothing back by default. Add 'check: <capability>' only when told that capability exists. Name a script that exists in the diff or the tree on a line 'script: <repo path>' under the title and never repeat its path in another line (slop shows its run command itself); never invent one.
 Answer with one JSON object and nothing else, in one of three shapes:
 {"decision":"none","reason":"<one line: why nothing is needed, e.g. migration 0071 runs on start; no new settings>"}
 {"decision":"steps","rollout":"<a ## Rollout section's list: one '- script|setting|manual: <short imperative title>' item per step, its Why / Permissions / Run / Check lines indented under it, '(env: <environment>, blocks: sign_off, check: <capability>)' at the end of a title, each part only when it applies>"}

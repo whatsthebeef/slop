@@ -588,6 +588,8 @@ export interface NewHumanStep {
   readonly due?: string;
   /** A one-shot command inside the change (`due: 'once'`): it has no environment and is never reopened. */
   readonly once?: boolean;
+  /** The step for the rest of the pipeline (`due: 'downstream'`): due once merged, holds nothing back, a person ticks it. */
+  readonly downstream?: boolean;
   readonly blocks?: readonly HumanStepBlock[];
   readonly check?: string;
   readonly script?: HumanStepScript;
@@ -689,7 +691,7 @@ export class GlobService implements AutomaticRelations {
         sizeCheck,
         humanSteps: steps,
         rolloutSteps,
-        arm: board === null ? null : armView(steps, board),
+        arm: armView(steps),
         handover: await handoverOf(tx, this.deps.clock, glob),
         dismissedKeys: (await tx.listStatusDismissals(email, glob.boardId)).filter((d) => d.globId === glob.id).map((d) => d.key),
         script: check?.script ?? null,
@@ -925,16 +927,19 @@ export class GlobService implements AutomaticRelations {
   /**
    * Adds a work step to a glob (members only; version-checked when a version is given, and the glob's version is left
    * alone). A rollout step defaults to falling due after the merge and holding back sign-off and dependants; one that
-   * waits for a deploy (`after_deploy:<env>`) holds nothing back unless it says so.
+   * waits for a deploy (`after_deploy:<env>`, a dev environment of the board) holds nothing back unless it says so, and a
+   * downstream step (the rest of the pipeline) never holds anything back.
    */
   async addHumanStep(email: string, id: string, version: number | null, input: NewHumanStep, origin = 'person'): Promise<Result<StoredHumanStep>> {
     const title = input.title.trim();
     if (title === '') return invalidInput('A step needs a title');
     const kind = input.kind ?? 'rollout';
     if (!HUMAN_STEP_KINDS.includes(kind)) return invalidInput(`Unknown step kind ${kind}`);
-    const due = input.due ?? (input.once === true ? 'once' : kind === 'rollout' ? 'after_merge' : 'now');
-    if (!isHumanStepDue(due)) return invalidInput(`Unknown due ${due}: use now, after_merge, once or after_deploy:<env>`);
+    const due = input.due ?? (input.once === true ? 'once' : input.downstream === true ? 'downstream' : kind === 'rollout' ? 'after_merge' : 'now');
+    if (!isHumanStepDue(due)) return invalidInput(`Unknown due ${due}: use now, after_merge, once, downstream or after_deploy:<env>`);
     if (input.once === true && due !== 'once') return invalidInput('A once step has no environment and is not due after the merge or a deploy: leave `due` out, or use once');
+    if (input.downstream === true && due !== 'downstream') return invalidInput('A downstream step is due when the change is released further: leave `due` out, or use downstream');
+    if (due === 'downstream' && (input.blocks ?? []).length > 0) return invalidInput('A downstream step holds nothing back: leave `blocks` out');
     const blocks = input.blocks ?? (kind === 'rollout' ? defaultStepBlocks(due) : []);
     const unknown = blocks.find((b) => !HUMAN_STEP_BLOCKS.includes(b));
     if (unknown !== undefined) return invalidInput(`Unknown block ${unknown}: use ${HUMAN_STEP_BLOCKS.join(', ')}`);
@@ -1356,7 +1361,7 @@ export class GlobService implements AutomaticRelations {
     createdBy: string,
     now: string,
     fields: Pick<StoredHumanStep, 'title' | 'detail' | 'check' | 'script' | 'why' | 'permissions' | 'commands' | 'verify'>,
-    when: Pick<RolloutStep, 'env' | 'blocks'> & { readonly once?: boolean } = { env: null, blocks: null },
+    when: Pick<RolloutStep, 'env' | 'blocks'> & { readonly once?: boolean; readonly downstream?: readonly string[] | null } = { env: null, blocks: null },
   ): StoredHumanStep {
     const { due, blocks } = rolloutWhen(when);
     return {
@@ -1415,11 +1420,9 @@ export class GlobService implements AutomaticRelations {
       const textOf = (step: { readonly title: string; readonly detail: string | null; readonly why: string | null }): string =>
         [step.title, step.why, step.detail].filter((t): t is string => t !== null && t.trim() !== '').join('\n');
       for (const [i, written] of parsed.entries()) {
-        // An environment the board doesn't define can never fall due: the step is filed after the merge instead, and says why.
-        const step =
-          written.env === null || environments.includes(written.env)
-            ? written
-            : { ...written, env: null, detail: [unknownEnvironmentText(written.env, environments) + '; the step is filed after the merge. Dismiss it and add it again for one of the board\'s environments.', written.detail].filter((t) => t !== null).join('\n\n') };
+        // An environment the board doesn't define (int, staging, prod) is the rest of the pipeline, which slop never sees deployed:
+        // the step becomes the downstream step itself, title unchanged so the stored row still matches.
+        const step = written.env === null || environments.includes(written.env) ? written : { ...written, env: null, downstream: [written.env] };
         let script: HumanStepScript | null = null;
         if (step.scriptPath !== null) {
           script = { path: step.scriptPath };
@@ -1634,10 +1637,10 @@ export class GlobService implements AutomaticRelations {
   }
 
   /**
-   * A person says the environment now runs the glob's merge, for boards that report no deploys: the glob's open
-   * `after_deploy:<env>` steps fall due (once; a rollback later doesn't undo it). Members only. Logs
-   * `EnvironmentMarkedDeployed`, not `Deployed` (ATF reads that), leaves `glob_environments` and the glob's version alone,
-   * and refuses an environment the board doesn't list. Repeating it changes and logs nothing.
+   * A person says one of the board's dev environments now runs the glob, for boards whose deploys slop doesn't see: the glob's
+   * open `after_deploy:<env>` steps fall due (once; a rollback later doesn't undo it). Members only. Logs
+   * `EnvironmentMarkedDeployed`, not `Deployed` (ATF reads that), leaves the glob's version alone, and refuses an
+   * environment the board doesn't list (the rest of the pipeline is a downstream step, ticked by a person). Repeating it changes and logs nothing.
    */
   async markEnvironmentDeployed(email: string, id: string, environment: string): Promise<Result<{ readonly marked: number }>> {
     const result = await this.deps.store.transaction(async (tx): Promise<Result<{ glob: Glob; marked: number }>> => {
@@ -1646,7 +1649,7 @@ export class GlobService implements AutomaticRelations {
       const actor = await this.actorFor(tx, email, glob.boardId);
       if (!actor.ok) return actor;
       const board = await tx.getBoard(glob.boardId);
-      if (board === null || !board.environments.some((e) => e.name === environment)) return invalidInput(`Unknown environment ${environment}`);
+      if (board === null || !board.environments.some((e) => e.name === environment)) return invalidInput(unknownEnvironmentText(environment, (board?.environments ?? []).map((e) => e.name)));
       const now = this.deps.clock.now();
       const marked = await markStepsDue(tx, glob.boardId, [id], environment, now);
       const already = (await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['EnvironmentMarkedDeployed'], [id])).some((e) => e.data.environment === environment);

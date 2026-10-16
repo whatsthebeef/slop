@@ -150,7 +150,7 @@ export const globView = (
   ...(holding === null ? {} : { holding }),
 });
 
-/** The Arm system stage on a view: the environment (or base branch) whose rollout step is next, and that step's title. Absent when no step is open. */
+/** Arm system on a view: the title of the open rollout step behind the plain label (it names no environment). Absent when no step is open. */
 export const armField = (arm: Arm | null) => (arm === null ? {} : { arm });
 
 /** A glob read through the service: its view with the actions open to the caller and what it waits for. */

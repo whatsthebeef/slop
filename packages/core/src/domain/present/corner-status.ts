@@ -1,11 +1,5 @@
 import { decisionOf } from '../decision-glob.js';
-import {
-  DEPLOY_STALLED_LABEL,
-  feedbackText,
-  labelsWaiting,
-  openFeedback,
-  signOffText,
-} from '../whose-move.js';
+import { feedbackText, labelsWaiting, openFeedback, signOffText } from '../whose-move.js';
 import { isHumanCategory } from '../types.js';
 import type { DecisionAttributes } from '../attributes.js';
 import type { HumanStepViewer } from '../human-steps.js';
@@ -45,8 +39,6 @@ export type StatusClick = GlobTarget;
 /** What the Your turn status opens: a stored work step (a rollout) the Human steps, a decision its block, a label its review, anything else the actions. */
 const yourTurnClick = (status: StatusLine): StatusClick => {
   if (status.work === true) return cardTargets.humanSteps();
-  // Mark deployed is on the Human steps section, beside the steps that wait for the deploy.
-  if (status.action === 'mark_deployed') return cardTargets.humanSteps();
   switch (status.turn) {
     case 'decide':
       return cardTargets.decision();
@@ -375,7 +367,7 @@ export const cornerStatus = (
         ? ` · ${String(position.minutes)} min`
         : '';
     // The stall's next step is a person's (the viewer's turn): the human outline with that action, not the warning.
-    if (status !== null && status.kind === 'ready' && status.action !== 'mark_deployed') {
+    if (status !== null && status.kind === 'ready') {
       return make('ready', 'human', status.text, status.tone, yourTurnClick(status), [
         position.tip,
         `Stalled: ${cause}${minutes}`,
@@ -389,10 +381,7 @@ export const cornerStatus = (
         position.tip,
       ]);
     }
-    // A deploy that never came: the steps waiting on it, with Mark deployed, are in the Human steps section.
-    const stalledClick =
-      position.label === DEPLOY_STALLED_LABEL ? cardTargets.humanSteps() : cardTargets.actions();
-    return make('stalled', 'alert', `${cause}${minutes}`, position.tone, stalledClick, [
+    return make('stalled', 'alert', `${cause}${minutes}`, position.tone, cardTargets.actions(), [
       position.tip,
     ]);
   }

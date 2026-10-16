@@ -115,7 +115,7 @@ describe('runner validation', () => {
   });
 
   it('only serves environments the board observes, at least one, without repeats', () => {
-    expect(errorMessage(check({ environments: ['dev'] }))).toContain("dev isn't an environment");
+    expect(errorMessage(check({ environments: ['nope'] }))).toContain("nope isn't an environment");
     expect(errorCode(check({ environments: [] }))).toBe('invalid_input');
     expect(unwrap(check({ environments: ['staging', 'staging'] })).environments).toEqual([
       'staging',
@@ -170,8 +170,8 @@ describe('the ATF runner registry', () => {
           defaultRoutineOwner: null,
           environments: [
             { name: 'dev', allowBranchDeploy: true },
-            { name: 'staging', allowBranchDeploy: false, role: 'integration' },
-            { name: 'prod', allowBranchDeploy: false, role: 'release' },
+            { name: 'staging', allowBranchDeploy: false },
+            { name: 'prod', allowBranchDeploy: false },
           ],
           sensitivePaths: [],
         });
@@ -263,7 +263,7 @@ describe('the ATF runner registry', () => {
       ),
     ).toBe('invalid_input');
     expect(
-      errorCode(await service.update(ADMIN, boardId, runner.id, { environments: ['dev'] })),
+      errorCode(await service.update(ADMIN, boardId, runner.id, { environments: ['nope'] })),
     ).toBe('invalid_input');
     const changed = unwrap(
       await service.update(ADMIN, boardId, runner.id, {
@@ -364,7 +364,7 @@ describe('client credentials issued for a runner', () => {
         baseBranch: 'main',
         timeZone: 'UTC',
         defaultRoutineOwner: null,
-        environments: [{ name: 'staging', allowBranchDeploy: false, role: 'integration' }],
+        environments: [{ name: 'staging', allowBranchDeploy: false }],
         sensitivePaths: [],
       });
       await tx.upsertMember({ boardId: board.id, email: ADMIN, role: 'admin' });
