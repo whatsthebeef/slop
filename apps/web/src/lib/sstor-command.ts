@@ -1,5 +1,6 @@
 import type { Action } from '@slop/core';
 import { copyOrSelect } from '@/lib/plan-text';
+import { canContinueLocally } from '@/lib/activity';
 
 /** The sstor command that starts the person's own session after Pick up (plain: the click already picked the glob up); null for any other action. */
 export const sstorCommand = (action: Action, globId: string): string | null => {
@@ -45,10 +46,12 @@ const runClause = (state: string | undefined): string =>
 export const takeOverConfirmation = (glob: {
   id: string;
   branch: string;
-  currentRun?: { state: string } | null;
-}): { title: string; happens: string; command: string; how: string } => ({
+  currentRun?: { state: string; sessionUrl: string | null; routineOwner: string } | null;
+}, email?: string): { title: string; happens: string; command: string; how: string } => ({
   title: `Pick up ${glob.id} from the machine?`,
   happens: `${runClause(glob.currentRun?.state)}its commits so far stay on the branch ${glob.branch}; the glob becomes yours (you are the implementer).`,
   command: `sstor --glob ${glob.id}`,
-  how: "This opens the glob's Claude session on your machine, on the branch, with the plan and the machine's notes.",
+  how: canContinueLocally(glob.currentRun, email)
+    ? "This carries on the routine run's conversation in your terminal (claude --teleport), on the branch; the cloud run stops."
+    : "This opens the glob's Claude session on your machine, on the branch, with the plan and the machine's notes.",
 });

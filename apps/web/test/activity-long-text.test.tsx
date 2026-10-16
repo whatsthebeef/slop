@@ -15,7 +15,7 @@ describe('Activity log with long text', () => {
   it('keeps an entry on one truncated line with the full text in its tooltip', () => {
     const long = 'y'.repeat(300);
     vi.spyOn(activity, 'activityOf').mockReturnValue([
-      { id: 'e1', actor: 'machine', text: long, at: null, link: null, linkLabel: '', title: long, count: 1 },
+      { id: 'e1', actor: 'machine', text: long, at: null, link: null, linkLabel: '', title: long, count: 1, command: null },
     ]);
     const ctx = { board: { repo: 'o/r' }, glob: { id: 's1t1', pr: null } } as unknown as GlobViewContext;
     const state = { move: null, turn: null, steps: [], brief: null, problem: null, seen: null, turnDismissed: false } as unknown as NowState;
