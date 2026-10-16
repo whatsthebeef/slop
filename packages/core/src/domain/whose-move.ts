@@ -338,7 +338,6 @@ const ACTION_TITLES: Readonly<Partial<Record<StepAction, string>>> = {
   start: 'Start',
   start_anyway: 'Start',
   open_session: 'Open session',
-  mark_deployed: 'Mark deployed',
 };
 
 /** What the unstick step needs beyond the move: the actions the viewer may take, and whether a run's session can be opened. */
@@ -361,7 +360,7 @@ export const unstickAction = (
   if (move.cause === undefined) return null;
   const allowed = options.allowed;
   const ok = (a: StepAction): boolean =>
-    a === 'open_session' ? options.session !== false : a === 'mark_deployed' ? true : allowed === undefined || allowed.includes(a);
+    a === 'open_session' ? options.session !== false : allowed === undefined || allowed.includes(a);
   const pair = ((): [StepAction, Action | undefined] => {
     switch (move.cause) {
       case 'failed':

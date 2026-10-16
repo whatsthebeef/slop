@@ -567,11 +567,6 @@ export type Hint =
   | { readonly kind: 'glob.findings'; readonly boardId: number; readonly globId: string }
   /** A glob's decisions (or what replaced them) changed: clients refetch the glob's decision list. */
   | { readonly kind: 'glob.decisions'; readonly boardId: number; readonly globId: string }
-  /**
-   * A test run against a release or integration environment arrived: every glob that environment holds may show it, so
-   * clients refetch the board's deploy state (one hint rather than one per held glob).
-   */
-  | { readonly kind: 'board.tests'; readonly boardId: number }
   | { readonly kind: 'board.changed'; readonly boardId: number }
   /** The board's KB items, documents or agent-set files changed (the board itself only on an agent-set version bump). */
   | { readonly kind: 'board.kb'; readonly boardId: number }

@@ -15,7 +15,6 @@ interface Hint {
     | 'glob.decisions'
     | 'board.changed'
     | 'board.kb'
-    | 'board.tests'
     | 'board.health'
     | 'board.notifications'
     | 'board.inbox';
@@ -37,7 +36,7 @@ export const deploysKey = (boardId: number) => ['deploys', boardId] as const;
 /** One glob's deploy history in the glob view. */
 export const globDeploysKey = (globId: string) => ['glob-deploys', globId] as const;
 
-/** One glob's ATF runs in the glob view; invalidated by `glob.deploys` and `board.tests` hints and on reconnect. */
+/** One glob's ATF runs in the glob view; invalidated by `glob.deploys` hints and on reconnect. */
 export const globTestsKey = (globId: string) => ['glob-tests', globId] as const;
 
 /** One glob's review findings in the glob view; invalidated by `glob.findings` hints and on reconnect. */
@@ -305,12 +304,6 @@ export const useLiveBoard = (boardId: number): LiveState => {
     if (hint.kind === 'board.kb') {
       kbRefetch.current?.call();
       void client.invalidateQueries({ queryKey: ['glob-diff'] });
-      return;
-    }
-    if (hint.kind === 'board.tests') {
-      // An environment's ATF run (or the check that placed globs at its commit): it shows on every glob held there.
-      void client.invalidateQueries({ queryKey: deploysKey(boardId) });
-      void client.invalidateQueries({ queryKey: ['glob-tests'] });
       return;
     }
     if (hint.kind === 'board.notifications') {

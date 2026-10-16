@@ -117,7 +117,7 @@ export class TestRunService {
       const boardIds: number[] = [];
       for (const board of boards) {
         if (!board.environments.some((e) => e.name === input.environment)) continue;
-        const succeeded = await tx.listDeploys(board.id, { environment: input.environment, states: ['succeeded'] });
+        const succeeded = await tx.listDeploys(board.id, { environment: input.environment, states: ['succeeded'], limit: RECENT_DEPLOYS });
         // Without a commit, the run tested what the environment runs now.
         const sha = input.sha ?? succeeded[0]?.sha ?? null;
         if (sha === null) continue;
@@ -282,12 +282,15 @@ const runnerNamesOf = async (tx: Tx, boardId: number, runs: readonly TestRun[]):
   return names;
 };
 
+/** How many of an environment's newest succeeded deploys are searched for a commit (older ones count as superseded). */
+const RECENT_DEPLOYS = 200;
+
 /**
  * The spec list of the succeeded branch deploys of `sha` in `environment` (normally one glob's), read from the globs' latest
  * test plans; null when none has succeeded.
  */
 const batchOf = async (tx: Tx, boardId: number, environment: string, sha: string): Promise<AtfBatch | null> => {
-  const deployed = (await tx.listDeploys(boardId, { environment, states: ['succeeded'] })).filter((d) => sameCommit(d.sha, sha));
+  const deployed = (await tx.listDeploys(boardId, { environment, states: ['succeeded'], limit: RECENT_DEPLOYS })).filter((d) => sameCommit(d.sha, sha));
   if (deployed.length === 0) return null;
   const globIds = [...new Set(deployed.map((d) => d.globId))];
   const plans = await tx.latestArtifacts(globIds, ['test_plan']);

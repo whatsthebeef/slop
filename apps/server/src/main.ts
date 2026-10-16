@@ -753,7 +753,7 @@ mountGitHubSetup(app, {
 mountGitHubWebhooks(app, {
   credentials: githubCredentials,
   log: logError,
-  handle: githubDeliveryHandler({ db, globs, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => {
+  handle: githubDeliveryHandler({ db, globs, boards, github, boardOf, feedback: reviewFeedback, onBasePush: (boardId) => {
       codeSync.mark(boardId);
       // Open actions whose script wasn't on the base branch are offered again when it is.
       void globs.baseMoved(boardId).catch((e: unknown) => logError('base push', e instanceof Error ? e.message : String(e)));

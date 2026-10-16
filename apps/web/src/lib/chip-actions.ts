@@ -38,8 +38,6 @@ export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedA
     const session = glob.currentRun?.state === 'ended' ? null : (glob.currentRun?.sessionUrl ?? null);
     return session === null ? { kind: 'section', target: cardTargets.actions() } : { kind: 'link', url: session };
   }
-  // `mark_deployed` stays in the step's action type but nothing produces it any more; it names no action to run.
-  if (status.action === 'mark_deployed') return { kind: 'section', target: cardTargets.actions() };
   if (status.turn === 'unstick' && status.action !== undefined)
     return allowed.includes(status.action) ? { kind: 'act', action: status.action, confirm: false } : { kind: 'section', target: cardTargets.actions() };
   switch (status.turn) {

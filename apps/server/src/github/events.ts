@@ -1,4 +1,4 @@
-import type { Board, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
+import type { Board, BoardService, Glob, GlobService, ReviewFeedbackService } from '@slop/core';
 import { isWrongReply, machine, parseId, subGateCheckOf } from '@slop/core';
 import { FAILED_CONCLUSIONS } from './merge-state.js';
 import { eq, sql } from 'drizzle-orm';
@@ -102,6 +102,8 @@ export const githubDeliveryHandler =
   (deps: {
     db: Db;
     globs: GlobService;
+    /** Absent: a push's default branch isn't taken into the board (the read from the host still is). */
+    boards?: Pick<BoardService, 'recordBaseBranch'>;
     github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     /** The base branch of a board received a push (the code view fetches it). */
@@ -131,6 +133,7 @@ const handle = async (
   deps: {
     db: Db;
     globs: GlobService;
+    boards?: Pick<BoardService, 'recordBaseBranch'>;
     github: Pick<CodeHost, 'deleteBranch'> & Partial<Pick<CodeHost, 'reviewComments'>>;
     boardOf: (id: number) => Promise<Board | null>;
     onBasePush?: (boardId: number) => void;
@@ -182,7 +185,8 @@ const handle = async (
     if (defaultBranch === undefined) return;
     const rows = await deps.db.select().from(schema.boards).where(sql`lower(${schema.boards.repo}) = ${repo.toLowerCase()}`);
     for (const board of rows.filter((b) => b.baseBranch !== defaultBranch)) {
-      await deps.db.update(schema.boards).set({ baseBranch: defaultBranch }).where(eq(schema.boards.id, board.id));
+      // Through the service: the version bumps and a board.changed hint goes out.
+      await deps.boards?.recordBaseBranch(board.id, defaultBranch);
       const globId = `board-${String(board.id)}`;
       const [pending] = await deps.db
         .select({ id: schema.outbox.id })

@@ -4,9 +4,9 @@
 # script reports the counts afterwards, whatever the result.
 #
 # A run on a glob's branch (SLOP_GLOB set, e.g. by a branch deploy's pipeline) shows on that glob. A run
-# against a release or integration environment (one with a role in the board's settings) shows on every
-# glob that environment's deployed commit contains. Send the commit the environment ran when the tests
-# started (SLOP_SHA); without one, slop takes the environment's latest deploy when the event arrives.
+# against a dev environment (SLOP_ENVIRONMENT) shows on the glob of that environment's branch deploy. Send the
+# commit the environment ran when the tests started (SLOP_SHA); without one, slop takes the environment's latest
+# deploy when the event arrives.
 #
 # How it reaches slop (SLOP_ATF_TRANSPORT, or by what is set):
 #   http         POST to $SLOP_URL/integrations/boards/$SLOP_BOARD/atf-results with the runner's own identity (the default

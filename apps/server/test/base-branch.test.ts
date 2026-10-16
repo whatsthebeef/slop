@@ -39,6 +39,7 @@ describe('the base branch follows the repo default branch', () => {
   let executors: ReturnType<typeof codeHostExecutors>;
   let handle: ReturnType<typeof githubDeliveryHandler>;
   let n = 0;
+  const hints: unknown[] = [];
 
   const boardOf = (boardId: number): Promise<Board | null> => store.transaction((tx) => tx.getBoard(boardId));
   const baseOf = async (boardId: number): Promise<string> => (await boardOf(boardId))?.baseBranch ?? '';
@@ -81,7 +82,7 @@ describe('the base branch follows the repo default branch', () => {
   beforeAll(async () => {
     ({ database, drop } = await createTestDatabase('basebranch'));
     store = new PgStore(database.db);
-    const notifier = { publish: () => undefined };
+    const notifier = { publish: (hint: unknown) => void hints.push(hint) };
     boards = new BoardService({ store, notifier });
     await store.transaction((tx) => tx.upsertUser({ email: ADMIN, name: 'Admin', active: true }));
     host = new FakeHost();
@@ -93,7 +94,7 @@ describe('the base branch follows the repo default branch', () => {
       ids: { runId: () => crypto.randomUUID() },
       routines: { hasRoutine: () => Promise.resolve(true) },
     });
-    handle = githubDeliveryHandler({ db: database.db, globs, boardOf, github: { deleteBranch: () => Promise.resolve() } });
+    handle = githubDeliveryHandler({ db: database.db, globs, boards, boardOf, github: { deleteBranch: () => Promise.resolve() } });
   });
 
   afterAll(() => drop());
@@ -164,8 +165,12 @@ describe('the base branch follows the repo default branch', () => {
     await runPending(board.id);
     expect(await handle(pushDelivery('acme/push', 'main'))).toBe(true);
     expect(await pending(board.id)).toHaveLength(0);
+    const versionBefore = (await boardOf(board.id))?.version ?? 0;
+    hints.length = 0;
     expect(await handle(pushDelivery('Acme/Push', 'trunk'))).toBe(true);
     expect(await baseOf(board.id)).toBe('trunk');
+    expect((await boardOf(board.id))?.version).toBe(versionBefore + 1);
+    expect(hints).toContainEqual({ kind: 'board.changed', boardId: board.id });
     expect(await pending(board.id)).toHaveLength(1);
     // The same payload again changes nothing and queues nothing more.
     expect(await handle(pushDelivery('acme/push', 'trunk'))).toBe(true);

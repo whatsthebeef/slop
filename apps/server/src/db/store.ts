@@ -2750,7 +2750,7 @@ export class PgStore implements Store {
             if (pending !== undefined || rows.some((r) => r.kind === effect.kind && r.globId === effect.globId)) continue;
           }
           if (effect.kind === 'deliver_atf_webhook') {
-            // One delivery per runner and deploy, whatever its state: a repeated containment check queues none, and a delivery
+            // One delivery per runner and deploy, whatever its state: a repeated deploy finish queues none, and a delivery
             // that already succeeded is never queued again (a failed one ran out of attempts and stays failed, and a dropped one, refused
             // by the receiver or the address check, stays dropped: the same delivery ID is not repeated).
             const jobs = schema.outbox;
