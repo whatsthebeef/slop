@@ -8,6 +8,7 @@ import { testPlanSpecs } from '../domain/test-plan.js';
 import { planChangedQuestionEffect, recheckOverlapsEffect } from '../domain/events.js';
 import { humanSteps } from '../domain/human-steps.js';
 import { isOpenQuestion, planChangedQuestion, questionsOf } from '../domain/questions.js';
+import { preparationOf } from '../domain/action-glob.js';
 import { currentRun, investigationRunning } from '../domain/machine.js';
 import type { Hotspot } from '../domain/hotspots.js';
 import type { SearchHit } from '../domain/search.js';
@@ -153,11 +154,18 @@ export class ArtifactService {
   async putArtifact(
     email: string,
     globId: string,
-    kind: 'implementation_plan' | 'postplan' | 'local_review' | 'investigation' | 'test_plan',
+    kind: 'implementation_plan' | 'postplan' | 'local_review' | 'investigation' | 'test_plan' | 'rollout_script',
     content: string,
     options: PutOptions,
+    /** `rollout_script` only: its label (`action: <slug>`), the name the person fetches it by. Every other kind has none. */
+    label?: string,
   ): Promise<Result<Artifact | Ignored>> {
     if (content.trim() === '') return invalidInput('An artifact needs content');
+    if (kind === 'rollout_script') {
+      if (label === undefined || label.trim() === '') return invalidInput('A rollout_script needs a label (action: <slug>)');
+      return this.put(email, globId, kind, label.trim(), content, null, options);
+    }
+    if (label !== undefined && label.trim() !== '') return invalidInput(`A ${kind} has no label`);
     return this.put(email, globId, kind === 'postplan' ? 'implementation_plan' : kind, '', content, null, options);
   }
 
@@ -348,6 +356,10 @@ export class ArtifactService {
       if (glob === null) return notFound(`No glob ${globId}`);
       const actor = await memberOf(tx, email, glob.boardId);
       if (!actor.ok) return actor;
+      // A script kept as an artifact is an action's prepared record: one a prepared action stores instead of a branch.
+      if (kind === 'rollout_script' && !(glob.category === 'action' && preparationOf(glob)?.record === 'artifact')) {
+        return invalidInput('A rollout_script is stored only on an action prepared with an artifact record (create it with record: artifact)');
+      }
       if (options.runId !== null) {
         const run = currentRun(glob);
         if (run === null || run.id !== options.runId || run.state === 'ended') {

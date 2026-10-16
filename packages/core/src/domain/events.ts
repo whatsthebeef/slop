@@ -100,6 +100,10 @@ export const DOMAIN_EVENT_TYPES = [
   'ActionDone',
   /** A person dismissed an action glob as not needed (data: by, reason). */
   'ActionDismissed',
+  /** A prepared action's routine finished a preparation round and the action is ready for the person to run (data: round, record). */
+  'ActionPrepared',
+  /** A person reported that a prepared action's run failed; another preparation round starts (data: by, round). The note is an attachment. */
+  'ActionRunFailed',
   /** The work glob a decision waited on merged. */
   'DecisionWorkLanded',
   /** An admin reopened a learning the KB pipeline closed (data: how it was closed). */
@@ -155,8 +159,9 @@ export type Effect =
       /**
        * `investigate`: the run only investigates a glob in Planning (no branch yet, nothing is committed).
        * `resolve_conflict`: the run merges the base branch into the glob's open PR and pushes.
+       * `prepare`: a preparation round of an action (the run writes what the person will run; it never runs it).
        */
-      readonly purpose?: 'investigate' | 'resolve_conflict';
+      readonly purpose?: 'investigate' | 'resolve_conflict' | 'prepare';
       /** An automatic retry of a watcher that gave up: the failed check it is asked to fix (name and first lines). */
       readonly failureSummary?: string;
       /** Set for Start and Retrigger: the executor refuses to fire while prerequisites are unmerged (Start now doesn't set it). */

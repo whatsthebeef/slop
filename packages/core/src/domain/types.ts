@@ -136,7 +136,7 @@ export interface Run {
   readonly purpose?: RunPurpose;
 }
 
-export const RUN_PURPOSES = ['investigate', 'resolve_conflict'] as const;
+export const RUN_PURPOSES = ['investigate', 'resolve_conflict', 'prepare'] as const;
 export type RunPurpose = (typeof RUN_PURPOSES)[number];
 
 export type PrState = 'draft' | 'ready' | 'closed' | 'merged';

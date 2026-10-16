@@ -160,6 +160,11 @@ export interface IntakeProposal {
   readonly promptVersion: number;
   /** Questions intake raises instead of guessing (at most `MAX_INTAKE_QUESTIONS`); the create path passes them to the new glob. */
   readonly questions: readonly NewQuestion[];
+  /**
+   * The request is work that takes effect by being done (an account, repo settings, a policy), not by being deployed: intake only
+   * suggests an action, with the reason. It never changes the category itself: an action has no review gate, so a person confirms.
+   */
+  readonly suggestedAction?: { readonly reason: string } | null;
   /** Why the plan looks oversized by its text (more tasks than the board's threshold); empty when it doesn't. Creating the glob judges it again with the model. */
   readonly oversized: readonly string[];
 }
@@ -235,7 +240,7 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 export const INTAKE_SYSTEM = `You turn a request for software work into the fields of a "glob", a unit of work on a planning board.
 
 Respond with one JSON object and nothing else:
-{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[], "prerequisites": [{"id": string, "gate": "start" | "merge" | "sign_off", "sentence": string}], "questions": [{"kind": "type" | "environment" | "scope" | "acceptance", "text": string, "options": string[], "blocking": "start" | "none"}]}
+{"title": string, "plan": string, "type": "sub" | "same" | "super", "typeReason": string, "fix": boolean, "workKind": "rnd" | "maintenance", "group": string | null, "confidence": "high" | "medium" | "low", "fixReason": string, "workKindReason": string, "autoTrigger": boolean, "autoTriggerQuote": string | null, "files": string[], "takesEffect": "deploying" | "doing", "doingReason": string | null, "prerequisites": [{"id": string, "gate": "start" | "merge" | "sign_off", "sentence": string}], "questions": [{"kind": "type" | "environment" | "scope" | "acceptance", "text": string, "options": string[], "blocking": "start" | "none"}]}
 
 - title: a short imperative title, at most 70 characters.
 - plan: what is wanted and why, in plain sentences, keeping every concrete detail from the request and adding none that it does not contain (no guessed motivations or extra requirements). End with "Done when:" lines when the request makes the outcome clear.
@@ -252,11 +257,19 @@ Respond with one JSON object and nothing else:
 - Examples from the board's history may follow the request. Examples marked as changed show what the team wanted after a person corrected the first choice: follow them over your own reading when the request is similar.
 - group: reuse an existing group (its exact name) only when the work clearly belongs to that same area; otherwise a new short group name if the request names an area of work, otherwise null. Never pick an existing group just because it is the only one.
 - files: repo paths the work most likely changes, only ones the request names or clearly implies (a migration directory for a schema change, a named file); an empty list when unknown. Never invent paths. List every one you expect: the board's risk-area path patterns are matched against them.
+- takesEffect: how the work becomes real. "deploying" (the default): the code is the change and ships through the pipeline with review, environments and after-deploy steps. "doing": it takes effect when someone applies it to the live thing (an AWS account, IAM or permission sets, GitHub or account settings, a form to a tax office) and any code is only how it was applied and the record of it. The revert test: work that is still needed if the change were reverted is doing. When "doing", doingReason is one short sentence naming what is applied and where; otherwise null. This only SUGGESTS an action to the person: do not change type, fix or workKind because of it, and answer "deploying" when unsure.
 - prerequisites: glob IDs (like s15t7) the request says this work cannot start, merge or be signed off until they are done ("only after s14t17 is in place", "requires s1t2"), each with its "gate" ("start": the work cannot begin; "merge"; "sign_off": it can be built but not handed over or rolled out) and "sentence", the request's own sentence word for word. The globs the request names are listed after it with their titles and states. A glob named only as background, history ("after s14t13 merged we removed the token") or a reference is not a prerequisite. An empty list when the request names none, and when in doubt.
 - autoTrigger: true only if the request explicitly says to start the work immediately or to let an agent implement it now. Then autoTriggerQuote is the exact words from the request that say so; otherwise null.
 - questions: usually an empty list. Raise one only when a person's answer would change the type, the environment or the scope of the work and the request does not say (kind "type", "environment" or "scope"), or when "Done when" cannot be written (kind "acceptance"). Never ask about style, naming or anything the agents can decide. At most 3, each one sentence with 2 to 4 short options when the choices are clear (otherwise an empty options list). blocking: "start" when the work should not begin before the answer (the default for type, environment and scope), "none" for a notice.`;
 
 const normalise = normaliseGroup;
+
+/** The model's `takesEffect: "doing"` with a reason, as a suggestion; anything else (absent, "deploying", no reason) is none. */
+const suggestedActionOf = (answer: unknown): { readonly reason: string } | null => {
+  if (field(answer, 'takesEffect') !== 'doing') return null;
+  const reason = text(field(answer, 'doingReason'))?.trim().slice(0, 300) ?? '';
+  return reason === '' ? null : { reason };
+};
 
 const GROUP_SYSTEM = `You choose the group of a unit of work on a planning board.
 
@@ -587,6 +600,7 @@ export class IntakeService {
         risky.length > 0 ? `Touches risk paths: ${risky.slice(0, 3).join(', ')}` : 'The plan has rollout steps a person carries out after the merge';
     }
     const category = categoryFor(fix);
+    const suggested = suggestedActionOf(answer);
 
     const proposedGroup = input.explicit.group ?? text(field(answer, 'group'));
     const group =
@@ -624,6 +638,7 @@ export class IntakeService {
       autoTrigger,
       autoTriggerReason: autoTrigger && typeof quote === 'string' ? `The request says: "${quote.trim()}"` : null,
       files,
+      ...(suggested === null ? {} : { suggestedAction: suggested }),
       suggestedAfter: waitedForIn(request, open),
       ...prerequisitesOf(answer, request, open),
       questions: questionList(field(answer, 'questions'), input.explicit),
