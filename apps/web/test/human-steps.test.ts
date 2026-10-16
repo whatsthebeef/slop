@@ -122,27 +122,12 @@ describe('rollout status line', () => {
   });
 });
 
-describe('a merged glob whose steps wait on a deploy that never came', () => {
-  const pending = [step({ id: 'a', state: 'pending', due: 'after_deploy:demo' }), step({ id: 'b', state: 'pending', due: 'after_deploy:dev' })];
-  const move = { holder: 'stalled', reason: 'nothing is recorded as deployed to demo since the merge', label: 'Deploy stalled', since: null, cause: 'deploy', minutes: 40 } as const;
-  const unstick = step({ id: 'machine:unstick', kind: 'unstick', title: 'Mark deployed', state: 'due', who: 'implementer', due: 'now', blocks: [], source: 'machine', action: 'mark_deployed' });
-
-  it('says "Deploy stalled" with the warning, and nothing else, on the card', () => {
-    const g = merged([unstick, ...pending], { move });
-    expect(cornerStatus(g, NOW, admin)).toMatchObject({ kind: 'stalled', icon: 'alert', text: 'Deploy stalled' });
-  });
-
-  it('says "Deploy stalled" in the glob view status too, not a Your turn', () => {
-    const g = merged([unstick, ...pending], { move });
-    expect(statusLine(g, NOW, admin)).toMatchObject({ kind: 'stuck', text: 'Deploy stalled' });
-  });
-});
-
 describe('needsRelease (the Arm system label)', () => {
   it('is the first open written rollout step, or an open work step due after the merge', () => {
     expect(needsRelease([step({ id: 'a', state: 'pending' })])?.id).toBe('a');
     expect(needsRelease([step({ id: 'a', kind: 'upload_file', due: 'now' }), step({ id: 'b', kind: 'upload_file', due: 'after_merge' })])?.id).toBe('b');
     expect(needsRelease([step({ id: 'a', state: 'due' })])?.id).toBe('a');
+    expect(needsRelease([step({ id: 'a', kind: 'upload_file', due: 'downstream', blocks: [] })])?.id).toBe('a');
   });
   it('is not a predicted placeholder, a done or dismissed step, a machine step or a step due now', () => {
     expect(needsRelease([step({ state: 'pending', predicted: true })])).toBeNull();

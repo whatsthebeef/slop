@@ -1,4 +1,3 @@
-import { DEPLOY_STALLED_LABEL } from '@slop/core';
 import type { Action } from '@slop/core';
 import type { GlobView } from './api';
 import { cardTargets } from './card-targets';
@@ -39,8 +38,8 @@ export const yourTurnClick = (status: StatusLine, glob: Pick<GlobView, 'allowedA
     const session = glob.currentRun?.state === 'ended' ? null : (glob.currentRun?.sessionUrl ?? null);
     return session === null ? { kind: 'section', target: cardTargets.actions() } : { kind: 'link', url: session };
   }
-  // Mark deployed is on the Human steps section, beside the steps that wait for the deploy.
-  if (status.action === 'mark_deployed') return { kind: 'section', target: cardTargets.humanSteps() };
+  // `mark_deployed` stays in the step's action type but nothing produces it any more; it names no action to run.
+  if (status.action === 'mark_deployed') return { kind: 'section', target: cardTargets.actions() };
   if (status.turn === 'unstick' && status.action !== undefined)
     return allowed.includes(status.action) ? { kind: 'act', action: status.action, confirm: false } : { kind: 'section', target: cardTargets.actions() };
   switch (status.turn) {
@@ -67,8 +66,6 @@ export const positionClick = (position: Position, glob: GlobView, repo: string |
     if (url !== null) return { kind: 'link', url };
   }
   if (position.sessionUrl !== null) return { kind: 'link', url: position.sessionUrl };
-  // A deploy that never came: the steps waiting on it, with Mark deployed, are in the Human steps section.
-  if (position.label === DEPLOY_STALLED_LABEL) return { kind: 'section', target: cardTargets.humanSteps() };
   return { kind: 'section', target: cardTargets.actions() };
 };
 

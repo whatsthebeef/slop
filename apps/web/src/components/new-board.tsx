@@ -19,7 +19,6 @@ export const NewBoardForm = ({ onCreated }: { onCreated?: () => void }) => {
       api.createBoard({
         name,
         repo: repo.trim() === '' ? null : repo.trim(),
-        baseBranch: 'main',
         timeZone: 'UTC',
         environments: [],
       }),

@@ -215,34 +215,44 @@ describe('steps grouped by stage', () => {
     expect(groups.map((g) => g.stage)).toEqual(['after_merge', 'staging', 'production', 'qa']);
   });
 
-  const showWith = (humanSteps: ListedHumanStep[], onMarkDeployed = vi.fn(() => Promise.resolve(true))) => {
-    const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps } as GlobView;
+  const showWith = (humanSteps: ListedHumanStep[], patch: Partial<GlobView> = {}) => {
+    const glob = { ...coreGlob(), list: 'doing', branch: 's1t1', currentRun: null, humanSteps, ...patch } as GlobView;
     render(
       <MemoryRouter>
         <HumanSteps
           glob={glob}
           canAdd
           environments={['staging', 'production']}
-          onMarkDeployed={onMarkDeployed}
+          baseBranch='main'
           onAdd={vi.fn(() => Promise.resolve(true))}
           onComplete={vi.fn(() => Promise.resolve(true))}
           onDismiss={vi.fn(() => Promise.resolve(true))}
         />
       </MemoryRouter>,
     );
-    return onMarkDeployed;
   };
 
-  it('renders a not-due environment group as one quiet line with Mark deployed, in stage order', async () => {
-    const mark = showWith([deploy('a', 'production'), deploy('b', 'production'), step({ id: 'c', state: 'pending' })]);
+  it('renders a not-due environment group as one quiet line, in stage order, with no Mark deployed button', () => {
+    showWith([deploy('a', 'production'), deploy('b', 'production'), step({ id: 'c', state: 'pending' })]);
     expect(screen.queryByTestId('due-steps')).toBeNull();
     const lines = screen.getAllByTestId('quiet-toggle').map((el) => el.textContent);
     expect(lines).toEqual(['After the merge: 1 step, not due yet ▸', 'After the deploy to production: 2 steps, not due yet ▸']);
-    const buttons = screen.getAllByTestId('mark-deployed');
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]?.textContent).toBe('Mark deployed to production');
-    await userEvent.click(buttons[0] as HTMLElement);
-    expect(mark).toHaveBeenCalledWith('production');
+    expect(screen.queryByTestId('mark-deployed')).toBeNull();
+  });
+
+  it('shows a downstream step as a non-blocking step in the needs-you block, and says the rest of the pipeline when quiet', () => {
+    showWith([step({ id: 'a', state: 'due', due: 'downstream', blocks: [] })]);
+    expect(screen.getByTestId('due-step').querySelector('[data-testid="step-downstream"]')?.textContent).toBe("doesn't block");
+    expect(groupText({ stage: 'downstream', steps: [step({ id: 'a', state: 'pending', due: 'downstream' })] })).toBe('Rest of the pipeline: 1 step, not due yet');
+  });
+
+  it('says where a step runs: the glob\'s dev environment, else the base branch; nothing for a downstream step', () => {
+    showWith([step({ id: 'a', state: 'due' }), step({ id: 'b', state: 'due', due: 'downstream', blocks: [] })], { environment: 'dev' });
+    const runs = screen.getAllByTestId('step-runs-on');
+    expect(runs.map((r) => r.textContent)).toEqual(['Runs on dev']);
+    cleanup();
+    showWith([step({ id: 'a', state: 'due' })], { environment: null });
+    expect(screen.getByTestId('step-runs-on').textContent).toBe('Runs against main');
   });
 
   it('puts only due steps in the needs-you block, the other stage stays quiet', () => {
@@ -256,7 +266,7 @@ describe('steps grouped by stage', () => {
     const glob = { ...coreGlob(), status: 'reviewing', pr: { number: 1, state: 'merged', headSha: 'abc' }, list: 'doing', branch: 's1t1', currentRun: null, humanSteps: [deploy('a', 'staging'), deploy('b', 'production')] } as GlobView;
     render(
       <MemoryRouter>
-        <HumanSteps glob={glob} canAdd environments={['staging', 'production']} onMarkDeployed={vi.fn(() => Promise.resolve(true))} onAdd={vi.fn(() => Promise.resolve(true))} onComplete={vi.fn(() => Promise.resolve(true))} onDismiss={vi.fn(() => Promise.resolve(true))} />
+        <HumanSteps glob={glob} canAdd environments={['staging', 'production']} onAdd={vi.fn(() => Promise.resolve(true))} onComplete={vi.fn(() => Promise.resolve(true))} onDismiss={vi.fn(() => Promise.resolve(true))} />
       </MemoryRouter>,
     );
     const groups = screen.getAllByTestId('quiet-steps');
@@ -284,7 +294,6 @@ describe('steps grouped by stage', () => {
   it('shows an empty due block while the glob is merging with an after-merge step pending', () => {
     showWith([step({ id: 'a', state: 'pending' })]);
     expect(screen.queryByTestId('due-steps')).toBeNull();
-    expect(screen.queryByTestId('mark-deployed')).toBeNull();
   });
 });
 

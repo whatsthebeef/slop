@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { ChatDock } from '@/components/chat-dock';
 import { NotificationBar } from '@/components/notification-bar';
-import { BoardEnvironments } from '@/components/board-environments';
 import { AppSettings, BoardBar, useOpenBoard } from '@/components/board-bar';
 import { api } from '@/lib/api';
 import { barRows, sessionForKey } from '@/lib/board-bar';
@@ -62,7 +61,6 @@ export const BoardTabs = ({
           </span>
         )}
         <div ref={onActions} className='flex items-center' data-testid='header-actions' />
-        <BoardEnvironments boardId={boardId} />
         <button
           type='button'
           className='rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:text-foreground'
