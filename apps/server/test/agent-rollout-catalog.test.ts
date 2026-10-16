@@ -208,17 +208,19 @@ describe('catalog agents: relations carry a reason and reach across boards', () 
 
 describe('catalog agents: when a step falls due (once, per environment, after the merge)', () => {
   for (const name of ['implementer', 'orchestrator']) {
-    it(`has the ${name} choose once, per-environment or after-merge timing for each command`, async () => {
+    it(`has the ${name} choose once, dev-environment or after-merge timing for each command`, async () => {
       const text = await agent(name);
-      expect(text).toContain('**When a step falls due: once, per environment, or after the merge.**');
+      expect(text).toContain('**When a step falls due: once, on the dev environment, or after the merge.**');
       expect(text).toContain('Work either takes effect by deploying it');
       expect(text).toContain('by doing it');
       expect(text).toContain('end its title with `(once)` and give it no `env`');
       expect(text).toContain('done once and never reopened');
       expect(text).toContain("using only names from `get_board`'s `environments`");
-      expect(text).toContain("promotion order from the board's environments KB doc");
+      expect(text).toContain('`downstream`');
+      expect(text).toContain("names come from the board's environments knowledge doc");
+      expect(text).not.toMatch(/promotion order|report-deploy|Mark deployed/);
       expect(text).toContain('can fall due before the merge');
-      expect(text).toContain('Only a step that needs main to have the change is a plain after-merge step');
+      expect(text).toContain('Only a step that needs the base branch to have the change is a plain after-merge step');
       expect(text).toContain('Split mixed commands into separate steps');
     });
   }
@@ -227,13 +229,14 @@ describe('catalog agents: when a step falls due (once, per environment, after th
     const text = await agent('investigator');
     expect(text).toContain('`once` (environment-independent and one-shot');
     expect(text).toContain('only names from `get_board`');
+    expect(text).toContain('`downstream`');
   });
 
   it('has the change reviewer flag misfiled steps as in scope', async () => {
     const text = await agent('change_reviewer');
     expect(text).toContain('steps filed at the wrong time (each is `IN-SCOPE`)');
     expect(text).toContain('not marked `(once)`');
-    expect(text).toContain('is not one of the board\'s environments');
+    expect(text).toContain('`downstream`');
     expect(text).toContain('commands for a branch-deploy environment held back until after the merge');
   });
 });
