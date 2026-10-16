@@ -135,7 +135,7 @@ const UnknownEnvironment = ({ environment }: { environment: string }) => (
 );
 
 /** One command in a monospace box with a copy button; `extra` sits beside the button (a link to the script's file). */
-const CommandBox = ({
+export const CommandBox = ({
   command,
   extra,
   testId = 'step-command',

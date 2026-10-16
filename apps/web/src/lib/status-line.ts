@@ -1,10 +1,12 @@
 import {
+  actionState,
   appliedHolding,
   behindAdvice,
   behindWarning,
   currentBehind,
   checksExplanation,
   machine,
+  preparationOf,
   readyStatus,
   MERGE_CONFLICT_STALL_LABEL,
   MERGE_QUEUE_TIP,
@@ -34,7 +36,8 @@ export interface StatusLine {
     | 'ready'
     | 'rollout'
     | 'merge-waits'
-    | 'merging';
+    | 'merging'
+    | 'action';
   /** One line, cut short: the card's text. */
   readonly text: string;
   /** The whole sentence, for the glob view. */
@@ -98,7 +101,62 @@ const ALSO = {
   rollout: '',
   'merge-waits': '',
   merging: '',
+  action: '',
 } as const;
+
+/** A prepared action's state in words: who has the ball (the icon) and what it is doing. */
+export interface ActionLine {
+  readonly state: 'preparing' | 'preparation_failed' | 'ready' | 'recording';
+  /** The machine (spinning while it works), a person, or an alert when preparation failed. */
+  readonly icon: 'machine-spinning' | 'human' | 'alert';
+  readonly text: string;
+  readonly tip: string;
+  readonly tone: string;
+}
+
+/**
+ * Where a prepared action stands (a routine prepares the script or document, the person runs it, then slop records it): preparing,
+ * ready to run, recording, or a failed preparation. Null for a plain action, for any other glob, and while it waits to start
+ * (the hold line says what it waits for).
+ */
+export const actionLine = (glob: GlobView): ActionLine | null => {
+  const preparation = glob.preparation ?? preparationOf(glob);
+  if (glob.category !== 'action' || preparation == null) return null;
+  const state = glob.actionState ?? actionState(glob);
+  const round = preparation.rounds > 1 ? ` · round ${String(preparation.rounds)}` : '';
+  switch (state) {
+    case 'preparing':
+      return {
+        state,
+        icon: 'machine-spinning',
+        text: `preparing${round}`,
+        tip: `The machine is preparing what you will run (round ${String(preparation.rounds)}); it never runs it itself`,
+        tone: 'text-muted-foreground',
+      };
+    case 'preparation_failed': {
+      const why = glob.failure?.reason ?? 'The preparation run failed';
+      return { state, icon: 'alert', text: 'preparation failed', tip: `${why}\nRetry prepares it again on the same branch`, tone: 'text-red' };
+    }
+    case 'ready':
+      return {
+        state,
+        icon: 'human',
+        text: 'ready to run',
+        tip: 'Your turn: run what was prepared, then press Done, or Failed… and paste the output for another round',
+        tone: 'text-signal-strong',
+      };
+    case 'recording':
+      return {
+        state,
+        icon: 'machine-spinning',
+        text: 'recording',
+        tip: 'Done is recorded: slop is merging the prepared branch once the checks pass, then the action closes',
+        tone: 'text-muted-foreground',
+      };
+    default:
+      return null;
+  }
+};
 
 /** The one problem a glob shows, in plain words, most important first; the rest go in its tooltip. */
 export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer, base?: string): StatusLine | null => {
@@ -120,6 +178,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     run !== null && isInvestigateRun(run) && run.state === 'ended' && run.outcome === 'failed';
   const provisioningFailed =
     glob.provisioning === 'failed' && glob.failure?.kind === 'provisioning';
+  const acting = actionLine(glob);
   const candidates: StatusLine[] = [];
   const make = (
     line: Omit<StatusLine, 'text' | 'url' | 'doing' | 'sessionUrl'> &
@@ -181,7 +240,9 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     // Checks in flight read the shared merging wording ("merging when checks pass", or "merging from <base>" while catching up).
     // In the host's merge queue it reads the queue wording instead.
     const queued = mergeQueueStatus(glob);
-    const full = queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
+    const merge = queued ?? (checksInFlightWhileMerging(glob) ? mergingChecksText(glob, base) : 'merging');
+    // A prepared action's merge is its record being written after Done.
+    const full = acting?.state === 'recording' ? `recording · ${merge}` : merge;
     const rollout = hasAfterMergeStep(glob.humanSteps) ? `; ${ROLLOUT_AFTER_MERGE_TEXT}` : '';
     candidates.push(
       make({
@@ -200,7 +261,7 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
     candidates.push(
       make({
         kind: 'failure',
-        full: reason,
+        full: acting?.state === 'preparation_failed' ? `Preparation failed: ${reason}` : reason,
         tone: 'text-red',
         tip,
         ...(failure?.conflict === undefined
@@ -263,6 +324,9 @@ export const statusLine = (glob: GlobView, now: string, viewer?: HumanStepViewer
       }),
     );
   }
+  // A prepared action with nothing wrong says where it stands (the person's turn, the machine's, or recording).
+  if (candidates.length === 0 && acting !== null && acting.state !== 'preparation_failed')
+    return make({ kind: 'action', full: acting.text, tone: acting.tone, tip: acting.tip });
   if (candidates.length === 0) {
     const reviewSha = glob.artifacts?.find((a) => a.kind === 'local_review')?.commitSha ?? null;
     const ready = readyStatus(glob, reviewSha, { rolloutSteps: glob.rolloutSteps ?? 0 });
@@ -339,16 +403,18 @@ const failedWhy = (glob: GlobView, head: string): string => {
 
 /** What an action's Done waits for: the glob that builds its script, or the script itself not being on the base branch yet. */
 const actionWaiting = (glob: GlobView, actions: readonly Action[]): Waiting[] => {
-  if (glob.status !== 'planning' || actions.includes('complete_action')) return [];
-  const { label, icon } = actionPresentation('complete_action', glob);
+  // A prepared action waits to be prepared; a plain one waits to be done.
+  const step: Action = (glob.preparation ?? preparationOf(glob)) == null ? 'complete_action' : 'prepare_action';
+  if (glob.status !== 'planning' || actions.includes(step)) return [];
+  const { label, icon } = actionPresentation(step, glob);
   const first = appliedHolding(glob, glob.holding ?? [])[0];
   if (first !== undefined) {
     const tip = scriptHoldTip(glob, first) ?? `Waits for ${named(first)} to be ${UNTIL_WORDS[first.until]}`;
-    return [{ action: 'complete_action', label, icon, tip, why: `for ${named(first)} to be ${UNTIL_WORDS[first.until]}` }];
+    return [{ action: step, label, icon, tip, why: `for ${named(first)} to be ${UNTIL_WORDS[first.until]}` }];
   }
   if (glob.script?.onBase !== false) return [];
   const why = `: script not on main yet: ${glob.script.path}`;
-  return [{ action: 'complete_action', label, icon, tip: `Script not on main yet: ${glob.script.path}`, why }];
+  return [{ action: step, label, icon, tip: `Script not on main yet: ${glob.script.path}`, why }];
 };
 
 /**
