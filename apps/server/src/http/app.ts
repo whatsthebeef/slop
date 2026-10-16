@@ -1,5 +1,5 @@
 import type { AttachmentService, BoardService, DecisionGlobService, Glob, GlobService, NewQuestion, PendingEffect, GroupBackfillService, GroupService, IntakeService, Result, SpendService, SplitInfo, WorkstreamsSummary } from '@slop/core';
-import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_DEPLOY_KNOWN, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
+import { ACTION_RECORD_KINDS, AGENT_KB_APPROVALS, HUMAN_STEP_KINDS, MAX_INTAKE_QUESTIONS, MAX_QUESTION_ANSWER, MAX_QUESTION_KEY, MAX_QUESTION_NOTE, MAX_QUESTION_COMMAND, MAX_QUESTION_COMMANDS, MAX_QUESTION_OPTION, MAX_QUESTION_OPTIONS, MAX_QUESTION_TEXT, QUESTION_BLOCKING, WORK_CATEGORIES, WORK_KINDS, invalidInput, CONFIDENCES, ENVIRONMENT_DEPLOY_KNOWN, ENVIRONMENT_ROLES, LABEL_NAMES, MAX_SPLIT_PARTS, OUTCOME_REASON_MAX, REVIEW_SEVERITIES, RELATION_GATES, ROLES, SLOP_TYPES, STATUSES, bySignedOffNewest, isArchivedDecision, isMine, latestSignedOff, listOf, machine, machineSteps, needsHuman, humanSteps, openRolloutSteps, stallThresholds, whoseMove, withUnstick, compactStep, stepsForViewer, armView, armsStored } from '@slop/core';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -882,6 +882,7 @@ export const createApp = (deps: AppDeps) => {
   const raiseQuestionSchema = z.object({
     text: z.string().min(1).max(MAX_QUESTION_TEXT),
     options: z.array(z.string().min(1).max(MAX_QUESTION_OPTION)).max(MAX_QUESTION_OPTIONS).optional(),
+    commands: z.array(z.string().min(1).max(MAX_QUESTION_COMMAND)).max(MAX_QUESTION_COMMANDS).optional(),
     blocking: z.enum(QUESTION_BLOCKING).optional(),
     key: z.string().min(1).max(120).optional(),
   });
@@ -901,6 +902,7 @@ export const createApp = (deps: AppDeps) => {
     const raised = await globs.raiseQuestion(email, id, {
       text: body.text,
       ...(body.options === undefined ? {} : { options: body.options }),
+      ...(body.commands === undefined ? {} : { commands: body.commands }),
       ...(body.key === undefined ? {} : { key: body.key }),
       blocking: body.blocking ?? 'none',
       source: 'other',

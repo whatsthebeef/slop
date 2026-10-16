@@ -161,7 +161,7 @@ const Why = ({ glob }: { glob: GlobView }) => {
           {stripMarkdown(glob.title)}
         </p>
       ) : (
-        <CollapsibleMarkdown content={text} />
+        <CollapsibleMarkdown content={text} commands />
       )}
     </div>
   );
@@ -249,7 +249,7 @@ export const DecisionAssessment = ({ glob, all = false }: { glob: GlobView; all?
       <div className='mt-2 grid gap-2'>
         {older.map((v) => (
           <div key={v.version} className='rounded border p-3'>
-            <CollapsibleMarkdown content={v.content} />
+            <CollapsibleMarkdown content={v.content} commands />
           </div>
         ))}
       </div>
