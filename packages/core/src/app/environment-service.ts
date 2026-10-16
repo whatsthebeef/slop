@@ -203,6 +203,14 @@ export class EnvironmentService {
     return 'recorded';
   }
 
+  /** Why `environment` can't be recorded by hand on the board (unknown, unobserved, or reported by a pipeline); null when it can. */
+  async manualRefusal(boardId: number, environment: string): Promise<string | null> {
+    const board = await this.deps.store.transaction((tx) => tx.getBoard(boardId));
+    const env = board === null ? null : environments.observedEnvironment(board, environment);
+    if (env === null) return `${environment} isn't an environment with a pipeline role`;
+    return env.deployKnown === 'manual' ? null : `${environment}'s deploys are reported by its pipeline, not recorded by hand`;
+  }
+
   /**
    * A board member records that a manual environment now runs `deploy.sha`. It is stored exactly as a reported deploy
    * (so the containment check, the globs' cards and their after-deploy steps follow), with the member in the event ID.

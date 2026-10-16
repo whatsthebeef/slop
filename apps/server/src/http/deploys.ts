@@ -113,7 +113,8 @@ const CODEBUILD_FINAL: Record<string, boolean> = {
   TIMED_OUT: false,
 };
 
-const recordSchema = z.object({ ref: z.string().max(255).optional() });
+// A branch, tag or commit name: no path tricks (`..`), spaces or control characters.
+const recordSchema = z.object({ ref: z.string().max(255).regex(/^(?!.*\.\.)[\w./@+-]*$/).optional() });
 
 const send = <T>(c: Context<Env>, result: Result<T>) =>
   result.ok ? c.json({ value: result.value }) : c.json(errorBody(result.error), statusOf(result.error));
@@ -214,6 +215,8 @@ export const mountDeploys = (app: Hono<Env>, deps: DeployRoutesDeps): void => {
     if (!membership.ok) return send(c, membership);
     const repo = repoOf(membership.value.board);
     if (deps.refs === undefined || repo === null) return c.json({ error: "This board's repo isn't connected, so slop can't look up the commit" }, 409);
+    const refusal = await deps.environments.manualRefusal(boardId, c.req.param('env'));
+    if (refusal !== null) return c.json({ code: 'invalid_input', message: refusal }, 422);
     const ref = body.data.ref?.trim() ?? '';
     const named = ref === '' ? repo.base : ref;
     const sha = await deps.refs.resolveRef(repo, named);
