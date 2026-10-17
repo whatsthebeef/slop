@@ -153,8 +153,13 @@ describe('action globs over REST and MCP (Postgres)', () => {
   it('creates an action over REST with a null type; a typed create is refused', async () => {
     const made = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Rotate token', category: 'action', assignee: DEV, group: null });
     expect(made.status).toBe(200);
-    expect(made.body).toMatchObject({ category: 'action', type: null, attributes: { assignee: DEV, outcome: null }, allowedActions: ['complete_action', 'dismiss_action', 'delete'] });
-    expect(made.body.humanSteps?.map((s) => [s.kind, s.title, s.who])).toEqual([['action', 'Do: Rotate token', DEV]]);
+    expect(made.body).toMatchObject({ category: 'action', type: null, attributes: { assignee: DEV, outcome: null }, allowedActions: ['pick_up', 'dismiss_action', 'delete'] });
+    // Its step shows once it is picked up (in Doing).
+    expect(made.body.humanSteps ?? []).toEqual([]);
+    expect((await rest('POST', `/api/globs/${made.body.id}/actions/pick-up`, { version: made.body.version })).status).toBe(200);
+    const doing = await rest('GET', `/api/globs/${made.body.id}`);
+    expect(doing.body).toMatchObject({ status: 'in_progress', allowedActions: ['complete_action', 'dismiss_action', 'back_to_planning', 'delete'] });
+    expect(doing.body.humanSteps?.map((s) => [s.kind, s.title, s.who])).toEqual([['action', 'Do: Rotate token', DEV]]);
     const refused = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Rotate', category: 'action', type: 'same', group: null });
     expect(refused.status).toBe(422);
   });
@@ -322,14 +327,19 @@ describe('action globs over REST and MCP (Postgres)', () => {
     const make = async (key: string, path: string, extra: Record<string, unknown> = {}) =>
       (await tool('create_glob', { board: boardId, idempotencyKey: key, category: 'action', title: `Run ${path}`, plan: plan(path), group: null, ...extra })).body;
     const done = (a: Body) => rest('POST', `/api/globs/${a.id}/actions/done`, { version: a.version });
+    const pickUp = async (a: Body): Promise<Body> => {
+      const view = (await rest('GET', `/api/globs/${a.id}`)).body;
+      await rest('POST', `/api/globs/${a.id}/actions/pick-up`, { version: view.version });
+      return (await rest('GET', `/api/globs/${a.id}`)).body;
+    };
 
     it('refuses Done while the script is absent on the base branch, even with no relation, and allows it after the push', async () => {
       const a = await make('script-1', 'scripts/rollout/s1-run.sh');
       const view = await rest('GET', `/api/globs/${a.id}`);
       expect(view.body.script).toEqual({ path: 'scripts/rollout/s1-run.sh', onBase: false });
-      expect(view.body.allowedActions).toEqual(['dismiss_action', 'delete']);
+      expect(view.body.allowedActions).toEqual(['pick_up', 'dismiss_action', 'delete']);
       const listed = (await rest('GET', `/api/boards/${boardId}/globs`)).body as unknown as Body[];
-      expect(listed.find((g) => g.id === a.id)).toMatchObject({ script: { onBase: false }, allowedActions: ['dismiss_action', 'delete'] });
+      expect(listed.find((g) => g.id === a.id)).toMatchObject({ script: { onBase: false }, allowedActions: ['pick_up', 'dismiss_action', 'delete'] });
       const refused = await done(view.body);
       expect(refused.status).toBe(409);
       expect(refused.body.message).toBe('script not on main yet: scripts/rollout/s1-run.sh');
@@ -342,8 +352,9 @@ describe('action globs over REST and MCP (Postgres)', () => {
       await globs.baseMoved(boardId);
       const after = await rest('GET', `/api/globs/${a.id}`);
       expect(after.body.script).toEqual({ path: 'scripts/rollout/s1-run.sh', onBase: true });
-      expect(after.body.allowedActions).toContain('complete_action');
-      expect((await done(after.body)).body).toMatchObject({ status: 'signed_off' });
+      const doing = await pickUp(after.body);
+      expect(doing.allowedActions).toContain('complete_action');
+      expect((await done(doing)).body).toMatchObject({ status: 'signed_off' });
     });
 
     it('does not keep a stale "missing" after a push: the clone catches up and the answer is read again', async () => {
@@ -360,7 +371,7 @@ describe('action globs over REST and MCP (Postgres)', () => {
       try {
         const after = await rest('GET', `/api/globs/${a.id}`);
         expect(after.body.script).toEqual({ path, onBase: true });
-        expect(after.body.allowedActions).toContain('complete_action');
+        expect((await pickUp(after.body)).allowedActions).toContain('complete_action');
       } finally {
         skew -= 20_000;
       }
@@ -381,13 +392,14 @@ describe('action globs over REST and MCP (Postgres)', () => {
         const a = await make('script-4', 'scripts/rollout/s4-run.sh');
         const view = await rest('GET', `/api/globs/${a.id}`);
         expect(view.body.script).toEqual({ path: 'scripts/rollout/s4-run.sh', onBase: null });
-        expect(view.body.allowedActions).toContain('complete_action');
+        const doing = await pickUp(view.body);
+        expect(doing.allowedActions).toContain('complete_action');
         // The unavailable answer is cached briefly: repeated reads don't hit the down host again.
         const reads = downReads;
         await rest('GET', `/api/globs/${a.id}`);
         await rest('GET', `/api/boards/${boardId}/globs`);
         expect(downReads).toBe(reads);
-        expect((await done(view.body)).body).toMatchObject({ status: 'signed_off' });
+        expect((await done(doing)).body).toMatchObject({ status: 'signed_off' });
       } finally {
         hostDown = false;
       }
@@ -398,16 +410,16 @@ describe('action globs over REST and MCP (Postgres)', () => {
       onBase.add('scripts/rollout/s5-run.sh');
       const a = await make('script-5', 'scripts/rollout/s5-run.sh', { relations: [{ to: builder.id, gate: 'start', until: 'merged', reason: 'builds its script' }] });
       const view = await rest('GET', `/api/globs/${a.id}`);
-      expect(view.body.allowedActions).toEqual(['dismiss_action', 'delete']);
+      expect(view.body.allowedActions).toEqual(['pick_up', 'dismiss_action', 'delete']);
       expect(view.body.holding).toMatchObject([{ to: builder.id, until: 'merged' }]);
       const refused = await done(view.body);
       expect(refused.status).toBe(409);
       expect(refused.body.message).toContain(`Waits for ${builder.id} to merge`);
       unwrap(await globs.applyEvent(builder.id, (g, c) => machine.merged(g, { sha: 'abc1234' }, c)));
       await globs.releaseDependents(builder.id, boardId);
-      const after = await rest('GET', `/api/globs/${a.id}`);
-      expect(after.body.allowedActions).toContain('complete_action');
-      expect((await done(after.body)).body).toMatchObject({ status: 'signed_off' });
+      const doing = await pickUp((await rest('GET', `/api/globs/${a.id}`)).body);
+      expect(doing.allowedActions).toContain('complete_action');
+      expect((await done(doing)).body).toMatchObject({ status: 'signed_off' });
     });
   });
 
@@ -454,9 +466,8 @@ describe('action globs over REST and MCP (Postgres)', () => {
     expect(await ids('human')).not.toContain(`s${boardId}t9000`);
   });
 
-  it('pick-up and take-over are refused on an action over REST, and a needs-list entry for it waits until done', async () => {
+  it('take-over is refused on an action over REST, pick-up moves it to Doing, and a needs-list entry for it waits until done', async () => {
     const a = (await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Not picked', category: 'action', group: null })).body;
-    expect((await rest('POST', `/api/globs/${a.id}/actions/pick-up`, { version: a.version })).status).toBe(409);
     expect((await rest('POST', `/api/globs/${a.id}/actions/take-over`, { version: a.version })).status).toBe(409);
     const sub = await rest('POST', `/api/boards/${boardId}/globs`, { title: 'Waits', type: 'sub', category: 'task', group: null, plan: 'p', needs: [a.id] }, ADMIN);
     const view = unwrap(await globs.get(DEV, sub.body.id));

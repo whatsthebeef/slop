@@ -1114,6 +1114,7 @@ export const pickUp = (
     // the prepared script. Any other action has no branch or run: picking it up moves it to Doing with the person (see pickUpAction).
     const state = actionState(glob);
     if ((state === 'ready' || state === 'recording') && hasBranchRecord(glob) && glob.pr !== null) return unchanged(glob);
+    if (options.takeOver) return invalidTransition(glob, actor, 'An action is picked up, not taken over');
     return pickUpAction(glob, ctx);
   }
   if (restrictedFrom(actor, glob)) {
