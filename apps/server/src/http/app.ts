@@ -739,9 +739,9 @@ export const createApp = (deps: AppDeps) => {
   });
 
   app.delete('/api/globs/:id', async (c) => {
-    const body = await parse(c, versionSchema);
+    const body = await parse(c, versionSchema.extend({ reason: z.string().min(1).max(2000).optional() }));
     if (body instanceof Response) return body;
-    return send(c, await globs.delete(c.get('email'), c.req.param('id'), body.version), () => ({}));
+    return send(c, await globs.delete(c.get('email'), c.req.param('id'), body.version, body.reason ?? null), () => ({}));
   });
 
   const actions = {

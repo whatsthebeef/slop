@@ -884,6 +884,20 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'delete_glob',
+    {
+      description:
+        "Delete a glob, with the same permission and state rules as the glob view's Delete: its run is superseded, its draft PR closed and its branch deleted, and globs that waited for it are released. A merged glob is refused, and so is a knowledge item an agent submitted (reject it instead). The reason is required and is recorded with who deleted it. Agents call this only when a person explicitly asks in this conversation to delete that specific glob, never on their own initiative, to tidy up or to undo their own mistakes; pass the person's words as the reason. Pass the version you read.",
+      inputSchema: { id: z.string(), version: z.number().int(), reason: z.string().min(1).max(2000).describe("The person's words asking for the deletion") },
+    },
+    async ({ id, version, reason }) => {
+      const deleted = await globs.delete(email, id, version, reason, { refuseMerged: true });
+      if (deleted.ok) void deps.outbox.drain(id).catch(() => undefined);
+      return reply(deleted, () => ({ deleted: id }));
+    },
+  );
+
+  server.registerTool(
     'prepare_action',
     {
       description:
