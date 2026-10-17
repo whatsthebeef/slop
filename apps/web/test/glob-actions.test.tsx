@@ -221,7 +221,7 @@ describe('glob view: main button', () => {
     renderGlob(view({ allowedActions: ['delete'] }));
     expect(mainButton()).toBeNull();
     expect(screen.queryByTestId('more-actions')).toBeNull();
-    expect(within(screen.getByTestId('glob-actions')).queryAllByRole('button')).toHaveLength(0);
+    expect(screen.queryByTestId('glob-actions')).toBeNull();
   });
 
   it('while merging, Cancel merge leads and the ▾ holds Review code and Pick up', async () => {
@@ -1109,7 +1109,7 @@ describe('glob view: split moves in the action ▾', () => {
       expect(type.className).toContain('text-[10px]');
       expect(group.className).toContain('text-[10px]');
       expect(type.className).toContain('font-mono');
-      expect(within(screen.getByTestId('glob-actions')).queryByTestId('glob-type')).toBeNull();
+      expect(screen.queryByTestId('glob-actions')).toBeNull();
       expect(screen.getAllByTestId('glob-type')).toHaveLength(1);
     });
 
@@ -1119,7 +1119,7 @@ describe('glob view: split moves in the action ▾', () => {
       expect(within(chips).getByTestId('group-chip').textContent).toBe('glob-view-layout');
       expect(within(chips).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
-      expect(within(screen.getByTestId('glob-actions')).queryByTestId('group-chip')).toBeNull();
+      expect(screen.queryByTestId('glob-actions')).toBeNull();
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
     });
 
@@ -1131,12 +1131,17 @@ describe('glob view: split moves in the action ▾', () => {
       expect(within(info).getByTestId('arm-system-label').textContent).toBe('Arm system');
       expect(within(info).queryByTestId('arm-step-title')).toBeNull();
       expect(info.textContent).not.toContain('Run the migration');
-      expect(within(info).queryByTestId('glob-branch')).toBeNull();
       expect(info.textContent).not.toContain('s1t1');
       expect(info.className).toContain('ml-auto');
       expect(info.className).toContain('flex-wrap');
       expect(within(screen.getByTestId('glob-header')).queryByTestId('arm-system-label')).toBeNull();
-      expect(within(screen.getByTestId('glob-header')).queryByTestId('glob-branch')).toBeNull();
+    });
+
+    it('shows no line, and no branch, beside the action row when there is no Arm system label', () => {
+      renderGlob(view({ branch: 's1t1', humanSteps: [] }));
+      expect(screen.queryByTestId('action-line-info')).toBeNull();
+      expect(screen.queryByTestId('glob-branch')).toBeNull();
+      expect(screen.queryByText('s1t1', { selector: '[data-testid="glob-actions"] *' })).toBeNull();
     });
   });
 
