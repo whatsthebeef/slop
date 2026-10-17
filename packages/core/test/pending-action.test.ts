@@ -119,6 +119,33 @@ describe('pending action transitions', () => {
   });
 });
 
+describe('a timed-out outcome does not outlive the glob moving on', () => {
+  const timedOut = {
+    kind: 'start_again',
+    at: NOW,
+    by: dev.email,
+    result: 'timed_out',
+    reason: 'start_again had no effect after a minute',
+  } as const;
+
+  it('is cleared by a later transition that moves the status, whatever triggered it', () => {
+    const before = glob({ status: 'implementing', pr: null, lastOutcome: timedOut });
+    const t = value(m.startAgain(before, ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.lastOutcome).toBeNull();
+  });
+
+  it('stays through a change that moves nothing, and a failed outcome is never cleared by it', () => {
+    const failed = { ...timedOut, result: 'failed', reason: 'no' } as const;
+    expect(
+      value(m.relationsChanged(glob({ lastOutcome: timedOut }), ctx(null))).glob.lastOutcome,
+    ).toEqual(timedOut);
+    expect(
+      value(m.relationsChanged(glob({ lastOutcome: failed }), ctx(null))).glob.lastOutcome,
+    ).toEqual(failed);
+  });
+});
+
 describe('a click whose effect is still going does not time out', () => {
   const old = (p: Partial<PendingAction> = {}) => pending({ at: NOW, ...p });
   const at = later(PENDING_TIMEOUT_MS + 5000);
