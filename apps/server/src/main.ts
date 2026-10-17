@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { serve } from '@hono/node-server';
-import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, RelationCheckService, PostMergeKnowledgeService, ContextTuningService, ContextReportService, DependencyLearningService, RelationLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
+import { ArtifactService, AttachmentService, InvestigationService, BoardService, SearchIndexer, SearchService, ChatService, ChatFeedbackService, CHAT_EXTRA_STEPS, DeployService, TestRunService, DecisionPipeline, DecisionService, InboxPipeline, InboxService, IntegrationTokenService, AtfRunnerService, FindingsPipeline, FindingsService, EffectCheckService, GlobService, INTEGRATION_NAMES, integrationSource, IntakeService, GroupBackfillService, GroupService, KbConsolidation, KbPipeline, KnowledgeService, AgentSetCommitService, machine, readMergePolicy, LearningJobService, MiningService, NotificationService, ReportService, RiskAreaService, SubLimitService, IntakeLearningService, SizeCheckService, DependencyInferenceService, RelationScanService, RelationCheckService, ContextTuningService, ContextReportService, DependencyLearningService, RelationLearningService, CodeViewService, EscalationLearningService, HotspotDecisions, HotspotService, ReviewInputService, DEFAULT_REVIEW_BOARD_SETTINGS, resolveReviewSettings, SpendService, KnowledgePageService, ReviewFeedbackService, sizeIgnoredPathsOf, TypeLearningService, DecisionGlobService, SuggestService, RolloutService, rolloutPathsOf, kbJobHint, suggestJobHint } from '@slop/core';
 import type { IntegrationId, Llm } from '@slop/core';
 import { Auth } from './auth.js';
 import { FsCatalog, renderAgentSetFile } from './catalog.js';
@@ -25,7 +25,6 @@ import { knowledgePageExecutors } from './knowledge-page-executors.js';
 import { suggestExecutors } from './suggest-executors.js';
 import { relationScanExecutors } from './relation-scan-executors.js';
 import { relationCheckExecutors } from './relation-check-executors.js';
-import { postMergeKnowledgeExecutors, HostSpecReader } from './post-merge-knowledge-executors.js';
 import { agentSetExecutors, readCommittedAgentSetVersion } from './agent-set-executors.js';
 import { mountMcp } from './mcp/server.js';
 import { mergeGate, readyGate } from './ready-gate.js';
@@ -248,8 +247,6 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
   ...relationScanExecutors({ run: (globId) => relationScan.run(globId) }),
   // The post-merge relation check (the `llm` lane); `relationCheck` is built below and only called once a job runs.
   ...relationCheckExecutors({ run: (globId) => relationCheck.run(globId) }),
-  // The post-merge knowledge pass (the `llm` lane); `postMergeKnowledge` is built below and only called once a job runs.
-  ...postMergeKnowledgeExecutors({ run: (globId, sha) => postMergeKnowledge.run(globId, sha) }),
   // The agent set's commit to its glob's branch; `agentSetCommit` is built below and only called once a job runs.
   ...agentSetExecutors({ prepare: (boardId) => agentSetCommit.prepare(boardId) }, github, (id) => store.transaction((tx) => tx.getGlob(id)), (id) =>
     globs.applyEvent(id, (g, ctx) => machine.readyRequested(g, null, ctx)),
@@ -411,17 +408,6 @@ const relationCheck = new RelationCheckService({
   index: { importEdges: (boardId, from, to) => codeIndex.importEdges(boardId, from, to) },
   llm: intakeLlm,
   model: config.INTAKE_MODEL,
-  log: logError,
-});
-// Every merged glob's architecture and operations facts become learnings and a missing spec or guide update a sub; the model is the intake one (spend `post_merge_knowledge`).
-const postMergeKnowledge = new PostMergeKnowledgeService({
-  store,
-  clock,
-  changes: new CodeHostChanges(github, logError),
-  specs: new HostSpecReader(github),
-  globs,
-  notify: (hint) => hub.publish(hint),
-  llm: intakeLlm,
   log: logError,
 });
 const intake = new IntakeService({
