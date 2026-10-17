@@ -142,19 +142,22 @@ const IN_PROGRESS: Readonly<Partial<Record<Action, string>>> = {
   prepare_action: 'preparing',
 };
 
+/** The clicks whose result is a person holding the glob: while they are pending the person's icon spins, not the machine's. */
+const PERSON_ACTIONS: ReadonlySet<Action> = new Set<Action>(['pick_up', 'take_over']);
+
 /** The in-progress words for a click; a Retry of a failed build is fixing the build, not CI. */
 export const inProgressText = (action: Action, glob?: PresentableGlob): string =>
   action === 'retry_autofix' && glob !== undefined && fixesBuild(glob)
     ? 'fixing the build'
     : (IN_PROGRESS[action] ?? 'working');
 
-/** The status of a glob with a click in force: the spinning machine and what it was asked to do, nothing to click and nothing to run. */
+/** The status of a glob with a click in force: the spinning machine (the spinning person for Pick up) and what it was asked to do, nothing to click and nothing to run. */
 const pendingStatus = (glob: PresentableGlob, pending: PendingAction): CornerStatus => {
   const text = inProgressText(pending.kind, glob);
   const label = actionPresentation(pending.kind, glob).label;
   return {
     kind: 'pending',
-    icon: 'machine-spinning',
+    icon: PERSON_ACTIONS.has(pending.kind) ? 'human-spinning' : 'machine-spinning',
     text,
     label: text,
     tip: `${label} was clicked; slop is ${text}. The result shows here when it arrives.`,

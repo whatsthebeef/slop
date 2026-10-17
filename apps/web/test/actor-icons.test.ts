@@ -44,6 +44,15 @@ describe('actor icons', () => {
     expect(turning).toContain('animate-spin');
     expect(turning).toContain('motion-reduce:animate-none');
   });
+  it('turns the person only while working, and not for reduced motion', () => {
+    const still = renderToStaticMarkup(createElement(HumanIcon));
+    const turning = renderToStaticMarkup(createElement(HumanIcon, { working: true }));
+    expect(still).not.toContain('animate-spin');
+    expect(turning).toContain('lucide-user-round');
+    expect(turning).toContain('animate-spin');
+    expect(turning).toContain('motion-reduce:animate-none');
+    expect(renderToStaticMarkup(createElement(HumanIcon, { working: true }))).toContain('aria-label="human"');
+  });
   it('hides a decorative icon from screen readers', () => {
     const html = renderToStaticMarkup(createElement(HumanIcon, { decorative: true }));
     expect(html).toContain('aria-hidden="true"');

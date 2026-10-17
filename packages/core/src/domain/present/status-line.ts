@@ -360,6 +360,18 @@ export const statusCandidates = (
       }),
     );
   }
+  // A Re-run answer that started no work: the run is idle (or gone) and the PR still carries the old plan.
+  if (machine.rerunIdle(glob)) {
+    candidates.push(
+      make({
+        kind: 'stuck',
+        full: "Re-run didn't start the work",
+        tone: 'text-required',
+        tip: "Re-run didn't start the work: nothing has been pushed since the plan changed.\nStart runs it again on the current plan",
+        sessionUrl: session,
+      }),
+    );
+  }
   if (hint !== null) {
     const flagged = failure === null ? glob.conflict : null;
     candidates.push(
