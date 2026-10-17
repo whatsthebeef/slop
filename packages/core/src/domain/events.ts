@@ -87,6 +87,8 @@ export const DOMAIN_EVENT_TYPES = [
   'RelationReleased',
   /** The post-merge check judged a relation of the merged glob (data: the other glob, gate, verdict, reason, by). */
   'RelationVerdict',
+  /** The post-merge knowledge pass ran on the merged glob (data: `summary`, `facts` submitted, `drift` the sub it filed or null, `skipped` why it did nothing). */
+  'PostMergeKnowledge',
   /** Another open glob started or stopped changing the same exclusive paths as this one. */
   'ClashChanged',
   /** An overlap edge was predicted for a glob (data: the other glob, its paths and why) by a recheck. */
@@ -273,6 +275,12 @@ export type Effect =
    */
   | { readonly kind: 'check_relations_after_merge'; readonly globId: string; readonly generation: number }
   /**
+   * A glob merged for good, whoever implemented it: a model reads the merged diff and submits `fact` learnings for the
+   * architecture and operations changes it makes, and files one sub when it changes behaviour the board's spec or guide
+   * describes without updating them. `llm` lane. Once per glob (the `PostMergeKnowledge` event); never gates anything.
+   */
+  | { readonly kind: 'post_merge_knowledge'; readonly globId: string; readonly generation: number; readonly sha: string }
+  /**
    * A glob merged for good: read the merge commit's files and, when they touch the board's rollout paths while the
    * implementation record has no `## Rollout`, queue `write_rollout_steps`. Once only; a failed read queues nothing.
    */
@@ -357,7 +365,7 @@ export const OUTBOX_LANES: readonly OutboxLane[] = ['default', 'llm'];
  * `llm`: the KB pipeline's routing and drafting and the knowledge page's regeneration. The `llm` runner starts with the `llm` job switch (or `kb`), so a new
  * llm-lane kind runs wherever those are on.
  */
-const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', suggest_decision: 'llm', regenerate_knowledge_page: 'llm', write_rollout_steps: 'llm', scan_relations: 'llm', check_relations_after_merge: 'llm' };
+const LANE_OF_KIND: Partial<Record<EffectKind, OutboxLane>> = { kb_route: 'llm', kb_draft: 'llm', suggest_decision: 'llm', regenerate_knowledge_page: 'llm', write_rollout_steps: 'llm', scan_relations: 'llm', check_relations_after_merge: 'llm', post_merge_knowledge: 'llm' };
 
 export const laneOf = (kind: EffectKind): OutboxLane => LANE_OF_KIND[kind] ?? 'default';
 
