@@ -128,6 +128,19 @@ export const BoardShell = () => {
     if (chatOpen) closeChat();
     else openChat();
   };
+  // On a phone the chat is a layer over the view, so the browser's back button closes it before it navigates anywhere.
+  const phoneChat = isBoard && chatOpen && narrow;
+  useEffect(() => {
+    if (!phoneChat) return;
+    window.history.pushState({ ...(window.history.state as object | null), slopChat: true }, '');
+    const onPop = () => closeChat();
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      // Closed by the panel itself: drop the entry it added (a back press has already consumed it).
+      if ((window.history.state as { slopChat?: boolean } | null)?.slopChat === true) window.history.back();
+    };
+  }, [phoneChat]);
   useEffect(() => {
     if (!isBoard) return;
     const onKey = (e: KeyboardEvent) => {

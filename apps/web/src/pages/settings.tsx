@@ -39,7 +39,7 @@ export const SettingsPage = () => {
   const admin = board.role === 'admin';
 
   return (
-    <main className='mx-auto grid max-w-2xl gap-4 p-6'>
+    <main className='mx-auto grid w-full max-w-2xl grid-cols-[minmax(0,1fr)] gap-4 p-3 sm:p-6'>
       <BoardGroup board={board} admin={admin} form={form} readinessLinked={hash === '#readiness'} />
       <MembersGroup boardId={boardId} admin={admin} />
       <EnvironmentsGroup admin={admin} form={form} />

@@ -454,7 +454,7 @@ export const ChatPanel = ({
   return (
     <aside
       className={cn(
-        'relative flex h-full min-h-0 w-full flex-col bg-card p-3 text-sm',
+        'relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-x-hidden bg-card p-3 text-sm',
       )}
       aria-label='Board chat'
       data-testid='chat-panel'
@@ -466,7 +466,7 @@ export const ChatPanel = ({
       }}
     >
       {!fullScreen && divider}
-      <div className={cn('mx-auto flex min-h-0 w-full flex-1 flex-col gap-2', fullScreen && 'max-w-3xl')}>
+      <div className={cn('mx-auto flex min-h-0 w-full min-w-0 flex-1 flex-col gap-2', fullScreen && 'max-w-3xl')}>
         <div className='flex items-center justify-between gap-2'>
           <h2 className='font-semibold'>Ask this board</h2>
           <div className='flex items-center gap-1'>
@@ -486,8 +486,8 @@ export const ChatPanel = ({
             >
               {fullScreen ? <Minimize2 className='h-4 w-4' /> : <Maximize2 className='h-4 w-4' />}
             </button>
-            <button className='rounded p-1 hover:bg-muted max-sm:p-2' aria-label='Close chat' onClick={onClose}>
-              <X className='h-4 w-4' />
+            <button className='rounded p-1 hover:bg-muted max-sm:p-2.5' aria-label='Close chat' onClick={onClose}>
+              <X className='h-4 w-4 max-sm:h-6 max-sm:w-6' />
             </button>
           </div>
         </div>

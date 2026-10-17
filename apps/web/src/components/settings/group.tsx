@@ -17,7 +17,7 @@ export const SettingsGroup = ({ id, forceOpen = false, children }: { id: Setting
   }, [forceOpen]);
   const bodyId = `settings-${id}-body`;
   return (
-    <section className='grid gap-3 rounded-md border bg-card p-4' data-testid={`settings-group-${id}`}>
+    <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-md border bg-card p-3 sm:p-4' data-testid={`settings-group-${id}`}>
       <h2 className='text-sm font-semibold'>
         <button
           type='button'
@@ -36,7 +36,7 @@ export const SettingsGroup = ({ id, forceOpen = false, children }: { id: Setting
       </h2>
       <p className='text-xs text-muted-foreground'>{blurb}</p>
       {open && (
-        <div id={bodyId} className='grid gap-4'>
+        <div id={bodyId} className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4'>
           {children}
         </div>
       )}
