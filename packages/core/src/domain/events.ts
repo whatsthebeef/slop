@@ -48,6 +48,8 @@ export const DOMAIN_EVENT_TYPES = [
   'PickedUp',
   /** Start was pressed on a glob a person had picked up: it went to the machine (data: `from`, the person who had it). */
   'HandedToMachine',
+  /** A person's same with no work yet went back to Planning (data: `from`, the person who had it). */
+  'MovedBackToPlanning',
   'ArtifactAdded',
   /** The implementation record's workstreams block changed (data: the parsed block, `version`, `commitSha`, `runId`). */
   'WorkstreamsRecorded',

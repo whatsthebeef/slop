@@ -884,6 +884,34 @@ describe('re-trigger, start again, delete (rows 20, 23, 24)', () => {
     expect(errorCode(m.startAgain(glob({ status: 'reviewing' }), ctx()))).toBe('invalid_transition');
   });
 
+  it('row 23: an empty picked-up same goes back to Planning, clearing the implementer, and logs it', () => {
+    const empty = glob({
+      type: 'same',
+      status: 'in_progress',
+      implementer: dev.email,
+      pr: { number: 7, state: 'draft', headSha: 'sssssss1', startSha: 'sssssss1' },
+    });
+    const t = value(m.startAgain(empty, ctx()));
+    expect(t.glob.status).toBe('planning');
+    expect(t.glob.implementer).toBeNull();
+    expect(t.glob.pr).toBeNull();
+    expect(t.glob.generation).toBe(empty.generation + 1);
+    expect(effectKinds(t)).toEqual(['close_pr', 'delete_branch']);
+    expect(t.events.find((e) => e.type === 'MovedBackToPlanning')?.data).toEqual({ from: dev.email });
+    expect(m.allowedActions(empty, dev)).toContain('start_again');
+
+    const built = glob({ type: 'same', status: 'in_progress', implementer: dev.email, pr: { number: 7, state: 'draft', headSha: 'ttttttt1', startSha: 'sssssss1' } });
+    expect(value(m.startAgain(built, ctx())).events.some((e) => e.type === 'MovedBackToPlanning')).toBe(false);
+  });
+
+  it('records the start commit when provisioned and when its push arrives', () => {
+    const t = value(m.provisioned(glob({ status: 'in_progress', pr: null }), { branch: 's1', pr: { number: 7, headSha: 'sssssss1' } }, ctx()));
+    expect(t.glob.pr).toMatchObject({ headSha: 'sssssss1', startSha: 'sssssss1' });
+    const old = glob({ status: 'in_progress', pr: { number: 7, state: 'draft', headSha: 'aaaaaaa1' } });
+    const pushed = value(m.commitPushed(old, { sha: 'bbbbbbb1', runId: null, message: `${old.id}: start` }, ctx(null)));
+    expect(pushed.glob.pr).toMatchObject({ headSha: 'bbbbbbb1', startSha: 'bbbbbbb1' });
+  });
+
   it("records a push's Slop-Agent-Set trailer version on its CommitPushed event", () => {
     const pushed = value(m.commitPushed(glob({ status: 'in_progress' }), { sha: 'ccc', runId: null, agentSetVersion: 12 }, ctx(null)));
     expect(pushed.events.find((e) => e.type === 'CommitPushed')?.data).toEqual({ sha: 'ccc', runId: null, fromSupersededRun: false, agentSetVersion: 12 });
@@ -1457,6 +1485,15 @@ describe('checks and merging (slice 2)', () => {
       expect(m.reviewOffer(ready, [])).toBe('retry');
       expect(offered(ready, [])).toBe(true);
       expect(offered(merged, [])).toBe(true);
+    });
+
+    it('is not offered on an empty draft (head is the start commit), and is once there is code', () => {
+      const empty = glob({ status: 'in_progress', implementer: dev.email, pr: { ...pr('draft'), startSha: 'bbbbbbb1' } });
+      expect(offered(empty, [])).toBe(false);
+      expect(m.reviewOffer(empty, [])).toBeNull();
+      expect(errorCode(m.reviewNow(empty, ctx()))).toBe('invalid_transition');
+      expect(offered({ ...empty, pr: { ...pr('draft'), startSha: 'aaaaaaa0' } }, [])).toBe(true);
+      expect(offered({ ...merged, pr: { ...pr('merged'), startSha: 'bbbbbbb1' } }, [])).toBe(true);
     });
 
     it('does not guess the retry case without the reviews loaded', () => {

@@ -146,6 +146,8 @@ export interface PullRequest {
   readonly number: number;
   readonly state: PrState;
   readonly headSha: string | null;
+  /** The empty `<id>: start` commit the branch was created with; a head equal to it means no work yet. Absent on older PRs. */
+  readonly startSha?: string | null;
 }
 
 /** A PR a super landed with Merge and continue; the glob kept going on the same branch. */
