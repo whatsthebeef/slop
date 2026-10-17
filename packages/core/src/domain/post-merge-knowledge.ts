@@ -117,7 +117,7 @@ export const postMergeSummary = (done: {
   if (done.skipped != null) return `post-merge: skipped (${done.skipped})`;
   const facts = `${String(done.facts)} fact${done.facts === 1 ? '' : 's'} submitted`;
   const drift =
-    done.drift ?? (done.specConfigured === false ? 'not checked (no spec paths)' : 'none');
+    done.drift ?? (done.specConfigured === false ? 'not checked (no readable spec files)' : 'none');
   return `post-merge: ${facts}, spec drift: ${drift}`;
 };
 

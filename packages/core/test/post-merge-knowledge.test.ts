@@ -274,7 +274,7 @@ describe('PostMergeKnowledgeService', () => {
     ).toBe(true);
     expect(attrs.map((a) => a?.target?.suggested).sort()).toEqual(['architecture', 'operations']);
     expect(summaryOf(g.id)).toEqual([
-      'post-merge: 2 facts submitted, spec drift: not checked (no spec paths)',
+      'post-merge: 2 facts submitted, spec drift: not checked (no readable spec files)',
     ]);
     expect(subs()).toEqual([]);
   });

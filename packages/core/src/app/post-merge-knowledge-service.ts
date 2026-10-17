@@ -309,7 +309,13 @@ export class PostMergeKnowledgeService {
 
   private async record(
     globId: string,
-    done: { facts: number; drift: string | null; skipped?: PostMergeSkip; specConfigured: boolean },
+    done: {
+      facts: number;
+      drift: string | null;
+      skipped?: PostMergeSkip;
+      specConfigured: boolean;
+      driftFailed?: boolean;
+    },
   ): Promise<void> {
     await this.deps.store.transaction((tx) => this.recordIn(tx, globId, done));
   }
@@ -318,7 +324,13 @@ export class PostMergeKnowledgeService {
   private async recordIn(
     tx: Tx,
     globId: string,
-    done: { facts: number; drift: string | null; skipped?: PostMergeSkip; specConfigured: boolean },
+    done: {
+      facts: number;
+      drift: string | null;
+      skipped?: PostMergeSkip;
+      specConfigured: boolean;
+      driftFailed?: boolean;
+    },
   ): Promise<void> {
     const summary = postMergeSummary(done);
     await tx.appendEvents([
