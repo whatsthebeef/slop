@@ -47,6 +47,12 @@ describe('activityOf', () => {
     ]);
     expect(handoffs[2]?.title).toBe('John picked it up (john.bower@x.com)');
   });
+  it('shows who reopened the glob and why', () => {
+    const entries = activityOf(view({ handoffs: [{ kind: 'reopened', by: 'ana.silva@x.com', at: T(5), reason: 'The migration missed a column' }] }), 'o/r');
+    const reopened = entries.find((e) => e.id.startsWith('handoff:'));
+    expect(reopened?.text).toBe('Reopened by Ana: The migration missed a column');
+    expect(reopened?.title).toBe('Reopened by ana.silva@x.com: The migration missed a column');
+  });
   it('lists runs, the PR, checks and a conflict newest first, each with its link', () => {
     const entries = activityOf(
       view({

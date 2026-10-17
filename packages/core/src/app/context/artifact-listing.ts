@@ -14,8 +14,8 @@ export interface ArtifactListing {
 /** Attachments with these labels always come inline: agents must follow them and pass them verbatim. */
 export const INLINE_LABELS = new Set(['clarifications', 'assumptions']);
 
-/** Label prefixes that also come inline: a failed rollout step's note, or a failed action run's output, is the next round's feedback. */
-const INLINE_LABEL_PREFIXES = ['rollout step failed', 'action run failed'];
+/** Label prefixes that also come inline: a failed rollout step's note, a failed action run's output or a reopen's reason is the next round's feedback. */
+const INLINE_LABEL_PREFIXES = ['rollout step failed', 'action run failed', 'reopened (generation'];
 
 /** A failed deploy's build log (`Build log (<env>, failed, <sha>)`) is feedback too: a fix run reads why the build failed. */
 const FAILED_BUILD_LOG = /^build log \(.*, failed, /;

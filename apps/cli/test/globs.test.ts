@@ -7,6 +7,7 @@ import {
   globCommand,
   handoverCommand,
   mergeCommand,
+  reopenCommand,
   NEW_USAGE,
   newCommand,
   pickUpCommand,
@@ -828,5 +829,30 @@ describe('slop delete', () => {
     await deleteCommand(['s1t4', '--yes'], { ...run.deps, ask });
     expect(ask).not.toHaveBeenCalled();
     expect(run.slop.tools()).toEqual(['get_glob', 'delete_glob']);
+  });
+});
+
+describe('slop reopen', () => {
+  const handlers = { get_glob: () => glob({ status: 'reviewing' }), reopen_glob: () => glob({ status: 'implementing', version: 4 }) };
+
+  it('sends the version read and the reason, and says what follows', async () => {
+    const run = setup(handlers);
+    await reopenCommand(['s1t4', '--reason', 'The migration missed a column'], run.deps);
+    expect(run.slop.calls[1]).toEqual({ tool: 'reopen_glob', args: { id: 's1t4', version: 3, reason: 'The migration missed a column' } });
+    expect(run.out).toEqual(['s1t4: implementing (reopened as a new generation; approvals are cleared)\n']);
+  });
+
+  it('prints the glob with --json', async () => {
+    const run = setup(handlers);
+    await reopenCommand(['s1t4', '--reason', 'More to do', '--json'], run.deps);
+    expect(JSON.parse(run.out.join(''))).toMatchObject({ id: 's1t4', status: 'implementing' });
+  });
+
+  it('needs a glob ID and a reason, and calls nothing without them', async () => {
+    const run = setup(handlers);
+    await expect(reopenCommand(['s1t4'], run.deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(reopenCommand(['--reason', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
+    await expect(reopenCommand(['main', '--reason', 'x'], run.deps)).rejects.toBeInstanceOf(UsageError);
+    expect(run.slop.tools()).toEqual([]);
   });
 });

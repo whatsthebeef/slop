@@ -462,9 +462,11 @@ export interface SplitInfo {
 
 /** A person taking a glob, or giving it back, for the activity log: who (null for slop) and when. */
 export interface Handoff {
-  readonly kind: 'picked_up' | 'took_over' | 'handed_back';
+  readonly kind: 'picked_up' | 'took_over' | 'handed_back' | 'reopened';
   readonly by: string | null;
   readonly at: string;
+  /** Why a person reopened the glob (masked), for `reopened`. */
+  readonly reason?: string;
 }
 
 /** What a client may change on a glob: the fields, and the globs it starts after (a list that replaces the person-set ones). */
@@ -890,16 +892,16 @@ export class GlobService implements AutomaticRelations {
     return found;
   }
 
-  /** Who picked the glob up, took it over or handed it back to the machine, and when, oldest first, for the glob view's activity log. */
+  /** Who picked the glob up, took it over, handed it back to the machine or reopened it (with the reason), and when, oldest first, for the glob view's activity log. */
   async handoffsOf(boardId: number, globId: string): Promise<Handoff[]> {
     const events = await this.deps.store.transaction((tx) =>
-      tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['PickedUp', 'HandedToMachine'], [globId]),
+      tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['PickedUp', 'HandedToMachine', 'GlobReopened'], [globId]),
     );
-    return events.map((e) => ({
-      kind: e.type === 'HandedToMachine' ? 'handed_back' : e.data.takeOver === true ? 'took_over' : 'picked_up',
-      by: e.actor,
-      at: e.at,
-    }));
+    return events.map((e) =>
+      e.type === 'GlobReopened'
+        ? { kind: 'reopened', by: e.actor, at: e.at, reason: typeof e.data.reason === 'string' ? e.data.reason : '' }
+        : { kind: e.type === 'HandedToMachine' ? 'handed_back' : e.data.takeOver === true ? 'took_over' : 'picked_up', by: e.actor, at: e.at },
+    );
   }
 
   /**
@@ -1105,9 +1107,7 @@ export class GlobService implements AutomaticRelations {
           if (found.step === null) return notFound(`No step ${stepId} on ${id}`);
           if (found.step.kind !== 'rollout') return invalidInput('Only a rollout step can be marked failed');
           if (found.step.due === 'once') return invalidInput('A once step is done once and never reopened: it cannot start the next generation');
-          const merges = await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['Merged'], [id]);
-          const sha = merges.sort((a, b) => a.at.localeCompare(b.at)).at(-1)?.data.sha;
-          found.mergeSha = typeof sha === 'string' ? sha : null;
+          found.mergeSha = await this.lastMergeSha(tx, glob);
           return ok(null);
         },
         record: async (tx, before, next) => {
@@ -1138,6 +1138,62 @@ export class GlobService implements AutomaticRelations {
     );
     if (result.ok) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId: id });
     return result;
+  }
+
+  /**
+   * A person sends a merged glob in Reviewing back to Doing with a reason (row 31b): the next generation starts as it does for a
+   * failed rollout step. The reason is masked and capped, and kept as an attachment, `Reopened (generation N)` (N is the
+   * generation that merged), which the next run reads as in-scope feedback. Done rollout steps are reopened, so they are due
+   * again after the next merge; `once` and `downstream` steps and dismissed ones are left alone.
+   */
+  async reopen(email: string, id: string, reason: string, version: number | null): Promise<Result<Glob>> {
+    const masked = maskedNote(reason);
+    const found: { mergeSha: string | null } = { mergeSha: null };
+    const result = await this.command(
+      email,
+      id,
+      version,
+      (glob, ctx) => machine.reopen(glob, { reason: masked, mergeSha: found.mergeSha }, ctx),
+      {
+        prepare: async (tx, glob) => {
+          found.mergeSha = await this.lastMergeSha(tx, glob);
+          return ok(null);
+        },
+        record: async (tx, before, next) => {
+          const steps = (await tx.listHumanSteps(before.boardId, [id])).filter((s) => s.kind === 'rollout' && s.state === 'done' && s.due !== 'once' && s.due !== 'downstream');
+          if (steps.length > 0) await tx.saveHumanSteps(steps.map((s) => ({ ...s, state: 'open', doneBy: null, doneAt: null })));
+          await addArtifact(tx, this.deps.clock, next, email, {
+            kind: 'attachment',
+            label: `Reopened (generation ${before.generation})`,
+            content: [
+              '# Reopened',
+              `Generation ${before.generation} merged${found.mergeSha === null ? '' : ` as ${found.mergeSha}`}; ${email} reopened the glob. Generation ${next.generation} continues it: change what is needed, and do not repeat the merged attempt.`,
+              '## Why it was reopened',
+              masked,
+            ].join('\n\n'),
+            link: null,
+            commitSha: null,
+            runId: null,
+            agentSetVersion: null,
+            reviewStats: null,
+          });
+        },
+      },
+    );
+    if (result.ok) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: result.value.boardId, globId: id });
+    return result;
+  }
+
+  /** A glob's category, or null when there is none: the one fact a route needs to tell a decision's Reopen from a work glob's. */
+  async categoryOf(id: string): Promise<Category | null> {
+    return (await this.deps.store.transaction((tx) => tx.getGlob(id)))?.category ?? null;
+  }
+
+  /** The sha of the glob's last `Merged` event, or null when none was recorded. */
+  private async lastMergeSha(tx: Tx, glob: Glob): Promise<string | null> {
+    const merges = await tx.listBoardEvents(glob.boardId, '1970-01-01T00:00:00.000Z', ['Merged'], [glob.id]);
+    const sha = merges.sort((a, b) => a.at.localeCompare(b.at)).at(-1)?.data.sha;
+    return typeof sha === 'string' ? sha : null;
   }
 
   /**

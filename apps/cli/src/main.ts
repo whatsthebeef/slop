@@ -16,6 +16,7 @@ import {
   NEW_USAGE,
   PICK_UP_USAGE,
   READY_USAGE,
+  REOPEN_USAGE,
   deleteCommand,
   globCommand,
   handoverCommand,
@@ -23,6 +24,7 @@ import {
   newCommand,
   pickUpCommand,
   readyCommand,
+  reopenCommand,
   type GlobDeps,
 } from './globs.js';
 import {
@@ -384,6 +386,11 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     usage: DELETE_USAGE,
     summary: "Delete the glob, like the glob view's Delete (stops its run, closes its PR); asks first unless --yes",
     run: (args, context) => deleteCommand(args, globDeps(context)),
+  },
+  reopen: {
+    usage: REOPEN_USAGE,
+    summary: "Send a merged glob in Reviewing back to Doing as a new generation, like the glob view's Reopen",
+    run: (args, context) => reopenCommand(args, globDeps(context)),
   },
 };
 

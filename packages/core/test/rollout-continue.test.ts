@@ -198,6 +198,72 @@ describe('rolloutStepsAdded (row 13d)', () => {
   });
 });
 
+describe('reopen (row 31b)', () => {
+  const reopened = (g: Glob, reason = 'The migration missed a column', actor = dev) => machine.reopen(g, { reason, mergeSha: 'sha1' }, ctx(actor));
+
+  it('a same with no implementer goes to implementing with a queued run, as a new generation', () => {
+    const g = merged({ generation: 2, labels: { FR: 'added' }, headChecks: { sha: 'abc1234', state: 'passed' } });
+    const t = unwrap(reopened(g));
+    expect(t.glob).toMatchObject({ status: 'implementing', generation: 3, pr: null, headChecks: null, provisioning: 'pending', labels: {}, checklists: {}, failure: null, mergeMode: null, conflict: null, behind: null, implementer: null });
+    expect(t.glob.prs).toEqual([{ number: 7, mergeSha: 'sha1', mergedAt: NOW }]);
+    expect(types(t)).toEqual(['GlobReopened', 'StatusChanged', 'RunTriggered']);
+    expect(t.events[0]?.data).toEqual({ reason: 'The migration missed a column', generation: 3 });
+    expect(t.effects.map((e) => [e.kind, 'generation' in e ? e.generation : null])).toEqual([
+      ['delete_branch', 3],
+      ['provision', 3],
+      ['fire_routine', 3],
+    ]);
+    expect(t.glob.runs.at(-1)).toMatchObject({ state: 'queued', generation: 3, triggeredBy: dev.email });
+  });
+
+  it('ends a live run as superseded with the cause reopened', () => {
+    const live = merged({ runs: [{ id: 'r1', state: 'active', generation: 1, triggeredBy: dev.email, triggeredAt: NOW } as never] });
+    const t = unwrap(reopened(live));
+    expect(t.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ cause: 'reopened' });
+  });
+
+  it("a person's glob goes to in_progress with no run", () => {
+    const t = unwrap(reopened(merged({ implementer: dev.email })));
+    expect(t.glob).toMatchObject({ status: 'in_progress', implementer: dev.email, provisioning: 'pending' });
+    expect(types(t)).toEqual(['GlobReopened', 'StatusChanged']);
+    expect(effectKinds(t)).toEqual(['delete_branch', 'provision']);
+    expect(unwrap(reopened(merged({ type: 'super' }))).glob).toMatchObject({ status: 'in_progress', implementer: dev.email });
+  });
+
+  it('a sub becomes a same, so it never merges itself through the sub gate', () => {
+    const t = unwrap(reopened(merged({ type: 'sub', mergeHold: { reason: 'x' } as never })));
+    expect(t.glob).toMatchObject({ type: 'same', escalation: { criterion: 'risk_path' }, mergeHold: null });
+    expect(types(t)).toEqual(expect.arrayContaining(['FieldsChanged', 'Escalated', 'GlobReopened']));
+  });
+
+  it('is refused outside a merged glob in Reviewing', () => {
+    for (const g of [ready(), merged({ status: 'signed_off' }), merged({ status: 'implementing', pr: null }), merged({ pr: { number: 7, state: 'ready', headSha: 'a' } })])
+      expect(reopened(g).ok).toBe(false);
+  });
+
+  it('is refused for QA and PO on a same or super, and without a reason', () => {
+    const refused = reopened(merged(), 'why', po);
+    expect(!refused.ok && refused.error.code).toBe('forbidden');
+    expect(reopened(merged({ type: 'super' }), 'why', po).ok).toBe(false);
+    expect(reopened(merged(), 'why', admin).ok).toBe(true);
+    const empty = reopened(merged(), '  \n ');
+    expect(!empty.ok && empty.error.code).toBe('invalid_input');
+  });
+
+  it('is offered in Reviewing only, and not to QA or PO', () => {
+    expect(machine.allowedActions(merged(), dev)).toContain('reopen');
+    expect(machine.allowedActions(merged(), po)).not.toContain('reopen');
+    expect(machine.allowedActions(merged({ status: 'signed_off' }), dev)).not.toContain('reopen');
+    expect(machine.allowedActions(ready(), dev)).not.toContain('reopen');
+  });
+
+  it('leaves rolloutStepFailed as it was: same body, its own event and cause', () => {
+    const t = unwrap(machine.rolloutStepFailed(merged(), { stepId: 'hs_1', title: 'Roll out', stepState: 'open', mergeSha: 'sha1' }, ctx(dev)));
+    expect(types(t)).toEqual(['RolloutStepFailed', 'StatusChanged', 'RunTriggered']);
+    expect(types(t)).not.toContain('GlobReopened');
+  });
+});
+
 describe('rolloutStepFailed (row 31a)', () => {
   const failed = (g: Glob, patch: Partial<Parameters<typeof machine.rolloutStepFailed>[1]> = {}, actor = dev) =>
     machine.rolloutStepFailed(g, { stepId: 'hs_1', title: 'Roll out the stack', stepState: 'open', mergeSha: 'sha1', ...patch }, ctx(actor));
@@ -764,6 +830,87 @@ describe('through the service', () => {
       expect(unwrap(machine.merged(second, { sha: 'merge-sha-1', number: 7 }, ctx(null))).changed).toBe(false);
       const refused = await globs.reviewLabel(PO, glob.id, second.version, 'CR', { kind: 'approve' });
       expect(!refused.ok && refused.error.message).toContain('Rollout pending (1 of 1)');
+    });
+  });
+
+  describe('reopen', () => {
+    const setup = async (patch: Partial<Glob> = {}) => {
+      const g = await readyGlob();
+      const rollout = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Roll out the host stack' }));
+      const once = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Grant access', once: true }));
+      const downstream = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Release further', downstream: true }));
+      const dismissed = unwrap(await globs.addHumanStep(DEV, g.id, null, { title: 'Not needed' }));
+      await store.transaction(async (tx) => {
+        await tx.appendEvents([{ type: 'Merged', globId: g.id, actor: null, at: '2026-10-13T11:00:00.000Z', data: { sha: 'merge-sha-1' } }]);
+      });
+      const done = await update(g.id, { status: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'abc1234' }, labels: { CR: 'required' }, ...patch });
+      return { glob: done, rollout, once, downstream, dismissed };
+    };
+    const stateById = async (id: string) => new Map((await stepsOf(id)).map((s) => [s.title, s.state]));
+
+    it('reopens done rollout steps and leaves once, downstream and dismissed steps alone', async () => {
+      const { glob, rollout, once, downstream, dismissed } = await setup();
+      for (const s of [rollout, once, downstream]) unwrap(await globs.completeHumanStep(DEV, glob.id, s.id, null));
+      unwrap(await globs.dismissHumanStep(DEV, glob.id, dismissed.id, 'Not needed', null));
+      const next = unwrap(await globs.reopen(DEV, glob.id, 'The migration missed a column', (await peek(glob.id)).version));
+      expect(next).toMatchObject({ status: 'implementing', generation: 2, pr: null, implementer: null });
+      expect(next.prs).toEqual([{ number: 7, mergeSha: 'merge-sha-1', mergedAt: '2026-10-13T12:00:00.000Z' }]);
+      expect(await stateById(glob.id)).toEqual(
+        new Map([
+          ['Roll out the host stack', 'open'],
+          ['Grant access', 'done'],
+          ['Release further', 'done'],
+          ['Not needed', 'dismissed'],
+        ]),
+      );
+    });
+
+    it('writes the attachment and the event with the masked reason, and the next run reads it from get_context', async () => {
+      const { glob } = await setup();
+      const reason = 'Add the column.\nAKIAABCDEFGHIJKLMNOP and password=hunter2pass';
+      unwrap(await globs.reopen(DEV, glob.id, reason, null));
+      const kept = await attachments(glob.id);
+      expect(kept.map((a) => a.label)).toEqual(['Reopened (generation 1)']);
+      expect(kept[0]?.content).toContain('Add the column.');
+      expect(kept[0]?.content).toContain('merge-sha-1');
+      expect(kept[0]?.content).toContain(DEV);
+      expect(kept[0]?.content).toContain('[masked]');
+      expect(kept[0]?.content).not.toContain('AKIAABCDEFGHIJKLMNOP');
+      expect(kept[0]?.content).not.toContain('hunter2pass');
+      const events = await store.transaction((tx) => tx.listBoardEvents(boardId, '1970-01-01T00:00:00.000Z', ['GlobReopened'], [glob.id]));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ actor: DEV, data: { generation: 2 } });
+      expect(events[0]?.data.reason).toEqual(expect.stringContaining('[masked]'));
+      expect(JSON.stringify(events)).not.toContain('hunter2pass');
+      const artifacts = new ArtifactService({ store, clock: { now: () => '2026-10-13T12:00:00.000Z' }, notifier: new RecordingNotifier() });
+      const context = unwrap(await artifacts.context(DEV, glob.id));
+      expect(context.attachments.map((a) => a.label)).toEqual(['Reopened (generation 1)']);
+      expect(context.available.map((a) => a.label)).not.toContain('Reopened (generation 1)');
+      const handoffs = await globs.handoffsOf(boardId, glob.id);
+      expect(handoffs).toMatchObject([{ kind: 'reopened', by: DEV }]);
+    });
+
+    it('a person implementing keeps the glob: in_progress and no run', async () => {
+      const { glob } = await setup({ implementer: DEV });
+      const next = unwrap(await globs.reopen(DEV, glob.id, 'More to do', null));
+      expect(next).toMatchObject({ status: 'in_progress', implementer: DEV, generation: 2 });
+      expect(store.state.outbox.filter((e) => e.kind === 'fire_routine' && e.globId === glob.id)).toHaveLength(0);
+    });
+
+    it('is refused without a reason, for QA and PO, outside Reviewing and on a stale version, changing nothing', async () => {
+      const { glob, rollout } = await setup();
+      unwrap(await globs.completeHumanStep(DEV, glob.id, rollout.id, null));
+      const empty = await globs.reopen(DEV, glob.id, '   ', null);
+      expect(!empty.ok && empty.error.code).toBe('invalid_input');
+      const qa = await globs.reopen(PO, glob.id, 'x', null);
+      expect(!qa.ok && qa.error.code).toBe('forbidden');
+      const stale = await globs.reopen(DEV, glob.id, 'x', 999);
+      expect(!stale.ok && stale.error.code).toBe('version_conflict');
+      await update(glob.id, { status: 'signed_off' });
+      expect((await globs.reopen(DEV, glob.id, 'x', null)).ok).toBe(false);
+      expect(await attachments(glob.id)).toHaveLength(0);
+      expect((await stateById(glob.id)).get('Roll out the host stack')).toBe('done');
+      expect((await peek(glob.id)).generation).toBe(glob.generation);
     });
   });
 

@@ -165,7 +165,7 @@ export type Action =
   | 'decide'
   /** Decision globs: sign off an accepted decision. */
   | 'sign_off'
-  /** Decision globs: take an accepted decision back to Doing to choose again. */
+  /** Decision globs: take an accepted decision back to Doing to choose again. Work globs: a merged glob in Reviewing starts its next generation. */
   | 'reopen'
   /** Action globs: a person did it; marks the action done. */
   | 'complete_action'
@@ -1600,11 +1600,50 @@ export const rolloutStepFailed = (
     return invalidTransition(glob, actor, 'Only a merged glob that is open for its rollout steps can start its next generation');
   if (input.stepState === 'dismissed') return invalidTransition(glob, actor, 'That rollout step was dismissed');
   if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s again`);
-  const merged: MergedPr = { number: landed.number, mergeSha: input.mergeSha ?? '', mergedAt: ctx.now };
-  const b = new Builder(glob, ctx).endRun('superseded', null, { cause: 'rollout_step_failed' }).bumpGeneration();
+  return nextGeneration(glob, ctx, actor, landed.number, input.mergeSha ?? '', 'rollout_step_failed', (generation) => [
+    'RolloutStepFailed',
+    { step: input.stepId, title: input.title, generation },
+  ]);
+};
+
+/**
+ * Row 31b: a person sends a merged glob in Reviewing back to Doing with a reason, as a new generation (the general form of row
+ * 31a, which needs a failed rollout step). The reason must be given; the service masks and caps it first, and stores it as an
+ * attachment the next run reads. Done rollout steps are reopened by the service.
+ */
+export const reopen = (glob: Glob, input: { readonly reason: string; readonly mergeSha?: string | null }, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const landed = glob.pr;
+  if (glob.status !== 'reviewing' || landed === null || landed.state !== 'merged')
+    return invalidTransition(glob, actor, 'Only a merged glob in Reviewing can be reopened');
+  if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot reopen ${glob.type}s`);
+  const reason = input.reason.trim();
+  if (reason === '') return invalidInput('Say why the glob is reopened');
+  return nextGeneration(glob, ctx, actor, landed.number, input.mergeSha ?? '', 'reopened', (generation) => [
+    'GlobReopened',
+    { reason, generation },
+  ]);
+};
+
+/**
+ * The next generation of a merged glob in Reviewing (rows 31a and 31b): the merged PR is kept in `prs` (a late observation of it
+ * is then a no-op), the branch is deleted and cut again from the base with a fresh draft PR, and a new run implements the
+ * change (or the glob is the person's, with no run, when one implements it). The callers own the guard, the event and the cause.
+ */
+const nextGeneration = (
+  glob: Glob,
+  ctx: Context,
+  actor: Actor,
+  prNumber: number,
+  mergeSha: string,
+  cause: 'rollout_step_failed' | 'reopened',
+  event: (generation: number) => readonly [DomainEventType, { readonly [key: string]: JsonValue }],
+): Result<Transition> => {
+  const merged: MergedPr = { number: prNumber, mergeSha, mergedAt: ctx.now };
+  const b = new Builder(glob, ctx).endRun('superseded', null, { cause }).bumpGeneration();
   const generation = b.current.generation;
-  // A sub that merged and then gained steps (the rollout check writes them after the merge) is a same from here on, so the
-  // fix generation never goes through the sub gate and merges itself with the reopened step unchecked.
+  // A sub that merged and then gained steps (the rollout check writes them after the merge), or that a person sent back, is a
+  // same from here on, so the next generation never goes through the sub gate and merges itself unchecked.
   if (glob.type === 'sub') asRolloutSame(b, glob, ctx);
   // A person who implements the glob (a super's creator, or whoever picked it up) fixes it themselves; otherwise a run does.
   const person = glob.type === 'super' || glob.implementer !== null;
@@ -1622,7 +1661,7 @@ export const rolloutStepFailed = (
     implementer: person ? (glob.implementer ?? glob.creator) : null,
     ...(glob.mergeHold == null ? {} : { mergeHold: null }),
   })
-    .event('RolloutStepFailed', { step: input.stepId, title: input.title, generation })
+    .event(...event(generation))
     .effect({ kind: 'delete_branch', globId: glob.id, generation })
     .status(person ? 'in_progress' : 'implementing');
   return (person ? b : b.queueRun(actor.email)).done();
@@ -3857,6 +3896,8 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   if (!restricted && !hasLiveRun(glob) && canRetryChecks(glob)) actions.push('retry_checks');
   if (!restricted && canRequestConflictFix(glob)) actions.push('resolve_conflict');
   if (!restricted && glob.status !== 'reviewing' && glob.status !== 'signed_off') actions.push('start_again');
+  // Row 31b: a merged glob in Reviewing can go back to Doing as a new generation, with a reason.
+  if (!restricted && glob.status === 'reviewing' && glob.pr?.state === 'merged') actions.push('reopen');
   if (isMergeArmed(glob) || isInMergeLine(glob)) {
     if (!restricted) actions.push('cancel_merge');
   } else if (mergeBlocker(glob, facts.relations) === null) {
