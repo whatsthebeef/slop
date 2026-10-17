@@ -99,6 +99,13 @@ export type KbPossibleCoverage =
       readonly via?: string;
     };
 
+/** Starts the note of a flag that two open items propose new documents in one area: a hint for an admin, not a contradiction. */
+export const NEW_DOCUMENT_OVERLAP_NOTE = 'Overlapping new document: ';
+
+/** The contradictions that hold an item back from agent approval: the pipeline's overlap flags don't. */
+export const blockingContradictions = (contradicts: readonly KbContradiction[]): KbContradiction[] =>
+  contradicts.filter((c) => !c.note.startsWith(NEW_DOCUMENT_OVERLAP_NOTE));
+
 /** Something an open item contradicts: another item (by ID) or a document or agent file (by name). */
 export interface KbContradiction {
   readonly kind: 'item' | 'knowledge';

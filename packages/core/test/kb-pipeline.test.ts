@@ -8,7 +8,7 @@ import { DEDUPE_SYSTEM, KbPipeline, ROUTE_SYSTEM } from '../src/app/kb-pipeline.
 import { KnowledgeService } from '../src/app/knowledge-service.js';
 import type { NewLearning } from '../src/app/knowledge-service.js';
 import type { Result } from '../src/domain/errors.js';
-import { llmWaitingReason } from '../src/domain/kb.js';
+import { blockingContradictions, llmWaitingReason } from '../src/domain/kb.js';
 import type { LearningWire } from '../src/domain/kb.js';
 import type { Catalog, Tx } from '../src/ports.js';
 import { MemoryStore, RecordingNotifier } from '../src/testing/memory-store.js';
@@ -283,6 +283,116 @@ describe('KB pipeline: routing and dedupe', () => {
       },
     });
     expect(llm.calls).toHaveLength(1);
+  });
+
+  describe('pending new documents (s15b174)', () => {
+    const toPendingDoc = (name: string) =>
+      json({
+        target: {
+          kind: 'document',
+          name,
+          section: null,
+          newDocument: { area: 'other', audience: [], description: 'Ignored' },
+        },
+        catalogCandidate: false,
+        catalogReason: null,
+      });
+
+    it('shows the model the new documents open items already propose, and asks for broad ones', async () => {
+      await routedAlone();
+      const second = await submit({
+        sourceGlobId: otherGlobId,
+        statement: 'Run vitest with the dot reporter',
+        evidence: 'Tester note',
+      });
+      llm.answer(toDoc('build_test_lint', 'Test'), NO_MATCH);
+      expect(await queue.process(second)).toBe(true);
+      const prompt = llm.calls[1]?.prompt ?? '';
+      expect(prompt).toContain('Pending new documents');
+      expect(prompt).toContain('- testing [area: testing; for: tester] How tests run (1 item)');
+      expect(ROUTE_SYSTEM).toContain('area-level document');
+      expect(ROUTE_SYSTEM).toContain('pending new document');
+    });
+
+    it('lets a second item join a pending new document, sharing its target and proposed metadata', async () => {
+      const first = await routedAlone();
+      const second = await submit({
+        sourceGlobId: otherGlobId,
+        statement: 'Run vitest with the dot reporter',
+        evidence: 'Tester note',
+      });
+      llm.answer(toPendingDoc('testing'), NO_MATCH);
+      expect(await queue.process(second)).toBe(true);
+      const target = {
+        kind: 'doc',
+        name: 'testing',
+        section: null,
+        newDocument: { area: 'testing', audience: ['tester'], description: 'How tests run' },
+      };
+      expect((await item(first)).target).toEqual(target);
+      expect(await item(second)).toMatchObject({ processing: 'routed', target, contradicts: [] });
+    });
+
+    it('flags two new documents proposed in one area, without merging them', async () => {
+      const first = await routedAlone();
+      const second = await submit({
+        sourceGlobId: otherGlobId,
+        statement: 'Run vitest with the dot reporter',
+        evidence: 'Tester note',
+      });
+      llm.answer(toNewDoc('testing_and_reporters'), NO_MATCH);
+      expect(await queue.process(second)).toBe(true);
+      const routedSecond = await item(second);
+      expect(routedSecond.target).toMatchObject({
+        name: 'testing_and_reporters',
+        newDocument: { area: 'testing' },
+      });
+      expect(routedSecond.contradicts).toEqual([
+        {
+          kind: 'item',
+          ref: first,
+          note: expect.stringContaining('should probably be one document') as unknown,
+        },
+      ]);
+      expect((await item(first)).contradicts).toEqual([]);
+    });
+
+    it('flags one entry per overlapping document, which holds nothing back from approval', async () => {
+      const first = await routedAlone();
+      const joined = await submit({ sourceGlobId: otherGlobId, statement: 'Run vitest with the dot reporter', evidence: 'Tester note' });
+      llm.answer(toPendingDoc('testing'), NO_MATCH);
+      expect(await queue.process(joined)).toBe(true);
+      const third = await submit({ sourceGlobId: otherGlobId, statement: 'Keep fixtures small', evidence: 'Tester note' });
+      llm.answer(toNewDoc('test_fixtures'), NO_MATCH);
+      expect(await queue.process(third)).toBe(true);
+      const { contradicts } = await item(third);
+      expect(contradicts).toEqual([{ kind: 'item', ref: first, note: expect.stringContaining('and 1 more') as unknown }]);
+      expect(blockingContradictions(contradicts)).toEqual([]);
+    });
+
+    it('flags nothing for new documents in different areas', async () => {
+      await routedAlone();
+      const second = await submit({
+        sourceGlobId: otherGlobId,
+        statement: 'Run vitest with the dot reporter',
+        evidence: 'Tester note',
+      });
+      llm.answer(
+        json({
+          target: {
+            kind: 'document',
+            name: 'deploys',
+            section: null,
+            newDocument: { area: 'infra', audience: [], description: 'Deploys' },
+          },
+          catalogCandidate: false,
+          catalogReason: null,
+        }),
+        NO_MATCH,
+      );
+      expect(await queue.process(second)).toBe(true);
+      expect((await item(second)).contradicts).toEqual([]);
+    });
   });
 
   it('merges a near-duplicate of an open item into it, adding its evidence, count and globs', async () => {
