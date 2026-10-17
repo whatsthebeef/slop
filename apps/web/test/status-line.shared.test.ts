@@ -168,11 +168,11 @@ describe('an action waiting for its script', () => {
       ...patch,
     });
 
-  it('says "s1t1" with the human icon and the script tooltip', () => {
+  it('says "s1t1" with the hourglass and the script tooltip', () => {
     expect(holdLine(action())).toEqual({
       text: 's1t1',
       tip: `Its script ${SCRIPT} is written by s1t1, which hasn't merged to main yet.`,
-      icon: 'human',
+      icon: 'hourglass',
     });
   });
 
@@ -180,7 +180,7 @@ describe('an action waiting for its script', () => {
     expect(holdLine(action({ script: null }))?.tip).toBe("Its script is written by s1t1, which hasn't merged to main yet.");
     const other = holdLine(action({ script: null, holding: [hold('s1t2', { state: 'planning' })] }));
     expect(other?.tip).toBe('Waits for s1t2 to be merged and rolled out (Planning) (no reason given)');
-    expect(other?.icon).toBe('human');
+    expect(other?.icon).toBe('hourglass');
   });
 
   it('leaves the hourglass for a code glob that waits for another', () => {
@@ -190,7 +190,7 @@ describe('an action waiting for its script', () => {
   });
 
   it('shows the hold on the card, and nothing for a free or finished action', () => {
-    expect(cornerStatus(action(), NOW)).toMatchObject({ kind: 'hold', icon: 'human', text: 's1t1' });
+    expect(cornerStatus(action(), NOW)).toMatchObject({ kind: 'hold', icon: 'hourglass', text: 's1t1' });
     expect(cornerStatus(action({ holding: [], script: null, allowedActions: ['complete_action', 'dismiss_action', 'delete'] }), NOW)).toBeNull();
   });
 
