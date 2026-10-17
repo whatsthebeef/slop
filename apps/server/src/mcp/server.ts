@@ -716,6 +716,21 @@ export const buildServer = (deps: McpDeps, email: string, origin: string): McpSe
   );
 
   server.registerTool(
+    'reopen_glob',
+    {
+      description:
+        "Send a merged glob in Reviewing back to Doing with a reason: the general version of failing a rollout step. The glob's next generation starts on a fresh branch from the base with a new draft PR, and a new routine run implements it (or it stays with the person who implements it, with no run). Approvals are cleared, so it is reviewed and signed off again; a sub becomes a same. Done rollout steps reopen and fall due again after the next merge (once and downstream steps are not reopened). The reason is masked (strip credentials first) and kept as an attachment `Reopened (generation N)` that the next run reads as in-scope feedback. Refused outside Reviewing and for QA and PO members; a reason is required.",
+      inputSchema: { id: z.string(), version: z.number().int(), reason: z.string().min(1).max(100_000) },
+    },
+    async ({ id, version, reason }) => {
+      const result = await globs.reopen(email, id, reason, version);
+      // A next generation provisions and starts its routine in the background, as the REST route does.
+      if (result.ok) void deps.outbox.drain(id).catch(() => undefined);
+      return reply(result, (g) => globView(g));
+    },
+  );
+
+  server.registerTool(
     'review_now',
     {
       description:

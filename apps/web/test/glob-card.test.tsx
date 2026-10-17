@@ -954,7 +954,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
     expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('s1t1');
   });
 
-  it('the tooltip lists every hold with its reason, and a click opens the Related section', async () => {
+  it('the tooltip lists every hold with its reason, and a click opens the Holding this back section', async () => {
     const holding = [hold('s1t1', { reason: 'uses its store' }), hold('s1t2', { state: 'planning', reason: 'same file' })];
     const html = markup(view({ status: 'planning', holding }));
     expect(html).toContain('Waits for s1t1 to be merged and rolled out (Doing): uses its store');
@@ -967,7 +967,7 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
       </MemoryRouter>,
     );
     await user.click(screen.getByTestId('position'));
-    expect(onOpenSection).toHaveBeenCalledWith({ section: 'related' });
+    expect(onOpenSection).toHaveBeenCalledWith({ section: 'holding' });
   });
 
   const states: readonly (readonly [string, readonly Item[], string, string])[] = [

@@ -528,7 +528,7 @@ export const cornerStatus = (
       'hourglass',
       `${String(waitingOnThis)} waiting on this`,
       'text-muted-foreground',
-      cardTargets.related(),
+      cardTargets.holdsBack(),
       [waitingTip],
     );
   }

@@ -202,6 +202,52 @@ describe('action outcomes (REST)', () => {
     expect(view.lastOutcome ?? null).toBeNull();
     expect((await viewOf(g.id)).pendingAction?.runId).toBe(view.currentRun.id);
   });
+
+  describe('Reopen on a merged glob', () => {
+    const merged = (patch: Partial<Glob> = {}) => ({
+      status: 'reviewing' as const,
+      provisioning: 'ok' as const,
+      pr: { number: 11, state: 'merged' as const, headSha: HEAD },
+      lastOutcome: { kind: 'merge' as const, at: new Date().toISOString(), by: DEV, result: 'failed' as const, reason: 'earlier refusal' },
+      ...patch,
+    });
+
+    it("leaves no pending click on a person's glob, which goes straight to Doing, and clears the last outcome", async () => {
+      const g = await create();
+      await put(g.id, merged({ implementer: DEV }));
+      const done = await post(g.id, '/actions/reopen', { version: (await current(g.id)).version, reason: 'The migration missed a column' });
+      expect(done.status).toBe(200);
+      const view = (await done.json()) as { status: string; pendingAction?: unknown; lastOutcome?: unknown; currentRun: unknown };
+      expect(view.status).toBe('in_progress');
+      expect(view.currentRun).toBeNull();
+      const after = await viewOf(g.id);
+      expect(after.pendingAction ?? null).toBeNull();
+      expect(after.lastOutcome ?? null).toBeNull();
+    });
+
+    it('records the pending click tied to the queued run on a routine glob', async () => {
+      const g = await create();
+      await put(g.id, merged());
+      const done = await post(g.id, '/actions/reopen', { version: (await current(g.id)).version, reason: 'The migration missed a column' });
+      expect(done.status).toBe(200);
+      const view = (await done.json()) as { status: string; currentRun: { id: string; state: string } };
+      expect(view.status).toBe('implementing');
+      expect(view.currentRun.state).toBe('queued');
+      const after = await viewOf(g.id);
+      expect(after.pendingAction).toMatchObject({ kind: 'reopen', by: DEV, runId: view.currentRun.id });
+      expect(after.lastOutcome ?? null).toBeNull();
+    });
+
+    it('refuses an empty reason and keeps the refusal on the glob', async () => {
+      const g = await create();
+      await put(g.id, merged());
+      const refused = await post(g.id, '/actions/reopen', { version: (await current(g.id)).version });
+      expect(refused.status).toBe(422);
+      expect((await current(g.id)).status).toBe('reviewing');
+    });
+  });
+
+
   it('Discard on a same applies in the request: no pending action, and no timed-out outcome afterwards', async () => {
     const g = await create();
     await put(g.id, {

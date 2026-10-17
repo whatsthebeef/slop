@@ -383,7 +383,9 @@ export const activityOf = (
         ? `${name} took it over from the routine run`
         : h.kind === 'handed_back'
           ? `${name} handed it to the machine`
-          : `${name} picked it up`;
+          : h.kind === 'reopened'
+            ? `Reopened by ${name}${oneLine(h.reason ?? '') === '' ? '' : `: ${oneLine(h.reason ?? '')}`}`
+            : `${name} picked it up`;
     out.push(
       entry(
         `handoff:${String(i)}:${h.kind}:${h.at}`,
@@ -392,7 +394,7 @@ export const activityOf = (
         h.at,
         null,
         'open',
-        h.by === null ? text : `${text} (${h.by})`,
+        h.kind === 'reopened' ? `Reopened by ${h.by ?? 'someone'}: ${h.reason ?? ''}` : h.by === null ? text : `${text} (${h.by})`,
       ),
     );
   });

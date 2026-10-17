@@ -7,7 +7,7 @@ import type { Holding, RelationsView, RelationSuggestion } from '@slop/core';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { HumanSteps } from '../src/components/human-steps';
-import { RelatedSection } from '../src/components/glob-view/related';
+import { HoldingSection, HoldsBackSection, NoLongerHoldingSection } from '../src/components/glob-view/related';
 import type { SuggestionHandler } from '../src/components/glob-view/related';
 import { RelationScanSpend } from '../src/pages/settings';
 import type { AddRelationInput, BoardView, GlobView, ListedHumanStep } from '../src/lib/api';
@@ -58,14 +58,16 @@ const renderRelated = (glob: GlobView, onSuggestion?: SuggestionHandler, withPro
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <RelatedSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} {...(onSuggestion === undefined ? {} : { onSuggestion })} {...(withPromote ? { onPromote } : {})} />
+        <HoldingSection ctx={ctx} onDismissEdge={onDismissEdge} onAddRelation={onAddRelation} {...(onSuggestion === undefined ? {} : { onSuggestion })} {...(withPromote ? { onPromote } : {})} />
+        <HoldsBackSection ctx={ctx} onAddRelation={onAddRelation} />
+        <NoLongerHoldingSection ctx={ctx} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
   return { onDismissEdge, onAddRelation, onPromote };
 };
 
-describe('Related: reasons', () => {
+describe('Relation sections: reasons', () => {
   it('badges a person or agent relation with no reason, and no inferred, learned, split or mention one', () => {
     renderRelated(
       view({
@@ -97,7 +99,7 @@ describe('Related: reasons', () => {
   it('asks "Why does it wait? (one line)" and keeps the reason optional', async () => {
     const user = userEvent.setup();
     const { onAddRelation } = renderRelated(view({ relations: related() }));
-    await user.click(screen.getByTestId('add-relation'));
+    await user.click(screen.getByTestId('add-holding'));
     expect(screen.getByPlaceholderText('Why does it wait? (one line)')).not.toBeNull();
     await user.type(screen.getByLabelText('Glob or decision'), 's1t9');
     await user.click(screen.getByTestId('add-relation-submit'));
@@ -107,7 +109,7 @@ describe('Related: reasons', () => {
   it('adds a supersedes relation from the form, with its reason', async () => {
     const user = userEvent.setup();
     const { onAddRelation } = renderRelated(view({ relations: related() }));
-    await user.click(screen.getByTestId('add-relation'));
+    await user.click(screen.getByTestId('add-holding'));
     await user.selectOptions(screen.getByLabelText('Gate'), 'supersedes');
     await user.type(screen.getByLabelText('Glob or decision'), 's1t9');
     await user.type(screen.getByLabelText('Reason (optional)'), 'replaces it');
@@ -116,7 +118,7 @@ describe('Related: reasons', () => {
   });
 });
 
-describe('Related: relations from a mention', () => {
+describe('Relation sections: relations from a mention', () => {
   const sentence = 'Hand the profile over only after s1t7 is deployed.';
 
   it('shows a "from a mention" chip with the sentence as its hover, not inline, and a one-click dismiss', async () => {
@@ -163,13 +165,13 @@ describe('Related: relations from a mention', () => {
     renderRelated(
       view({ relations: related({ done: [{ relationId: 'rel_d', to: 's1t7', toTitle: 'T', gate: 'merge', until: 'merged', reason: sentence, source: 'mention', how: 'overridden' }] }) }),
     );
-    await user.click(screen.getByTestId('related-toggle'));
+    await user.click(screen.getByTestId('no-longer-holding-toggle'));
     expect(screen.getByText('No longer holding (1)')).toBeTruthy();
     expect(screen.getByTestId('related-row-s1t7').textContent).toContain('(forced through)');
   });
 });
 
-describe('Related: other boards', () => {
+describe('Relation sections: other boards', () => {
   it('names the other board for a visible glob and links into it', () => {
     renderRelated(view({ relations: related({ holding: [hold('s15t220', { external: { boardId: 15, boardName: 'Ops', hidden: false } })] }) }));
     const row = screen.getByTestId('related-row-s15t220');
@@ -189,18 +191,18 @@ describe('Related: other boards', () => {
   it('says how many globs on other boards wait for this one', async () => {
     const user = userEvent.setup();
     renderRelated(view({ relations: related({ waitedOnByOtherBoards: 2 }) }));
-    await user.click(screen.getByTestId('related-toggle'));
+    await user.click(screen.getByTestId('holds-back-toggle'));
     expect(screen.getByTestId('related-other-boards').textContent).toBe('2 globs on other boards wait for this');
   });
 });
 
-describe('Related: supersedes', () => {
+describe('Relation sections: supersedes', () => {
   it('shows "Superseded by" on the older glob with a dismiss that removes the label', async () => {
     const user = userEvent.setup();
     const { onDismissEdge } = renderRelated(
       view({ relations: related({ supersededBy: { id: 's1t9', title: 'Newer', reason: 'replaces it', source: 'agent', relationId: 'rel_sup' } }) }),
     );
-    await user.click(screen.getByTestId('related-toggle'));
+    await user.click(screen.getByTestId('holding-toggle'));
     const line = screen.getByTestId('related-superseded-by');
     expect(line.textContent).toContain('Superseded by s1t9');
     expect(line.textContent).toContain('replaces it');
@@ -211,12 +213,12 @@ describe('Related: supersedes', () => {
   it('lists what the newer glob supersedes', async () => {
     const user = userEvent.setup();
     renderRelated(view({ relations: related({ supersedes: [{ id: 's1t3', title: 'Older', reason: 'obsolete', source: 'person' }] }) }));
-    await user.click(screen.getByTestId('related-toggle'));
+    await user.click(screen.getByTestId('holding-toggle'));
     expect(screen.getByTestId('related-supersedes-s1t3').textContent).toContain('Supersedes s1t3');
   });
 });
 
-describe('Related: a failed step still asks, a mention never does', () => {
+describe('Relation sections: a failed step still asks, a mention never does', () => {
   const failedStep = (patch: Partial<RelationSuggestion> = {}): RelationSuggestion => ({
     id: 'step:hs_1',
     kind: 'step_failed',
@@ -367,8 +369,8 @@ describe('board settings: automatic relations cost', () => {
   });
 });
 
-describe('Related: verdicts and weak links', () => {
-  it('shows the post-merge verdict on a done row, and on a holding row', () => {
+describe('Relation sections: verdicts and weak links', () => {
+  it('shows the post-merge verdict on a done row, and on a holding row', async () => {
     renderRelated(
       view({
         relations: related({
@@ -381,6 +383,7 @@ describe('Related: verdicts and weak links', () => {
         }),
       }),
     );
+    await userEvent.click(screen.getByTestId('no-longer-holding-toggle'));
     expect(screen.getByTestId('verdict-s1t4').textContent).toContain('needed: uses `parseRow` from s1t4');
     expect(screen.getByTestId('verdict-s1t5').textContent).toContain('not needed: no shared files, imports or symbols');
     expect(screen.getByTestId('verdict-s1t7').textContent).toContain('unsure');
@@ -390,15 +393,13 @@ describe('Related: verdicts and weak links', () => {
     expect(screen.getByTestId('mention-badge-s1t5').textContent).toBe('from a mention');
   });
 
-  it('lists weak links under "May relate" with a one-click gate and a dismiss, and they do not count as holding', async () => {
+  it('lists weak links as "may relate" rows with a one-click gate and a dismiss, and they do not count as holding', async () => {
     const user = userEvent.setup();
     const weak = { relationId: 'rel_w', to: 's1t8', toTitle: 'Weak one', gate: 'start' as const, until: 'merged' as const, reason: null, source: 'mention' as const, state: 'open' as const };
     const { onPromote, onDismissEdge } = renderRelated(view({ relations: related({ weak: [weak] }) }), undefined, true);
-    await user.click(screen.getByTestId('related-toggle'));
-    const group = screen.getByTestId('related-weak');
-    expect(group.textContent).toContain('May relate');
+    await user.click(screen.getByTestId('holding-toggle'));
     expect(screen.getByTestId('related-row-s1t8').textContent).toContain('may relate');
-    expect(screen.queryByTestId('related-holding')).toBeNull();
+    expect(screen.getByTestId('holding-toggle').textContent).toBe('Holding this back (1)');
     await user.click(screen.getByTestId('promote-s1t8'));
     expect(onPromote).toHaveBeenCalledWith('rel_w');
     await user.click(screen.getByTestId('dismiss-edge-s1t8'));
@@ -410,6 +411,5 @@ describe('Related: verdicts and weak links', () => {
     renderRelated(view({ relations: related({ weak: [weak], holding: [hold('s1t7')] }) }), undefined, false);
     expect(screen.queryByTestId('promote-s1t8')).toBeNull();
     expect(screen.queryByTestId('promote-s1t7')).toBeNull();
-    expect(screen.getByTestId('related-weak')).toBeTruthy();
   });
 });

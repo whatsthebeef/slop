@@ -221,7 +221,7 @@ describe('glob view: main button', () => {
     renderGlob(view({ allowedActions: ['delete'] }));
     expect(mainButton()).toBeNull();
     expect(screen.queryByTestId('more-actions')).toBeNull();
-    expect(within(screen.getByTestId('glob-actions')).queryAllByRole('button')).toHaveLength(0);
+    expect(screen.queryByTestId('glob-actions')).toBeNull();
   });
 
   it('while merging, Cancel merge leads and the ▾ holds Review code and Pick up', async () => {
@@ -1109,7 +1109,7 @@ describe('glob view: split moves in the action ▾', () => {
       expect(type.className).toContain('text-[10px]');
       expect(group.className).toContain('text-[10px]');
       expect(type.className).toContain('font-mono');
-      expect(within(screen.getByTestId('glob-actions')).queryByTestId('glob-type')).toBeNull();
+      expect(screen.queryByTestId('glob-actions')).toBeNull();
       expect(screen.getAllByTestId('glob-type')).toHaveLength(1);
     });
 
@@ -1119,7 +1119,7 @@ describe('glob view: split moves in the action ▾', () => {
       expect(within(chips).getByTestId('group-chip').textContent).toBe('glob-view-layout');
       expect(within(chips).getByTestId('group-chip').getAttribute('href')).toBe('/boards/1?group=glob-view-layout');
       expect(screen.getAllByTestId('group-chip')).toHaveLength(1);
-      expect(within(screen.getByTestId('glob-actions')).queryByTestId('group-chip')).toBeNull();
+      expect(screen.queryByTestId('glob-actions')).toBeNull();
       expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
     });
 
@@ -1131,12 +1131,17 @@ describe('glob view: split moves in the action ▾', () => {
       expect(within(info).getByTestId('arm-system-label').textContent).toBe('Arm system');
       expect(within(info).queryByTestId('arm-step-title')).toBeNull();
       expect(info.textContent).not.toContain('Run the migration');
-      expect(within(info).queryByTestId('glob-branch')).toBeNull();
       expect(info.textContent).not.toContain('s1t1');
       expect(info.className).toContain('ml-auto');
       expect(info.className).toContain('flex-wrap');
       expect(within(screen.getByTestId('glob-header')).queryByTestId('arm-system-label')).toBeNull();
-      expect(within(screen.getByTestId('glob-header')).queryByTestId('glob-branch')).toBeNull();
+    });
+
+    it('shows no line, and no branch, beside the action row when there is no Arm system label', () => {
+      renderGlob(view({ branch: 's1t1', humanSteps: [] }));
+      expect(screen.queryByTestId('action-line-info')).toBeNull();
+      expect(screen.queryByTestId('glob-branch')).toBeNull();
+      expect(screen.queryByText('s1t1', { selector: '[data-testid="glob-actions"] *' })).toBeNull();
     });
   });
 
@@ -1348,5 +1353,58 @@ describe('glob view: Start now, Merge anyway and Sign off anyway', () => {
     await user.click(await screen.findByTestId('more-start_anyway'));
     expect(screen.queryByTestId('anyway-confirmation')).toBeNull();
     expect(cb.onAction).toHaveBeenCalledWith('start_anyway');
+  });
+});
+
+describe('Reopen on a merged glob', () => {
+  const merged = (allowedActions: Action[]) =>
+    view({ status: 'reviewing', list: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'aaa' }, allowedActions });
+
+  it('is in the ▾ menu in Reviewing, never the main button', async () => {
+    const user = userEvent.setup();
+    renderGlob(merged(['review_now', 'reopen', 'delete']));
+    expect(mainButton()?.textContent).not.toContain('Reopen');
+    await user.click(screen.getByTestId('more-actions'));
+    expect((await screen.findByTestId('more-reopen')).textContent).toContain('Reopen');
+  });
+
+  it('is not offered where the server does not allow it (Signed off, Doing)', () => {
+    renderGlob(view({ status: 'signed_off', list: 'signed_off', pr: { number: 7, state: 'merged', headSha: 'aaa' }, allowedActions: ['review_now', 'delete'] }));
+    expect(screen.queryByTestId('more-reopen')).toBeNull();
+    cleanup();
+    renderGlob(view({ status: 'in_progress', list: 'doing', allowedActions: ['review_now', 'start_again', 'delete'] }));
+    expect(screen.queryByTestId('more-reopen')).toBeNull();
+  });
+
+  it('asks for a reason first: the confirm stays off while it is empty, then one request carries it', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(merged(['review_now', 'reopen', 'delete']));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-reopen'));
+    expect(cb.onAction).not.toHaveBeenCalled();
+    const dialog = screen.getByTestId('reopen-confirmation');
+    expect(within(dialog).getByTestId('reopen-says').textContent).toContain('Approvals are cleared');
+    expect(within(dialog).getByTestId('reopen-says').textContent).toContain('new generation');
+    const confirm = within(dialog).getByTestId<HTMLButtonElement>('confirm-reopen');
+    expect(confirm.disabled).toBe(true);
+    await user.type(within(dialog).getByTestId('reopen-reason'), '   ');
+    expect(confirm.disabled).toBe(true);
+    await user.clear(within(dialog).getByTestId('reopen-reason'));
+    await user.type(within(dialog).getByTestId('reopen-reason'), 'The migration missed a column');
+    expect(confirm.disabled).toBe(false);
+    await user.click(confirm);
+    expect(cb.onAction).toHaveBeenCalledTimes(1);
+    expect(cb.onAction).toHaveBeenCalledWith('reopen', undefined, 'The migration missed a column');
+    await waitFor(() => expect(screen.queryByTestId('reopen-confirmation')).toBeNull());
+  });
+
+  it('Cancel closes the dialog without a request', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(merged(['review_now', 'reopen', 'delete']));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-reopen'));
+    await user.click(within(screen.getByTestId('reopen-confirmation')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('reopen-confirmation')).toBeNull();
+    expect(cb.onAction).not.toHaveBeenCalled();
   });
 });

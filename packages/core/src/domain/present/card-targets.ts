@@ -8,8 +8,10 @@ export const cardTargets = {
   artifact: (kind: ArtifactKind): GlobTarget => ({ section: 'artifacts', artifact: kind }),
   /** The independent review's status ("1 finding", "(outdated)"). */
   findings: (): GlobTarget => ({ section: 'findings' }),
-  /** The blocked-by / waits-for chip. */
-  related: (): GlobTarget => ({ section: 'related' }),
+  /** The blocked-by / waits-for chip: Holding this back. */
+  related: (): GlobTarget => ({ section: 'holding' }),
+  /** The "N waiting on this" status: Holds back. */
+  holdsBack: (): GlobTarget => ({ section: 'holds-back' }),
   /** The "needs a human" chip. */
   escalation: (): GlobTarget => ({ section: 'escalation' }),
   /** The "question" corner status. */
