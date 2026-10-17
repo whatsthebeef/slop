@@ -179,9 +179,14 @@ export const reviewOpen = (
   return list === 'reviewing' || list === 'signed_off';
 };
 
-/** The stored work steps that are due now (not predicted): shown as the full block at the top of the glob view. */
+/** A plain action's derived Do step: the one machine step that is shown as a block, since it closes the glob. */
+const isDoStep = (step: Pick<ListedHumanStep, 'id' | 'blocks'>): boolean => step.id === 'machine:action' && isBlockingStep(step);
+
+/** The stored work steps that are due now (not predicted), and a picked-up action's Do step first: shown as the full block at the top of the glob view. */
 export const dueWorkSteps = (steps: readonly ListedHumanStep[]): ListedHumanStep[] =>
-  steps.filter((s) => isWorkStep(s) && s.state === 'due' && s.predicted !== true);
+  steps
+    .filter((s) => (isWorkStep(s) || isDoStep(s)) && s.state === 'due' && s.predicted !== true)
+    .sort((a, b) => Number(isDoStep(b)) - Number(isDoStep(a)));
 
 /** A step that isn't due yet: a pending work step, which collapses into one quiet line. */
 export const isQuietStep = (step: ListedHumanStep): boolean =>
