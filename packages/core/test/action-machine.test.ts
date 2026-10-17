@@ -28,6 +28,8 @@ const attributes = (patch: Partial<ActionAttributes> = {}): ActionAttributes => 
 const action = (patch: Partial<Glob> = {}): Glob =>
   glob({ id: 's1a1', category: 'action', type: null, attributes: attributes(), pr: null, provisioning: 'none', ...patch });
 
+const doing = (patch: Partial<Glob> = {}): Glob => action({ status: 'in_progress', implementer: 'dev@example.com', ...patch });
+
 const create = (patch: Partial<machine.CreateInput> = {}, actor: Actor = dev): Result<Transition> =>
   machine.create(
     { id: 's1a1', boardId: 1, title: 'Protect main', type: null, category: 'action', attributes: attributes(), group: null, environment: null, autoTrigger: false, ...patch },
@@ -105,8 +107,9 @@ describe('A3: dismissing an action', () => {
 });
 
 describe('what a person can do with an action', () => {
-  it('offers done and dismiss while open, and only delete after', () => {
-    expect(machine.allowedActions(action(), dev)).toEqual(['complete_action', 'dismiss_action', 'delete']);
+  it('offers pick up first in Planning, then done, dismiss and back to Planning in Doing, and only delete after', () => {
+    expect(machine.allowedActions(action(), dev)).toEqual(['pick_up', 'dismiss_action', 'delete']);
+    expect(machine.allowedActions(doing(), dev)).toEqual(['complete_action', 'dismiss_action', 'back_to_planning', 'delete']);
     const done = unwrap(machine.completeAction(action(), {}, ctx(dev))).glob;
     expect(machine.allowedActions(done, dev)).toEqual(['delete']);
   });
@@ -130,8 +133,9 @@ describe('what a person can do with an action', () => {
 
 describe('an action in the derived views', () => {
   it('has one human step while open, for the assignee or anyone, and none after', () => {
-    expect(derivedSteps(action()).map((s) => [s.kind, s.title, s.who])).toEqual([['action', 'Do: Fix login timeout', 'anyone']]);
-    expect(derivedSteps(action({ attributes: attributes({ assignee: 'sam@example.com' }) }))[0]?.who).toBe('sam@example.com');
+    expect(derivedSteps(action())).toEqual([]);
+    expect(derivedSteps(doing()).map((s) => [s.kind, s.title, s.who])).toEqual([['action', 'Do: Fix login timeout', 'anyone']]);
+    expect(derivedSteps(doing({ attributes: attributes({ assignee: 'sam@example.com' }) }))[0]?.who).toBe('sam@example.com');
     const done = unwrap(machine.completeAction(action(), {}, ctx(dev))).glob;
     expect(derivedSteps(done)).toEqual([]);
   });
@@ -208,12 +212,13 @@ describe('an action waits for the glob that builds its script', () => {
   it('can still be dismissed while held', () => {
     const t = unwrap(machine.dismissAction(action(), { reason: 'not needed' }, ctx(dev)));
     expect(t.glob.status).toBe('signed_off');
-    expect(machine.allowedActions(action(), dev, { relations: held('planning') })).toEqual(['dismiss_action', 'delete']);
+    expect(machine.allowedActions(action(), dev, { relations: held('planning') })).toEqual(['pick_up', 'dismiss_action', 'delete']);
+    expect(machine.allowedActions(doing(), dev, { relations: held('planning') })).toEqual(['dismiss_action', 'back_to_planning', 'delete']);
   });
 
   it('offers Done again when the glob has merged', () => {
-    expect(machine.allowedActions(action(), dev, { relations: held('merged') })).toEqual(['complete_action', 'dismiss_action', 'delete']);
-    expect(machine.allowedActions(action(), dev)).toEqual(['complete_action', 'dismiss_action', 'delete']);
+    expect(machine.allowedActions(doing(), dev, { relations: held('merged') })).toEqual(['complete_action', 'dismiss_action', 'back_to_planning', 'delete']);
+    expect(machine.allowedActions(doing(), dev)).toEqual(['complete_action', 'dismiss_action', 'back_to_planning', 'delete']);
   });
 
   it('is refused Done while its script is not on the base branch, with or without a relation', () => {
@@ -223,8 +228,8 @@ describe('an action waits for the glob that builds its script', () => {
     expect(!r.ok && r.error.message).toBe('script not on main yet: scripts/rollout/s1t1-x.sh');
     const named = machine.completeAction(action(), {}, ctx(dev), { script, baseBranch: 'master' });
     expect(!named.ok && named.error.message).toBe('script not on master yet: scripts/rollout/s1t1-x.sh');
-    expect(machine.allowedActions(action(), dev, { script })).toEqual(['dismiss_action', 'delete']);
-    expect(machine.allowedActions(action(), dev, { script: { ...script, onBase: true } })).toContain('complete_action');
+    expect(machine.allowedActions(doing(), dev, { script })).toEqual(['dismiss_action', 'back_to_planning', 'delete']);
+    expect(machine.allowedActions(doing(), dev, { script: { ...script, onBase: true } })).toContain('complete_action');
   });
 
   it('fails open when the base branch could not be read, and when the plan names no script', () => {
@@ -393,16 +398,20 @@ describe('work commands on human globs', () => {
     expect(unwrap(await globs.get(DEV, part ?? '')).holding).toEqual([]);
   });
 
-  it('refuses pick-up and take-over of an action, with a message that says what to do', async () => {
+  it('picks an action up into Doing with the person, no branch or run; another person cannot, Back to Planning returns it, and the Do step closes it', async () => {
     const a = unwrap(await globs.create(DEV, input()));
-    for (const takeOver of [false, true]) {
-      const r = await globs.pickUp(DEV, a.id, a.version, takeOver);
-      expect(code(r)).toBe('invalid_transition');
-      expect(!r.ok && r.error.message).toBe('An action is not picked up: mark it done or dismiss it');
-    }
-    expect(code(await globs.pickUp(ADMIN, a.id, a.version, false))).toBe('invalid_transition');
-    expect((await current(a.id)).status).toBe('planning');
-    expect(unwrap(await globs.completeAction(DEV, a.id, a.version)).status).toBe('signed_off');
+    const picked = unwrap(await globs.pickUp(DEV, a.id, a.version, false));
+    expect(picked).toMatchObject({ status: 'in_progress', implementer: DEV, pr: null, provisioning: 'none' });
+    expect(picked.runs).toEqual([]);
+    expect(picked.attributes).toMatchObject({ assignee: DEV, outcome: null });
+    expect(code(await globs.pickUp(ADMIN, a.id, picked.version, false))).toBe('invalid_transition');
+    const back = unwrap(await globs.backToPlanning(DEV, a.id, picked.version));
+    expect(back).toMatchObject({ status: 'planning', implementer: null });
+    const again = unwrap(await globs.pickUp(DEV, a.id, back.version, false));
+    const view = unwrap(await globs.get(DEV, a.id));
+    expect(view.humanSteps.map((s) => s.id)).toContain('machine:action');
+    expect(unwrap(await globs.completeHumanStep(DEV, a.id, 'machine:action', again.version)).state).toBe('done');
+    expect((await current(a.id)).status).toBe('signed_off');
   });
 
   it('lets a person relate to an action, and relate an action to a code glob at its start only', async () => {
@@ -427,14 +436,15 @@ describe('work commands on human globs', () => {
     const view = unwrap(await globs.get(DEV, made.id));
     expect(view.relations.map((r) => [r.to, r.gate, r.until])).toEqual([[work.id, 'start', 'merged']]);
     expect(view.waitingFor.map((w) => w.id)).toEqual([work.id]);
-    expect(view.allowedActions).toEqual(['dismiss_action', 'delete']);
+    expect(view.allowedActions).toEqual(['pick_up', 'dismiss_action', 'delete']);
     expect(code(await globs.completeAction(DEV, made.id, made.version))).toBe('invalid_transition');
     expect((await current(made.id)).status).toBe('planning');
     // The merge releases nothing for an action (it has no start), but tells the board so the row offers Done again.
     unwrap(await globs.applyEvent(work.id, (g, c) => machine.merged(g, { sha: 'abc1234' }, c)));
     expect(await globs.releaseDependents(work.id, boardId)).toEqual([]);
+    const picked = unwrap(await globs.pickUp(DEV, made.id, made.version, false));
     expect(unwrap(await globs.get(DEV, made.id)).allowedActions).toContain('complete_action');
-    expect(unwrap(await globs.completeAction(DEV, made.id, made.version)).status).toBe('signed_off');
+    expect(unwrap(await globs.completeAction(DEV, made.id, picked.version)).status).toBe('signed_off');
   });
 
   it('does not record a wait for a glob that has merged already, and refuses a non-start relation', async () => {

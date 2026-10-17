@@ -760,6 +760,8 @@ export const createApp = (deps: AppDeps) => {
     // Action globs: a person did it (optional note), or it is not needed (reason required).
     done: (email: string, id: string, b: ActionBody) => globs.completeAction(email, id, b.version, b.note),
     dismiss: (email: string, id: string, b: ActionBody) => globs.dismissAction(email, id, b.version, b.reason ?? ''),
+    // A picked-up plain action goes back to Planning.
+    'back-to-planning': (email: string, id: string, b: ActionBody) => globs.backToPlanning(email, id, b.version),
     // Prepared actions: start or retry the machine preparation, or report that the person's run failed (another round starts).
     prepare: (email: string, id: string, b: ActionBody) => globs.prepareAction(email, id, b.version),
     fail: async (email: string, id: string, b: ActionBody) =>

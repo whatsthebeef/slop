@@ -20,7 +20,7 @@ type Subject = Pick<PresentableGlob, 'type' | 'status' | 'implementer' | 'pr'> &
   Partial<
     Pick<
       PresentableGlob,
-      'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState' | 'buildFailed'
+      'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState' | 'buildFailed' | 'category'
     >
   >;
 
@@ -125,9 +125,11 @@ export const actionPresentation = (
             tip:
               glob.type === 'super'
                 ? 'You pair on it with the product owner: copies the sstor command that opens the pairing session'
-                : 'You implement it in your own session',
+                : glob.category === 'action'
+                  ? 'You take it on: it moves to Doing with you and its steps show with Done'
+                  : 'You implement it in your own session',
             // A super is paired on and a decision is decided by a person, so picking it up is the next step.
-            placement: glob.type === 'super' || decision ? 'main' : 'more',
+            placement: glob.type === 'super' || decision || glob.category === 'action' ? 'main' : 'more',
           }
         : glob.implementer !== null && glob.implementer === viewer
           ? {
@@ -294,6 +296,8 @@ export const actionPresentation = (
             : 'You did it: marks the action done, with a note of what you checked if you like',
         placement: 'main',
       };
+    case 'back_to_planning':
+      return { label: 'Back to Planning', icon: null, tip: 'You put it down: it returns to Planning with nothing discarded', placement: 'more' };
     case 'prepare_action':
       return glob.actionState === 'preparation_failed'
         ? {

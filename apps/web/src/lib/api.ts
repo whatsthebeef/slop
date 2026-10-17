@@ -550,7 +550,8 @@ export type ActionPath =
   | 'sign-off'
   | 'reopen'
   | 'done'
-  | 'dismiss';
+  | 'dismiss'
+  | 'back-to-planning';
 
 /** What the board's banner shows: each integration that needs a person, and the in-app AWS sign-in (local development only). */
 export interface IntegrationHealthView {
@@ -1061,5 +1062,6 @@ export const ACTION_PATHS: Record<Action, ActionPath | null> = {
   dismiss_action: null,
   // Failed… takes the pasted output: its own dialog and call (api.failAction).
   fail_action: null,
+  back_to_planning: 'back-to-planning',
   delete: null,
 };

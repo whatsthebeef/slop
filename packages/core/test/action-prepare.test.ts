@@ -415,9 +415,10 @@ describe('A9: dismiss', () => {
     expect(kinds(unwrap(machine.dismissAction(waiting, { reason: 'x' }, ctx(dev))))).toEqual(['release_waiting']);
   });
 
-  it('a plain action keeps its rule: only in Planning', () => {
+  it('a plain action is dismissed in Planning or Doing, not once finished', () => {
     const plain = glob({ category: 'action', type: null, attributes: attributes(null, 0), status: 'in_progress' });
-    expect(code(machine.dismissAction(plain, { reason: 'x' }, ctx(dev)))).toBe('invalid_transition');
+    expect(code(machine.dismissAction(plain, { reason: 'x' }, ctx(dev)))).toBeNull();
+    expect(code(machine.dismissAction({ ...plain, status: 'signed_off' }, { reason: 'x' }, ctx(dev)))).toBe('invalid_transition');
   });
 });
 
@@ -432,11 +433,13 @@ describe('A10: pick up reads the branch', () => {
     }
   });
 
-  it('is refused while preparing, for an artifact record and for a plain action', () => {
+  it('is refused while preparing and for an artifact record; a plain action is picked up into Doing', () => {
     expect(code(machine.pickUp(prepared('preparing'), ctx(dev), board, { takeOver: false }))).toBe('invalid_transition');
     expect(code(machine.pickUp(prepared('ready', 'artifact'), ctx(dev), board, { takeOver: false }))).toBe('invalid_transition');
     const plain = glob({ category: 'action', type: null, attributes: attributes(null, 0), status: 'planning' });
-    expect(code(machine.pickUp(plain, ctx(dev), board, { takeOver: false }))).toBe('invalid_transition');
+    const t = unwrap(machine.pickUp(plain, ctx(dev), board, { takeOver: false }));
+    expect(t.glob).toMatchObject({ status: 'in_progress', implementer: dev.email });
+    expect(t.events.map((e) => e.type)).toEqual(['StatusChanged', 'PickedUp']);
   });
 });
 

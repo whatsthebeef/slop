@@ -646,6 +646,9 @@ class DependantMoved extends Error {}
  */
 const MERGED_STATUSES: ReadonlySet<string> = new Set(['merging', 'reviewing', 'signed_off']);
 
+/** The id of the derived `Do:` step of a plain action (never stored). */
+const ACTION_STEP_ID = 'machine:action';
+
 export class GlobService implements AutomaticRelations {
   constructor(private readonly deps: GlobServiceDeps) {}
 
@@ -719,7 +722,7 @@ export class GlobService implements AutomaticRelations {
     const read = await this.deps.store.transaction(async (tx) => {
       const glob = await tx.getGlob(id);
       // A prepared action runs its own script from its branch or artifact: only a plain action waits for a script another glob builds.
-      if (glob?.category !== 'action' || glob.status !== 'planning' || preparationOf(glob) !== null) return null;
+      if (glob?.category !== 'action' || (glob.status !== 'planning' && glob.status !== 'in_progress') || preparationOf(glob) !== null) return null;
       const board = await tx.getBoard(glob.boardId);
       return board === null ? null : { glob, baseBranch: board.baseBranch, plan: (await tx.listArtifacts(id, 'plan'))[0]?.content ?? '' };
     });
@@ -1030,13 +1033,53 @@ export class GlobService implements AutomaticRelations {
    * `note` (what was checked, or done by hand) is masked and kept in the step's event only.
    */
   completeHumanStep(email: string, id: string, stepId: string, version: number | null, note?: string): Promise<Result<StoredHumanStep>> {
+    if (stepId === ACTION_STEP_ID) return this.closeActionStep(email, id, () => this.completeAction(email, id, version, note), 'done');
     return this.closeHumanStep(email, id, stepId, version, 'done', null, note);
   }
 
   /** Dismisses a wrong step with the reason; the glob moves on if nothing else holds it back. */
   dismissHumanStep(email: string, id: string, stepId: string, reason: string, version: number | null): Promise<Result<StoredHumanStep>> {
     if (reason.trim() === '') return Promise.resolve(invalidInput('Dismissing a step needs a reason'));
+    if (stepId === ACTION_STEP_ID) return this.closeActionStep(email, id, () => this.dismissAction(email, id, version, reason.trim()), 'dismissed');
     return this.closeHumanStep(email, id, stepId, version, 'dismissed', reason.trim());
+  }
+
+  /** The derived `Do:` step of an action in Doing is not stored: its Done and Dismiss are the action's own, and answer with the step as it was. */
+  private async closeActionStep(
+    email: string,
+    id: string,
+    close: () => Promise<Result<Glob>>,
+    to: 'done' | 'dismissed',
+  ): Promise<Result<StoredHumanStep>> {
+    const closed = await close();
+    if (!closed.ok) return closed;
+    const glob = closed.value;
+    const now = this.deps.clock.now();
+    return ok({
+      id: ACTION_STEP_ID,
+      boardId: glob.boardId,
+      globId: id,
+      kind: 'action',
+      title: `Do: ${glob.title}`,
+      detail: null,
+      who: 'anyone',
+      due: 'now',
+      state: to,
+      blocks: [],
+      check: null,
+      script: null,
+      why: null,
+      permissions: null,
+      commands: [],
+      verify: null,
+      origin: 'machine',
+      createdBy: email,
+      createdAt: now,
+      doneBy: email,
+      doneAt: now,
+      dismissedReason: null,
+      dueSince: null,
+    });
   }
 
   private async closeHumanStep(
@@ -3290,6 +3333,11 @@ export class GlobService implements AutomaticRelations {
       (glob, ctx, _board, facts) => machine.completeAction(glob, note === undefined ? {} : { note }, ctx, { ...facts, ...scriptFacts(check) }),
       { applies: 'action', relations: true },
     );
+  }
+
+  /** Action globs: a person puts a picked-up action back in Planning. */
+  backToPlanning(email: string, id: string, version: number | null) {
+    return this.command(email, id, version, (glob, ctx) => machine.backToPlanning(glob, ctx), { applies: 'action' });
   }
 
   /** Action globs: the work is not needed; the reason is required, and what waited for it is released. */
