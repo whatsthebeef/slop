@@ -91,3 +91,14 @@ describe('routine run instructions', () => {
     expect(runInstructions(glob, 'run-1', null)).not.toContain('Repository:');
   });
 });
+
+describe('runInstructions for a Re-run answer', () => {
+  it('asks for the plan difference to be applied and pushed before watching, whatever the PR state', () => {
+    const text = runInstructions({ id: 's1t1', title: 'Work' }, 'run-3', 'whatsthebeef/slop', true, null, { from: 1, to: 2 });
+    expect(text).toContain('RE-RUN');
+    expect(text).toContain('from v1 to v2');
+    expect(text).toContain('apply only that difference');
+    expect(text).toContain('Only after a push');
+    expect(text).not.toContain("Don't run the phases");
+  });
+});

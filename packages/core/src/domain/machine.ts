@@ -66,6 +66,7 @@ import {
   matchOption,
   mergeQuestions,
   isPlanChangedQuestion,
+  pendingRerun,
   RERUN_OPTION,
   nextQuestionId,
   questionAwaits,
@@ -260,6 +261,22 @@ export const hasBusyRun = (glob: Glob): boolean => {
 export const hasWorkingRun = (glob: Glob): boolean => {
   const run = currentRun(glob);
   return run !== null && (run.state === 'queued' || run.state === 'active');
+};
+
+/**
+ * A Re-run answer on a plan-changed question that nobody is working on: no push since the answer, no one implementing, and no run
+ * queued or active (none, or one idling in `watching`). Start is then the glob's next step, and the status says the re-run didn't
+ * start the work.
+ */
+export const rerunIdle = (glob: Pick<Glob, 'status' | 'type' | 'implementer' | 'questions' | 'pr' | 'runs'>): boolean => {
+  const run = glob.runs.at(-1);
+  return (
+    glob.status === 'pr_open' &&
+    glob.type !== 'super' &&
+    glob.implementer === null &&
+    pendingRerun(glob) !== null &&
+    !(run !== undefined && (run.state === 'queued' || run.state === 'active'))
+  );
 };
 
 /**
@@ -801,6 +818,13 @@ export const start = (
   newHolds: readonly ImpliedAfter[] = [],
 ): Result<Transition> => {
   const actor = requireActor(ctx);
+  // A Re-run answer left nothing working: Start runs the work again on the current plan (the idle watcher is replaced).
+  if (rerunIdle(glob)) {
+    if (restrictedFrom(actor, glob)) return forbidden(`QA and PO members cannot start ${glob.type}s`);
+    const b = new Builder(glob, ctx);
+    if (hasLiveRun(glob)) b.endRun('superseded', null, { cause: 'plan_changed' });
+    return b.queueRun(actor.email).done();
+  }
   if (glob.status !== 'planning' || glob.type !== 'same') {
     return invalidTransition(glob, actor, 'Only a same in planning can be started');
   }
@@ -2406,7 +2430,9 @@ export const commitPushed = (
   const superseded =
     push.runId !== null && (run === null || run.id !== push.runId || run.state === 'ended');
   if (!superseded && run !== null && run.state !== 'ended' && push.runId === run.id) {
-    b.updateRun({ lastProgressAt: ctx.now, state: run.state === 'queued' ? 'active' : run.state });
+    // A Re-run run's push is the work it was started for: from here it watches the new head like any run on a ready PR.
+    const reran = glob.status === 'pr_open' && run.purpose === undefined && pendingRerun(glob) !== null;
+    b.updateRun({ lastProgressAt: ctx.now, state: reran ? 'watching' : run.state === 'queued' ? 'active' : run.state });
   }
   // A new head is a different commit from the one the person armed the merge on: they press Merge again. An action's record
   // is the exception: Done armed it for whatever the branch holds, so a fix pushed after Done keeps the merge armed.
@@ -2721,9 +2747,13 @@ export const runProgress = (glob: Glob, runId: string, ctx: Context): Result<Tra
     .updateRun({
       // A run retried on a ready PR watches it; there is no PR to mark ready. A conflict-fix run has work to do first, unless the conflict already cleared.
       // A preparation run never watches checks: it ends at `mark_ready`.
+      // A run started by a Re-run answer has work to do first (apply the new plan and push), so it is active, never watching.
       state:
         run.state === 'queued'
-          ? glob.status === 'pr_open' && run.purpose !== 'prepare' && (run.purpose !== 'resolve_conflict' || glob.conflict == null)
+          ? glob.status === 'pr_open' &&
+            run.purpose !== 'prepare' &&
+            (run.purpose !== 'resolve_conflict' || glob.conflict == null) &&
+            !(run.purpose === undefined && pendingRerun(glob) !== null)
             ? 'watching'
             : 'active'
           : run.state,
@@ -3740,6 +3770,8 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
     !startQueued(glob) &&
     (facts.relations === undefined ? glob.waiting != null || startQuestions(glob).length > 0 : startHoldsOf(glob, facts.relations).length > 0);
   if (!restricted && glob.status === 'planning' && glob.type === 'same' && !held && !startQueued(glob)) actions.push('start');
+  // After a Re-run answer with nothing working, Start is the next step (never Start anyway: no hold is left to override).
+  if (!restricted && rerunIdle(glob)) actions.push('start');
   if (!restricted && canInvestigate(glob)) actions.push('investigate');
   if (reviewOffer(glob, facts.reviews) !== null) actions.push('review_now');
   if (held && !restricted) actions.push('start_anyway');

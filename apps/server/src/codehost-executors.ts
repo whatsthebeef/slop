@@ -1,7 +1,7 @@
 import type { BaseChecks, Board, BoardService, Effect, Store, ObjectStore, CheckFailure, HealthSink, EffectKind, Glob, GlobService, NotificationService } from '@slop/core';
 import { conflictInstructions, fireRoutine, investigateInstructions, prepareInstructions, runInstructions } from './routines.js';
 import type { RoutineSource } from './routines.js';
-import { hasBranchRecord, isOpenAction, isRepoAccessFailure, isSetupFailure, machine, preparationOf, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
+import { hasBranchRecord, isOpenAction, isRepoAccessFailure, isSetupFailure, machine, pendingRerun, preparationOf, refusalText, parseId, provisioningFailureReason, repoAccessNotification, REPO_ACCESS_SOURCE, riskPathsOf, sizeIgnoredPathsOf, subGateCheckOf, subGatePolicy } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
 import type { Repo } from './codehost.js';
@@ -597,7 +597,7 @@ export const codeHostExecutors = (
             ? prepareInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null, preparationOf(glob))
           : effect.purpose === 'resolve_conflict'
             ? conflictInstructions(glob, effect.runId, repoName, board?.baseBranch ?? null, glob.conflict ?? null)
-            : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null);
+            : runInstructions(glob, effect.runId, repoName, glob.status === 'pr_open', effect.failureSummary ?? null, pendingRerun(glob));
       const result = await fireRoutine(secret, text, health);
       if (result.outcome === 'retry') throw new Error(result.reason);
       if (result.outcome === 'failed') {
