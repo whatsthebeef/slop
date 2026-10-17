@@ -203,7 +203,7 @@ describe('card rows', () => {
       ...patch,
     });
     const decisionHeld = dom(markup(view({ status: 'planning', holding: [hold('s1k9', { toIsDecision: true, until: 'decided', state: 'planning' })] })));
-    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('decision s1k9');
+    expect(decisionHeld.querySelector('[data-testid="card-status"] .truncate')?.textContent).toBe('s1k9');
     // A start relation holds nothing once the glob has started, and nothing relation-shaped is left on the card.
     const started = dom(markup(view({ status: 'in_progress', holding: [hold('s1t1')] })));
     expect(started.textContent).not.toContain('waiting on');
@@ -943,14 +943,14 @@ describe('card indicators: what holds the glob, workstreams, rollout and Arm sys
 
   it('a hold by a decision says so with the human icon, and a hold by a glob with the hourglass', () => {
     const decision = corner(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'store not chosen' })] }));
-    expect(decision).toMatchObject({ text: 'decision s1k1', icon: 'human' });
+    expect(decision).toMatchObject({ text: 's1k1', icon: 'hourglass' });
     expect(decision.html).toContain('store not chosen');
     expect(corner(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 's1t1', icon: 'hourglass' });
   });
 
-  it('a merge gate says "merge held" and several holds are the first plus the others', () => {
+  it('a merge gate shows only the holder ID and several holds are the first plus the others', () => {
     const g = view({ status: 'pr_open', pr: { number: 1, state: 'draft', headSha: head }, holding: [hold('s1k1', { gate: 'merge', toIsDecision: true, until: 'decided', state: 'planning' })] });
-    expect(corner(g)).toMatchObject({ text: 'merge held · decision s1k1', icon: 'human' });
+    expect(corner(g)).toMatchObject({ text: 's1k1', icon: 'hourglass' });
     expect(corner(view({ status: 'planning', holding: [hold('s1t1'), hold('s1t2'), hold('s1t3')] })).text).toBe('s1t1');
   });
 

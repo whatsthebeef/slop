@@ -187,7 +187,7 @@ describe('cornerStatus', () => {
 
   it('names a decision it waits on, with the reason in the tooltip', () => {
     const g = view({ status: 'planning', holding: [hold('s15k190', { toIsDecision: true, until: 'decided', state: 'planning', reason: 'the store is not chosen' })] });
-    expect(at(g)).toMatchObject({ kind: 'hold', icon: 'human', text: 'decision s15k190' });
+    expect(at(g)).toMatchObject({ kind: 'hold', icon: 'hourglass', text: 's15k190' });
     expect(at(g)?.tip).toContain('Waits for decision s15k190 (Planning): the store is not chosen');
   });
 
