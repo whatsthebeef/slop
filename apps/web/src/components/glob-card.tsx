@@ -15,6 +15,8 @@ import { cardMoveOf, presentOf } from '@/lib/present';
 import type { CardMove } from '@/lib/present';
 import { useConfirmClick } from '@/lib/use-confirm-click';
 import { Tip } from './ui/tip';
+import { LabelPopover } from './labels';
+import type { ReviewLabel } from './labels';
 import { TAG } from './glob-view/tag-style';
 
 /** The small dot between a header's values: the card's ID and type, its status and fix marker, and the glob view's header. */
@@ -380,6 +382,7 @@ export const GlobCard = ({
   glob,
   onOpen,
   onOpenSection,
+  onReviewLabel,
   previewing,
   onPreview,
   onMove,
@@ -400,6 +403,8 @@ export const GlobCard = ({
   onFilterGroup?: (name: string) => void;
   /** Opens the glob at the section the status points to; `onOpen` opens it at the top. */
   onOpenSection: (target: GlobTarget) => void;
+  /** Approves or re-opens a sign-off label from the card's popover; absent on a read-only card, whose popover then only links to the review. */
+  onReviewLabel?: ReviewLabel;
   /** The move whose ghost piece is showing, if it is this card's. */
   previewing: Action | null;
   onPreview: (move: CardMove | null) => void;
@@ -508,9 +513,12 @@ export const GlobCard = ({
             <MoveButton move={move} hot={move.action === previewing} onPreview={onPreview} onMove={onMove} />
           </div>
         )}
-        {glob.group !== null && (
-          <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-testid='card-chips'>
-            <GroupChip name={glob.group} onFilter={onFilterGroup} />
+        {(glob.group !== null || !human) && (
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden' data-testid='card-chips'>
+            {glob.group !== null && <GroupChip name={glob.group} onFilter={onFilterGroup} />}
+            {!human && (
+              <LabelPopover glob={glob} onReview={onReviewLabel} onOpenReview={(label) => onOpenSection(cardTargets.label(label))} />
+            )}
           </div>
         )}
         <div className='ml-auto flex shrink-0 items-center gap-1.5' data-testid='card-trailing'>
