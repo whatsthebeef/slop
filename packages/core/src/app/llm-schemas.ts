@@ -169,14 +169,6 @@ export const RELATION_CHECK_SCHEMA = named(
   }),
 );
 
-export const POST_MERGE_KNOWLEDGE_SCHEMA = named(
-  'post_merge_knowledge',
-  object({
-    facts: array(object({ statement: str, evidence: str, target: oneOf('architecture', 'operations') })),
-    drift: nullable(object({ sections: array(object({ path: str, section: str })), change: str })),
-  }),
-);
-
 export const INTAKE_GROUP_SCHEMA = named('intake_group', object({ group: nullable(str) }));
 
 export const SIZE_JUDGE_SCHEMA = named(

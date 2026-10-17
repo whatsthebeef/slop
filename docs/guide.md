@@ -119,7 +119,7 @@ A decision glob (ID like `s1k4`) is a proposed change to what the project knows,
 
 A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, a note on how an agent should behave, or a fact (how the system is now, after architecture or operations changed; approving it replaces the outdated description). Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
 
-**After every merge**, whoever built the glob, slop reads the merged diff and submits `fact` learnings for the architecture and operations changes it made (at most five; repeats of what a session already submitted are dropped). If the board lists its spec and guide files (`specPaths` in its merge policy) and the merge changed behaviour they describe without updating them, slop files one sub, "Update spec/guide for <glob>: <sections>", that holds back the glob's sign-off. Agent-set and docs-only merges are skipped, and the glob's history shows what the pass did ("post-merge: 2 facts submitted, spec drift: none").
+Slop does not write knowledge from a merge by itself: learnings and spec or guide updates come from the developer's `/finalise` (soon `slop finalise`) and the session's change reviewer. After a merge slop runs only its independent code review.
 
 ## Settings and what slop has learned
 
