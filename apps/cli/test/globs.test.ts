@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SlopError, UsageError } from '../src/errors.js';
 import {
   PROVISION_TIMEOUT_MS,
+  deleteCommand,
   globCommand,
   handoverCommand,
   mergeCommand,
@@ -763,5 +764,39 @@ describe('pick-up advice', () => {
         /sstor --glob \S+ --take-over/,
       );
     }
+  });
+});
+
+describe('slop delete', () => {
+  const handlers = { get_glob: () => glob({ status: 'implementing' }), delete_glob: () => ({ deleted: 's1t4' }) };
+
+  it('asks first and deletes on y, passing the version and the reason', async () => {
+    const run = setup(handlers);
+    const questions: string[] = [];
+    const ask = (q: string) => {
+      questions.push(q);
+      return Promise.resolve('y');
+    };
+    await deleteCommand(['s1t4', '--reason', 'filed twice'], { ...run.deps, ask });
+    expect(questions).toEqual(["Delete s1t4 'Fix login timeout'? This stops its run and closes its PR [y/N] "]);
+    expect(run.slop.calls[1]).toEqual({ tool: 'delete_glob', args: { id: 's1t4', version: 3, reason: 'filed twice' } });
+    expect(run.out).toEqual(['s1t4: deleted\n']);
+  });
+
+  it('does not delete when the answer is not yes, or when it cannot ask', async () => {
+    const no = setup(handlers);
+    await expect(deleteCommand(['s1t4'], { ...no.deps, ask: () => Promise.resolve('') })).rejects.toThrow(/not deleted/);
+    expect(no.slop.tools()).toEqual(['get_glob']);
+    const none = setup(handlers);
+    await expect(deleteCommand(['s1t4'], none.deps)).rejects.toThrow(/rerun with --yes/);
+    expect(none.slop.tools()).toEqual(['get_glob']);
+  });
+
+  it('--yes deletes without asking', async () => {
+    const run = setup(handlers);
+    const ask = vi.fn(() => Promise.resolve('n'));
+    await deleteCommand(['s1t4', '--yes'], { ...run.deps, ask });
+    expect(ask).not.toHaveBeenCalled();
+    expect(run.slop.tools()).toEqual(['get_glob', 'delete_glob']);
   });
 });

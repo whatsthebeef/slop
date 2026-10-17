@@ -8,12 +8,14 @@ import { insecureUrlWarning, requireSetting, userConfigPath } from './config.js'
 import { SlopError, UsageError } from './errors.js';
 import type { Git } from './git.js';
 import {
+  DELETE_USAGE,
   GLOB_USAGE,
   HANDOVER_USAGE,
   MERGE_USAGE,
   NEW_USAGE,
   PICK_UP_USAGE,
   READY_USAGE,
+  deleteCommand,
   globCommand,
   handoverCommand,
   mergeCommand,
@@ -288,6 +290,11 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     usage: MERGE_USAGE,
     summary: "Merge the glob (default: the current branch's) through slop, like its Merge button",
     run: (args, context) => mergeCommand(args, globDeps(context)),
+  },
+  delete: {
+    usage: DELETE_USAGE,
+    summary: "Delete the glob, like the glob view's Delete (stops its run, closes its PR); asks first unless --yes",
+    run: (args, context) => deleteCommand(args, globDeps(context)),
   },
 };
 

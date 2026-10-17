@@ -644,6 +644,8 @@ class DependantMoved extends Error {}
  * Application service for globs. Every entry point (REST, MCP, webhooks, jobs) calls these
  * methods, so every change goes through the same authorisation, state machine and outbox.
  */
+const MERGED_STATUSES: ReadonlySet<string> = new Set(['merging', 'reviewing', 'signed_off']);
+
 export class GlobService implements AutomaticRelations {
   constructor(private readonly deps: GlobServiceDeps) {}
 
@@ -3436,19 +3438,19 @@ export class GlobService implements AutomaticRelations {
     });
   }
 
-  async delete(email: string, id: string, version: number): Promise<Result<null>> {
+  async delete(email: string, id: string, version: number, reason: string | null = null, options: { readonly refuseMerged?: boolean } = {}): Promise<Result<null>> {
     const released: Glob[] = [];
     // A dependant written by someone else meanwhile rolls the delete back: try again against what is there now.
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.deleteOnce(email, id, version, released);
+        return await this.deleteOnce(email, id, version, released, reason, options.refuseMerged === true);
       } catch (e) {
         if (!(e instanceof DependantMoved) || attempt >= EVENT_RETRIES) throw e;
       }
     }
   }
 
-  private async deleteOnce(email: string, id: string, version: number, released: Glob[]): Promise<Result<null>> {
+  private async deleteOnce(email: string, id: string, version: number, released: Glob[], reason: string | null, refuseMerged: boolean): Promise<Result<null>> {
     const result = await this.deps.store.transaction(async (tx): Promise<Result<Glob>> => {
       released.length = 0;
       const glob = await tx.getGlob(id);
@@ -3460,6 +3462,8 @@ export class GlobService implements AutomaticRelations {
       }
       const board = await tx.getBoard(glob.boardId);
       if (board === null) return notFound(`No board ${glob.boardId}`);
+      // The glob view's Delete lets a merged glob go; the agent tool and the CLI don't (what merged stays on record).
+      if (refuseMerged && MERGED_STATUSES.has(glob.status)) return invalidInput(`${glob.id} is merged; it can't be deleted here`);
       const transition = machine.remove(glob, await this.context(actor.value, board));
       if (!transition.ok) return transition;
       // A learning an agent submitted or slop mined is a KB item: deleting it would lose the learning (and a rejected one
@@ -3471,6 +3475,13 @@ export class GlobService implements AutomaticRelations {
       released.push(...dependants);
       await tx.deleteEvents(glob.id);
       await tx.deleteGlob(glob.id);
+      // A deletion with a reason leaves the one record that outlives the glob: who deleted it, in what state, and why
+      // (the events above went with it). The glob view's Delete gives none and leaves nothing.
+      if (reason !== null) {
+        await tx.appendEvents([
+          { type: 'GlobDeleted', globId: glob.id, actor: email, at: this.deps.clock.now(), data: { status: glob.status, title: glob.title, boardId: glob.boardId, reason } },
+        ]);
+      }
       // The deletion itself is logged without a glob, so reports lose the glob's time.
       // The files' objects go through the outbox, written with the delete, so a crash or a storage error can't leave them behind.
       await tx.enqueueEffects([...transition.value.effects, recheckOverlapsEffect(glob.boardId), ...fileKeys.map((key) => deleteObjectEffect(glob.id, key))]);

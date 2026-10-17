@@ -28,6 +28,7 @@ export const PICK_UP_USAGE = 'pick-up <id> [--take-over] [--env <name>] [--json]
 export const NEW_USAGE =
   'new [--mode sub|same|super | --same|--sub|--super] [--fix] [--routine] [--env <name>] [--after <id>[,<id>...]] [--action [--prepare [--record branch|artifact|attachment]]] [--json] <prompt...>';
 export const READY_USAGE = 'ready [<id>] [--json]';
+export const DELETE_USAGE = 'delete <id> [--reason <text>] [--yes] [--json]';
 export const MERGE_USAGE = 'merge [<id>] [--continue] [--json]';
 
 /** How long pick-up waits for the glob's branch. */
@@ -652,4 +653,31 @@ export async function mergeCommand(args: readonly string[], deps: GlobDeps): Pro
           ? 'merged and continued; the next push opens a new draft PR'
           : 'see the glob view';
   deps.stdout(`${id}: ${merged.status} (${note})\n`);
+}
+
+/**
+ * `slop delete <id>`: delete a glob, with the glob view's rules (slop enforces them). Asks first on a terminal;
+ * without one it needs `--yes`.
+ */
+export async function deleteCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
+  const { flags, values, positionals } = parseArgs(args, ['--yes', '--json'], DELETE_USAGE, ['--reason']);
+  const [id] = positionals;
+  if (id === undefined || positionals.length !== 1)
+    throw new UsageError(`usage: slop ${DELETE_USAGE}`);
+  const glob = await getGlob(deps, requireGlobId(id, DELETE_USAGE));
+  if (!flags.has('--yes')) {
+    if (deps.ask === undefined)
+      throw new SlopError(`${id}: deleting needs a terminal to confirm; rerun with --yes`);
+    const answer = await deps.ask(
+      `Delete ${id} '${glob.title}'? This stops its run and closes its PR [y/N] `,
+    );
+    if (!/^y(es)?$/i.test(answer.trim())) throw new SlopError(`${id}: not deleted`);
+  }
+  await deps.client.call('delete_glob', {
+    id,
+    version: glob.version,
+    reason: values.get('--reason') ?? 'Deleted with slop delete',
+  });
+  if (flags.has('--json')) printJson(deps, { deleted: id });
+  else deps.stdout(`${id}: deleted\n`);
 }
