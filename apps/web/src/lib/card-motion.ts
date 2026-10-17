@@ -6,8 +6,8 @@ import type { LiveState } from './live';
  * crosses its distance in small equal steps. Each step is about `STEP_PX` long and lasts `STEP_MS`, so a longer move takes more
  * steps rather than bigger ones, up to `MAX_MS` (a move across one column is a little under a second).
  */
-export const STEP_PX = 20;
-export const STEP_MS = 50;
+export const STEP_PX = 28;
+export const STEP_MS = 70;
 export const MIN_STEPS = 2;
 export const MAX_MS = 1000;
 
@@ -25,7 +25,7 @@ export const stepMotion = (distance: number, duration?: number): StepMotion => {
   const total = duration ?? Math.min(MAX_MS, wanted * STEP_MS);
   return { duration: total, easing: `steps(${String(Math.min(wanted, Math.max(MIN_STEPS, Math.floor(total / STEP_MS))))}, end)` };
 };
-const LOCK_MS = 165;
+const LOCK_MS = 3 * 165;
 const TAG_MS = 3000;
 /** Several moves at once (a burst of webhooks) play one after another, and only the first few. */
 const STAGGER_MS = 225;
