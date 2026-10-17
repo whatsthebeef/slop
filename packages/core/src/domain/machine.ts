@@ -3459,6 +3459,8 @@ export const merged = (
     .effect({ kind: 'release_waiting', globId: glob.id, generation: glob.generation })
     // Was each relation of this glob needed? Judged from the merge's diff once; only the final merge, like the release.
     .effect({ kind: 'check_relations_after_merge', globId: glob.id, generation: glob.generation })
+    // What the merge taught the board: fact learnings and a spec/guide drift sub, for every glob, not only the ones a session finalised.
+    .effect({ kind: 'post_merge_knowledge', globId: glob.id, generation: glob.generation, sha: merge.sha })
     // Likewise: a Merge and continue is not the change that is rolled out.
     .effect({ kind: 'check_rollout_paths', globId: glob.id, generation: glob.generation, sha: merge.sha });
   // A sub merges without human review, so its one review runs after the merge (a same or super was reviewed before it).

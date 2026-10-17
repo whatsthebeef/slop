@@ -43,6 +43,7 @@ export const LLM_SPEND_SOURCES = [
   'knowledge_page',
   'relation_scan',
   'relation_check',
+  'post_merge_knowledge',
 ] as const;
 
 export type LlmSpendSource = (typeof LLM_SPEND_SOURCES)[number];
