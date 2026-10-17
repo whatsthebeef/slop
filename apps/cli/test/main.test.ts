@@ -51,6 +51,8 @@ describe('main', () => {
     const help = context({});
     expect(await main(['--help'], help.context)).toBe(EXIT_OK);
     expect(help.out.join('')).toContain('slop whoami');
+    expect(help.out.join('')).toContain('slop finalise <id> --note');
+    expect(help.out.join('')).toContain('slop work <id> [--agent]');
     const none = context({});
     expect(await main([], none.context)).toBe(EXIT_USAGE);
     expect(none.err.join('')).toContain('Usage:');
