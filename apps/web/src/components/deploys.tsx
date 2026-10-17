@@ -1,11 +1,13 @@
-import type { Deploy } from '@slop/core';
+import { deploys as deployRules } from '@slop/core';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { api } from '@/lib/api';
-import type { GlobSpecResult, GlobView } from '@/lib/api';
+import type { DeployView, GlobSpecResult, GlobView } from '@/lib/api';
+import { globPath } from '@/lib/glob-section';
 import { globDeploysKey, globTestsKey } from '@/lib/live';
 import { atfLine } from './glob-card';
 
-const STATE_TEXT: Record<Deploy['state'], string> = {
+const STATE_TEXT: Record<DeployView['state'], string> = {
   waiting: 'queued',
   running: 'deploying',
   succeeded: 'deployed',
@@ -44,10 +46,20 @@ export const DeploysSection = ({ glob }: { glob: GlobView }) => {
               <span className='text-muted-foreground'>
                 {d.trigger === 'push' ? 'push' : `Deploy now by ${d.requestedBy ?? 'someone'}`} · {when(d.finishedAt ?? d.startedAt ?? d.requestedAt)}
               </span>
-              {(d.logUrl ?? d.url) !== null && (
+              {(d.logUrl ?? d.url) != null && (
                 <a className='underline' href={d.logUrl ?? d.url ?? undefined} target='_blank' rel='noreferrer'>
                   log
                 </a>
+              )}
+              {/* A finished build with a log link has its attachment on the glob (the last lines too, when it failed). */}
+              {d.logUrl != null && (d.state === 'succeeded' || d.state === 'failed') && (
+                <Link
+                  className='underline'
+                  to={globPath(glob.boardId, glob.id, { section: 'artifacts', artifact: 'attachment', label: deployRules.buildLogLabel(d) })}
+                  data-testid='deploy-build-log'
+                >
+                  build log
+                </Link>
               )}
               {d.error !== null && <span className='basis-full text-red'>{d.error}</span>}
             </li>

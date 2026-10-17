@@ -1,4 +1,5 @@
 import { CloudWatchLogsClient, GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
+import type { GetLogEventsCommandOutput } from '@aws-sdk/client-cloudwatch-logs';
 
 /** The most lines, and bytes, of a build log's end that slop keeps on a glob. */
 export const LOG_MAX_LINES = 200;
@@ -13,11 +14,19 @@ export class LogNotReady extends Error {}
 /** Reads the end of a finished build's log. */
 export interface BuildLogReader {
   /** `mask` runs over the whole text before it is cut, so a secret split by the cut can't survive. */
-  tail(region: string, group: string, stream: string, mask?: (text: string) => string): Promise<string>;
+  tail(
+    region: string,
+    group: string,
+    stream: string,
+    mask?: (text: string) => string,
+  ): Promise<string>;
 }
 
 /** The last `LOG_MAX_LINES` lines of `lines`, cut again from the front to fit `LOG_MAX_BYTES`. */
-export const tailOf = (lines: readonly string[], mask: (text: string) => string = (text) => text): string => {
+export const tailOf = (
+  lines: readonly string[],
+  mask: (text: string) => string = (text) => text,
+): string => {
   // Masked first: a PEM block whose BEGIN line falls outside the cut would otherwise keep its body.
   let kept = mask(lines.join('\n')).split('\n').slice(-LOG_MAX_LINES);
   let bytes = kept.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
@@ -28,27 +37,60 @@ export const tailOf = (lines: readonly string[], mask: (text: string) => string 
   const text = kept.join('\n');
   if (Buffer.byteLength(text) <= LOG_MAX_BYTES) return text;
   // One line longer than the bound: keep its end, from a character boundary.
-  return Buffer.from(text).subarray(-LOG_MAX_BYTES).toString('utf8').replace(/^\uFFFD+/, '');
+  return Buffer.from(text)
+    .subarray(-LOG_MAX_BYTES)
+    .toString('utf8')
+    .replace(/^\uFFFD+/, '');
 };
+
+/** The part of the CloudWatch Logs client the reader uses (a stub in tests). */
+export interface LogsClient {
+  send(
+    command: GetLogEventsCommand,
+    options?: { readonly abortSignal?: AbortSignal },
+  ): Promise<GetLogEventsCommandOutput>;
+}
 
 /** CloudWatch Logs: pages back from the stream's end (`GetLogEvents`, `startFromHead: false`) until it has enough lines. */
 export class CloudWatchBuildLogReader implements BuildLogReader {
-  private readonly clients = new Map<string, CloudWatchLogsClient>();
+  private readonly clients = new Map<string, LogsClient>();
 
-  async tail(region: string, group: string, stream: string, mask?: (text: string) => string): Promise<string> {
+  constructor(
+    private readonly newClient: (region: string) => LogsClient = (region) =>
+      new CloudWatchLogsClient({ region }),
+  ) {}
+
+  async tail(
+    region: string,
+    group: string,
+    stream: string,
+    mask?: (text: string) => string,
+  ): Promise<string> {
     const client = this.client(region);
     let lines: string[] = [];
     let token: string | undefined;
     try {
       for (;;) {
         const page = await client.send(
-          new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, startFromHead: false, limit: LOG_MAX_LINES, nextToken: token }),
+          new GetLogEventsCommand({
+            logGroupName: group,
+            logStreamName: stream,
+            startFromHead: false,
+            limit: LOG_MAX_LINES,
+            nextToken: token,
+          }),
           { abortSignal: AbortSignal.timeout(30_000) },
         );
         const events = page.events ?? [];
         lines = [...events.map((e) => (e.message ?? '').replace(/\r?\n$/, '')), ...lines];
         const next = page.nextBackwardToken;
-        if (lines.length >= LOG_MAX_LINES || events.length === 0 || next === undefined || next === token) break;
+        if (
+          lines.length >= LOG_MAX_LINES ||
+          events.length === 0 ||
+          next === undefined ||
+          next === token
+        )
+          break;
         token = next;
       }
     } catch (error) {
@@ -56,17 +98,18 @@ export class CloudWatchBuildLogReader implements BuildLogReader {
       if (name === 'AccessDeniedException' || name === 'AccessDenied') {
         throw new LogAccessDenied(`slop's role may not read ${group} (needs logs:GetLogEvents)`);
       }
-      if (name === 'ResourceNotFoundException') throw new LogNotReady(`${group}/${stream} is not readable yet`);
+      if (name === 'ResourceNotFoundException')
+        throw new LogNotReady(`${group}/${stream} is not readable yet`);
       throw error;
     }
     if (lines.length === 0) throw new LogNotReady(`${group}/${stream} has no lines yet`);
     return tailOf(lines, mask);
   }
 
-  private client(region: string): CloudWatchLogsClient {
+  private client(region: string): LogsClient {
     let client = this.clients.get(region);
     if (client === undefined) {
-      client = new CloudWatchLogsClient({ region });
+      client = this.newClient(region);
       this.clients.set(region, client);
     }
     return client;

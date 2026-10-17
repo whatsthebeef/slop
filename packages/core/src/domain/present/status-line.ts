@@ -246,7 +246,8 @@ export const statusCandidates = (
         kind: 'build-failed',
         full,
         tone: 'text-red',
-        tip: [full, build.logUrl === null ? `The log is in the attachment "${build.label}"` : `Build log: ${build.logUrl}`].join('\n'),
+        // Only what exists: with no log link, no attachment was written either.
+        tip: [full, ...(build.logUrl === null ? [] : [`Build log: ${build.logUrl}`]), ...(build.label === null ? [] : [`Its last lines are in the attachment "${build.label}"`])].join('\n'),
         url: build.logUrl,
       }),
     );

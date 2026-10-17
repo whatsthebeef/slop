@@ -56,6 +56,17 @@ describe('build logs', () => {
     expect(deploys.buildLogLabel({ environment: 'dev1', sha: 'abc1234def', state: 'failed' })).toBe('Build log (dev1, failed, abc1234)');
   });
 
+  it('reads the latest log read for readiness, ignoring other events and unknown outcomes (s15t273)', () => {
+    const failed = deploy({ state: 'failed', logGroup: log.group, logStream: log.stream });
+    expect(deploys.buildLogAccessOf([])).toBeNull();
+    const denied = deploys.buildLogRead(failed, 'denied', 'no grant', '2026-01-01T00:00:00.000Z');
+    const read = deploys.buildLogRead(failed, 'read', null, '2026-01-02T00:00:00.000Z');
+    const other = { type: 'DeployFailed' as const, globId: 's1t1', actor: 'slop', at: '2026-01-03T00:00:00.000Z', data: { outcome: 'denied' } };
+    expect(deploys.buildLogAccessOf([read, denied, other])).toEqual({ outcome: 'denied', group: log.group, reason: 'no grant', at: '2026-01-01T00:00:00.000Z' });
+    expect(deploys.buildLogAccessOf([denied, read])).toEqual({ outcome: 'read', group: log.group, reason: null, at: '2026-01-02T00:00:00.000Z' });
+    expect(deploys.buildLogAccessOf([{ ...read, data: { ...read.data, outcome: 'maybe' } }])).toBeNull();
+  });
+
   it('reads only a failed deploy\'s log inline in a run\'s context', () => {
     expect(isInlineLabel('Build log (dev1, failed, abc1234)')).toBe(true);
     expect(isInlineLabel('Build log (dev1, abc1234)')).toBe(false);
@@ -288,6 +299,74 @@ describe('DeployService', () => {
     const refused = await service.deployNow(MEMBER, 's1t1');
     expect(refused.ok).toBe(false);
     expect(unwrap(await service.requestFromPush('s1t1', 'a1'))).toBeNull();
+  });
+
+  describe('a failed build', () => {
+    const log = { group: '/aws/codebuild/deploy', stream: 'b1', url: 'https://console.example/b1' };
+    const LATER = new Date(Date.parse(NOW) + 3_600_000).toISOString();
+
+    // A clock that moves, so the deploy's own request comes before it fails (a fixed one would read it as someone acting).
+    beforeEach(() => {
+      let tick = Date.parse(NOW);
+      service = new DeployService({ store, notifier, clock: { now: () => new Date((tick += 1000)).toISOString() }, newDeployId: () => `d${++n}` });
+    });
+
+    /** s1t1's deploy d1 runs as CodeBuild build:1 and fails, with its log location. */
+    const failBuild = async () => {
+      unwrap(await service.requestFromPush('s1t1', 'a1'));
+      unwrap(await service.started('d1', { providerRef: 'build:1', url: null }));
+      unwrap(await service.finishedByProviderRef('build:1', { succeeded: false, error: 'CodeBuild failed in BUILD', log }));
+    };
+    const shown = async () => (await service.buildFailedOf(board.id, ['s1t1'])).get('s1t1');
+    const attachments = () => store.state.artifacts.filter((a) => a.globId === 's1t1' && a.kind === 'attachment');
+
+    it('attaches the log link when it fails, and shows it failed', async () => {
+      await failBuild();
+      expect(attachments().map((a) => a.label)).toEqual(['Build log (dev, failed, a1)']);
+      expect(attachments()[0]?.link).toBe(log.url);
+      expect(await shown()).toMatchObject({ deployId: 'd1', environment: 'dev', label: 'Build log (dev, failed, a1)' });
+    });
+
+    it.each(deploys.ACTED_EVENTS)('clears once someone acts on the glob (%s)', async (type) => {
+      await failBuild();
+      await store.transaction((tx) => tx.appendEvents([{ type, globId: 's1t1', actor: MEMBER, at: LATER, data: {} }]));
+      expect(await shown()).toBeUndefined();
+    });
+
+    it('stays cleared after a later successful deploy', async () => {
+      await failBuild();
+      unwrap(await service.requestFromPush('s1t1', 'a2'));
+      unwrap(await service.started('d2', { providerRef: 'build:2', url: null }));
+      unwrap(await service.finishedByProviderRef('build:2', { succeeded: true, error: null, log: { ...log, stream: 'b2' } }));
+      expect(await shown()).toBeUndefined();
+      expect(attachments().map((a) => a.label)).toContain('Build log (dev, a2)');
+    });
+
+    it("records a read or refused log for readiness, and nothing when the stream wasn't readable", async () => {
+      await failBuild();
+      const reads = () => store.state.events.filter((e) => e.type === 'BuildLogRead');
+      unwrap(await service.attachBuildLog('d1', { reason: 'not readable yet' }));
+      expect(reads()).toEqual([]);
+      unwrap(await service.attachBuildLog('d1', { reason: 'may not read /aws/codebuild/deploy', denied: true }));
+      expect(deploys.buildLogAccessOf(reads())).toMatchObject({ outcome: 'denied', group: log.group, reason: 'may not read /aws/codebuild/deploy' });
+      unwrap(await service.attachBuildLog('d1', { lines: 'exit 1' }));
+      expect(deploys.buildLogAccessOf(reads())).toMatchObject({ outcome: 'read', reason: null });
+      expect(reads()[0]).toMatchObject({ globId: 's1t1', data: { deployId: 'd1', environment: 'dev' } });
+    });
+
+    it('writes nothing again when the job is replayed with the same result', async () => {
+      await failBuild();
+      const reads = () => store.state.events.filter((e) => e.type === 'BuildLogRead');
+      expect(unwrap(await service.attachBuildLog('d1', { lines: 'exit 1' }))).toBe(true);
+      expect(unwrap(await service.attachBuildLog('d1', { lines: 'exit 1' }))).toBe(false);
+      // The link from the failure, then one version with the last lines.
+      expect(attachments()).toHaveLength(2);
+      expect(reads()).toHaveLength(1);
+      unwrap(await service.attachBuildLog('d1', { reason: 'may not read', denied: true }));
+      expect(unwrap(await service.attachBuildLog('d1', { reason: 'may not read', denied: true }))).toBe(false);
+      expect(attachments()).toHaveLength(3);
+      expect(reads().map((e) => e.data['outcome'])).toEqual(['read', 'denied']);
+    });
   });
 
   describe('after_deploy steps on a dev environment', () => {

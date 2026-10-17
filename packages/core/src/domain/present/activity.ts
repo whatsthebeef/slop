@@ -69,6 +69,10 @@ const entry = (
   command: null,
 });
 
+/** A glob attachment's place in the glob view (`?section=artifacts&artifact=attachment&label=…`), as the web's `globPath` builds it. */
+const attachmentPath = (boardId: number, globId: string, label: string): string =>
+  `/boards/${String(boardId)}/globs/${encodeURIComponent(globId)}?${new URLSearchParams({ section: 'artifacts', artifact: 'attachment', label }).toString()}`;
+
 /** A reason on one line: its first line, cut at `LINE_MAX`. */
 const oneLine = (reason: string): string => {
   const first = (reason.split('\n').find((l) => l.trim() !== '') ?? '').trim();
@@ -201,12 +205,23 @@ export const activityOf = (
     );
   }
 
-  // A failed branch build raises a problem that stays until someone acts on the glob: a red entry with the build log's link.
+  // A failed branch build raises a problem that stays until someone acts on the glob: a red entry linking the build log's
+  // attachment (as the notice does), or CodeBuild's console when no attachment was written.
   const build = glob.buildFailed;
   if (build != null) {
     const said = `Build failed on ${build.environment}: ${build.error}`;
+    const link =
+      build.label === null ? build.logUrl : attachmentPath(glob.boardId, glob.id, build.label);
     out.push(
-      entry(`build:${build.deployId}`, 'warn', `Build failed on ${build.environment}: ${oneLine(build.error)}`, build.at, build.logUrl, 'build log', said),
+      entry(
+        `build:${build.deployId}`,
+        'warn',
+        `Build failed on ${build.environment}: ${oneLine(build.error)}`,
+        build.at,
+        link,
+        'build log',
+        said,
+      ),
     );
   }
 

@@ -20,9 +20,17 @@ type Subject = Pick<PresentableGlob, 'type' | 'status' | 'implementer' | 'pr'> &
   Partial<
     Pick<
       PresentableGlob,
-      'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState'
+      'headChecks' | 'artifacts' | 'currentRun' | 'rolloutSteps' | 'actionState' | 'buildFailed'
     >
   >;
+
+/** Whether Fix checks fixes a failed branch build (Retry): the glob has one, and the checks at the PR head have not failed. */
+export const fixesBuild = (glob: Subject): boolean => {
+  const head = glob.pr?.headSha ?? null;
+  const checksFailed =
+    head !== null && glob.headChecks?.sha === head && glob.headChecks.state === 'failed';
+  return glob.buildFailed != null && !checksFailed;
+};
 
 /**
  * Whether Review code, when offered, retries slop's automatic review: a merged glob with no after-merge review, or a ready
@@ -149,13 +157,22 @@ export const actionPresentation = (
         tip: 'A new machine run on the same branch',
         placement: 'main',
       };
-    case 'retry_autofix':
+    case 'retry_autofix': {
+      // Offered for a failed branch build (and no failed checks to fix): a fix run that reads the build log.
+      if (fixesBuild(glob))
+        return {
+          label: 'Retry',
+          icon: 'machine',
+          tip: 'A machine run fixes the failed build, reading its build log',
+          placement: 'main',
+        };
       return {
         label: 'Fix checks',
         icon: 'machine',
         tip: 'The machine watches the PR and fixes the failed checks',
         placement: 'main',
       };
+    }
     case 'resolve_conflict':
       return {
         label: 'Fix conflict',

@@ -80,9 +80,10 @@ export const deployExecutors = (
     if (deploy?.state !== 'failed' || deploy.logGroup === null || deploy.logStream === null) return 'dropped';
     const board = await boardOf(deploy.boardId);
     if (board?.deploy?.provider !== 'codebuild') return 'dropped';
-    const keepLink = async (reason: string) => {
+    // `denied` also tells readiness that the host stack's log-read grant is missing.
+    const keepLink = async (reason: string, denied = false) => {
       log('deploy', `${deploy.id} (${deploy.globId}): build log not attached: ${reason}`);
-      await deploys.attachBuildLog(deploy.id, { reason });
+      await deploys.attachBuildLog(deploy.id, { reason, denied });
       return 'done' as const;
     };
     let lines: string;
@@ -90,7 +91,7 @@ export const deployExecutors = (
       lines = await logs.tail(board.deploy.region, deploy.logGroup, deploy.logStream, maskSecrets);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      if (error instanceof LogAccessDenied) return keepLink(reason);
+      if (error instanceof LogAccessDenied) return keepLink(reason, true);
       // CodeBuild writes the stream a moment after the build ends: retry, and say why on the last attempt.
       if (attempt?.final === true) return keepLink(reason);
       throw error;

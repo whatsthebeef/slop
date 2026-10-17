@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { appSettingsUrl, behindWarning, missingAppEvents, queuedRunNotice, readiness, runsClaudeAction, allowsBot, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
+import { appSettingsUrl, behindWarning, missingAppEvents, queuedRunNotice, readiness, readinessNotifications, runsClaudeAction, allowsBot, recentRoutineFailures, routineFailureFix, stuckHint, unreactedCheckFailures } from '../src/domain/readiness.js';
 import type { ReadinessFacts } from '../src/domain/readiness.js';
+import { buildLogAccessOf } from '../src/domain/deploys.js';
 import { NOW, board, glob, run } from './fixtures.js';
 
 const ready: ReadinessFacts = {
@@ -27,6 +28,7 @@ const ready: ReadinessFacts = {
   ticks: { routines: true, routine_repo: true, claude_app: true },
   recentFailures: [],
   unreactedCheckFailures: [],
+  buildLogs: { outcome: 'read', group: '/aws/codebuild/deploy', reason: null, at: NOW },
 };
 
 const stateOf = (facts: ReadinessFacts) => Object.fromEntries(readiness(facts).map((i) => [i.key, i.state]));
@@ -136,6 +138,47 @@ describe('board readiness', () => {
     expect(byKey.conventions_doc?.state).toBe('ok');
     expect(byKey.environments).toMatchObject({ state: 'ok', detail: 'dev' });
     expect(items.filter((i) => i.manual).map((i) => i.state)).toEqual(['missing', 'missing', 'missing']);
+  });
+
+  it("reports whether slop can read failed builds' logs, with the missing grant and its fix", () => {
+    const logs = (facts: Partial<ReadinessFacts>) => readiness({ ...ready, ...facts }).find((i) => i.key === 'build_logs');
+    expect(logs({})).toMatchObject({ title: 'Build logs readable', state: 'ok', manual: false });
+    expect(logs({ buildLogs: null })).toMatchObject({ state: 'unknown' });
+    const denied = logs({ buildLogs: { outcome: 'denied', group: '/aws/codebuild/deploy', reason: "slop's role may not read /aws/codebuild/deploy (needs logs:GetLogEvents)", at: NOW } });
+    expect(denied).toMatchObject({ state: 'failing' });
+    expect(denied?.detail).toContain("slop's role can't read /aws/codebuild/deploy");
+    expect(denied?.detail).toContain('logs:GetLogEvents on /aws/codebuild/deploy:*');
+    expect(denied?.detail).toContain('run infra/deploy/host-deploy.sh');
+    // A fix link to the grant's how-to, and the item says it clears by itself on the next read.
+    expect(denied?.fix?.kind === 'link' ? denied.fix.href : null).toContain('infra/deploy/README.md');
+    expect(denied?.detail).toContain('This clears on the next failed build whose log slop reads');
+    // The latest outcome wins: a read after the refusal turns the item ok.
+    const reread = buildLogAccessOf([
+      { type: 'BuildLogRead', globId: 's1t1', actor: 'slop', at: NOW, data: { outcome: 'denied', group: '/aws/codebuild/deploy', reason: 'no' } },
+      { type: 'BuildLogRead', globId: 's1t1', actor: 'slop', at: NOW, data: { outcome: 'read', group: '/aws/codebuild/deploy', reason: null } },
+    ]);
+    expect(logs({ buildLogs: reread })).toMatchObject({ state: 'ok', fix: null });
+    // Only boards that deploy with CodeBuild have build logs to read.
+    expect(logs({ board: { ...ready.board, deploy: null } })).toBeUndefined();
+    expect(logs({ board: { ...ready.board, deploy: { provider: 'github_actions', workflow: 'slop-deploy.yml' } } })).toBeUndefined();
+  });
+
+  it("names every deploy project's log group in the missing grant (s15t273)", () => {
+    const items = readiness({
+      ...ready,
+      board: { ...ready.board, deploy: { provider: 'codebuild', region: 'us-east-1', projects: { dev: 'deploy-dev', dev2: 'deploy-dev2' } } },
+      buildLogs: { outcome: 'denied', group: null, reason: null, at: NOW },
+    });
+    const detail = items.find((i) => i.key === 'build_logs')?.detail;
+    expect(detail).toContain("slop's role can't read the build's log group, so failed builds keep only the link");
+    expect(detail).toContain('logs:GetLogEvents on /aws/codebuild/deploy-dev:*, /aws/codebuild/deploy-dev2:*');
+  });
+
+  it('raises a failing build-logs item as a warning notification', () => {
+    const items = readiness({ ...ready, buildLogs: { outcome: 'denied', group: '/aws/codebuild/deploy', reason: null, at: NOW } });
+    expect(readinessNotifications(1, 'acme', items)).toContainEqual(
+      expect.objectContaining({ source: 'readiness:build_logs', severity: 'warning', title: 'acme: Build logs readable is failing' }),
+    );
   });
 
   it('marks unknown what slop cannot check yet', () => {

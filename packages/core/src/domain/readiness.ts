@@ -6,6 +6,7 @@ import type { RaisedNotification } from './notifications.js';
 import type { BehindBase, Board, CheckFailure, Glob } from './types.js';
 import { isMergeHeld } from './relations.js';
 import { DEFAULT_SUB_GATE_CHECK, subGateWorkflowPath } from './merge-policy.js';
+import type { BuildLogAccess } from './deploys.js';
 
 /**
  * Board readiness: what a board needs before slop can run its globs end to end, checked where slop
@@ -21,6 +22,7 @@ export const READINESS_KEYS = [
   'conventions_doc',
   'architecture_doc',
   'environments',
+  'build_logs',
   'routines',
   'routine_repo',
   'claude_app',
@@ -92,6 +94,8 @@ export interface ReadinessFacts {
   readonly recentFailures: readonly { readonly globId: string; readonly reason: string }[];
   /** Globs whose watching run hasn't reacted to failed checks (see `unreactedCheckFailures`). */
   readonly unreactedCheckFailures: readonly UnreactedCheckFailure[];
+  /** The latest recent read of a failed build's log from CloudWatch Logs (`buildLogAccessOf`); null when none was tried. */
+  readonly buildLogs: BuildLogAccess | null;
 }
 
 /** The action a workflow must run for `@claude` mentions to get a response. */
@@ -135,6 +139,13 @@ export const appSettingsUrl = (
   owner.type === 'Organization'
     ? `https://github.com/organizations/${owner.login}/settings/apps/${slug}/permissions`
     : `https://github.com/settings/apps/${slug}/permissions`;
+
+/** How to apply the host stack's build-log read grant (`host-deploy.sh --add-project` grants it per project). */
+const BUILD_LOGS_FIX: ReadinessFix = {
+  kind: 'link',
+  label: 'Apply the grant',
+  href: 'https://github.com/whatsthebeef/slop/blob/main/infra/deploy/README.md',
+};
 
 const claudeWorkflowFix = (repo: string | null): string =>
   `Add a Claude workflow: run /install-github-app in Claude Code for ${repo ?? 'the repo'}, or copy catalog/scripts/claude.yml to .github/workflows/ and add the CLAUDE_CODE_OAUTH_TOKEN secret`;
@@ -429,6 +440,29 @@ export const readiness = (facts: ReadinessFacts): ReadinessItem[] => {
           null,
         ),
   );
+
+  // Only CodeBuild deploys have logs slop reads; the item is known once a failed build's log was read or refused.
+  // The latest read or refusal wins (`buildLogAccessOf`), so the item turns ok again on the first read after the grant.
+  const deploy = board.deploy;
+  if (deploy?.provider === 'codebuild') {
+    const logs = facts.buildLogs;
+    const logsTitle = 'Build logs readable';
+    const groups = Object.values(deploy.projects).map((p) => `/aws/codebuild/${p}:*`);
+    const grant = `logs:GetLogEvents on ${groups.length === 0 ? '/aws/codebuild/<project>:*' : groups.join(', ')}`;
+    items.push(
+      logs === null
+        ? item('build_logs', logsTitle, 'unknown', "No failed build's log read in the last 7 days", null)
+        : logs.outcome === 'read'
+          ? item('build_logs', logsTitle, 'ok', "slop reads a failed build's last lines from CloudWatch Logs onto its glob", null)
+          : item(
+              'build_logs',
+              logsTitle,
+              'failing',
+              `slop's role can't read ${logs.group ?? "the build's log group"}${logs.reason === null ? '' : ` (${logs.reason})`}, so failed builds keep only the link. It needs ${grant}: run infra/deploy/host-deploy.sh to apply the host stack's grant. This clears on the next failed build whose log slop reads`,
+              BUILD_LOGS_FIX,
+            ),
+    );
+  }
 
   const MANUAL: Record<ManualReadinessKey, string> = {
     routines: 'Routines for the board',

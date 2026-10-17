@@ -1,6 +1,7 @@
 import * as deploys from '../domain/deploys.js';
 import type { BuildFailed, Deploy, DeployChange, DeployIndicator, DeployLog } from '../domain/deploys.js';
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
+import { maskSecrets } from '../domain/mask-secrets.js';
 import type { Result } from '../domain/errors.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
@@ -273,16 +274,30 @@ export class DeployService {
 
   /**
    * The outbox job's result for a finished build: the last lines of its log (already masked), or why they couldn't be
-   * read, as a new version of the deploy's attachment. Null when the deploy or its glob is gone.
+   * read, as a new version of the deploy's attachment. A read, or a refusal (`denied`: the role lacks the grant), is also
+   * recorded for the board's readiness. False when nothing was written: the deploy or its glob is gone, or a replay of the
+   * job found the same text already attached (so no second version and no second readiness event).
    */
-  async attachBuildLog(deployId: string, tail: { readonly lines?: string; readonly reason?: string }): Promise<Result<boolean>> {
+  async attachBuildLog(
+    deployId: string,
+    tail: { readonly lines?: string; readonly reason?: string; readonly denied?: boolean },
+  ): Promise<Result<boolean>> {
     return this.change(async (dtx) => {
       const deploy = await dtx.tx.getDeploy(deployId);
       if (deploy === null) return ok(false);
       const glob = await dtx.tx.getGlob(deploy.globId);
       if (glob === null) return ok(false);
       await dtx.tx.lockGlobArtifacts(glob.id);
-      await this.writeLog(dtx, glob, deploy, deploys.buildLogContent(deploy, tail));
+      const content = deploys.buildLogContent(deploy, tail);
+      // Under the artifact lock: the latest version of each label, so a replayed job sees what the first run wrote.
+      const label = deploys.buildLogLabel(deploy);
+      const current = (await dtx.tx.listArtifacts(glob.id, 'attachment')).find((a) => a.label === label);
+      if (current?.content === content) return ok(false);
+      await this.writeLog(dtx, glob, deploy, content);
+      // A stream that never became readable says nothing about access, so only a read or a refusal is recorded.
+      const now = this.deps.clock.now();
+      if (tail.lines !== undefined) await dtx.tx.appendEvents([deploys.buildLogRead(deploy, 'read', null, now)]);
+      else if (tail.denied === true) await dtx.tx.appendEvents([deploys.buildLogRead(deploy, 'denied', maskSecrets(tail.reason ?? 'access denied'), now)]);
       return ok(true);
     });
   }

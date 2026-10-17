@@ -57,6 +57,8 @@ export const DOMAIN_EVENT_TYPES = [
   'DeployReplaced',
   'DeployStarted',
   'DeployFailed',
+  /** slop read a failed build's log from CloudWatch Logs, or was refused (data: `outcome` read or denied, the log `group`, the masked `reason`). Readiness reads the latest. */
+  'BuildLogRead',
   'BuildCompleted',
   'BaseChecksChanged',
   'ATFCompleted',

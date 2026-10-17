@@ -178,8 +178,8 @@ export interface BuildFailed {
   readonly at: string;
   /** CodeBuild's console link; null when the event carried none. */
   readonly logUrl: string | null;
-  /** The glob's attachment holding the log link and last lines. */
-  readonly label: string;
+  /** The glob's attachment holding the log link and last lines; null when there is none (the event carried no log link). */
+  readonly label: string | null;
 }
 
 /** The domain events that are someone acting on a glob after its build failed (a push, Retry, Pick up, Take over, a new deploy). */
@@ -199,7 +199,39 @@ export const buildFailedOf = (latest: Deploy | null, actedSince: boolean): Build
     error: latest.error ?? 'The build failed',
     at: latest.finishedAt ?? latest.requestedAt,
     logUrl: latest.logUrl,
-    label: buildLogLabel(latest),
+    // The attachment is written only when the deploy has a log link (`DeployService.attachLink`).
+    label: latest.logUrl === null ? null : buildLogLabel(latest),
+  };
+};
+
+/** Whether slop could read a failed build's log from CloudWatch Logs: read, or refused for want of the host stack's grant. */
+export type BuildLogOutcome = 'read' | 'denied';
+
+/** What slop last found reading a failed build's log, for the board's readiness (from the latest `BuildLogRead` event). */
+export interface BuildLogAccess {
+  readonly outcome: BuildLogOutcome;
+  /** The CloudWatch log group it read, or tried to. */
+  readonly group: string | null;
+  /** Why it couldn't, when denied. */
+  readonly reason: string | null;
+  readonly at: string;
+}
+
+/** The event that records a log read's outcome (`reason` already masked). */
+export const buildLogRead = (deploy: Deploy, outcome: BuildLogOutcome, reason: string | null, at: string): DomainEvent =>
+  event('BuildLogRead', deploy, at, { outcome, group: deploy.logGroup, reason });
+
+/** The latest log read among `events` (oldest first, as the store lists them), or null when there is none. */
+export const buildLogAccessOf = (events: readonly DomainEvent[]): BuildLogAccess | null => {
+  const latest = events.filter((e) => e.type === 'BuildLogRead').at(-1);
+  if (latest === undefined) return null;
+  const { outcome, group, reason } = latest.data;
+  if (outcome !== 'read' && outcome !== 'denied') return null;
+  return {
+    outcome,
+    group: typeof group === 'string' ? group : null,
+    reason: typeof reason === 'string' ? reason : null,
+    at: latest.at,
   };
 };
 

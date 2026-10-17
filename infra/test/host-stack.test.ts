@@ -83,12 +83,19 @@ describe('HostStack', () => {
     expect(cognitoStatements(synth('dev'))).toEqual([]);
   });
 
+  const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+  // Read from the synthesised template as unknown data, narrowed rather than cast.
   const statementsFor = (t: Template, prefix: string): { Action: string[]; Resource: unknown }[] =>
-    Object.values(t.findResources('AWS::IAM::Policy')).flatMap((policy) => {
-      const document = (policy.Properties as { PolicyDocument: { Statement: { Action: string | string[]; Resource: unknown }[] } }).PolicyDocument;
-      return document.Statement.flatMap((s) => {
-        const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
-        return actions.some((a) => a.startsWith(prefix)) ? [{ Action: actions, Resource: s.Resource }] : [];
+    Object.values(t.findResources('AWS::IAM::Policy')).flatMap((policy: unknown) => {
+      const properties = isRecord(policy) ? policy['Properties'] : undefined;
+      const document = isRecord(properties) ? properties['PolicyDocument'] : undefined;
+      const statements: unknown[] = isRecord(document) && Array.isArray(document['Statement']) ? document['Statement'] : [];
+      return statements.flatMap((s) => {
+        if (!isRecord(s)) return [];
+        const action = s['Action'];
+        const actions = (Array.isArray(action) ? action : [action]).filter((a): a is string => typeof a === 'string');
+        return actions.some((a) => a.startsWith(prefix)) ? [{ Action: actions, Resource: s['Resource'] }] : [];
       });
     });
 

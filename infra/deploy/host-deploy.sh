@@ -6,8 +6,9 @@
 #                               [--data-volume <vol-id>] [--hand-over-volume] [--allow-replace]
 #
 # Read-only lookups (needs an AWS session for the account): the deploy connection, the CloudFront domain and certificate,
-# the alert email, the CodeBuild projects the instance role may start (--add-project / --remove-project change that
-# list; names come from the command line only), and (for the stack's pinned AMI and data disk) the
+# the alert email, the CodeBuild projects the instance role may start and whose /aws/codebuild/<project>:* logs it may
+# read (--add-project / --remove-project change that list, both grants; names come from the command line only), and
+# (for the stack's pinned AMI and data disk) the
 # running instance's AMI and /dev/sdf volume. It prints the context, runs `cdk diff`, and asks before `cdk deploy`.
 # Without --yes it refuses to run when stdin is not a terminal.
 #

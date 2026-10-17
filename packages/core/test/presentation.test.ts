@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CARD_ACTION_KINDS, PENDING_TIMEOUT_MS, presentGlob } from '../src/index.js';
+import { CARD_ACTION_KINDS, PENDING_TIMEOUT_MS, actionPresentation, presentGlob } from '../src/index.js';
 import type {
   Action,
   HumanStepViewer,
@@ -135,15 +135,57 @@ describe('conflict, with and without failed checks', () => {
       label: 'Build log (dev1, failed, abc1234)',
     };
 
-    it('says it in a red notice with the log link, a build failed status with the alert icon, a Retry primary and a red activity entry', () => {
+    it('says it in a red notice linking the log attachment, a build failed status with the alert icon, a Retry primary and a red activity entry', () => {
       const p = holdsRules(prOpen({ buildFailed, allowedActions: ['retry_autofix'] }));
-      expect(p.notice).toMatchObject({ kind: 'build-failed', url: buildFailed.logUrl });
+      // The notice links the glob's attachment (which holds CodeBuild's link), not the console.
+      expect(p.notice).toMatchObject({ kind: 'build-failed', url: null, attachment: buildFailed.label });
       expect(p.notice?.text).toBe('Build failed on dev1: CodeBuild failed in BUILD: COMMAND_EXECUTION_ERROR: exit 1');
       expect(p.status).toMatchObject({ text: 'build failed', icon: 'alert', tone: 'text-red' });
       expect(p.primary).toBe('retry_autofix');
       // The card offers nothing extra: its actions stay Pick up, Start, Merge and Fix conflict.
       expect(p.cardPrimary).toBeNull();
-      expect(p.activity.find((e) => e.id === 'build:dep-1')).toMatchObject({ actor: 'warn', link: buildFailed.logUrl, linkLabel: 'build log', at: buildFailed.at });
+      // The activity entry links the same attachment as the notice, in the glob view.
+      const entry = p.activity.find((e) => e.id === 'build:dep-1');
+      expect(entry).toMatchObject({ actor: 'warn', linkLabel: 'build log', at: buildFailed.at });
+      const link = new URL(entry?.link ?? '', 'https://slop.example');
+      expect(link.pathname).toMatch(/^\/boards\/\d+\/globs\/[^/]+$/);
+      expect(Object.fromEntries(link.searchParams)).toEqual({ section: 'artifacts', artifact: 'attachment', label: buildFailed.label });
+      expect(p.status?.tip).toContain(`Build log: ${buildFailed.logUrl}`);
+      expect(p.status?.tip).toContain(buildFailed.label);
+    });
+
+    it('links no attachment when none was written (the build had no log link)', () => {
+      const p = holdsRules(prOpen({ buildFailed: { ...buildFailed, logUrl: null, label: null }, allowedActions: ['retry_autofix'] }));
+      expect(p.notice).toMatchObject({ kind: 'build-failed', url: null, attachment: null });
+      expect(p.status?.tip).toMatch(/^Build failed on dev1: CodeBuild failed in BUILD/);
+      expect(p.status?.tip).not.toMatch(/attachment|Build log:/);
+      expect(p.activity.find((e) => e.id === 'build:dep-1')?.link).toBeNull();
+    });
+
+    it('reads fixing the build while a Retry of the failed build is pending, and fixing CI for failed checks', () => {
+      const click = { kind: 'retry_autofix' as const, at: ago(5000), by: 'dev@example.com' };
+      expect(holdsRules(prOpen({ buildFailed, pendingAction: click })).status).toMatchObject({ kind: 'pending', text: 'fixing the build' });
+      expect(holdsRules(prOpen({ headChecks: failedChecks, pendingAction: click })).status).toMatchObject({ kind: 'pending', text: 'fixing CI' });
+    });
+
+    it('presents the fix run as Retry, reading the build log, unless the checks failed too', () => {
+      const shown = (g: PresentableGlob) => actionPresentation('retry_autofix', g);
+      expect(shown(prOpen({ buildFailed }))).toEqual({
+        label: 'Retry',
+        icon: 'machine',
+        tip: 'A machine run fixes the failed build, reading its build log',
+        placement: 'main',
+      });
+      expect(shown(prOpen({ buildFailed, headChecks: { sha: HEAD, state: 'failed' } })).label).toBe('Fix checks');
+      expect(shown(prOpen({ buildFailed: null })).label).toBe('Fix checks');
+      // Checks that failed on an older commit are not the head's: still Retry (s15t273).
+      expect(shown(prOpen({ buildFailed, headChecks: { sha: 'older', state: 'failed' } })).label).toBe('Retry');
+    });
+
+    it('keeps Retry primary over the card actions in the glob view, and off the card', () => {
+      const p = holdsRules(prOpen({ buildFailed, allowedActions: ['retry_autofix', 'merge', 'pick_up'] }));
+      expect(p.primary).toBe('retry_autofix');
+      expect(p.cardPrimary).toBeNull();
     });
 
     it('says nothing once the glob has no failed build to show (someone acted, or a later deploy succeeded)', () => {

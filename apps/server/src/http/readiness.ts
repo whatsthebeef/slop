@@ -1,5 +1,5 @@
 import type { Board, BoardService, GlobService, NotificationService, ReadinessFacts, ReadinessItem, Store } from '@slop/core';
-import { allowsBot, appSettingsUrl, missingAppEvents, missingCoreAreas, parseAgentSetManifest, readMergePolicy, readiness, recentRoutineFailures, runsClaudeAction, SETTINGS_REPO_PATH, subGateCheckOf, subGateWorkflowPath, unregisteredHooks, unreactedCheckFailures } from '@slop/core';
+import { allowsBot, appSettingsUrl, deploys, missingAppEvents, missingCoreAreas, parseAgentSetManifest, readMergePolicy, readiness, recentRoutineFailures, runsClaudeAction, SETTINGS_REPO_PATH, subGateCheckOf, subGateWorkflowPath, unregisteredHooks, unreactedCheckFailures } from '@slop/core';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { CodeHost } from '../codehost.js';
@@ -108,11 +108,13 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     }
   }
 
-  const [docs, globs] = await Promise.all([
+  const since = new Date(Date.now() - FAILURE_WINDOW_DAYS * 86_400_000).toISOString();
+  const [docs, globs, logReads] = await Promise.all([
     deps.store.transaction((tx) => tx.listKnowledge(board.id, ['doc'])),
     deps.globs.peekAll(board.id, {}),
+    // Whether slop could read its latest failed build's log: a refusal means the host stack's grant is missing.
+    deps.store.transaction((tx) => tx.listBoardEvents(board.id, since, ['BuildLogRead'])),
   ]);
-  const since = new Date(Date.now() - FAILURE_WINDOW_DAYS * 86_400_000).toISOString();
   const facts: ReadinessFacts = {
     board,
     repoConnected,
@@ -130,6 +132,7 @@ export const readinessOf = async (deps: ReadinessSources, board: Board): Promise
     ticks: board.readinessTicks,
     recentFailures: recentRoutineFailures(globs, since),
     unreactedCheckFailures: unreactedCheckFailures(globs, new Date().toISOString()),
+    buildLogs: deploys.buildLogAccessOf(logReads),
   };
   return readiness(facts);
 };

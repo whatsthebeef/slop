@@ -1,7 +1,7 @@
 import { BoardService, DeployService, GlobService, TestRunService } from '@slop/core';
 import type { Board, Effect, Glob } from '@slop/core';
 import { Hono } from 'hono';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { PgStore } from '../src/db/store.js';
 import { LogAccessDenied, LogNotReady } from '../src/build-logs.js';
@@ -10,8 +10,10 @@ import { deployCallbackUrl, deployExecutors } from '../src/deploy-executors.js';
 import type { Deployer, DeployJob } from '../src/deployer.js';
 import type { Env } from '../src/http/app.js';
 import { callbackPath, mountDeploys } from '../src/http/deploys.js';
+import { readinessOf } from '../src/http/readiness.js';
 import { SignedLinks } from '../src/signed-links.js';
 import { createTestDatabase } from './support/database.js';
+import { fakeCodeHost } from './support/fake-codehost.js';
 
 const DEV = 'dev@example.com';
 const KEY = 'test-aws-key';
@@ -334,6 +336,23 @@ describe('deploy results and executors', () => {
       const denied = await attachment('Build log (dev1, failed, e3e3e3e)');
       expect(denied?.content).toContain(LOGS['deep-link']);
       expect(denied?.content).toContain('Last lines not attached: slop role may not read the group');
+      // Readiness reports the missing grant (its 7-day window is read against the test's clock).
+      const reads = await store.transaction((tx) => tx.listBoardEvents(board.id, '1970-01-01T00:00:00.000Z', ['BuildLogRead']));
+      expect(reads.at(-1)).toMatchObject({ globId: 's9f3', data: { deployId: id, outcome: 'denied', group: LOGS['group-name'] } });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(clock);
+      try {
+        const items = await readinessOf({ globs, store, host: fakeCodeHost({ configured: false }), log: () => undefined }, board);
+        const logs = items.find((i) => i.key === 'build_logs');
+        expect(logs).toMatchObject({ state: 'failing' });
+        expect(logs?.detail).toContain('logs:GetLogEvents on /aws/codebuild/sandbox-deploy:*');
+      } finally {
+        vi.useRealTimers();
+      }
+      // A later read that works turns it back to ok.
+      expect(await run(reader(() => Promise.resolve('exit 1')), id)).toBe('done');
+      const latest = await store.transaction((tx) => tx.listBoardEvents(board.id, '1970-01-01T00:00:00.000Z', ['BuildLogRead']));
+      expect(latest.at(-1)?.data).toMatchObject({ outcome: 'read' });
     });
 
     it('retries while the stream is not readable, and says so on the last attempt', async () => {

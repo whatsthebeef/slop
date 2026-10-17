@@ -4,7 +4,7 @@ import type { Action } from './machine.js';
 import { pendingInForce, pendingTimedOut } from './pending-action.js';
 import { activityOf } from './present/activity.js';
 import type { ActivityEntry } from './present/activity.js';
-import { actionPresentation } from './present/action-presentation.js';
+import { actionPresentation, fixesBuild } from './present/action-presentation.js';
 import type { ActionIcon } from './present/action-presentation.js';
 import { blockingItem } from './present/blocking-item.js';
 import type { BlockingItem } from './present/blocking-item.js';
@@ -77,6 +77,8 @@ export interface Notice {
   readonly detail: string | null;
   /** The failing check run, when the notice is about failed checks. */
   readonly url: string | null;
+  /** The label of the glob's attachment the notice links to (a failed build's log), or null. */
+  readonly attachment: string | null;
 }
 
 /** A block that asks a person for something: Answer a question, Decide a decision or a review, Do a step. Nothing else is a block. */
@@ -140,12 +142,15 @@ const IN_PROGRESS: Readonly<Partial<Record<Action, string>>> = {
   prepare_action: 'preparing',
 };
 
-/** The in-progress words for a click. */
-export const inProgressText = (action: Action): string => IN_PROGRESS[action] ?? 'working';
+/** The in-progress words for a click; a Retry of a failed build is fixing the build, not CI. */
+export const inProgressText = (action: Action, glob?: PresentableGlob): string =>
+  action === 'retry_autofix' && glob !== undefined && fixesBuild(glob)
+    ? 'fixing the build'
+    : (IN_PROGRESS[action] ?? 'working');
 
 /** The status of a glob with a click in force: the spinning machine and what it was asked to do, nothing to click and nothing to run. */
 const pendingStatus = (glob: PresentableGlob, pending: PendingAction): CornerStatus => {
-  const text = inProgressText(pending.kind);
+  const text = inProgressText(pending.kind, glob);
   const label = actionPresentation(pending.kind, glob).label;
   return {
     kind: 'pending',
@@ -200,6 +205,7 @@ const conflictNotice = (glob: PresentableGlob): Notice | null => {
     files: conflict.files,
     detail: null,
     url: null,
+    attachment: null,
   };
 };
 
@@ -233,7 +239,7 @@ const noticeOf = (
       outcome.result === 'timed_out'
         ? `${label} had no effect after a minute.`
         : `${label} failed: ${outcome.reason}`;
-    return { kind: 'outcome', ...cut(said), files: [], url: null };
+    return { kind: 'outcome', ...cut(said), files: [], url: null, attachment: null };
   }
   // A click that was neither refused nor settled by the time it timed out: say so (it is written down by the next change).
   const stale = glob.pendingAction;
@@ -245,6 +251,7 @@ const noticeOf = (
       detail: null,
       files: [],
       url: null,
+      attachment: null,
     };
   }
   if (machineOnIt(glob, now, viewer, base)) return null;
@@ -254,7 +261,15 @@ const noticeOf = (
   for (const kind of NOTICE_ORDER) {
     const line = lines.find((l) => l.kind === kind);
     if (line === undefined) continue;
-    return { kind, ...cut(line.full), files: [], url: line.url };
+    // A failed build links its log attachment in the glob view (when one was written), which keeps CodeBuild's link.
+    const build = kind === 'build-failed' ? (glob.buildFailed ?? null) : null;
+    return {
+      kind,
+      ...cut(line.full),
+      files: [],
+      url: build?.label == null ? line.url : null,
+      attachment: build?.label ?? null,
+    };
   }
   const clash = glob.clash ?? null;
   if (clash !== null) {
@@ -264,6 +279,7 @@ const noticeOf = (
       files: clash.paths,
       detail: null,
       url: null,
+      attachment: null,
     };
   }
   return null;
