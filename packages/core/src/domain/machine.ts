@@ -99,6 +99,7 @@ import type {
   MergeConflict,
   MergedPr,
   OpenConflict,
+  PullRequest,
   Role,
   Run,
   RunOutcome,
@@ -888,9 +889,14 @@ export const investigate = (glob: Glob, ctx: Context, automatic = false): Result
  * Whether a glob can be independently reviewed on demand: it has a PR (open or merged) and is in Doing or Reviewing. Not
  * while it is merging: the change is about to land and the after-merge review runs anyway.
  */
+/** Whether the PR holds code beyond the branch's empty start commit; a merged PR always does, and one with no start recorded is assumed to. */
+export const prHasWork = (pr: PullRequest): boolean =>
+  pr.state === 'merged' || pr.startSha == null || pr.headSha === null || !sameCommit(pr.headSha, pr.startSha);
+
 export const canReviewNow = (glob: Glob): boolean =>
   glob.pr !== null &&
   glob.pr.state !== 'closed' &&
+  prHasWork(glob.pr) &&
   glob.status !== 'merging' &&
   (listOf(glob.status) === 'doing' || glob.status === 'reviewing');
 
@@ -1519,6 +1525,10 @@ export const startAgain = (
       .status('planning')
       .event('Waiting', { for: awaitedNames(awaited), note: waitSummary(awaited) });
     return b.done();
+  }
+  // A person's same with nothing built yet goes back to Planning with nothing lost but the empty draft.
+  if (glob.type === 'same' && glob.status === 'in_progress' && !hasLiveRun(glob) && (glob.pr === null || !prHasWork(glob.pr))) {
+    b.event('MovedBackToPlanning', { from: glob.implementer });
   }
   b.status(initialStatus(glob.type));
   // A sub or super starts again in Doing with a fresh branch; a same waits for its next start.
@@ -2361,7 +2371,9 @@ export const provisioned = (
     })
     .event('BranchCreated', { ok: true, branch: result.branch });
   if (result.pr !== null) {
-    b.set({ pr: { number: result.pr.number, state: 'draft', headSha: result.pr.headSha } }).event(
+    b.set({
+      pr: { number: result.pr.number, state: 'draft', headSha: result.pr.headSha, startSha: result.pr.headSha },
+    }).event(
       'PROpened',
       {
         number: result.pr.number,
@@ -2407,7 +2419,10 @@ export const commitPushed = (
   ctx: Context,
 ): Result<Transition> => {
   const b = new Builder(glob, ctx);
-  if (glob.pr !== null) b.set({ pr: { ...glob.pr, headSha: push.sha } });
+  if (glob.pr !== null) {
+    const startSha = isStartPush(glob, push) && glob.pr.startSha == null ? push.sha : glob.pr.startSha;
+    b.set({ pr: { ...glob.pr, headSha: push.sha, ...(startSha === undefined ? {} : { startSha }) } });
+  }
   // A new head keeps its place in the merge line; the merge starts over on the new head's checks (below), and a head's
   // stuck clock restarts.
   if (glob.mergeLine?.head != null) b.set({ mergeLine: { joinedAt: glob.mergeLine.joinedAt, head: { since: ctx.now } } });
