@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tip';
 import type { GlobView } from '@/lib/api';
 import { approveHold, reviewOpen } from '@/lib/human-steps';
@@ -93,6 +94,9 @@ const stateText = (state: LabelState, items: readonly ChecklistItem[]): string =
     : `Resubmitted · ${done} of ${items.length} done`;
 };
 
+/** Every state a label's text can take in the popover, so its column can reserve room for the widest. Without items only "Approved" has text, so nothing wider is reserved. */
+const RESERVED_STATES: readonly LabelState[] = ['required', 'added', 'approved'];
+
 const CHIP_TIPS: Record<LabelState, string> = {
   required: 'waiting for the reviewer',
   added: "items added: the developer's turn",
@@ -126,6 +130,144 @@ const Chip = ({ glob, name }: { glob: GlobView; name: LabelName }) => {
         {name}
       </span>
     </Tip>
+  );
+};
+
+/**
+ * FR/CR/QA chips on the card; clicking opens a compact status view with a quick Approve or
+ * Re-open, without opening the glob. Checklists are worked in the glob view.
+ */
+export const LabelPopover = ({
+  glob,
+  onReview,
+  onOpenReview,
+}: {
+  glob: GlobView;
+  /** Absent on a read-only card: the popover then only links to the review. */
+  onReview?: ReviewLabel;
+  /** Opens the sign-off section in the glob view, at one label's checklist when given. */
+  onOpenReview: (label?: LabelName) => void;
+}) => {
+  const present = presentLabels(glob);
+  const hold = approveHold(glob);
+  const [confirming, setConfirming] = useState<LabelName | null>(null);
+  const confirmingCounts =
+    confirming === null
+      ? { open: 0, drafts: 0 }
+      : openCounts(glob, confirming, glob.labels[confirming] ?? 'required');
+  // The dialog closes when nothing is open any more; forget the pending confirmation so later items don't reopen it.
+  useEffect(() => {
+    if (confirming !== null && confirmingCounts.open === 0) setConfirming(null);
+  }, [confirming, confirmingCounts.open]);
+  if (present.length === 0) return null;
+  return (
+    <>
+      <Popover>
+        <PopoverTrigger
+          className="flex gap-1"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label="Sign-off labels"
+        >
+          {present.map((name) => (
+            <Chip key={name} glob={glob} name={name} />
+          ))}
+        </PopoverTrigger>
+        <PopoverContent
+          className="w-auto min-w-max max-w-[20rem] p-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="grid gap-1">
+            {present.map((name) => {
+              const state = glob.labels[name] ?? 'required';
+              const items = itemsOf(glob, name);
+              const { open } = openCounts(glob, name, state);
+              return (
+                <div key={name} className="flex items-center justify-between gap-1.5 text-sm">
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="font-semibold">{name}</span>
+                    {/* Every state's text shares one cell, so the column is as wide as the widest and approving doesn't resize the popover. */}
+                    <span className="grid text-xs text-muted-foreground">
+                      {RESERVED_STATES.filter((s) => s === 'approved' || items.length > 0).map(
+                        (s) => (
+                          <span
+                            key={s}
+                            data-reserved-state={s}
+                            aria-hidden={s !== state || undefined}
+                            className={cn('col-start-1 row-start-1', s !== state && 'invisible')}
+                          >
+                            {stateText(s, items)}
+                          </span>
+                        ),
+                      )}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => onOpenReview(name)}>
+                      Open review
+                    </Button>
+                    {onReview === undefined ? null : (
+                      <span className="grid">
+                        {/* The widest action ("Approve anyway") is kept in the cell, hidden, whichever button shows. */}
+                        <span
+                          aria-hidden
+                          className="invisible col-start-1 row-start-1 px-3 text-sm"
+                          data-reserved-action
+                        >
+                          Approve anyway
+                        </span>
+                        {state === 'approved' ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="col-start-1 row-start-1"
+                            onClick={() => void onReview(name, { kind: 'reopen' })}
+                          >
+                            Re-open
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="col-start-1 row-start-1"
+                            disabled={hold !== null}
+                            title={hold ?? undefined}
+                            onClick={() =>
+                              open > 0
+                                ? setConfirming(name)
+                                : void onReview(name, { kind: 'approve' })
+                            }
+                          >
+                            {open > 0 ? 'Approve anyway' : 'Approve'}
+                          </Button>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 justify-self-start px-1 text-xs"
+              onClick={() => onOpenReview()}
+            >
+              Open review checklist
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+      <ApproveConfirm
+        label={confirming}
+        counts={confirmingCounts}
+        onCancel={() => setConfirming(null)}
+        onConfirm={() => {
+          if (confirming !== null) void onReview?.(confirming, { kind: 'approve' });
+          setConfirming(null);
+        }}
+      />
+    </>
   );
 };
 

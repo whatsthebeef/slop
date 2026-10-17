@@ -112,7 +112,7 @@ describe('Signed Off view cards', () => {
     expect(screen.queryByTestId('card-s1f1')).toBeNull();
   });
 
-  it('has no label chips or approve controls on the card, and dates only signed-off cards', async () => {
+  it('shows the label chips but no approve controls on the card, and dates only signed-off cards', async () => {
     api.signedOff.mockResolvedValue({
       next: null,
       globs: [
@@ -122,7 +122,7 @@ describe('Signed Off view cards', () => {
     });
     renderPage('/boards/1/signed-off');
     await screen.findByTestId('card-s1b2');
-    expect(screen.queryByLabelText('Sign-off labels')).toBeNull();
+    expect(within(screen.getByTestId('card-s1b2')).getByLabelText('Sign-off labels')).not.toBeNull();
     expect(screen.queryByRole('button', { name: /^(approve|re-open)$/i })).toBeNull();
     expect(within(screen.getByTestId('card-s1f1')).getByTestId('card-status').getAttribute('data-kind')).toBe('signed-off');
     expect(within(screen.getByTestId('card-s1f1')).queryByTestId('card-signed-off')).toBeNull();

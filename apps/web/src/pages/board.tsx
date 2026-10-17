@@ -1,5 +1,5 @@
 import { LISTS, PENDING_TIMEOUT_MS, actionLabel, byListSinceNewest, bySignedOffNewest, decisionOf, haltedBy, latestSignedOff, waitingOnCounts } from '@slop/core';
-import type { Action, HumanStepViewer, List, PendingAction } from '@slop/core';
+import type { Action, HumanStepViewer, LabelCommand, LabelName, List, PendingAction } from '@slop/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -352,6 +352,12 @@ export const BoardPage = () => {
     );
   };
 
+  const reviewLabel = (glob: GlobView) => (label: LabelName, command: LabelCommand) =>
+    mutation.mutateAsync(() => api.reviewLabel(glob.id, label, command, glob.version)).then(
+      () => true,
+      () => false,
+    );
+
   /** Drops the card: the action runs and, once the board updates, the card steps into place. */
   const commit = async (glob: GlobView, action: Action) => {
     setPreview(null);
@@ -484,6 +490,7 @@ export const BoardPage = () => {
                       glob={glob}
                       onOpen={() => openGlob(glob.id)}
                       onOpenSection={(target) => openGlob(glob.id, target)}
+                      onReviewLabel={reviewLabel(glob)}
                       onFilterGroup={(name) => {
                         setFilters({ ...filters, group: name });
                         setFilterOpen(true);
