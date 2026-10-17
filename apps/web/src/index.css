@@ -152,7 +152,7 @@
     0 1px 0 rgb(0 0 0 / 0.22);
 }
 
-/* A moved card locks into place with a short inverted flash: LCD green for yours, khaki for remote. */
+/* A moved card locks into place with a short inverted flash, three times: LCD green for yours, khaki for remote. */
 @keyframes lock-flash {
   0%,
   49% {
@@ -166,12 +166,12 @@
 
 .lock-local {
   --flash: var(--lcd);
-  animation: lock-flash 165ms steps(1, end);
+  animation: lock-flash 165ms steps(1, end) 3;
 }
 
 .lock-remote {
   --flash: var(--remote);
-  animation: lock-flash 165ms steps(1, end);
+  animation: lock-flash 165ms steps(1, end) 3;
 }
 
 /* A move with nowhere to go: the card nudges toward the wall and snaps back. */

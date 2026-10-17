@@ -240,7 +240,24 @@ describe('glob view: main button', () => {
     expect(screen.queryByTestId('more-cancel_merge')).toBeNull();
   });
 
-  it('a glob in the merge line has Cancel merge only in the ▾, never as the main button', async () => {
+  it('a glob in the merge line shows Cancel merge as a visible outline button, never a lone ▾', () => {
+    renderGlob(
+      view({
+        status: 'merging',
+        list: 'doing',
+        pr: { number: 7, state: 'ready', headSha: 'd16d563aaaa' },
+        headChecks: { sha: 'd16d563aaaa', state: 'passed' },
+        mergeLine: { joinedAt: new Date().toISOString() },
+        mergeLinePlace: { position: 3, ahead: ['s1t1', 's1t2'] },
+        allowedActions: ['cancel_merge', 'delete'],
+      }),
+    );
+    expect(mainButton()?.textContent).toContain('Cancel merge');
+    expect(screen.getByTestId('main-action').getAttribute('data-variant')).toBe('outline');
+    expect(screen.queryByTestId('more-actions')).toBeNull();
+  });
+
+  it('with no primary, the first action is an outline button and the rest are in the ▾', async () => {
     const user = userEvent.setup();
     renderGlob(
       view({
@@ -253,9 +270,10 @@ describe('glob view: main button', () => {
         allowedActions: ['cancel_merge', 'take_over', 'delete'],
       }),
     );
-    expect(mainButton()?.textContent ?? '').not.toMatch(/Cancel merge/);
+    expect(mainButton()?.textContent).toContain('Cancel merge');
     await user.click(screen.getByTestId('more-actions'));
-    expect((await screen.findByTestId('more-cancel_merge')).textContent).toContain('Cancel merge');
+    expect(await screen.findByTestId('more-take_over')).toBeTruthy();
+    expect(screen.queryByTestId('more-cancel_merge')).toBeNull();
   });
 
   it('is a split button: the main action with an icon-only ▾ joined to it', () => {

@@ -160,7 +160,7 @@ describe('promotedAction', () => {
     expect(promotedAction(['review_now', 'delete'], own)).toBe('review_now');
   });
 
-  it('promotes nothing while the glob is merging', () => {
+  it('promotes nothing while the glob is merging (the row promotes its first action itself)', () => {
     const merging = glob({ type: 'sub', status: 'merging', pr: pr('ready') });
     expect(promotedAction(['review_now', 'start_again', 'delete'], merging)).toBeNull();
     expect(pick(['review_now', 'start_again', 'delete'], merging)).toBeNull();
