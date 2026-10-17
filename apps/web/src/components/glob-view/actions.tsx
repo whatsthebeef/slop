@@ -24,7 +24,6 @@ import { typeOptions } from '@/lib/type-change';
 import type { TypeOption } from '@/lib/type-change';
 import { Tip } from '../ui/tip';
 import { ArmSystemLabel } from '../glob-card';
-import { META } from './tag-style';
 import { Notice } from './notice';
 import { TypePopover } from '../type-popover';
 import type { GlobViewContext } from './context';
@@ -297,29 +296,20 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
   );
 
 /**
- * Beside the action row (under it on narrow widths): the Arm system label (no step title), or the branch when there is no
- * such step, one quiet mono line.
- * Human work has no branch or deploy.
+ * Beside the action row (under it on narrow widths): the Arm system label (no step title), one quiet mono line. Nothing when
+ * there is no such step (the branch repeats the glob ID). Human work has no deploy.
  */
 const actionLine = ({ glob }: GlobViewContext) => {
   if (isHumanCategory(glob.category)) return null;
   const arming = armLabel(glob);
-  return { arming };
+  return arming === null ? null : { arming };
 };
 
-const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable<ReturnType<typeof actionLine>> }) => {
-  const { glob } = ctx;
+const ActionLineInfo = ({ line }: { line: NonNullable<ReturnType<typeof actionLine>> }) => {
   const { arming } = line;
   return (
     <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="action-line-info">
-      {arming !== null && (
-        <ArmSystemLabel label={{ ...arming, tip: 'A person has a step at release. Opens Human steps' }} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
-      )}
-      {arming === null && (
-        <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
-          {glob.branch}
-        </span>
-      )}
+      <ArmSystemLabel label={{ ...arming, tip: 'A person has a step at release. Opens Human steps' }} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
     </div>
   );
 };
@@ -598,7 +588,7 @@ export const GlobActions = ({
     </DropdownMenu>
   ) : undefined;
   const line = actionLine(ctx);
-  const info = line === null ? null : <ActionLineInfo ctx={ctx} line={line} />;
+  const info = line === null ? null : <ActionLineInfo line={line} />;
   const notice = state.presentation.notice;
   return (
     <>
