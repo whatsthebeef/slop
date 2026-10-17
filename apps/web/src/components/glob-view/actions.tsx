@@ -847,7 +847,7 @@ export const GlobReset = ({
   state: GlobActionsState;
   onDelete: () => Promise<void>;
 }) => {
-  const { board, glob } = ctx;
+  const { glob } = ctx;
   const { busy, tiers, actions } = state;
   const resetActions = actions.filter((a) => tiers.get(a) === 'destructive' && a !== 'delete');
   // A learning can be deleted too, but only Reject suppresses its repeats, so its confirmation says so.
@@ -888,7 +888,7 @@ export const GlobReset = ({
           className="flex flex-wrap items-center gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
         >
           <span className="flex-1" data-testid="start-again-says">
-            {startAgainConfirmation(glob, board.baseBranch)}
+            {startAgainConfirmation(glob)}
           </span>
           <Button size="sm" variant="ghost" onClick={() => state.setConfirmingAgain(false)}>
             Cancel

@@ -52,13 +52,6 @@ export const isReviewRetry = (glob: Subject): boolean => {
 const prRef = (glob: Subject): string => (glob.pr === null ? 'the PR' : `PR #${glob.pr.number}`);
 
 /** What Discard does to the glob's PR and branch. */
-/** A picked-up same with no run and nothing built yet: Discard only closes the empty draft and returns it to Planning. */
-export const isBackToPlanning = (glob: Subject): boolean =>
-  glob.type === 'same' &&
-  glob.status === 'in_progress' &&
-  (glob.currentRun === undefined || glob.currentRun === null || glob.currentRun.state === 'ended') &&
-  (glob.pr === null || !machine.prHasWork(glob.pr));
-
 const discardTip = (glob: Subject, then: string): string =>
   `${glob.pr === null ? 'Deletes' : `Closes ${prRef(glob)} and deletes`} the branch${then}`;
 
@@ -267,33 +260,10 @@ export const actionPresentation = (
         placement: 'more',
       };
     case 'start_again':
-      if (glob.type === 'sub') {
-        return {
-          label: 'Discard & restart',
-          icon: 'machine',
-          tip: discardTip(glob, ', then a new machine run starts from the base branch'),
-          placement: 'reset',
-        };
-      }
-      // A same already in Planning stays there: the label mustn't say it goes back.
-      if (isBackToPlanning(glob))
-        return {
-          label: 'Back to Planning',
-          icon: null,
-          tip: `${glob.pr === null ? 'Deletes' : `Closes the empty ${prRef(glob)} and deletes`} the branch and clears the implementer; the plan and questions stay`,
-          placement: 'reset',
-        };
-      if (glob.type === 'same')
-        return {
-          label: glob.status === 'planning' ? 'Discard & start over' : 'Discard & back to Planning',
-          icon: null,
-          tip: discardTip(glob, ''),
-          placement: 'reset',
-        };
       return {
-        label: 'Discard & start over',
-        icon: 'human',
-        tip: discardTip(glob, '; it stays with you'),
+        label: 'Discard and back to Planning',
+        icon: null,
+        tip: `${discardTip(glob, '')}; the glob goes back to Planning and nothing starts`,
         placement: 'reset',
       };
     case 'delete':

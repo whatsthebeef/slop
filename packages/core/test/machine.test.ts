@@ -870,38 +870,29 @@ describe('re-trigger, start again, delete (rows 20, 23, 24)', () => {
     expect(errorCode(m.retrigger(glob({ status: 'failed', type: 'super' }), ctx()))).toBe('invalid_transition');
   });
 
-  it('row 23: start again resets by type and re-provisions under the new generation', () => {
-    const sub = value(m.startAgain(glob({ type: 'sub', status: 'pr_open', runs: [run({ state: 'watching' })] }), ctx()));
-    expect(sub.glob.status).toBe('implementing');
-    expect(effectKinds(sub)).toEqual(['close_pr', 'delete_branch', 'provision', 'fire_routine']);
-    expect(sub.glob.runs.at(-2)?.outcome).toBe('superseded');
+  it('row 23: Discard and back to Planning returns every type to Planning and starts nothing', () => {
+    const pr = { number: 7, state: 'draft' as const, headSha: 'ttttttt1', startSha: 'sssssss1' };
+    const cases = [
+      glob({ type: 'sub', status: 'pr_open', pr, runs: [run({ state: 'watching' })] }),
+      glob({ type: 'same', status: 'in_progress', implementer: dev.email, pr }),
+      glob({ type: 'super', status: 'failed', implementer: other.email, creator: dev.email, pr }),
+    ];
+    for (const g of cases) {
+      const t = value(m.startAgain(g, ctx()));
+      expect(t.glob.status).toBe('planning');
+      expect(t.glob.implementer).toBeNull();
+      expect(t.glob.pr).toBeNull();
+      expect(t.glob.provisioning).toBe('none');
+      expect(t.glob.generation).toBe(g.generation + 1);
+      expect(effectKinds(t)).toEqual(['close_pr', 'delete_branch']);
+      expect(t.events.find((e) => e.type === 'DiscardedToPlanning')?.data).toEqual({ from: g.implementer });
+      expect(t.glob.runs.every((r) => r.state === 'ended')).toBe(true);
+      expect(m.allowedActions(g, dev)).toContain('start_again');
+    }
+    const sub = value(m.startAgain(cases[0] as Glob, ctx()));
     expect(sub.events.find((e) => e.type === 'RunEnded')?.data).toMatchObject({ outcome: 'superseded', cause: 'start_again' });
 
-    const sup = value(m.startAgain(glob({ type: 'super', status: 'failed', implementer: other.email, creator: dev.email }), ctx()));
-    expect(sup.glob.status).toBe('in_progress');
-    expect(sup.glob.implementer).toBe(dev.email);
-
     expect(errorCode(m.startAgain(glob({ status: 'reviewing' }), ctx()))).toBe('invalid_transition');
-  });
-
-  it('row 23: an empty picked-up same goes back to Planning, clearing the implementer, and logs it', () => {
-    const empty = glob({
-      type: 'same',
-      status: 'in_progress',
-      implementer: dev.email,
-      pr: { number: 7, state: 'draft', headSha: 'sssssss1', startSha: 'sssssss1' },
-    });
-    const t = value(m.startAgain(empty, ctx()));
-    expect(t.glob.status).toBe('planning');
-    expect(t.glob.implementer).toBeNull();
-    expect(t.glob.pr).toBeNull();
-    expect(t.glob.generation).toBe(empty.generation + 1);
-    expect(effectKinds(t)).toEqual(['close_pr', 'delete_branch']);
-    expect(t.events.find((e) => e.type === 'MovedBackToPlanning')?.data).toEqual({ from: dev.email });
-    expect(m.allowedActions(empty, dev)).toContain('start_again');
-
-    const built = glob({ type: 'same', status: 'in_progress', implementer: dev.email, pr: { number: 7, state: 'draft', headSha: 'ttttttt1', startSha: 'sssssss1' } });
-    expect(value(m.startAgain(built, ctx())).events.some((e) => e.type === 'MovedBackToPlanning')).toBe(false);
   });
 
   it('records the start commit when provisioned and when its push arrives', () => {
@@ -1371,12 +1362,12 @@ describe('provisioning when a glob enters Doing', () => {
     expect(effectKinds(value(m.changeFields(planning, { type: 'sub' }, board, ctx())))).toEqual(['provision', 'fire_routine']);
   });
 
-  it('start again leaves a same unprovisioned and re-provisions a sub', () => {
+  it('Discard and back to Planning provisions nothing and queues no run, for a same and a sub', () => {
     const same = value(m.startAgain(glob({ status: 'in_progress' }), ctx()));
     expect(same.glob.provisioning).toBe('none');
     expect(effectKinds(same)).toEqual(['close_pr', 'delete_branch']);
     const sub = value(m.startAgain(glob({ type: 'sub', status: 'failed' }), ctx()));
-    expect(effectKinds(sub)).toEqual(['close_pr', 'delete_branch', 'provision', 'fire_routine']);
+    expect(effectKinds(sub)).toEqual(['close_pr', 'delete_branch']);
   });
 
   it('an already provisioned glob is not provisioned again', () => {
@@ -2337,7 +2328,7 @@ describe('supers: Merge and continue (row 31) and Ready for review on the board'
 
 describe('provisioning failure', () => {
   const queued = () => glob({ status: 'implementing', provisioning: 'pending', pr: null, runs: [run({ state: 'queued' })] });
-  const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Discard & restart.";
+  const reason = "Couldn't create branch s1t1 on acme/app: the slop GitHub App can't see that repo. Install it on the repo, or add the repo to its access, then Discard and back to Planning.";
 
   it('a retryable failure only records the attempt', () => {
     const t = value(m.provisioningFailed(queued(), 'boom', ctx()));

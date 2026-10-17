@@ -543,7 +543,7 @@ export const BoardPage = () => {
           >
             {haltConfirm.action === 'start_again' && (
               <p className='mb-2 text-sm' data-testid='start-again-says'>
-                {startAgainConfirmation(haltConfirm.glob, board.data.baseBranch)}
+                {startAgainConfirmation(haltConfirm.glob)}
               </p>
             )}
             <p className='text-sm'>This stops:</p>
