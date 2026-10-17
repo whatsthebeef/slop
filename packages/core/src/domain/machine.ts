@@ -552,9 +552,28 @@ class Builder {
     }
   }
 
+  /**
+   * A `timed_out` last outcome says the click had no effect; once any later transition moves the glob (status, run or PR), whatever
+   * triggered it (web, MCP, CLI, webhook), that no longer holds. A `failed` outcome stays until the next click.
+   */
+  private clearStaleTimeout(): void {
+    const outcome = this.glob.lastOutcome;
+    if (outcome == null || outcome.result !== 'timed_out' || this.began.lastOutcome !== outcome) return;
+    const [was, now] = [this.began, this.glob];
+    const [before, run] = [currentRun(was), currentRun(now)];
+    const moved =
+      now.status !== was.status ||
+      now.pr?.headSha !== was.pr?.headSha ||
+      now.pr?.state !== was.pr?.state ||
+      run?.id !== before?.id ||
+      run?.state !== before?.state;
+    if (moved) this.glob = {...now, lastOutcome: null};
+  }
+
   /** `touch: false` leaves `updatedAt` alone (a click's own record is not activity on the glob: reconcile and stall clocks read it). */
   done(touch = true): Result<Transition> {
     this.settlePending();
+    this.clearStaleTimeout();
     const glob = this.changed && touch ? { ...this.glob, updatedAt: this.ctx.now } : this.glob;
     return ok({
       glob,
