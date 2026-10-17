@@ -241,7 +241,7 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   if (glob.category === 'action') {
     const attributes = glob.attributes !== undefined && isActionAttributes(glob.attributes) ? glob.attributes : null;
     if (glob.status === 'in_progress' && attributes?.outcome === null && attributes.preparation === undefined) {
-      steps.push(derived('action', `Do: ${glob.title}`, attributes.assignee ?? 'anyone', { id: 'machine:action' }));
+      steps.push(derived('action', `Do: ${glob.title}`, attributes.assignee ?? 'anyone', { id: 'machine:action', blocks: ['sign_off'] }));
     }
     // A prepared action in its ready state: the person runs what the routine prepared. The block shows the commands, one per line,
     // the fetch of the script first. Preparing and recording are the machine's turn and have no human step.
