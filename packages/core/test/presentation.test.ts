@@ -720,6 +720,30 @@ describe('the card in Planning', () => {
   });
 });
 
+describe('a plain action', () => {
+  const plain = (patch: Partial<PresentableGlob> = {}) =>
+    view({ category: 'action', type: null, status: 'planning', list: 'planning', pr: null, allowedActions: ['pick_up', 'dismiss_action'], ...patch });
+
+  it('leads with Pick up in Planning, on the card and in the glob view', () => {
+    const p = holdsRules(plain());
+    expect(p.cardPrimary).toMatchObject({ action: 'pick_up', label: 'Pick up' });
+    expect(p.blocking).toBeNull();
+  });
+
+  it('in Doing has its Do step as the blocking item, with Done and Dismiss of its own', () => {
+    const p = holdsRules(
+      plain({
+        status: 'in_progress',
+        list: 'doing',
+        implementer: 'dev@example.com',
+        allowedActions: ['complete_action', 'dismiss_action', 'back_to_planning'],
+        humanSteps: [{ id: 'machine:action', kind: 'action', title: 'Do: x', who: 'anyone', state: 'due', blocks: [] }] as unknown as PresentableGlob['humanSteps'],
+      }),
+    );
+    expect(p.blocking).toEqual({ kind: 'step', id: 'machine:action' });
+  });
+});
+
 describe('a prepared action', () => {
   const action = (
     actionState: PresentableGlob['actionState'],

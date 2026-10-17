@@ -240,7 +240,7 @@ export const derivedSteps = (glob: Glob, facts: HumanStepFacts = {}): HumanStep[
   const steps: HumanStep[] = [];
   if (glob.category === 'action') {
     const attributes = glob.attributes !== undefined && isActionAttributes(glob.attributes) ? glob.attributes : null;
-    if (glob.status === 'planning' && attributes?.outcome === null && attributes.preparation === undefined) {
+    if (glob.status === 'in_progress' && attributes?.outcome === null && attributes.preparation === undefined) {
       steps.push(derived('action', `Do: ${glob.title}`, attributes.assignee ?? 'anyone', { id: 'machine:action' }));
     }
     // A prepared action in its ready state: the person runs what the routine prepared. The block shows the commands, one per line,

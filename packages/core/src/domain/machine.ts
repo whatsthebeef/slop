@@ -140,6 +140,8 @@ export type Action =
   /** A merged glob with approved labels that `sign_off` relations hold back is signed off now, with a reason. */
   | 'sign_off_anyway'
   | 'pick_up'
+  /** A picked-up plain action goes back to Planning. */
+  | 'back_to_planning'
   | 'take_over'
   | 'retrigger'
   /** A PR whose auto-fix ended without fixing it: a new routine run on the same branch, keeping the PR. */
@@ -1109,10 +1111,11 @@ export const pickUp = (
   const actor = requireActor(ctx);
   if (glob.category === 'action') {
     // Row A10: a prepared action's branch is read, not worked on: no implementer, no brief. The person opens a worktree on it to run
-    // the prepared script. Any other action has no branch, run or implementer: it is only ever done or dismissed.
+    // the prepared script. Any other action has no branch or run: picking it up moves it to Doing with the person (see pickUpAction).
     const state = actionState(glob);
     if ((state === 'ready' || state === 'recording') && hasBranchRecord(glob) && glob.pr !== null) return unchanged(glob);
-    return invalidTransition(glob, actor, 'An action is not picked up: mark it done or dismiss it');
+    if (options.takeOver) return invalidTransition(glob, actor, 'An action is picked up, not taken over');
+    return pickUpAction(glob, ctx);
   }
   if (restrictedFrom(actor, glob)) {
     return forbidden(`QA and PO members cannot pick up ${glob.type}s`);
@@ -4210,7 +4213,7 @@ export const completeAction = (glob: Glob, input: { readonly note?: string }, ct
   const note = input.note?.trim() ?? '';
   const done: ActionOutcome = { kind: 'done', by: actor.email, at: ctx.now, ...(note === '' ? {} : { note }) };
   if (preparationOf(glob) !== null) return completePrepared(glob, done, ctx);
-  if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
+  if (glob.status !== 'planning' && glob.status !== 'in_progress') return invalidTransition(glob, actor, 'This action is not open');
   const held = actionHeld(facts);
   if (held !== null) return invalidTransition(glob, actor, held);
   return finishAction(glob, done, ctx, 'ActionDone');
@@ -4253,7 +4256,7 @@ export const dismissAction = (glob: Glob, input: { readonly reason: string }, ct
     return outcome.kind === 'dismissed' ? unchanged(glob) : invalidTransition(glob, actor, 'This action is already done');
   }
   const prepared = preparationOf(glob) !== null;
-  if (glob.status !== 'planning' && !prepared) return invalidTransition(glob, actor, 'This action is not open');
+  if (glob.status !== 'planning' && glob.status !== 'in_progress' && !prepared) return invalidTransition(glob, actor, 'This action is not open');
   if (glob.status === 'signed_off') return invalidTransition(glob, actor, 'This action is not open');
   const reason = input.reason.trim();
   if (reason === '') return invalidInput('Dismissing needs a reason');
@@ -4371,7 +4374,12 @@ const actionHeld = (facts: ActionFacts): string | null => {
 const actionActions = (glob: Glob, facts: ActionFacts): Action[] => {
   const state = actionState(glob);
   if (preparationOf(glob) === null) {
-    return glob.status !== 'planning' ? ['delete'] : actionHeld(facts) === null ? ['complete_action', 'dismiss_action', 'delete'] : ['dismiss_action', 'delete'];
+    // Planning: Pick up first. Doing (picked up): Done and Dismiss, and back to Planning.
+    if (glob.status === 'planning') return ['pick_up', 'dismiss_action', 'delete'];
+    if (glob.status !== 'in_progress') return ['delete'];
+    return actionHeld(facts) === null
+      ? ['complete_action', 'dismiss_action', 'back_to_planning', 'delete']
+      : ['dismiss_action', 'back_to_planning', 'delete'];
   }
   const actions: Action[] = [];
   const held = facts.relations !== undefined && awaitedOf(facts.relations).length > 0;
@@ -4430,6 +4438,44 @@ export const pickUpDecision = (glob: Glob, ctx: Context): Result<Transition> => 
       .done();
   }
   return invalidTransition(glob, actor, `A decision in ${glob.status} cannot be picked up`);
+};
+
+/**
+ * Row A10: a person picks up a plain action. It goes to Doing with them as implementer (and assignee when it has none), with no
+ * branch, PR, run or provisioning; its steps then show with their own Done and Dismiss. A prepared action never gets here.
+ */
+const pickUpAction = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  const attributes = actionAttributesOf(glob);
+  if (preparationOf(glob) !== null || attributes.outcome !== null) {
+    return invalidTransition(glob, actor, 'This action cannot be picked up');
+  }
+  if (glob.status === 'in_progress') {
+    return glob.implementer === actor.email
+      ? unchanged(glob)
+      : invalidTransition(glob, actor, `${glob.implementer ?? 'Someone'} has already picked up this action`);
+  }
+  if (glob.status !== 'planning') return invalidTransition(glob, actor, 'This action is not open');
+  return new Builder(glob, ctx)
+    .set({
+      implementer: actor.email,
+      waiting: null,
+      ...(attributes.assignee == null ? { attributes: { ...attributes, assignee: actor.email } } : {}),
+    })
+    .status('in_progress')
+    .event('PickedUp', { takeOver: false })
+    .done();
+};
+
+/** Row A11: a person puts a picked-up plain action back in Planning. Nothing is discarded and nothing starts. */
+export const backToPlanning = (glob: Glob, ctx: Context): Result<Transition> => {
+  const actor = requireActor(ctx);
+  if (glob.category !== 'action') return notAction(glob, actor);
+  if (glob.status === 'planning') return unchanged(glob);
+  if (glob.status !== 'in_progress' || preparationOf(glob) !== null) {
+    return invalidTransition(glob, actor, 'Only a picked-up action goes back to Planning');
+  }
+  return new Builder(glob, ctx).set({ implementer: null }).status('planning').event('FieldsChanged', { implementer: null }).done();
 };
 
 /** What a person chooses for a decision in Doing. */

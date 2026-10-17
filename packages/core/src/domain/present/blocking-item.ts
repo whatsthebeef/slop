@@ -40,6 +40,10 @@ export const blockingItem = (
   }
   const [question] = holdingQuestionsOf(glob);
   if (question !== undefined) return { kind: 'question', id: question.id };
+  // A plain action in Doing: its derived Do step is the way forward, with its own Done and Dismiss.
+  if (glob.category === 'action' && glob.status === 'in_progress' && (glob.humanSteps ?? []).some((s) => s.id === 'machine:action' && s.state === 'due')) {
+    return { kind: 'step', id: 'machine:action' };
+  }
   const step = mainStep(glob, viewer);
   if (step !== null) return { kind: 'step', id: step.step.id };
   if (
