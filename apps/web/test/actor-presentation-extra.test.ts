@@ -66,16 +66,15 @@ describe('actionPresentation state variants (s15f88)', () => {
     });
   });
 
-  it('Discard tips for same and super with a PR name the PR', () => {
+  it('Discard tips name the PR when there is one and say nothing starts', () => {
     const pr = { number: 9, state: 'draft' as const, headSha: 'abc' };
-    expect(actionPresentation('start_again', view({ type: 'same', pr })).tip).toBe(
-      'Closes PR #9 and deletes the branch',
-    );
-    expect(actionPresentation('start_again', view({ type: 'super', pr })).tip).toBe(
-      'Closes PR #9 and deletes the branch; it stays with you',
-    );
+    for (const type of ['same', 'super', 'sub'] as const) {
+      expect(actionPresentation('start_again', view({ type, pr })).tip).toBe(
+        'Closes PR #9 and deletes the branch; the glob goes back to Planning and nothing starts',
+      );
+    }
     expect(actionPresentation('start_again', view({ type: 'sub', pr: null })).tip).toBe(
-      'Deletes the branch, then a new machine run starts from the base branch',
+      'Deletes the branch; the glob goes back to Planning and nothing starts',
     );
   });
 

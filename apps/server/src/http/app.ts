@@ -766,7 +766,9 @@ export const createApp = (deps: AppDeps) => {
       b.output === undefined || b.output.trim() === '' ? invalidInput('Say what failed: the output of the run is needed') : globs.failAction(email, id, b.output, b.version),
     'pick-up': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, false, b.environment),
     'take-over': (email: string, id: string, b: ActionBody) => globs.pickUp(email, id, b.version, true, b.environment),
+    // `start-again` is the old name of `discard-to-planning`, kept as an alias for one release.
     'start-again': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
+    'discard-to-planning': (email: string, id: string, b: ActionBody) => globs.startAgain(email, id, b.version),
     merge: async (email: string, id: string, b: ActionBody) => {
       const gate = await deps.mergeGate?.(email, id);
       return gate !== undefined && !gate.ok ? gate : globs.merge(email, id, b.version);
@@ -823,6 +825,7 @@ export const createApp = (deps: AppDeps) => {
     'retry-autofix': 'retry_autofix',
     'resolve-conflict': 'resolve_conflict',
     'start-again': 'start_again',
+    'discard-to-planning': 'start_again',
     merge: 'merge',
     'merge-anyway': 'merge_anyway',
     'merge-continue': 'merge_continue',
