@@ -219,7 +219,7 @@ export const CreateGlobDialog = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         title='New glob'
-        className='max-sm:top-0 max-sm:left-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:rounded-none max-sm:border-0'
+        className='max-sm:top-0 max-sm:left-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:overflow-x-hidden max-sm:translate-x-0 max-sm:rounded-none max-sm:border-0'
       >
         {fromInbox !== undefined && (
           <p className='mb-3 text-xs text-muted-foreground' data-testid='from-inbox'>
@@ -255,7 +255,7 @@ export const CreateGlobDialog = ({
             Plan
             <Textarea value={form.plan ?? ''} onChange={(e) => setForm({ ...form, plan: e.target.value })} />
           </Label>
-          <div className='grid grid-cols-2 gap-3'>
+          <div className='grid grid-cols-[repeat(2,minmax(0,1fr))] gap-3'>
             <Label>
               Who
               <Select value={form.actor} data-testid='actor' onChange={(e) => setForm(withActor(form, e.target.value as WorkActor))}>
