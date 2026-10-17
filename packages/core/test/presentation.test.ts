@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CARD_ACTION_KINDS, PENDING_TIMEOUT_MS, actionPresentation, presentGlob } from '../src/index.js';
+import { CARD_ACTION_KINDS, PENDING_TIMEOUT_MS, actionPresentation, dueWorkSteps, presentGlob } from '../src/index.js';
 import type {
   Action,
   HumanStepViewer,
@@ -741,6 +741,14 @@ describe('a plain action', () => {
       }),
     );
     expect(p.blocking).toEqual({ kind: 'step', id: 'machine:action' });
+  });
+
+  it('lists its Do step first among the due steps of the top block', () => {
+    const doStep = { id: 'machine:action', kind: 'action', title: 'Do: x', who: 'anyone', state: 'due', blocks: ['sign_off'] };
+    const stored = { id: 'hs_1', kind: 'rollout', title: 'Run it', who: 'anyone', state: 'due', blocks: [] };
+    const due = dueWorkSteps([stored, doStep] as unknown as ListedHumanStep[]);
+    expect(due.map((s) => s.id)).toEqual(['machine:action', 'hs_1']);
+    expect(dueWorkSteps([{ ...doStep, blocks: [] }] as unknown as ListedHumanStep[])).toEqual([]);
   });
 });
 

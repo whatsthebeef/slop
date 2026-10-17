@@ -315,6 +315,18 @@ describe('where the steps sit in the glob view', () => {
     expect(viewSections(false, false).indexOf('human-steps')).toBe(viewSections(false, false).indexOf('choices') - 1);
   });
 
+  it('shows a picked-up action\'s Do step first in the top block, with Done and Dismiss, and not in the collapsible', async () => {
+    const doStep = step({ id: 'machine:action', kind: 'action', title: 'Do: Rotate token', who: 'anyone', due: 'now', blocks: ['sign_off'], state: 'due' });
+    const h = show([step({ id: 'a', state: 'due' }), doStep]);
+    const cards = screen.getAllByTestId('due-step');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.textContent).toContain('Do: Rotate token');
+    await userEvent.click(cards[0]?.querySelector('[data-testid="due-done"]') as HTMLElement);
+    expect(h.onComplete).toHaveBeenCalledWith('machine:action');
+    expect(cards[0]?.querySelector('[data-testid="due-dismiss"]')).not.toBeNull();
+    expect(hasDueSteps([doStep])).toBe(true);
+  });
+
   it('counts only live, due work steps', () => {
     expect(hasDueSteps(undefined)).toBe(false);
     expect(hasDueSteps([step({ id: 'a', state: 'pending' }), step({ id: 'b', state: 'dismissed' })])).toBe(false);
