@@ -573,6 +573,36 @@ describe('slop ready', () => {
     expect(run.out.join('')).toContain('pushed and marked ready');
   });
 
+  it('warns, without refusing, when slop has no implementation record or local review for the head', async () => {
+    const run = setup({
+      get_glob: () => ({
+        ...glob({ status: 'in_progress', pr: { number: 9, state: 'draft' } }),
+        artifacts: [{ kind: 'implementation_plan', commitSha: 'old' }],
+      }),
+      mark_ready: () => ({ id: 's1t4', status: 'in_progress', pr: { number: 9, state: 'draft' } }),
+    });
+    run.git.branch = 's1t4';
+    await readyCommand([], run.deps);
+    expect(run.logs.join('\n')).toMatch(/warning: s1t4 has no implementation record or local review.*slop finalise s1t4/);
+    expect(run.slop.tools()).toContain('mark_ready');
+  });
+
+  it('does not warn when both exist for the head', async () => {
+    const run = setup({
+      get_glob: () => ({
+        ...glob({ status: 'in_progress', pr: { number: 9, state: 'draft' } }),
+        artifacts: [
+          { kind: 'implementation_plan', commitSha: 'abc1234' },
+          { kind: 'local_review', commitSha: 'abc1234' },
+        ],
+      }),
+      mark_ready: () => ({ id: 's1t4', status: 'in_progress', pr: { number: 9, state: 'draft' } }),
+    });
+    run.git.branch = 's1t4';
+    await readyCommand([], run.deps);
+    expect(run.logs).toEqual([]);
+  });
+
   it('treats a glob already pr_open with a ready PR as done (sstor failed there)', async () => {
     const run = setup({
       get_glob: () => glob({ status: 'pr_open', pr: { number: 9, state: 'ready' } }),

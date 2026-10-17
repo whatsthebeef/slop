@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { z } from 'zod';
 import { ATTACH_USAGE, attachCommand } from './attach.js';
 import { accessToken, login, logout, type AuthDeps } from './auth.js';
@@ -24,6 +25,23 @@ import {
   readyCommand,
   type GlobDeps,
 } from './globs.js';
+import {
+  ANSWER_USAGE,
+  FINALISE_USAGE,
+  START_USAGE,
+  STATUS_USAGE,
+  STEP_USAGE,
+  WORK_USAGE,
+  answerCommand,
+  finaliseCommand,
+  startCommand,
+  statusCommand,
+  stepCommand,
+  workCommand,
+  type LifecycleDeps,
+} from './lifecycle.js';
+import { systemRunner, type Runner } from './process.js';
+import { hasLocalConversation } from './teleport.js';
 import { GET_ARTIFACT_USAGE, getArtifactCommand } from './get-artifact.js';
 import { GROUP_BACKFILL_USAGE, groupBackfillCommand } from './group-backfill.js';
 import { IMPORT_USAGE, importCommand } from './import.js';
@@ -51,6 +69,10 @@ export interface CliContext extends AuthDeps {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Asks a question on the terminal (stderr, so stdout stays machine-readable); used only when `canPrompt`. */
   readonly ask?: (question: string) => Promise<string>;
+  /** Launches claude for `slop work --agent` and `slop finalise`; tests inject a fake so nothing runs. */
+  readonly runner?: Runner;
+  /** The home directory, where Claude Code keeps its conversations. */
+  readonly homeDir?: string;
 }
 
 async function readInputDefault(path: string): Promise<string> {
@@ -90,6 +112,43 @@ function globDeps(context: CliContext): GlobDeps {
     sleep: context.sleep,
     newIdempotencyKey: randomUUID,
     ...(context.canPrompt && context.ask !== undefined ? { ask: context.ask } : {}),
+  };
+}
+
+function lifecycleDeps(context: CliContext): LifecycleDeps {
+  const client = clientFor(context);
+  const home = context.homeDir ?? homedir();
+  return {
+    ...globDeps(context),
+    client,
+    runner: context.runner ?? systemRunner,
+    whoami: async () => {
+      const result = whoamiResultSchema.safeParse(await client.call('whoami'));
+      if (!result.success) throw new SlopError('whoami: unexpected response from slop');
+      return result.data.email;
+    },
+    hasLocalConversation: (dir) => hasLocalConversation(home, dir),
+    initCheckout: (dir, board) =>
+      runInit({
+        root: dir,
+        board,
+        server: resolveMcpServer(context.settings),
+        connect: () => ({ client, slopUrl: requireSetting(context.settings, 'SLOP_URL') }),
+        fetch: context.fetch,
+        isMcpServerConfigured: context.isMcpServerConfigured,
+        committed: true,
+        isTracked: isGitTracked,
+        now: context.now,
+        log: context.log,
+        stdout: () => undefined,
+      }),
+    readText: async (path) => {
+      try {
+        return await (context.readInput ?? readInputDefault)(path);
+      } catch {
+        return undefined;
+      }
+    },
   };
 }
 
@@ -222,6 +281,36 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     summary: "Push the glob's branch (default: the current one) and mark its PR ready",
     run: (args, context) => readyCommand(args, globDeps(context)),
   },
+  work: {
+    usage: WORK_USAGE,
+    summary: 'Pick up a glob and set up its branch (or --worktree) and agent set; --agent also starts Claude Code on it',
+    run: (args, context) => workCommand(args, lifecycleDeps(context)),
+  },
+  status: {
+    usage: STATUS_USAGE,
+    summary: "One screen for a glob: status, open questions, due steps, failed checks, PR and what to do next",
+    run: (args, context) => statusCommand(args, globDeps(context)),
+  },
+  answer: {
+    usage: ANSWER_USAGE,
+    summary: "Answer a glob's open question (an option's text picks that option)",
+    run: (args, context) => answerCommand(args, globDeps(context)),
+  },
+  step: {
+    usage: STEP_USAGE,
+    summary: "Tick, fail or dismiss one of a glob's human steps (n is its place in slop status)",
+    run: (args, context) => stepCommand(args, globDeps(context)),
+  },
+  finalise: {
+    usage: FINALISE_USAGE,
+    summary: 'Run /finalise headless here: implementation record, local review and learnings (default: facts only when no local agent worked)',
+    run: (args, context) => finaliseCommand(args, lifecycleDeps(context)),
+  },
+  start: {
+    usage: START_USAGE,
+    summary: "Hand a glob in Planning to the machine, like the glob view's Start",
+    run: (args, context) => startCommand(args, globDeps(context)),
+  },
   'put-artifact': {
     usage: PUT_ARTIFACT_USAGE,
     summary: 'Upload the implementation record (postplan is an alias) or a local review from a file (or - for stdin) to a glob',
@@ -326,6 +415,9 @@ export function helpText(): string {
     '  SLOP_BOARD      the board for slop init (when none is given), slop new and slop report',
     "  SLOP_MCP_SERVER slop's MCP server name in Claude Code (default slop)",
     '  slop import also reads JIRA_SITE_URL, JIRA_EMAIL and JIRA_API_TOKEN from the environment (and GOOGLE_ACCESS_TOKEN with --docs)',
+    '',
+    'A developer\'s lifecycle: slop work <id>, implement and commit, slop finalise <id> --note "…", slop ready <id> (then slop merge <id>).',
+    'slop status <id> shows what is open at any point; slop answer and slop step act on its questions and steps.',
     '',
     'Exit codes: 0 ok, 1 slop or sign-in error, 2 usage error.',
     '',
