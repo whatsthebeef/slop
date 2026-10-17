@@ -52,8 +52,10 @@ describe('glob view section registry', () => {
     }
   });
 
-  it('renders Related directly below Artifacts', () => {
-    expect(GLOB_VIEW_SECTIONS.indexOf('related')).toBe(GLOB_VIEW_SECTIONS.indexOf('artifacts') + 1);
+  it('renders Holding this back, Holds back and No longer holding in a row below Artifacts', () => {
+    const at = GLOB_VIEW_SECTIONS.indexOf('artifacts');
+    expect(GLOB_VIEW_SECTIONS.slice(at + 1, at + 4)).toEqual(['holding', 'holds-back', 'no-longer-holding']);
+    expect(GLOB_VIEW_SECTIONS).not.toContain('related');
   });
 
   it('leaves a work glob’s sections out of a learning’s view, and keeps the decision block above the action row', () => {

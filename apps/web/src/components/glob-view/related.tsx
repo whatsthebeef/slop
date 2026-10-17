@@ -43,7 +43,7 @@ export const verdictText = (v: VerdictFields): string | null => {
   return reason === '' ? lead : `${lead}: ${reason}`;
 };
 
-/** One row of the Related section, whichever group it is in. */
+/** One row of the Holding this back, Holds back and No longer holding sections. */
 export interface RelatedRow extends VerdictFields {
   readonly relationId: string;
   /** The other glob. */
@@ -56,9 +56,11 @@ export interface RelatedRow extends VerdictFields {
   readonly dismissible: boolean;
   /** Set when the other glob is on another board (its name, and whether the viewer may not see it). */
   readonly external?: ExternalGlob;
+  /** The other glob is a decision (or an action) this one waits for: the row says so. */
+  readonly decision?: boolean;
 }
 
-/** What the Related section lists, in its groups. */
+/** What the relation sections list. */
 export interface RelatedGroups {
   /** Unmet relations a person or slop made (start gates first): what keeps the glob back right now. */
   readonly holding: readonly RelatedRow[];
@@ -101,14 +103,14 @@ const rowOf = (h: Holding): RelatedRow => ({
 
 const HOW_WORDS = { met: 'done', deleted: 'deleted', dismissed: 'dismissed', overridden: 'forced through' } as const;
 
-/** The Related section's content: the glob's relations in groups; null when it has none (or the API is older and sends none). */
+/** The relation sections' content: the glob's relations in groups; null when the API is older and sends none. */
 export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
   const view = glob.relations;
   if (view === undefined) return null;
   const holding = view.holding;
   const groups: RelatedGroups = {
     holding: holding.filter((h) => !h.toIsDecision && h.toIsAction !== true).map(rowOf),
-    decisions: holding.filter((h) => h.toIsDecision || h.toIsAction === true).map(rowOf),
+    decisions: holding.filter((h) => h.toIsDecision || h.toIsAction === true).map((h) => ({ ...rowOf(h), decision: true })),
     holdsBack: view.holdsBack.map((h) => ({
       relationId: h.relationId,
       id: h.from,
@@ -146,11 +148,7 @@ export const relatedGroups = (glob: GlobView): RelatedGroups | null => {
     otherBoards: view.waitedOnByOtherBoards ?? 0,
     suggestions: glob.suggestions ?? [],
   };
-  const empty =
-    groups.holding.length + groups.decisions.length + groups.holdsBack.length + groups.weak.length + groups.done.length + groups.supersedes.length + groups.suggestions.length === 0 &&
-    groups.supersededBy === null &&
-    groups.otherBoards === 0;
-  return empty ? null : groups;
+  return groups;
 };
 
 const GlobLink = ({ boardId, id }: { boardId: number; id: string }) => (
@@ -213,6 +211,7 @@ export const Row = ({
           {row.external !== undefined && <BoardNote external={row.external} />}
         </>
       )}
+      {row.decision === true && <span className="text-muted-foreground"> · decision</span>}
       <span className="text-muted-foreground"> · {row.words}</span>
       {how !== undefined && <span className="text-muted-foreground"> ({how})</span>}
       {reason !== '' && !fromMention && <span className="text-muted-foreground">: {reason}</span>}
@@ -331,37 +330,34 @@ const FailedStepItem = ({ suggestion, onSuggestion }: { suggestion: RelationSugg
   );
 };
 
-const Group = ({ name, testId, children }: { name: string; testId: string; children: React.ReactNode }) => (
-  <div data-testid={testId}>
-    <span className="font-medium">{name}</span>
-    <ul className="ml-4 list-disc">{children}</ul>
-  </div>
-);
-
 /**
- * The form behind "+ Add relation" and a decision's "+ Holds back": pick a glob (or type its ID), a gate, and Add. A glob adds a
- * relation it is held back by (`to`); a decision adds one for another glob that it holds back (`holdsBack`). The section's header
+ * The form behind "+ Add holding" and "+ Add holds back": pick a glob (or type its ID), a gate, and Add. `holding` adds a
+ * relation this glob is held back by (`to`); `holdsBack` adds one for another glob that this one holds back. The section's header
  * button opens and closes it.
  */
 export const AddRelationForm = ({
   ctx: { glob, busy },
+  mode,
   gates,
   onAdd,
   onClose,
 }: {
   ctx: GlobViewContext;
+  /** `holding`: a glob or decision that holds this one back; `holdsBack`: a glob this one holds back. */
+  mode: 'holding' | 'holdsBack';
   gates: readonly RelationGate[];
   onAdd: (input: AddRelationInput) => Promise<boolean>;
   onClose: () => void;
 }) => {
   const decision = isHumanCategory(glob.category);
+  const holdsBack = mode === 'holdsBack';
   const [other, setOther] = useState('');
   const [gate, setGate] = useState<RelationGate | 'supersedes'>('start');
   const [reason, setReason] = useState('');
   const [working, setWorking] = useState(false);
   const globs = useQuery({ queryKey: globsKey(glob.boardId), queryFn: () => api.globs(glob.boardId) });
   // A decision holds work globs back; a glob is held back by other work globs and by decisions.
-  const candidates = (globs.data ?? []).filter((g) => g.id !== glob.id && (!decision || !isHumanCategory(g.category)));
+  const candidates = (globs.data ?? []).filter((g) => g.id !== glob.id && (!decision || !isHumanCategory(g.category)) && (!holdsBack || !isHumanCategory(g.category)));
   const id = other.trim();
   const submit = async () => {
     if (id === '') return;
@@ -369,7 +365,7 @@ export const AddRelationForm = ({
     const text = reason.trim();
     const why = text === '' ? {} : { reason: text };
     const ok = await onAdd(
-      gate === 'supersedes' ? { ...why, supersedes: id } : decision ? { ...why, gate, holdsBack: id } : { ...why, gate, to: id, version: glob.version },
+      gate === 'supersedes' ? { ...why, supersedes: id } : holdsBack ? { ...why, gate, holdsBack: id } : { ...why, gate, to: id, version: glob.version },
     );
     setWorking(false);
     if (ok) {
@@ -388,7 +384,7 @@ export const AddRelationForm = ({
         void submit();
       }}
     >
-      <Input aria-label={decision ? 'Glob it holds back' : 'Glob or decision'} placeholder="s15t7" list={listId} value={other} onChange={(e) => setOther(e.target.value)} />
+      <Input aria-label={holdsBack ? 'Glob it holds back' : 'Glob or decision'} placeholder="s15t7" list={listId} value={other} onChange={(e) => setOther(e.target.value)} />
       <datalist id={listId}>
         {candidates.map((g) => (
           <option key={g.id} value={g.id}>
@@ -396,13 +392,13 @@ export const AddRelationForm = ({
           </option>
         ))}
       </datalist>
-      <Select aria-label="Gate" value={gate} onChange={(e) => setGate(e.target.value === 'supersedes' && !decision ? 'supersedes' : (gates.find((g) => g === e.target.value) ?? 'start'))}>
+      <Select aria-label="Gate" value={gate} onChange={(e) => setGate(e.target.value === 'supersedes' && !holdsBack ? 'supersedes' : (gates.find((g) => g === e.target.value) ?? 'start'))}>
         {gates.map((g) => (
           <option key={g} value={g}>
-            {decision ? { start: 'can’t start until decided', merge: 'can’t merge until decided', sign_off: 'can’t sign off until decided' }[g] : gateWords(g, 'merged')}
+            {holdsBack ? (decision ? { start: 'can’t start until decided', merge: 'can’t merge until decided', sign_off: 'can’t sign off until decided' }[g] : gateWords(g, 'merged', 'this')) : gateWords(g, 'merged')}
           </option>
         ))}
-        {!decision && <option value="supersedes">supersedes it (replaces its work)</option>}
+        {!holdsBack && <option value="supersedes">supersedes it (replaces its work)</option>}
       </Select>
       <Input
         aria-label="Reason (optional)"
@@ -421,57 +417,74 @@ export const AddRelationForm = ({
 };
 
 /**
- * The header of Related and of a decision's Holds back, as Human steps has it: a collapsible subheading with a count (and, while
- * collapsed, how many hold the glob back) and a ghost "+ Add …" button that opens the add form below.
+ * The header of a relation section, as Human steps has it: a collapsible subheading with a count and an optional ghost "+ Add …"
+ * button that opens the add form below.
  */
 export const RelationsHeader = ({
   open,
   onToggle,
   title,
   count,
-  holding,
   addLabel,
   onAdd,
   toggleTestId,
+  addTestId,
 }: {
   open: boolean;
   onToggle: () => void;
   title: string;
   count: number;
-  holding: number;
-  addLabel: string;
-  onAdd: () => void;
+  addLabel?: string;
+  onAdd?: () => void;
   toggleTestId: string;
+  addTestId?: string;
 }) => (
   <div className="flex items-center gap-2">
     <SectionToggle open={open} onToggle={onToggle} testId={toggleTestId}>
       {title} ({count})
-      {!open && holding > 0 && (
-        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground" data-testid="related-holding-count">
-          {holding} holding
-        </span>
-      )}
     </SectionToggle>
-    <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5 text-xs" data-testid="add-relation" onClick={onAdd}>
-      <Plus className="h-3.5 w-3.5" />
-      {addLabel}
-    </Button>
+    {addLabel !== undefined && onAdd !== undefined && (
+      <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5 text-xs" data-testid={addTestId ?? 'add-relation'} onClick={onAdd}>
+        <Plus className="h-3.5 w-3.5" />
+        {addLabel}
+      </Button>
+    )}
   </div>
 );
 
+const sectionClass = 'grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-xs';
+
+const List = ({ children }: { children: React.ReactNode }) => <ul className="ml-4 grid list-disc gap-0.5">{children}</ul>;
+
+/** The Add button's state: the form is open or closed, and clicking it opens the section. */
+const useAddForm = (open: boolean, setToggled: (open: boolean) => void) => {
+  const [adding, setAdding] = useState(false);
+  return {
+    adding,
+    toggle: () => {
+      setAdding(!(adding && open));
+      setToggled(true);
+    },
+    close: () => setAdding(false),
+  };
+};
+
+interface RelationSectionProps {
+  ctx: GlobViewContext;
+}
+
 /**
- * The Related section of a work glob: what holds it back (with the gate in words, why and who said so), the decisions it waits
- * for, the glob it was split from, what it holds back, and what no longer holds (inline, muted). Slop infers relations; a person can dismiss one
- * that isn't, or add one.
+ * Holding this back: what keeps the glob back (with the gate in words, why and who said so), the decisions it waits for, the
+ * "may relate" links, the glob it was split from, what it supersedes and a failed step's question. Slop infers relations; a person
+ * can dismiss one that isn't, or add one.
  */
-export const RelatedSection = ({
+export const HoldingSection = ({
   ctx,
   onDismissEdge,
   onAddRelation,
   onSuggestion,
   onPromote,
-}: {
-  ctx: GlobViewContext;
+}: RelationSectionProps & {
   /** The ✕ on a row: the relation is not a dependency; resolves false when it failed. */
   onDismissEdge: (relationId: string) => Promise<boolean>;
   onAddRelation: (input: AddRelationInput) => Promise<boolean>;
@@ -484,92 +497,123 @@ export const RelatedSection = ({
   const groups = relatedGroups(glob);
   const boardId = glob.boardId;
   const splitFrom = glob.split !== undefined && glob.split.part > 0 ? glob.split.source : null;
-  const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length;
   const decision = isHumanCategory(glob.category);
-  const count = groups === null ? 0 : holding + groups.holdsBack.length + groups.weak.length + groups.done.length + groups.supersedes.length + groups.suggestions.length + (groups.supersededBy === null ? 0 : 1);
+  const holding = groups === null ? 0 : groups.holding.length + groups.decisions.length;
+  const count = groups === null ? 0 : holding + groups.weak.length + groups.supersedes.length + groups.suggestions.length + (groups.supersededBy === null ? 0 : 1);
   // Starts open while something holds the glob back, until the viewer toggles it.
   const [toggled, setToggled] = useState<boolean | null>(null);
-  const [adding, setAdding] = useState(false);
-  const open = toggled ?? (holding > 0 || (groups?.suggestions.length ?? 0) > 0 || (decision && groups !== null && groups.holdsBack.length > 0));
+  const open = toggled ?? (holding > 0 || (groups?.suggestions.length ?? 0) > 0);
+  const form = useAddForm(open, setToggled);
   return (
-    <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 text-sm" aria-label="Related" data-testid="related">
+    <section className={sectionClass} aria-label="Holding this back" data-testid="holding">
       <RelationsHeader
         open={open}
         onToggle={() => setToggled(!open)}
-        title="Related"
+        title="Holding this back"
         count={count}
-        holding={holding}
-        addLabel={decision ? 'Holds back' : 'Add relation'}
-        onAdd={() => {
-          setAdding(!(adding && open));
-          setToggled(true);
-        }}
-        toggleTestId="related-toggle"
+        addLabel="Add holding"
+        onAdd={form.toggle}
+        toggleTestId="holding-toggle"
+        addTestId="add-holding"
       />
       {open && (
         <>
-      {groups !== null && groups.holding.length > 0 && (
-        <Group name="Holding this back" testId="related-holding">
-          {groups.holding.map((r) => (
-            <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} />
-          ))}
-        </Group>
-      )}
-      {groups !== null && groups.decisions.length > 0 && (
-        <Group name="Decisions" testId="related-decisions">
-          {groups.decisions.map((r) => (
-            <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} />
-          ))}
-        </Group>
-      )}
-      {groups !== null && groups.weak.length > 0 && (
-        <Group name="May relate" testId="related-weak">
-          {groups.weak.map((r) => (
-            <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} onPromote={onPromote ?? null} />
-          ))}
-        </Group>
-      )}
-      {splitFrom !== null && (
-        <p className="text-xs text-muted-foreground" data-testid="related-split-from">
-          Split from <GlobLink boardId={boardId} id={splitFrom} />
-        </p>
-      )}
-      {groups !== null && groups.holdsBack.length > 0 && (
-        <Group name="Holds back" testId="related-holds-back">
-          {groups.holdsBack.map((r) => (
-            <Row key={r.relationId} boardId={boardId} row={r} holdsBack onDismiss={null} />
-          ))}
-        </Group>
-      )}
-      {groups !== null && groups.otherBoards > 0 && (
-        <p className="text-xs text-muted-foreground" data-testid="related-other-boards">
-          {String(groups.otherBoards)} {groups.otherBoards === 1 ? 'glob' : 'globs'} on other boards {groups.otherBoards === 1 ? 'waits' : 'wait'} for this
-        </p>
-      )}
-      {groups !== null && groups.supersededBy !== null && (
-        <SupersessionLine boardId={boardId} other={groups.supersededBy} lead="Superseded by" testId="related-superseded-by" onDismiss={onDismissEdge} />
-      )}
-      {groups !== null &&
-        groups.supersedes.map((o) => <SupersessionLine key={o.id} boardId={boardId} other={o} lead="Supersedes" testId={`related-supersedes-${o.id}`} onDismiss={null} />)}
-      {groups !== null && groups.suggestions.length > 0 && (
-        <Group name="Failed step" testId="related-failed-step">
-          {groups.suggestions.map((sg) => (
-            <FailedStepItem key={sg.id} suggestion={sg} onSuggestion={onSuggestion} />
-          ))}
-        </Group>
-      )}
-      {groups !== null && groups.done.length > 0 && (
-        <div className="grid gap-0.5 text-muted-foreground" data-testid="related-done">
-          <span className="font-medium">No longer holding ({groups.done.length})</span>
-          <ul className="ml-4 list-disc">
-            {groups.done.map((r) => (
-              <Row key={r.relationId} boardId={boardId} row={r} how={r.how} onDismiss={null} />
-            ))}
-          </ul>
-        </div>
-      )}
-          {adding && <AddRelationForm ctx={ctx} gates={decision ? ['start', 'merge'] : ['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={() => setAdding(false)} />}
+          {groups !== null && holding + groups.weak.length > 0 && (
+            <List>
+              {[...groups.holding, ...groups.decisions].map((r) => (
+                <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} />
+              ))}
+              {groups.weak.map((r) => (
+                <Row key={r.relationId} boardId={boardId} row={r} onDismiss={onDismissEdge} onPromote={onPromote ?? null} />
+              ))}
+            </List>
+          )}
+          {splitFrom !== null && (
+            <p className="text-muted-foreground" data-testid="related-split-from">
+              Split from <GlobLink boardId={boardId} id={splitFrom} />
+            </p>
+          )}
+          {groups !== null && groups.supersededBy !== null && (
+            <SupersessionLine boardId={boardId} other={groups.supersededBy} lead="Superseded by" testId="related-superseded-by" onDismiss={onDismissEdge} />
+          )}
+          {groups !== null &&
+            groups.supersedes.map((o) => <SupersessionLine key={o.id} boardId={boardId} other={o} lead="Supersedes" testId={`related-supersedes-${o.id}`} onDismiss={null} />)}
+          {groups !== null && groups.suggestions.length > 0 && (
+            <div data-testid="related-failed-step">
+              <span className="font-medium">Failed step</span>
+              <ul className="ml-4 list-disc">
+                {groups.suggestions.map((sg) => (
+                  <FailedStepItem key={sg.id} suggestion={sg} onSuggestion={onSuggestion} />
+                ))}
+              </ul>
+            </div>
+          )}
+          {form.adding && (
+            <AddRelationForm ctx={ctx} mode="holding" gates={decision ? ['start', 'merge'] : ['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={form.close} />
+          )}
         </>
+      )}
+    </section>
+  );
+};
+
+/** Holds back: the globs waiting for this one, and how many on other boards do. A decision with rows starts open. */
+export const HoldsBackSection = ({ ctx, onAddRelation }: RelationSectionProps & { onAddRelation: (input: AddRelationInput) => Promise<boolean> }) => {
+  const { glob } = ctx;
+  const groups = relatedGroups(glob);
+  const decision = isHumanCategory(glob.category);
+  const rows = groups?.holdsBack ?? [];
+  const otherBoards = groups?.otherBoards ?? 0;
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const open = toggled ?? (decision && rows.length > 0);
+  const form = useAddForm(open, setToggled);
+  return (
+    <section className={sectionClass} aria-label="Holds back" data-testid="holds-back">
+      <RelationsHeader
+        open={open}
+        onToggle={() => setToggled(!open)}
+        title="Holds back"
+        count={rows.length}
+        addLabel="Add holds back"
+        onAdd={form.toggle}
+        toggleTestId="holds-back-toggle"
+        addTestId="add-holds-back"
+      />
+      {open && (
+        <>
+          {rows.length > 0 && (
+            <List>
+              {rows.map((r) => (
+                <Row key={r.relationId} boardId={glob.boardId} row={r} holdsBack onDismiss={null} />
+              ))}
+            </List>
+          )}
+          {otherBoards > 0 && (
+            <p className="text-muted-foreground" data-testid="related-other-boards">
+              {String(otherBoards)} {otherBoards === 1 ? 'glob' : 'globs'} on other boards {otherBoards === 1 ? 'waits' : 'wait'} for this
+            </p>
+          )}
+          {form.adding && <AddRelationForm ctx={ctx} mode="holdsBack" gates={decision ? ['start', 'merge'] : ['start', 'merge', 'sign_off']} onAdd={onAddRelation} onClose={form.close} />}
+        </>
+      )}
+    </section>
+  );
+};
+
+/** No longer holding: the relations that ended (muted, with how). Only shown when there are rows; starts collapsed. */
+export const NoLongerHoldingSection = ({ ctx }: RelationSectionProps) => {
+  const done = relatedGroups(ctx.glob)?.done ?? [];
+  const [open, setOpen] = useState(false);
+  if (done.length === 0) return null;
+  return (
+    <section className={`${sectionClass} text-muted-foreground`} aria-label="No longer holding" data-testid="no-longer-holding">
+      <RelationsHeader open={open} onToggle={() => setOpen(!open)} title="No longer holding" count={done.length} toggleTestId="no-longer-holding-toggle" />
+      {open && (
+        <List>
+          {done.map((r) => (
+            <Row key={r.relationId} boardId={ctx.glob.boardId} row={r} how={r.how} onDismiss={null} />
+          ))}
+        </List>
       )}
     </section>
   );
