@@ -200,3 +200,11 @@ describe('mainVariant', () => {
     expect(mainVariant(null, sub, false)).toBe('default');
   });
 });
+
+describe('mainAction after a Re-run answer with nothing working', () => {
+  it('leads with Start, with Pick up and Start anyway never the main button', () => {
+    const g = glob({ type: 'sub', status: 'pr_open', pr: pr('ready') });
+    expect(pick(['start', 'take_over', 'start_again', 'delete'], g)).toBe('start');
+    expect(pick(['start_anyway', 'take_over', 'start_again', 'delete'], g)).toBeNull();
+  });
+});

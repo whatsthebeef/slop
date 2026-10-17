@@ -6,6 +6,7 @@ import type { Transition } from '../src/domain/machine.js';
 import type { Glob } from '../src/domain/types.js';
 import { NOW, admin, board, ctx, dev, glob, other, po, relationFacts, run } from './fixtures.js';
 import { derivedSteps } from '../src/domain/human-steps.js';
+import { pendingRerun } from '../src/domain/questions.js';
 import { isRepoAccessFailure, provisioningFailureReason } from '../src/domain/provisioning.js';
 
 const value = (result: Result<Transition>): Transition => {
@@ -2509,5 +2510,63 @@ describe('workReinferred', () => {
   it('never makes a super a fix', () => {
     const t = value(m.workReinferred(glob({ category: 'feature', type: 'super' }), { fix: true, workKind: 'rnd', reason: null }, ctx(null)));
     expect(t.glob.fix).toBeUndefined();
+  });
+});
+
+describe('a Re-run answer on a plan-changed question', () => {
+  const answered = (patch: Partial<Glob> = {}): Glob =>
+    glob({
+      type: 'sub',
+      status: 'pr_open',
+      pr: { number: 7, state: 'ready', headSha: 'aaaa1111' },
+      questions: [
+        {
+          id: 'q1',
+          key: 'plan:v2',
+          text: 'plan.md changed to v2 during the run; the run used v1. Re-run, accept as is, or follow up?',
+          options: ['Re-run', 'Accept as is', 'Follow up'],
+          raisedBy: { kind: 'system', actor: null },
+          source: 'plan_save',
+          blocking: 'merge',
+          raisedAt: NOW,
+          answer: { text: 'Re-run', option: 'Re-run', by: dev.email, at: NOW, rerunFrom: 'aaaa1111' },
+        },
+      ],
+      runs: [run({ state: 'queued' })],
+      ...patch,
+    });
+
+  it('names the plan versions the work is redone between', () => {
+    expect(pendingRerun(answered())).toMatchObject({ from: 1, to: 2 });
+    expect(pendingRerun(answered({ pr: { number: 7, state: 'ready', headSha: 'bbbb2222' } }))).toBeNull();
+  });
+
+  it('starts the run active, never watching, and watches only after a push', () => {
+    const started = value(m.runProgress(answered(), 'run-0', ctx(null)));
+    expect(m.currentRun(started.glob)?.state).toBe('active');
+    const pushed = value(m.commitPushed(started.glob, { sha: 'bbbb2222', runId: 'run-0' }, ctx(null)));
+    expect(m.currentRun(pushed.glob)?.state).toBe('watching');
+  });
+
+  it('a run on a ready PR with no answer still goes straight to watching', () => {
+    const started = value(m.runProgress(answered({ questions: [] }), 'run-0', ctx(null)));
+    expect(m.currentRun(started.glob)?.state).toBe('watching');
+  });
+
+  it('with nothing working, Start is offered and Start anyway is not; a working run offers no Start', () => {
+    const idle = answered({ runs: [run({ state: 'watching' })] });
+    expect(m.rerunIdle(idle)).toBe(true);
+    const actions = m.allowedActions(idle, dev);
+    expect(actions).toContain('start');
+    expect(actions).not.toContain('start_anyway');
+    expect(actions).toContain('take_over');
+    expect(m.allowedActions(answered({ runs: [run({ state: 'active' })] }), dev)).not.toContain('start');
+  });
+
+  it('Start replaces the idle watcher with a new run', () => {
+    const t = value(m.start(answered({ runs: [run({ state: 'watching' })] }), ctx()));
+    expect(t.glob.runs.at(-2)).toMatchObject({ state: 'ended', outcome: 'superseded' });
+    expect(m.currentRun(t.glob)?.state).toBe('queued');
+    expect(errorCode(m.start(answered({ runs: [run({ state: 'active' })] }), ctx()))).toBe('invalid_transition');
   });
 });

@@ -147,6 +147,8 @@ export const runInstructions = (
   prReady = false,
   /** Slop's own retry of a watcher that gave up: the failed check (name and first lines) it must fix. */
   failureSummary: string | null = null,
+  /** A person answered Re-run to a plan-changed question: the plan versions the work is redone between. Overrides `prReady`. */
+  rerun: { from: number | null; to: number | null } | null = null,
 ): string =>
   [
     `Slop glob ${glob.id}: ${glob.title}`,
@@ -159,7 +161,14 @@ export const runInstructions = (
     '',
     `Work on the glob's branch, ${glob.id}, which already exists on origin with an open ${prReady ? 'PR' : 'draft PR'}: run \`git fetch origin ${glob.id} && git checkout -B ${glob.id} origin/${glob.id}\` first. Push only to ${glob.id} (\`git push origin ${glob.id}\`); never create or push a claude/ branch, and never open a new PR.`,
     '',
-    ...(prReady
+    ...(rerun !== null
+      ? [
+          `This is a RE-RUN on a changed plan: plan.md changed${rerun.from === null ? '' : ` from v${String(rerun.from)}`}${rerun.to === null ? '' : ` to v${String(rerun.to)}`} after the earlier run started, and a person asked for the work to be redone. The PR already exists and its code reflects the old plan, so the work is NOT done: don't just watch it.`,
+          `Run /run-glob ${glob.id} --run ${runId}, starting from phase 1 on the existing branch: read the current plan.md and the implementation record, work out what the plan change alters, and apply only that difference to the existing implementation and record (don't start over). Run the board's checks, then push to ${glob.id}.`,
+          "Start by calling slop's get_glob and get_context for the glob, passing the run ID.",
+          `Only after a push (the PR head moves) do you watch the PR as orchestrator.md's "Auto-fix (watching the PR)" section says. Call slop's mark_ready for ${glob.id} with the run ID when the work is pushed (do not use gh). If you cannot finish, call report_failure with the run ID.`,
+        ]
+      : prReady
       ? [
           `The PR is already ready for review and its auto-fix ended without fixing it. Don't run the phases or call mark_ready: read .claude/agents/orchestrator.md and follow its "Auto-fix (watching the PR)" section for glob ${glob.id} with run ID ${runId}.`,
           ...(failureSummary === null ? [] : ['This is slop retrying it automatically, once. The check that failed:', failureSummary]),

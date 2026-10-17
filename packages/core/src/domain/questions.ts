@@ -118,6 +118,26 @@ const holdsAfterRerun = (q: OpenQuestion, head: string | null): boolean =>
 export const mergeQuestions = (glob: Pick<Glob, 'questions' | 'pr'>): OpenQuestion[] =>
   questionsOf(glob).filter((q) => (isOpenQuestion(q) && q.blocking === 'merge') || holdsAfterRerun(q, glob.pr?.headSha ?? null));
 
+/** A Re-run answer whose run has not pushed since: the plan versions it applies the difference between. */
+export interface PendingRerun {
+  /** The plan version the earlier run used (null when the question's text doesn't say). */
+  readonly from: number | null;
+  /** The plan version to apply. */
+  readonly to: number | null;
+  /** The answer's time. */
+  readonly answeredAt: string;
+}
+
+/** The Re-run answer still waiting for a push (the PR head hasn't moved since it was given), if any. */
+export const pendingRerun = (glob: Pick<Glob, 'questions' | 'pr'>): PendingRerun | null => {
+  const head = glob.pr?.headSha ?? null;
+  const q = questionsOf(glob).find((c) => isPlanChangedQuestion(c) && c.answer !== undefined && holdsAfterRerun(c, head));
+  if (q?.answer === undefined) return null;
+  const to = /^plan:v(\d+)$/.exec(q.key ?? '')?.[1];
+  const from = /the run used v(\d+)/.exec(q.text)?.[1];
+  return { from: from === undefined ? null : Number(from), to: to === undefined ? null : Number(to), answeredAt: q.answer.at };
+};
+
 /** The next free question ID on a glob: one more than the highest `q<n>`. */
 export const nextQuestionId = (existing: readonly Pick<OpenQuestion, 'id'>[]): string => {
   let max = 0;
