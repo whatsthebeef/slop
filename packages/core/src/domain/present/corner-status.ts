@@ -109,6 +109,8 @@ const shortProblem = (status: StatusLine, glob: PresentableGlob): string => {
   switch (status.kind) {
     case 'provisioning':
       return 'branch not created';
+    case 'build-failed':
+      return 'build failed';
     case 'base-red':
       return status.text;
     case 'checks':
@@ -550,7 +552,7 @@ export const hasBlocker = (
   if (conflictOf(glob) != null) return true;
   if (position?.holder === 'stalled') return true;
   if (isEscalated(glob) || heldByQuestion(glob) || status?.turn === 'decide') return true;
-  return status !== null && ['provisioning', 'base-red', 'checks', 'stuck'].includes(status.kind);
+  return status !== null && ['provisioning', 'build-failed', 'base-red', 'checks', 'stuck'].includes(status.kind);
 };
 
 /** How many globs wait for this one at the start gate (its open `holdsBack` relations), for the glob view's "N waiting on this"; 0 when the view has none. */

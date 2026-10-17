@@ -36,6 +36,7 @@ import { actionPresentation, type ActionIcon } from './action-presentation.js';
 export interface StatusLine {
   readonly kind:
     | 'provisioning'
+    | 'build-failed'
     | 'base-red'
     | 'checks'
     | 'failure'
@@ -79,6 +80,7 @@ export interface StatusLine {
  */
 const PROBLEM_KINDS: ReadonlySet<StatusLine['kind']> = new Set([
   'provisioning',
+  'build-failed',
   'checks',
   'failure',
   'investigation-failed',
@@ -234,6 +236,21 @@ export const statusCandidates = (
   // A glob with no branch can't do anything else, so this comes before every other problem.
   if (provisioningFailed) {
     candidates.push(make({ kind: 'provisioning', full: reason, tone: 'text-red', tip: reason }));
+  }
+  // A failed branch deploy stays until someone acts on the glob (a push, Retry, Pick up, a new deploy).
+  const build = glob.buildFailed ?? null;
+  if (build !== null) {
+    const full = `Build failed on ${build.environment}: ${build.error}`;
+    candidates.push(
+      make({
+        kind: 'build-failed',
+        full,
+        tone: 'text-red',
+        // Only what exists: with no log link, no attachment was written either.
+        tip: [full, ...(build.logUrl === null ? [] : [`Build log: ${build.logUrl}`]), ...(build.label === null ? [] : [`Its last lines are in the attachment "${build.label}"`])].join('\n'),
+        url: build.logUrl,
+      }),
+    );
   }
   // A conflict stops the checks from re-running, so a failure beside it is the conflict's, not a second problem.
   const conflicted = (glob.conflict ?? failure?.conflict ?? null) !== null;

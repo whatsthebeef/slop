@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { CfnOutput, Duration, RemovalPolicy, Size, Stack } from 'aws-cdk-lib';
+import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Size, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import {
   AllowedMethods,
@@ -179,6 +179,14 @@ export class HostStack extends Stack {
         new PolicyStatement({
           actions: ['codebuild:StartBuild'],
           resources: deployProjects.map((name) => this.formatArn({ service: 'codebuild', resource: 'project', resourceName: name })),
+        }),
+      );
+      // A failed deploy's build log: slop reads its last lines from CloudWatch Logs (apps/server/src/build-logs.ts) and attaches
+      // them to the glob. CodeBuild's default log group is /aws/codebuild/<project>; the same projects as the StartBuild grant.
+      role.addToPolicy(
+        new PolicyStatement({
+          actions: ['logs:GetLogEvents', 'logs:DescribeLogStreams'],
+          resources: deployProjects.map((name) => this.formatArn({ service: 'logs', resource: 'log-group', resourceName: `/aws/codebuild/${name}:*`, arnFormat: ArnFormat.COLON_RESOURCE_NAME })),
         }),
       );
     }

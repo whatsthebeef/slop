@@ -204,6 +204,8 @@ export const globViewFor = (
   stored: readonly StoredHumanStep[] = [],
   /** An open action's script check, where the list read it. */
   check?: ScriptCheck,
+  /** The glob's latest build failed and nobody has acted since: Retry starts a fix run that reads the log. */
+  buildFailed = false,
 ) => ({
   ...globView(
     glob,
@@ -220,6 +222,7 @@ export const globViewFor = (
         rolloutSteps: openRolloutSteps(stored),
         // Sign off anyway is offered only once no step holds the sign-off back.
         rollout: storedBlockProgress(stored, 'sign_off'),
+        buildFailed,
       },
     ),
     artifacts,

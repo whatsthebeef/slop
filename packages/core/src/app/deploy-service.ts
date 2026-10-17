@@ -1,9 +1,12 @@
 import * as deploys from '../domain/deploys.js';
-import type { Deploy, DeployChange, DeployIndicator } from '../domain/deploys.js';
+import type { BuildFailed, Deploy, DeployChange, DeployIndicator, DeployLog } from '../domain/deploys.js';
 import { forbidden, invalidInput, notFound, ok } from '../domain/errors.js';
+import { maskSecrets } from '../domain/mask-secrets.js';
 import type { Result } from '../domain/errors.js';
 import type { Glob } from '../domain/types.js';
 import type { Clock, Hint, Notifier, Store, Tx } from '../ports.js';
+import { addArtifact } from './artifact-write.js';
+import { buildFailedFor } from './build-failed.js';
 import { markStepsDue } from './step-due.js';
 
 /** A transaction, and the deploys written in it so far (to tell open boards after it commits). */
@@ -12,6 +15,8 @@ interface DeployTx {
   readonly written: Deploy[];
   /** Globs whose human steps fell due in it (their cards' Arm system and steps change). */
   readonly due: Glob[];
+  /** Globs whose build-log attachment changed in it. */
+  readonly attached: Glob[];
 }
 
 export interface DeployServiceDeps {
@@ -25,6 +30,8 @@ export interface DeployServiceDeps {
 export interface DeployResult {
   readonly succeeded: boolean;
   readonly error: string | null;
+  /** Where the build's log is, when the provider's event said. */
+  readonly log?: DeployLog | null;
 }
 
 /**
@@ -213,6 +220,8 @@ export class DeployService {
     // Only the write that finished it succeeded it (a repeated result changes nothing, so this runs once per deploy).
     const finishedNow = change.writes.find((d) => d.id === deploy.id);
     if (finishedNow?.state === 'succeeded') await this.deployed(dtx, finishedNow);
+    if (finishedNow !== undefined && finishedNow.state !== 'waiting') await this.attachLink(dtx, finishedNow);
+    else if (result.log?.url != null) await this.lateLog(dtx, deploy, result.log);
     return done;
   }
 
@@ -227,6 +236,78 @@ export class DeployService {
     if (glob !== null && (await markStepsDue(tx, deploy.boardId, [glob.id], deploy.environment, this.deps.clock.now())).length > 0) {
       dtx.due.push(glob);
     }
+  }
+
+  /** The deploy's build-log attachment, with the link and the result; a failed build's last lines are added by the outbox job. */
+  private async attachLink(dtx: DeployTx, deploy: Deploy): Promise<void> {
+    if (deploy.logUrl === null) return;
+    const glob = await dtx.tx.getGlob(deploy.globId);
+    if (glob === null) return;
+    await this.writeLog(dtx, glob, deploy, deploys.buildLogContent(deploy));
+  }
+
+  /**
+   * The provider's event arrived after the signed callback already finished the deploy, so the log link is new: record it and
+   * attach it (and queue the last lines of a failed build).
+   */
+  private async lateLog(dtx: DeployTx, found: Deploy, log: DeployLog): Promise<void> {
+    const deploy = (await dtx.tx.getDeploy(found.id)) ?? found;
+    if (deploy.logUrl !== null || (deploy.state !== 'succeeded' && deploy.state !== 'failed')) return;
+    const next: Deploy = { ...deploy, logGroup: log.group, logStream: log.stream, logUrl: log.url };
+    await this.apply(dtx, { writes: [next], events: [], effects: deploys.logEffects(next) });
+    await this.attachLink(dtx, next);
+  }
+
+  private async writeLog(dtx: DeployTx, glob: Glob, deploy: Deploy, content: string): Promise<void> {
+    await addArtifact(dtx.tx, this.deps.clock, glob, 'slop', {
+      kind: 'attachment',
+      label: deploys.buildLogLabel(deploy),
+      content,
+      link: deploy.logUrl,
+      commitSha: deploy.sha,
+      runId: null,
+      agentSetVersion: null,
+      reviewStats: null,
+    });
+    dtx.attached.push(glob);
+  }
+
+  /**
+   * The outbox job's result for a finished build: the last lines of its log (already masked), or why they couldn't be
+   * read, as a new version of the deploy's attachment. A read, or a refusal (`denied`: the role lacks the grant), is also
+   * recorded for the board's readiness. False when nothing was written: the deploy or its glob is gone, or a replay of the
+   * job found the same text already attached (so no second version and no second readiness event).
+   */
+  async attachBuildLog(
+    deployId: string,
+    tail: { readonly lines?: string; readonly reason?: string; readonly denied?: boolean },
+  ): Promise<Result<boolean>> {
+    return this.change(async (dtx) => {
+      const deploy = await dtx.tx.getDeploy(deployId);
+      if (deploy === null) return ok(false);
+      const glob = await dtx.tx.getGlob(deploy.globId);
+      if (glob === null) return ok(false);
+      await dtx.tx.lockGlobArtifacts(glob.id);
+      const content = deploys.buildLogContent(deploy, tail);
+      // Under the artifact lock: the latest version of each label, so a replayed job sees what the first run wrote.
+      const label = deploys.buildLogLabel(deploy);
+      const current = (await dtx.tx.listArtifacts(glob.id, 'attachment')).find((a) => a.label === label);
+      if (current?.content === content) return ok(false);
+      await this.writeLog(dtx, glob, deploy, content);
+      // A stream that never became readable says nothing about access, so only a read or a refusal is recorded.
+      const now = this.deps.clock.now();
+      if (tail.lines !== undefined) await dtx.tx.appendEvents([deploys.buildLogRead(deploy, 'read', null, now)]);
+      else if (tail.denied === true) await dtx.tx.appendEvents([deploys.buildLogRead(deploy, 'denied', maskSecrets(tail.reason ?? 'access denied'), now)]);
+      return ok(true);
+    });
+  }
+
+  /**
+   * The failed builds to show on globs (board list and glob view): each glob's latest deploy when its build failed and
+   * nobody has acted on the glob since (a push, Retry, Pick up, Take over or a new deploy).
+   */
+  async buildFailedOf(boardId: number, globIds: readonly string[]): Promise<Map<string, BuildFailed>> {
+    return this.deps.store.transaction((tx) => buildFailedFor(tx, boardId, globIds));
   }
 
   private async enqueue(
@@ -257,6 +338,9 @@ export class DeployService {
       providerRef: null,
       url: null,
       error: null,
+      logGroup: null,
+      logStream: null,
+      logUrl: null,
     };
     await this.apply(dtx, deploys.request(active, deploy, now));
     return tx.getDeploy(deploy.id);
@@ -278,13 +362,15 @@ export class DeployService {
   private async change<T>(work: (tx: DeployTx) => Promise<Result<T>>): Promise<Result<T>> {
     const written: Deploy[] = [];
     const due: Glob[] = [];
-    const result = await this.deps.store.transaction((tx) => work({ tx, written, due }));
+    const attached: Glob[] = [];
+    const result = await this.deps.store.transaction((tx) => work({ tx, written, due, attached }));
     if (result.ok) {
       const globs = new Map(written.map((d) => [d.globId, d.boardId]));
       for (const [globId, boardId] of globs) {
         const hint: Hint = { kind: 'glob.deploys', boardId, globId };
         this.deps.notifier.publish(hint);
       }
+      for (const glob of attached) this.deps.notifier.publish({ kind: 'glob.artifacts', boardId: glob.boardId, globId: glob.id });
       // A step falling due changes the board's Arm system label and Human steps, which the deploys hint doesn't refresh.
       for (const glob of due) this.deps.notifier.publish({ kind: 'glob.changed', boardId: glob.boardId, globId: glob.id, version: glob.version });
     }

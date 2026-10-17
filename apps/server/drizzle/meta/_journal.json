@@ -617,6 +617,13 @@
       "when": 1792186188337,
       "tag": "0087_merge_line_head",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1792186189337,
+      "tag": "0088_deploy_build_logs",
+      "breakpoints": true
     }
   ]
 }

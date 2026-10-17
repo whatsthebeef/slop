@@ -120,7 +120,7 @@ describe('the ATF spec list for a branch deploy', () => {
           runningSince: at(1),
           startedAt: at(1),
           finishedAt: at(2),
-          providerRef: null,
+          providerRef: null, logGroup: null, logStream: null, logUrl: null,
           url: null,
           error: null,
         },

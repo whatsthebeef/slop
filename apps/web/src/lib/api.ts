@@ -200,6 +200,9 @@ export type TypeLearningResponse = Partial<TypeLearningView>;
 export type MonthSpendView = Omit<MonthSpend, 'unpricedBySource'> & {
   readonly unpricedBySource?: MonthSpend['unpricedBySource'];
 };
+/** A deploy as the API returns it; the build-log fields (s15t273) are missing from an older API, so read them with `?.`/`??`. */
+export type DeployView = Omit<Deploy, 'logGroup' | 'logStream' | 'logUrl'> & Partial<Pick<Deploy, 'logGroup' | 'logStream' | 'logUrl'>>;
+
 export type AtfRun = Omit<AtfIndicator, 'id'> & {
   readonly id?: number;
   readonly specs?: readonly RunSpecView[];
@@ -768,8 +771,8 @@ export const api = {
   /** The board's 👎 answers (admins only). */
   chatTestCases: (boardId: number) => request<{ cases: ChatTestCase[] }>('GET', `/api/boards/${boardId}/chat-feedback`).then((r) => r.cases),
   askChat: (boardId: number, input: ChatQuestion, stream?: ChatStream) => (stream === undefined ? request<ChatReply>('POST', `/api/boards/${boardId}/chat`, input) : askChatStream(boardId, input, stream)),
-  globDeploys: (id: string) => request<{ value: Deploy[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
-  deployNow: (id: string) => request<{ value: Deploy | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
+  globDeploys: (id: string) => request<{ value: DeployView[] }>('GET', `/api/globs/${id}/deploys`).then((r) => r.value),
+  deployNow: (id: string) => request<{ value: DeployView | null }>('POST', `/api/globs/${id}/deploy-now`).then((r) => r.value),
   createGlob: (boardId: number, input: NewGlob) =>
     request<GlobView>('POST', `/api/boards/${boardId}/globs`, { ...input, idempotencyKey: input.idempotencyKey ?? crypto.randomUUID() }),
   /** The board's groups with progress (the card's "name 3/5"); a group is only the label on its globs. */

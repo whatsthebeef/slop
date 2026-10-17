@@ -1,5 +1,7 @@
 import type { Notice as PresentedNotice } from '@slop/core';
 import { stripMarkdown } from '@slop/core';
+import { Link as RouterLink } from 'react-router';
+import { globPath } from '@/lib/glob-section';
 import { conflictByHand } from '@/lib/sstor-command';
 import type { GlobViewContext } from './context';
 import { Link } from './status';
@@ -59,6 +61,23 @@ export const Notice = ({
           <>
             {' ('}
             <Link href={notice.url}>check run</Link>
+            {')'}
+          </>
+        )}
+        {notice.attachment !== null && (
+          <>
+            {' ('}
+            <RouterLink
+              className="underline"
+              to={globPath(glob.boardId, glob.id, {
+                section: 'artifacts',
+                artifact: 'attachment',
+                label: notice.attachment,
+              })}
+              data-testid="notice-attachment"
+            >
+              build log
+            </RouterLink>
             {')'}
           </>
         )}

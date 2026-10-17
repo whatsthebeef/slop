@@ -193,7 +193,7 @@ describe('the ATF spec list endpoint', () => {
           runningSince: new Date(time).toISOString(),
           startedAt: new Date(time).toISOString(),
           finishedAt: state === 'succeeded' ? new Date(time).toISOString() : null,
-          providerRef: null,
+          providerRef: null, logGroup: null, logStream: null, logUrl: null,
           url: null,
           error: null,
         },

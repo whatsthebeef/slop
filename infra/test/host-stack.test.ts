@@ -7,7 +7,7 @@ import { Stack } from 'aws-cdk-lib';
 
 const env = { account: '123456789012', region: 'us-east-1' };
 
-const synth = (stage: string, extra: { amiId?: string; dataVolumeId?: string; cognitoUserPoolId?: string } = {}): Template => {
+const synth = (stage: string, extra: { amiId?: string; dataVolumeId?: string; cognitoUserPoolId?: string; deployProjects?: string[] } = {}): Template => {
   const app = new App();
   const secrets = new SlopSecrets(new Stack(app, 'Secrets', { env }), 'Secrets', { stage });
   const stack = new HostStack(app, 'Host', {
@@ -81,5 +81,43 @@ describe('HostStack', () => {
 
   it('grants nothing on Cognito without a pool', () => {
     expect(cognitoStatements(synth('dev'))).toEqual([]);
+  });
+
+  const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+  // Read from the synthesised template as unknown data, narrowed rather than cast.
+  const statementsFor = (t: Template, prefix: string): { Action: string[]; Resource: unknown }[] =>
+    Object.values(t.findResources('AWS::IAM::Policy')).flatMap((policy: unknown) => {
+      const properties = isRecord(policy) ? policy['Properties'] : undefined;
+      const document = isRecord(properties) ? properties['PolicyDocument'] : undefined;
+      const statements: unknown[] = isRecord(document) && Array.isArray(document['Statement']) ? document['Statement'] : [];
+      return statements.flatMap((s) => {
+        if (!isRecord(s)) return [];
+        const action = s['Action'];
+        const actions = (Array.isArray(action) ? action : [action]).filter((a): a is string => typeof a === 'string');
+        return actions.some((a) => a.startsWith(prefix)) ? [{ Action: actions, Resource: s['Resource'] }] : [];
+      });
+    });
+
+  // The host's own log grants (the CloudWatch agent) are not the build logs.
+  const buildLogStatements = (t: Template) => statementsFor(t, 'logs:GetLogEvents').filter((s) => JSON.stringify(s.Resource).includes('/aws/codebuild/'));
+
+  it('lets the instance read each deploy project\'s CodeBuild log group, the same projects it may start', () => {
+    const t = synth('dev', { deployProjects: ['dev-megarepo', 'dev-other'] });
+    const [start] = statementsFor(t, 'codebuild:');
+    const [logs, ...rest] = buildLogStatements(t);
+    expect(rest).toEqual([]);
+    expect(logs?.Action.sort()).toEqual(['logs:DescribeLogStreams', 'logs:GetLogEvents']);
+    const resources = JSON.stringify(logs?.Resource);
+    for (const name of ['dev-megarepo', 'dev-other']) {
+      expect(resources).toContain(`log-group:/aws/codebuild/${name}:*`);
+      expect(JSON.stringify(start?.Resource)).toContain(`project/${name}`);
+    }
+    // Only the build log groups, never every log group.
+    expect(resources).not.toContain('log-group:*');
+  });
+
+  it('grants no log access without deploy projects', () => {
+    expect(buildLogStatements(synth('dev'))).toEqual([]);
   });
 });

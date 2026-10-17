@@ -72,7 +72,7 @@ export * from './domain/board-sessions.js';
 export * from './domain/signed-off-cap.js';
 export * as deploys from './domain/deploys.js';
 export { DEPLOY_STATES, DEPLOY_TRIGGERS } from './domain/deploys.js';
-export type { Deploy, DeployChange, DeployIndicator, DeployState, DeployTrigger } from './domain/deploys.js';
+export type { BuildFailed, Deploy, DeployChange, DeployIndicator, DeployLog, DeployState, DeployTrigger } from './domain/deploys.js';
 export * as testRuns from './domain/test-runs.js';
 export { REVIEW_GUIDE_AREA } from './domain/code-review.js';
 export { SPEC_STATUSES, TEST_RUN_KINDS } from './domain/test-runs.js';

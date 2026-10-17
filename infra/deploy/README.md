@@ -9,8 +9,9 @@ not run them; `host-deploy.sh` refuses to run without a terminal unless you pass
 - `host-deploy.sh [--stage prod] [--add-project <name>]... [--remove-project <name>]... [--data-volume <vol-id>] [--hand-over-volume] [--yes]` reads the host stack's cdk context from the live stack (deploy connection,
   domain and certificate, alert email, deploy projects, the instance's AMI and data volume), prints it, runs `cdk diff`
   and asks before `cdk deploy`. Read the diff first; see `HOST.md`. `--add-project` adds a CodeBuild project to the
-  instance role's `codebuild:StartBuild` grant (repeatable; the existing projects stay); `--remove-project` drops one.
-  Names come from the command line only, never the repo. Example: `host-deploy.sh --add-project dev-megarepo-atf`.
+  instance role's `codebuild:StartBuild` grant and its log-read grant (`logs:GetLogEvents`, `logs:DescribeLogStreams` on
+  `/aws/codebuild/<project>:*`, so slop attaches a failed build's last lines to its glob) (repeatable; the existing
+  projects stay); `--remove-project` drops both. Names come from the command line only, never the repo. Example: `host-deploy.sh --add-project dev-megarepo-atf`.
   `--data-volume` names the data volume when it is detached; if it is attached outside the stack the script stops
   before CloudFormation fails, and `--hand-over-volume` does the detach-and-deploy handover (`HOST.md`).
 - `server-env.sh [--stage prod] set KEY=VALUE... [--unset KEY]... [--redeploy] [--dry-run]` changes only the named

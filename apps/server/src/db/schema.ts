@@ -341,6 +341,10 @@ export const deploys = pgTable(
     providerRef: text('provider_ref'),
     url: text('url'),
     error: text('error'),
+    // CodeBuild's log for the build, from its finished event.
+    logGroup: text('log_group'),
+    logStream: text('log_stream'),
+    logUrl: text('log_url'),
   },
   (t) => [
     index('deploys_board_env_state_idx').on(t.boardId, t.environment, t.state),

@@ -36,6 +36,8 @@ const NOT_GENERATION_CHECKED: readonly EffectKind[] = [
   // moves on; the deploy executor handles both.
   'delete_glob_data',
   'start_deploy',
+  // Reads the deploy record; a deleted glob's deploy just has nothing to attach to.
+  'attach_build_log',
   // The glob may be gone (a deleted glob's files); the key is all the executor needs.
   'delete_object',
   // Board-wide effects have no glob.

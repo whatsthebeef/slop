@@ -42,6 +42,7 @@ import { createOidcRunnerVerifier } from './atf-oidc.js';
 import { atfExecutors } from './atf-executors.js';
 import { WebhookSecrets, atfWebhookExecutors, dnsResolver, httpsTransport, runnerWebhooks } from './atf-webhooks.js';
 import { CodeBuildAtfStarter } from './atf-starter.js';
+import { CloudWatchBuildLogReader } from './build-logs.js';
 import { CodeBuildDeployer, Deployers } from './deployer.js';
 import { deployCallbackUrl, deployExecutors } from './deploy-executors.js';
 import { exclusivePathExecutors } from './exclusive-path-executors.js';
@@ -191,6 +192,7 @@ const outboxExecutors: ConstructorParameters<typeof OutboxRunner>[2] = {
       boardOf,
       deployCallbackUrl(links, config.WEBHOOK_BASE_URL ?? config.PUBLIC_URL),
       logError,
+      new CloudWatchBuildLogReader(),
     ),
     ...atfExecutors({ testRuns, starter: new CodeBuildAtfStarter(atfPolicy), boardOf, log: logError }),
     ...(webhookSecrets === null
@@ -590,6 +592,7 @@ const app = createApp({
   hub,
   outbox,
   spend,
+  deploys,
   ...(attachments === null ? {} : { attachments }),
   onBoardCreated: async (email, boardId) => {
     const adopted = await knowledge.adoptCatalogAgentSet(email, boardId);

@@ -797,7 +797,7 @@ describe('the implementation record becomes rollout steps', () => {
     const g = await newGlob();
     await merge(g.id);
     await store.transaction((tx) =>
-      tx.saveDeploys([{ id: 'd1', boardId, environment: 'production', globId: g.id, sha: 'abc1234', state: 'succeeded', trigger: 'push', requestedBy: null, requestedAt: '2026-10-13T11:00:00.000Z', runningSince: '2026-10-13T11:00:00.000Z', startedAt: '2026-10-13T11:00:00.000Z', finishedAt: '2026-10-13T11:05:00.000Z', providerRef: null, url: null, error: null }]),
+      tx.saveDeploys([{ id: 'd1', boardId, environment: 'production', globId: g.id, sha: 'abc1234', state: 'succeeded', trigger: 'push', requestedBy: null, requestedAt: '2026-10-13T11:00:00.000Z', runningSince: '2026-10-13T11:00:00.000Z', startedAt: '2026-10-13T11:00:00.000Z', finishedAt: '2026-10-13T11:05:00.000Z', providerRef: null, logGroup: null, logStream: null, logUrl: null, url: null, error: null }]),
     );
     await put(g.id, record('## Rollout\n- manual: Set the flag (env: production)\n- manual: Other (env: staging)\n'));
     expect(stepsOf(g.id).map((s) => [s.title, s.dueSince])).toEqual([

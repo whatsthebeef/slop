@@ -473,7 +473,7 @@ describe('ChatService', () => {
 
     it('still reports the board\'s failures and deploys when health cannot be read', async () => {
       withHealth(new Error('boom'));
-      const failed: Deploy = { id: 'd1', boardId, environment: 'staging', globId: 's1t7', sha: 'abc', state: 'failed', trigger: 'push', requestedBy: null, requestedAt: NOW, runningSince: NOW, startedAt: NOW, finishedAt: NOW, providerRef: null, url: null, error: 'Build exited with code 1' };
+      const failed: Deploy = { id: 'd1', boardId, environment: 'staging', globId: 's1t7', sha: 'abc', state: 'failed', trigger: 'push', requestedBy: null, requestedAt: NOW, runningSince: NOW, startedAt: NOW, finishedAt: NOW, providerRef: null, logGroup: null, logStream: null, logUrl: null, url: null, error: 'Build exited with code 1' };
       await store.transaction((tx) => tx.saveDeploys([failed]));
       unwrap(await ask('why did the deploy fail?'));
       const prompt = llm.requests[0]?.prompt ?? '';
@@ -504,7 +504,7 @@ describe('ChatService', () => {
       const other = await store.transaction((tx) => tx.insertBoard({ name: 'o', repo: null, baseBranch: 'main', timeZone: 'UTC', defaultRoutineOwner: null, environments: [], sensitivePaths: [] }));
       await store.transaction(async (tx) => {
         await tx.insertGlob(makeGlob({ boardId: other.id, id: 's9t1', title: 'Other board', status: 'failed', failure: { reason: 'other board failure', at: NOW } }), null);
-        await tx.saveDeploys([{ id: 'dx', boardId: other.id, environment: 'prod', globId: 's9t1', sha: 'x', state: 'failed', trigger: 'push', requestedBy: null, requestedAt: NOW, runningSince: null, startedAt: null, finishedAt: null, providerRef: null, url: null, error: 'other deploy' }]);
+        await tx.saveDeploys([{ id: 'dx', boardId: other.id, environment: 'prod', globId: 's9t1', sha: 'x', state: 'failed', trigger: 'push', requestedBy: null, requestedAt: NOW, runningSince: null, startedAt: null, finishedAt: null, providerRef: null, logGroup: null, logStream: null, logUrl: null, url: null, error: 'other deploy' }]);
         await tx.insertGlob(makeGlob({ boardId, id: 's1t9', title: 'Mine', status: 'failed', failure: { reason: `Merge failed with key ${secret}`, at: NOW, kind: 'merge' } }), null);
       });
       unwrap(await ask("why isn't it working?"));

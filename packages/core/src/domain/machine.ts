@@ -193,6 +193,8 @@ export interface ActionFacts {
   readonly rollout?: BlockProgress;
   /** Open rollout steps holding back sign-off (`openRolloutSteps`), where loaded: a same with any lands with Merge and continue. */
   readonly rolloutSteps?: number;
+  /** The glob's latest build failed and nobody has acted since (`buildFailedFor`), where loaded: Retry starts a fix run that reads the log. */
+  readonly buildFailed?: boolean;
   /** The glob's stored independent reviews, where loaded (Retry review is offered only once they are known). */
   readonly reviews?: readonly IndependentReviewMeta[];
 }
@@ -1192,7 +1194,7 @@ const setEnvironment = (b: Builder, environment: string | null): Builder => {
 };
 
 /** Whether the glob's PR was left by an ended auto-fix run: ready for review, a failure on the card, nobody working on it. */
-const canRetryAutofix = (glob: Glob): boolean => {
+const canRetryAutofix = (glob: Glob, facts: ActionFacts = {}): boolean => {
   const run = currentRun(glob);
   if (
     glob.status !== 'pr_open' ||
@@ -1209,6 +1211,8 @@ const canRetryAutofix = (glob: Glob): boolean => {
     glob.headChecks?.inheritedFrom === undefined
   )
     return true;
+  // A failed branch deploy nobody has acted on: a fix run reads the build log (an attachment) and pushes a fix.
+  if (facts.buildFailed === true && (glob.pr.state === 'ready' || glob.pr.state === 'draft') && glob.conflict == null) return true;
   return (
     glob.failure !== null &&
     glob.failure.kind === undefined &&
@@ -1219,10 +1223,10 @@ const canRetryAutofix = (glob: Glob): boolean => {
 };
 
 /** Row 25a: Retry auto-fix. A new routine run watches the same PR on the same branch; the failure clears. */
-export const retryAutofix = (glob: Glob, ctx: Context): Result<Transition> => {
+export const retryAutofix = (glob: Glob, ctx: Context, facts: ActionFacts = {}): Result<Transition> => {
   const actor = requireActor(ctx);
   if (hasLiveRun(glob)) return runActive('A routine run is already queued, active or watching');
-  if (!canRetryAutofix(glob))
+  if (!canRetryAutofix(glob, facts))
     return invalidTransition(glob, actor, 'Only a ready PR whose auto-fix ended can retry it');
   // On an action's record the run is a preparation round's kind: it fixes the branch and ends at `mark_ready`, nothing watches.
   return new Builder(glob, ctx)
@@ -3821,7 +3825,7 @@ export const allowedActions = (glob: Glob, actor: Actor, facts: ActionFacts = {}
   ) {
     actions.push('retrigger');
   }
-  if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob)) actions.push('retry_autofix');
+  if (!restricted && !hasLiveRun(glob) && canRetryAutofix(glob, facts)) actions.push('retry_autofix');
   if (!restricted && !hasLiveRun(glob) && canRetryMerge(glob)) actions.push('retry_merge');
   if (!restricted && !hasLiveRun(glob) && canRetryChecks(glob)) actions.push('retry_checks');
   if (!restricted && canRequestConflictFix(glob)) actions.push('resolve_conflict');
