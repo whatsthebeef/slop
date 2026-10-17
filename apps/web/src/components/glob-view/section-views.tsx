@@ -22,7 +22,7 @@ import { EscalationSection } from './escalation';
 import { FindingsPanel } from './findings';
 import { PlanSection } from './plan';
 import { QuestionsSection } from './questions';
-import { RelatedSection } from './related';
+import { HoldingSection, HoldsBackSection, NoLongerHoldingSection } from './related';
 import type { SuggestionHandler } from './related';
 import { SizeSection } from './size';
 import type { OversizedState } from '../oversized-glob';
@@ -64,7 +64,7 @@ export interface SectionProps {
   onFailStep?: (stepId: string, note: string) => Promise<boolean>;
   /** Accept (with the fix glob for a failed step) or dismiss a card suggestion; without it the suggestions show without buttons. */
   onSuggestion?: SuggestionHandler;
-  /** "Make it a gate" on a weak link in Related; without it the button is absent. */
+  /** "Make it a gate" on a weak link in Holding this back; without it the button is absent. */
   onPromoteRelation?: (relationId: string) => Promise<boolean>;
 }
 
@@ -83,8 +83,8 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
     !actions.human && reviewOpen(ctx.glob) && (
       <LabelReviews glob={ctx.glob} onReview={onReviewLabel} openLabel={openLabel} />
     ),
-  related: ({ ctx, onDismissEdge, onAddRelation, onSuggestion, onPromoteRelation }) => (
-    <RelatedSection
+  holding: ({ ctx, onDismissEdge, onAddRelation, onSuggestion, onPromoteRelation }) => (
+    <HoldingSection
       ctx={ctx}
       onDismissEdge={onDismissEdge}
       onAddRelation={onAddRelation}
@@ -92,6 +92,8 @@ export const SECTION_VIEWS: Record<GlobSection, SectionView> = {
       {...(onPromoteRelation === undefined ? {} : { onPromote: onPromoteRelation })}
     />
   ),
+  'holds-back': ({ ctx, onAddRelation }) => <HoldsBackSection ctx={ctx} onAddRelation={onAddRelation} />,
+  'no-longer-holding': ({ ctx }) => <NoLongerHoldingSection ctx={ctx} />,
   size: ({ ctx, actions, size, splitting, onSplitting, onClose }) => (
     <SizeSection
       ctx={ctx}
