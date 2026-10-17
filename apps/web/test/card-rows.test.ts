@@ -361,7 +361,7 @@ describe('"N waiting on this" in the corner status', () => {
   it('is the status of a glob with nothing else to say, opening its related globs', () => {
     const status = cornerStatus(view({ status: 'planning' }), NOW, undefined, 2);
     expect(status).toMatchObject({ kind: 'waiting-on-this', icon: 'hourglass', text: '2 waiting on this' });
-    expect(status?.click).toEqual({ section: 'related' });
+    expect(status?.click).toEqual({ section: 'holds-back' });
     expect(status?.tip).toContain('2 in Planning wait for this glob to merge.');
     expect(cornerStatus(view({ status: 'planning' }), NOW)).toBeNull();
   });

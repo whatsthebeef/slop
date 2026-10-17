@@ -14,9 +14,11 @@ export interface ParsedGlobTarget {
 
 const isSection = (name: string): name is GlobSection => GLOB_SECTIONS.some((s) => s === name);
 
-/** Other names a link may use for a section: `rollout` is what people call the Human steps section, `prerequisites` was the Dependencies section's id (now Related); `runs` and `pr` are carried by the Activity log under the actions. */
+/** Other names a link may use for a section: `rollout` is what people call the Human steps section, `prerequisites` was the Dependencies section's id (now Holding this back); `runs` and `pr` are carried by the Activity log under the actions. */
 const SECTION_ALIASES: Readonly<Record<string, GlobSection>> = {
-  prerequisites: 'related',
+  prerequisites: 'holding',
+  // The Related section was split into Holding this back, Holds back and No longer holding.
+  related: 'holding',
   // The conflict and the problems are one notice beside the primary action now.
   conflict: 'actions',
   problem: 'actions',
