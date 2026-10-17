@@ -12,6 +12,9 @@ import type { Result } from './errors.js';
  *   a merge touching one with no `## Rollout` in its implementation record is flagged (`rolloutPathsOf` has the defaults).
  * - `riskPaths`: path globs a board adds to the built-in risk paths (`riskPathsOf`): a change touching one is always a
  *   same, never a sub (infrastructure, IAM, builds, rollout scripts, a board's own agent settings).
+ * - `specPaths`: path globs of the repo's spec and guide (product behaviour docs). The post-merge knowledge pass
+ *   files a sub when a merge changes behaviour they describe and the PR didn't update them; a board with none gets
+ *   fact learnings only.
  * - `subGateCheck`: the name of the check run a sub waits for before slop applies the policy and merges it
  *   (`subGateCheckOf` has the default). A board whose repo still reports a differently named gate sets it here.
  *
@@ -22,6 +25,7 @@ export interface MergePolicy {
   readonly sizeIgnoredPaths?: readonly string[];
   readonly rolloutPaths?: readonly string[];
   readonly riskPaths?: readonly string[];
+  readonly specPaths?: readonly string[];
   readonly subGateCheck?: string;
 }
 
@@ -76,7 +80,7 @@ export const MERGE_POLICY_PATHS_MAX = 50;
 /** Longest gate check name, in characters. */
 export const MERGE_POLICY_CHECK_MAX = 100;
 
-const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths', 'riskPaths', 'subGateCheck'] as const;
+const KEYS = ['exclusivePaths', 'sizeIgnoredPaths', 'rolloutPaths', 'riskPaths', 'specPaths', 'subGateCheck'] as const;
 type PolicyKey = (typeof KEYS)[number];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -126,6 +130,8 @@ export const checkMergePolicy = (value: unknown): Result<MergePolicy> => {
   if (!rollout.ok) return rollout;
   const risk = pathList(value, 'riskPaths');
   if (!risk.ok) return risk;
+  const spec = pathList(value, 'specPaths');
+  if (!spec.ok) return spec;
   const gate = checkName(value);
   if (!gate.ok) return gate;
   return ok({
@@ -133,6 +139,7 @@ export const checkMergePolicy = (value: unknown): Result<MergePolicy> => {
     ...(ignored.value === undefined ? {} : { sizeIgnoredPaths: ignored.value }),
     ...(rollout.value === undefined ? {} : { rolloutPaths: rollout.value }),
     ...(risk.value === undefined ? {} : { riskPaths: risk.value }),
+    ...(spec.value === undefined ? {} : { specPaths: spec.value }),
     ...(gate.value === undefined ? {} : { subGateCheck: gate.value }),
   });
 };
