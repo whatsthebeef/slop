@@ -1,4 +1,4 @@
-import type { BoardService, GlobService, Result } from '@slop/core';
+import type { BoardService, Glob, GlobService, Result } from '@slop/core';
 import { AGENT_SET_MANIFEST_PATH, agentSetVersionOfTitle, err, isAgentSetGlob, ok, parseAgentSetManifest } from '@slop/core';
 import type { CodeHost } from './codehost.js';
 import { repoOf } from './codehost.js';
@@ -92,14 +92,17 @@ export const readyGate =
 export type MergeGate = (email: string, id: string) => Promise<Result<null>>;
 
 /**
- * The check before a merge is requested: an agent-set PR whose diff is empty (slop's commit never landed) is refused,
- * since merging it would land nothing. Anything else is left to the machine.
+ * The check before a merge is requested: an agent-set PR whose branch doesn't hold its manifest (slop's commit never
+ * landed) is refused, since merging it would land nothing. When the branch does hold it but the recorded head is still
+ * the start commit (the push webhook was late), the head is refreshed instead of refusing. Anything else is left to the machine.
  */
 export const mergeGate =
   (
-    host: Pick<CodeHost, 'configured' | 'diffSummary'>,
+    host: Pick<CodeHost, 'configured' | 'diffSummary' | 'readFile'>,
     globs: Pick<GlobService, 'peek'>,
     boards: Pick<BoardService, 'get'>,
+    /** Brings the glob's recorded head up to the host's (as the reconcile job would). */
+    refreshHead: (glob: Glob) => Promise<void> = () => Promise.resolve(),
   ): MergeGate =>
   async (email, id) => {
     const glob = await globs.peek(id);
@@ -113,6 +116,14 @@ export const mergeGate =
       () => false,
     );
     if (!empty) return ok(null);
+    // Fails closed, as in `readyGate`: a branch that can't be read can't be shown to hold the commit.
+    const committed = await host
+      .readFile(repo, glob.id, AGENT_SET_MANIFEST_PATH)
+      .then((text) => parseAgentSetManifest(text ?? '')?.version ?? null, () => null);
+    if (committed !== null && committed === agentSetVersionOfTitle(glob.title)) {
+      await refreshHead(glob).catch(() => undefined);
+      return ok(null);
+    }
     return err({
       code: 'invalid_transition',
       message: `slop hasn't committed agent set v${String(agentSetVersionOfTitle(glob.title))} yet`,

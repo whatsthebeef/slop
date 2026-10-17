@@ -33,6 +33,8 @@ import { AppCredentialsStore, fileSlot } from './github/credentials.js';
 import { githubDeliveryHandler } from './github/events.js';
 import { ReviewFeedbackPoller } from './review-feedback-poller.js';
 import { HostBranchFiles } from './branch-files.js';
+import { repoOf } from './codehost.js';
+import type { Glob } from '@slop/core';
 import { codeHostExecutors, queueBaseBranchRefreshes } from './codehost-executors.js';
 import { mountGitHubSetup } from './github/setup.js';
 import { mountGitHubWebhooks } from './github/webhooks.js';
@@ -578,6 +580,17 @@ if (config.AUTH_MODE === 'cognito' && (config.SIGNING_SECRET ?? '') === '') {
   console.warn('[auth] SIGNING_SECRET is not set: sign-ins and download links in flight fail across restarts and instances');
 }
 
+/** Brings a glob's recorded head up to the PR's, as the reconcile job does for a push webhook that never arrived. */
+const refreshHead = async (glob: Glob): Promise<void> => {
+  const board = await store.transaction((tx) => tx.getBoard(glob.boardId));
+  const repo = board === null ? null : repoOf(board);
+  if (repo === null || glob.pr === null) return;
+  const pr = await github.prState(repo, glob.pr.number);
+  if (pr.state === 'open' && pr.headSha !== glob.pr.headSha) {
+    await globs.applyEvent(glob.id, (g, ctx) => machine.commitPushed(g, { sha: pr.headSha, runId: null }, ctx));
+  }
+};
+
 const app = createApp({
   auth,
   intake,
@@ -585,7 +598,7 @@ const app = createApp({
   groups,
   decisions: decisionGlobs,
   readyGate: readyGate(github, globs, boards),
-  mergeGate: mergeGate(github, globs, boards),
+  mergeGate: mergeGate(github, globs, boards, refreshHead),
   links,
   boards,
   globs,
@@ -727,7 +740,7 @@ mountMcp(app, {
   groups,
   suggest: suggestService,
   readyGate: readyGate(github, globs, boards),
-  mergeGate: mergeGate(github, globs, boards),
+  mergeGate: mergeGate(github, globs, boards, refreshHead),
   boards,
   globs,
   deploys,

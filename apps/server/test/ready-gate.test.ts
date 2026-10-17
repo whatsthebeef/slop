@@ -102,6 +102,13 @@ describe("the checks on slop's agent-set glob", () => {
     expect(!empty.ok && empty.error.message).toBe("slop hasn't committed agent set v59 yet");
     host.diffSummary = () => Promise.resolve({ changedLines: 4, files: ['.claude/slop-agent-set.json'] });
     expect((await gate('dev', 's1t3')).ok).toBe(true);
+    // The branch holds the manifest but the recorded head is stale: refreshed, not refused.
+    host.diffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
+    host.readFile = () => Promise.resolve('{"version":59,"files":[]}');
+    const refreshed: string[] = [];
+    const refreshing = mergeGate(host, { peek: () => Promise.resolve(agentSet) }, member, (g) => Promise.resolve(void refreshed.push(g.id)));
+    expect((await refreshing('dev', 's1t3')).ok).toBe(true);
+    expect(refreshed).toEqual(['s1t3']);
     // Any other glob is the machine's to judge.
     host.diffSummary = () => Promise.resolve({ changedLines: 0, files: [] });
     expect((await mergeGate(host, { peek: () => Promise.resolve(glob) }, member)('dev', 's1t1')).ok).toBe(true);

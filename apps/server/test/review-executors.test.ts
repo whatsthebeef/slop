@@ -53,6 +53,13 @@ const setup = (enabled = () => Promise.resolve(true)) => {
 };
 
 describe('review_change executor', () => {
+  it('reviews nothing on an agent-set PR that holds only the start commit', async () => {
+    const { host, run, execute } = setup();
+    host.testMergeTarget = () => Promise.resolve({ outcome: 'ready', ref: 'refs/pull/7/merge', sha: 'm1', baseSha: 'b1', diff: '' });
+    expect(await execute(pre, glob({ title: 'Agent set v5', implementer: 'slop' }), deps)).toBe('dropped');
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('reviews a ready PR whose head is the queued commit', async () => {
     const { run, execute } = setup();
     expect(await execute(pre, glob(), deps)).toBe('done');
