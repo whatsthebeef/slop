@@ -104,6 +104,28 @@ export class FakeGit implements Git {
   readonly remoteBranches = new Set<string>();
   readonly pushes: string[] = [];
   remoteChecks = 0;
+  sha = 'abc1234';
+  readonly ops: string[] = [];
+
+  headSha(): Promise<string> {
+    return Promise.resolve(this.sha);
+  }
+
+  fetch(): Promise<void> {
+    this.ops.push('fetch');
+    return Promise.resolve();
+  }
+
+  checkoutBranch(_root: string, branch: string): Promise<void> {
+    this.ops.push(`checkout ${branch}`);
+    this.branch = branch;
+    return Promise.resolve();
+  }
+
+  addWorktree(_root: string, dir: string, branch: string): Promise<void> {
+    this.ops.push(`worktree ${dir} ${branch}`);
+    return Promise.resolve();
+  }
 
   currentBranch(): Promise<string | undefined> {
     return Promise.resolve(this.branch);

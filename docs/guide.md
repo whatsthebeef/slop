@@ -119,7 +119,7 @@ A decision glob (ID like `s1k4`) is a proposed change to what the project knows,
 
 A **learning** is a piece of guidance an agent or slop proposes: a gotcha, a pattern, a note on how an agent should behave, or a fact (how the system is now, after architecture or operations changed; approving it replaces the outdated description). Each one is a decision glob waiting for a person. When approved it is written into a knowledge document (project facts for agents to read) or an agent's own instructions. The **Knowledge page** shows the board's knowledge documents, the open proposals with their evidence and the diff they would make, and what was approved or rejected. Use it to review what the agents learned and keep the board's conventions accurate. Agents read approved knowledge at the start of each run.
 
-Slop does not write knowledge from a merge by itself: learnings and spec or guide updates come from the developer's `/finalise` (soon `slop finalise`) and the session's change reviewer. After a merge slop runs only its independent code review.
+Slop does not write knowledge from a merge by itself: learnings and spec or guide updates come from the developer's `/finalise` (`slop finalise` runs it headless) and the session's change reviewer. After a merge slop runs only its independent code review.
 
 ## Settings and what slop has learned
 
@@ -160,6 +160,17 @@ The chat panel, opened from the board, answers questions in plain words. It sear
 - **Save to knowledge** turns a cited answer into a learning proposal. The Include history box makes a question search older and replaced material too.
 
 Use the chat to find out why something was decided, what changed, what is open, or how a part of slop works. Each person's conversations are private to them.
+
+## The slop command line
+
+`slop` is the command line for a developer's whole lifecycle on a glob, with or without a local agent. A typical manual flow:
+
+1. `slop work <id>` picks the glob up, switches the checkout to its branch (`--worktree <dir>` adds a worktree instead) and installs the agent set, then stops. Add `--agent` to start Claude Code on it: when the glob's current run is a cloud routine you own and this checkout has no local conversation yet, it carries on that conversation (`claude --teleport`), otherwise it runs `/run-glob <id>`. `--teleport` and `--no-teleport` override the choice.
+2. Implement and commit. `slop status [<id>]` shows the glob's questions, due steps, failed checks, PR and what to do next; `slop answer <id> <question> "<answer>"` and `slop step <id> <n|step-id> done|failed|dismiss` act on them.
+3. `slop finalise <id> --note "<why>"` runs `/finalise` headless in the checkout: it uploads the implementation record, runs a local review and submits learnings (`--learnings all|facts|none`; `facts` is the default when no local agent conversation did the work).
+4. `slop ready <id>` pushes the branch and marks the PR ready (it warns when the head has no record or review), and `slop merge <id>` merges it.
+
+`slop start <id>` hands a glob in Planning to the machine, like the glob view's Start.
 
 ## sstor basics
 

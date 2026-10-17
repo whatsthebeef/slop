@@ -38,10 +38,10 @@ const MAX_POLL_DELAY_MS = 8_000;
 
 // Glob IDs as slop formats them (s1t4); also keeps an ID from reaching git as an option. Mirrors GLOB_ID_PATTERN in
 // packages/core/src/domain/ids.ts (the CLI doesn't depend on @slop/core).
-const GLOB_ID = /^s[1-9]\d*[ftbhka][1-9]\d*$/;
+export const GLOB_ID = /^s[1-9]\d*[ftbhka][1-9]\d*$/;
 
-const LIVE_RUN_STATES: ReadonlySet<string> = new Set(['queued', 'active', 'watching']);
-const MERGED_STATUSES: ReadonlySet<string> = new Set(['reviewing', 'signed_off']);
+export const LIVE_RUN_STATES: ReadonlySet<string> = new Set(['queued', 'active', 'watching']);
+export const MERGED_STATUSES: ReadonlySet<string> = new Set(['reviewing', 'signed_off']);
 
 const runSchema = z.object({
   id: z.string(),
@@ -51,6 +51,8 @@ const runSchema = z.object({
   purpose: z.string().optional(),
   lastProgressAt: z.string().nullable().optional(),
 });
+
+const artifactSchema = z.object({ kind: z.string(), commitSha: z.string().nullable().optional() });
 
 const prSchema = z.object({ number: z.number(), state: z.string() });
 
@@ -73,9 +75,11 @@ const globSchema = z.object({
   environment: z.string().nullable().default(null),
   pr: prSchema.nullable(),
   currentRun: runSchema.nullable(),
+  /** The latest version of each artifact (no content); absent on an older slop. */
+  artifacts: z.array(artifactSchema).optional(),
 });
 
-type GlobView = z.infer<typeof globSchema>;
+export type GlobView = z.infer<typeof globSchema>;
 
 const createdSchema = z.object({
   id: z.string(),
@@ -105,7 +109,7 @@ const handoverSchema = z
 
 const markedReadySchema = z.object({ id: z.string(), status: z.string(), pr: prSchema.nullable() });
 
-interface ParsedArgs {
+export interface ParsedArgs {
   readonly flags: ReadonlySet<string>;
   /** Options that take a value (`--env dev` or `--env=dev`). */
   readonly values: ReadonlyMap<string, string>;
@@ -116,7 +120,7 @@ interface ParsedArgs {
  * Splits flags from positionals; a flag outside `allowed` (or `valued`, for options that take a
  * value) is a usage error.
  */
-function parseArgs(
+export function parseArgs(
   args: readonly string[],
   allowed: readonly string[],
   usage: string,
@@ -149,19 +153,19 @@ function parseArgs(
   return { flags, values, positionals };
 }
 
-function requireGlobId(id: string, usage: string): string {
+export function requireGlobId(id: string, usage: string): string {
   if (!GLOB_ID.test(id))
     throw new UsageError(`'${id}' is not a glob ID (like s1t4)\nusage: slop ${usage}`);
   return id;
 }
 
-function requireRoot(deps: GlobDeps, command: string): string {
+export function requireRoot(deps: GlobDeps, command: string): string {
   if (deps.root === undefined) throw new SlopError(`${command}: run this inside a git checkout`);
   return deps.root;
 }
 
 /** The ID given, or the checked-out branch (a glob's branch is its ID). */
-async function globIdOrBranch(
+export async function globIdOrBranch(
   deps: GlobDeps,
   positionals: readonly string[],
   command: string,
@@ -179,7 +183,7 @@ async function globIdOrBranch(
   return branch;
 }
 
-function parseGlob(value: unknown, tool: string): GlobView {
+export function parseGlob(value: unknown, tool: string): GlobView {
   const parsed = globSchema.safeParse(value);
   if (!parsed.success) throw new SlopError(`${tool}: unexpected response from slop`);
   // A glob's branch is its ID. The branch reaches git (and sstor's `git worktree add`), so a
@@ -191,11 +195,11 @@ function parseGlob(value: unknown, tool: string): GlobView {
   return parsed.data;
 }
 
-async function getGlob(deps: GlobDeps, id: string): Promise<GlobView> {
+export async function getGlob(deps: GlobDeps, id: string): Promise<GlobView> {
   return parseGlob(await deps.client.call('get_glob', { id }), 'get_glob');
 }
 
-function liveRun(glob: GlobView): GlobView['currentRun'] {
+export function liveRun(glob: GlobView): GlobView['currentRun'] {
   const run = glob.currentRun;
   return run !== null && LIVE_RUN_STATES.has(run.state) ? run : null;
 }
@@ -212,7 +216,7 @@ function kindFields(glob: Pick<GlobView, 'category' | 'actor' | 'mode' | 'fix' |
 }
 
 /** "machine same fix": the short form of who, how and whether it fixes something. */
-function describeKind(glob: Pick<GlobView, 'category' | 'actor' | 'mode' | 'fix' | 'workKind'> & { readonly type: string | null }): string {
+export function describeKind(glob: Pick<GlobView, 'category' | 'actor' | 'mode' | 'fix' | 'workKind'> & { readonly type: string | null }): string {
   const kind = kindFields(glob);
   return `${String(kind.actor)} ${String(kind.mode)}${kind.fix === true ? ' fix' : ''}`;
 }
@@ -246,7 +250,7 @@ function describeGlob(glob: GlobView): string {
   );
 }
 
-function printJson(deps: GlobDeps, value: unknown): void {
+export function printJson(deps: GlobDeps, value: unknown): void {
   deps.stdout(`${JSON.stringify(value)}\n`);
 }
 
@@ -297,7 +301,10 @@ export async function handoverCommand(args: readonly string[], deps: GlobDeps): 
  * otherwise a terminal is asked and anything else is refused. pick_up is always called, since slop treats
  * re-picking your own glob as a no-op (and it moves your own failed glob back to in_progress).
  */
-export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
+export async function pickUp(
+  args: readonly string[],
+  deps: GlobDeps,
+): Promise<{ readonly glob: GlobView; readonly rollout: boolean; readonly json: boolean }> {
   const { flags, values, positionals } = parseArgs(args, ['--take-over', '--json'], PICK_UP_USAGE, [
     '--env',
   ]);
@@ -322,9 +329,7 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
     // slop accepts a pick-up of a merged glob that still has open rollout steps: report it as a rollout pick-up. The glob's
     // branch may be gone after the merge, so don't wait for it; sstor works on the base branch.
     deps.log(`slop: picked up ${accepted.id} (${accepted.status}, merged: rollout steps)`);
-    if (flags.has('--json')) printJson(deps, { ...globJson(accepted), rollout: true });
-    else deps.stdout(`${accepted.branch}\n`);
-    return;
+    return { glob: accepted, rollout: true, json: flags.has('--json') };
   }
   const run = liveRun(glob);
   if (run !== null && !takeOver) {
@@ -354,8 +359,13 @@ export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Pr
   );
   const ready = await waitForBranch(deps, picked);
   deps.log(`slop: picked up ${ready.id} (${ready.status})`);
-  if (flags.has('--json')) printJson(deps, globJson(ready));
-  else deps.stdout(`${ready.branch}\n`);
+  return { glob: ready, rollout: false, json: flags.has('--json') };
+}
+
+export async function pickUpCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
+  const { glob, rollout, json } = await pickUp(args, deps);
+  if (json) printJson(deps, rollout ? { ...globJson(glob), rollout: true } : globJson(glob));
+  else deps.stdout(`${glob.branch}\n`);
 }
 
 /** Polls get_glob with backoff until provisioning is ok and origin has the branch. */
@@ -554,6 +564,26 @@ function isUnexpectedUntracked(path: string): boolean {
   );
 }
 
+/** Which of the implementation record and the local review slop holds for `sha`; undefined when this slop doesn't list artifacts. */
+export function finaliseState(
+  glob: GlobView,
+  sha: string,
+): { readonly record: boolean; readonly review: boolean } | undefined {
+  if (glob.artifacts === undefined) return undefined;
+  const at = (kind: string): boolean => glob.artifacts?.some((a) => a.kind === kind && a.commitSha === sha) === true;
+  return { record: at('implementation_plan'), review: at('local_review') };
+}
+
+/** `slop ready` warns (it doesn't refuse) when slop has no implementation record or local review for the head. */
+async function warnWithoutFinalise(deps: GlobDeps, root: string, glob: GlobView): Promise<void> {
+  const state = finaliseState(glob, await deps.git.headSha(root));
+  if (state === undefined || (state.record && state.review)) return;
+  const missing = [...(state.record ? [] : ['implementation record']), ...(state.review ? [] : ['local review'])];
+  deps.log(
+    `slop: warning: ${glob.id} has no ${missing.join(' or ')} for the head commit; run \`slop finalise ${glob.id}\` first (it also submits learnings)`,
+  );
+}
+
 /**
  * `slop ready [<id>]`: push the branch and mark the glob's PR ready. A glob already in pr_open
  * with a ready PR is pushed and counts as done.
@@ -585,6 +615,7 @@ export async function readyCommand(args: readonly string[], deps: GlobDeps): Pro
     throw new SlopError(`${id} is already merged (${glob.status})`);
   if (glob.status === 'merging')
     throw new SlopError(`${id} is being merged; nothing to mark ready`);
+  await warnWithoutFinalise(deps, root, glob);
   await deps.git.push(root, id);
   const alreadyReady = glob.status === 'pr_open' && glob.pr?.state === 'ready';
   let result = { id, status: glob.status, pr: glob.pr };

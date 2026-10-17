@@ -15,6 +15,14 @@ export interface Git {
   push(root: string, branch: string): Promise<void>;
   /** Whether `origin` has the branch. */
   remoteBranchExists(root: string, branch: string): Promise<boolean>;
+  /** The commit HEAD points at. */
+  headSha(root: string): Promise<string>;
+  /** `git fetch origin`. */
+  fetch(root: string): Promise<void>;
+  /** Switches to the branch, creating it from `origin/<branch>` when it doesn't exist locally. */
+  checkoutBranch(root: string, branch: string): Promise<void>;
+  /** Adds a worktree of the branch (created from `origin/<branch>` when it doesn't exist locally) at `dir`. */
+  addWorktree(root: string, dir: string, branch: string): Promise<void>;
 }
 
 interface GitResult {
@@ -61,7 +69,32 @@ async function gitOrFail(root: string, args: readonly string[]): Promise<string>
   return result.stdout.trim();
 }
 
+async function localBranchExists(root: string, branch: string): Promise<boolean> {
+  return (
+    (await runGit(root, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])).code === 0
+  );
+}
+
 export const systemGit: Git = {
+  async headSha(root) {
+    return gitOrFail(root, ['rev-parse', 'HEAD']);
+  },
+  async fetch(root) {
+    await gitOrFail(root, ['fetch', 'origin']);
+  },
+  async checkoutBranch(root, branch) {
+    if (await localBranchExists(root, branch)) {
+      await gitOrFail(root, ['switch', branch]);
+      // Best effort: bring a stale local branch up to date (a base branch for a rollout); not fast-forwardable is left alone.
+      await runGit(root, ['merge', '--ff-only', `origin/${branch}`]);
+    } else await gitOrFail(root, ['switch', '-c', branch, '--track', `origin/${branch}`]);
+  },
+  async addWorktree(root, dir, branch) {
+    if (await localBranchExists(root, branch))
+      await gitOrFail(root, ['worktree', 'add', dir, branch]);
+    else
+      await gitOrFail(root, ['worktree', 'add', '--track', '-b', branch, dir, `origin/${branch}`]);
+  },
   async currentBranch(root) {
     const branch = await gitOrFail(root, ['branch', '--show-current']);
     return branch === '' ? undefined : branch;
