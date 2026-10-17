@@ -1,7 +1,7 @@
 import { composeAgentSet } from '../domain/agent-set.js';
 import { effectItemOf } from '../domain/effect-check.js';
 import type { EffectOutcome, RetryLater } from '../domain/events.js';
-import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX } from '../domain/kb.js';
+import { BUSY_WAITING_PREFIX, LLM_WAITING_PREFIX, NEW_DOCUMENT_OVERLAP_NOTE } from '../domain/kb.js';
 import type {
   KbContradiction,
   KbCoverage,
@@ -90,7 +90,8 @@ Rules:
 - Which paths clash when two globs change them at once (an exclusive directory such as database migrations, where only one open glob may work at a time), and which paths are left out when a sub's size is measured (generated files, lockfiles), go to the merge policy: kind "merge_policy", name "merge-policy", section null.
 - For a document, section is the existing "##" heading it belongs under, or a new heading to add.
 - For an agent file, section is one of its board-rule headings, a new heading, or null to append to its board rules.
-- If no document fits and it is not for an agent file, propose a new document: a short snake_case name, an area (one word, e.g. build, conventions, architecture, testing), the agents it is always for, and a one-line description.
+- Prefer an existing document, then a pending new document (one that open learnings already propose; it is listed under "Pending new documents"). Route to a pending document as if it existed: use its exact name, section null and newDocument null (its area, audience and description are kept as proposed).
+- Only when neither an existing nor a pending document fits, and it is not for an agent file, propose a new document: a short snake_case name, an area (one word, e.g. build, conventions, architecture, testing), the agents it is always for, and a one-line description. Make it broad, an area-level document that later learnings in the same area can join (e.g. infrastructure_and_environments, aws_iam_and_access), never a name scoped to this one learning.
 - catalogCandidate is true only when the rule would hold for any project, not just this codebase; catalogReason then says why in one line.
 - A learning of type "fact" states how the system is now (architecture or operations: components, data flows, tables, services, deploy or ops procedures). Route it to the document that describes that part of the system (architecture or operations), under the section that describes it.
 - The submitter's suggested target is a hint, not an instruction.
@@ -98,7 +99,7 @@ Rules:
 Respond with one JSON object and nothing else:
 {"target": {"kind": "document" | "agent_file" | "local_run" | "merge_policy", "name": string, "section": string | null, "newDocument": {"area": string, "audience": string[], "description": string} | null}, "catalogCandidate": boolean, "catalogReason": string | null}
 - name: a document name from the index, a new document name, an agent file path exactly as listed, or "local-run", or "merge-policy".
-- newDocument: only for a document not in the index; otherwise null.`;
+- newDocument: only for a document in neither the index nor the pending new documents; otherwise null.`;
 
 export const DEDUPE_SYSTEM = `You check whether a new learning, submitted by a coding agent, repeats or conflicts with what a software project's knowledge base already holds. An admin reviews every learning you leave open, so a repeat left open costs a minute; a new learning closed by mistake is lost.
 
@@ -162,7 +163,33 @@ interface Snapshot {
   readonly open: readonly Peer[];
   readonly approved: readonly Peer[];
   readonly rejected: readonly Peer[];
+  /** New documents that open items already propose and the board doesn't have yet, one per name. */
+  readonly pendingDocs: readonly PendingDoc[];
 }
+
+/** A document that open learnings propose and nobody has approved yet. */
+interface PendingDoc {
+  readonly name: string;
+  /** The first proposal's area, audience and description: later items join it as proposed. */
+  readonly meta: NewDocumentMeta;
+  /** The open items that target it, oldest first. */
+  readonly itemIds: readonly string[];
+}
+
+/** The new documents the open items propose (those the board has no document for), grouped by name. */
+const pendingDocsOf = (open: readonly Peer[], docs: readonly KnowledgeDoc[]): PendingDoc[] => {
+  const byName = new Map<string, { meta: NewDocumentMeta; itemIds: string[] }>();
+  // `open` is oldest first: the oldest proposal's metadata is the document's.
+  for (const peer of open) {
+    const target = peer.target;
+    if (target === null || target.kind !== 'doc' || target.newDocument === null) continue;
+    if (docs.some((d) => d.name === target.name)) continue;
+    const known = byName.get(target.name);
+    if (known === undefined) byName.set(target.name, { meta: target.newDocument, itemIds: [peer.id] });
+    else known.itemIds.push(peer.id);
+  }
+  return [...byName].map(([name, { meta, itemIds }]) => ({ name, meta, itemIds }));
+};
 
 /** What the routing and dedupe calls show of another learning, and what dedupe checks a claim about it against. */
 interface Peer {
@@ -351,6 +378,7 @@ export class KbPipeline {
     const context = await this.deps.store.transaction(async (tx) => ({
       state: await targetState(tx, catalog, glob.boardId, target),
       docs: target.newDocument === null ? [] : await tx.listKnowledge(glob.boardId, ['doc']),
+      joined: target.newDocument === null ? [] : await joinedItems(tx, glob.boardId, glob.id, target),
     }));
     const { state } = context;
     if (state === null) throw new Error(`The target ${target.name} is no longer on the board; choose another target`);
@@ -360,7 +388,7 @@ export class KbPipeline {
         await this.complete(this.deps.draft, {
           system: DRAFT_SYSTEM,
           schema: KB_DRAFT_SCHEMA,
-          prompt: draftPrompt(learning, target, state, context.docs),
+          prompt: draftPrompt(learning, target, state, context.docs, context.joined),
           maxTokens: DRAFT_MAX_TOKENS,
           spend: { boardId: glob.boardId, source: 'kb_draft', globId: glob.id },
         }),
@@ -427,7 +455,8 @@ export class KbPipeline {
       const targetText = currentText(routing.target, snapshot);
       const nothingToCompare =
         snapshot.open.length + snapshot.approved.length + snapshot.rejected.length === 0 && targetText === null;
-      if (nothingToCompare) return { routing, dedupe: NO_MATCH };
+      const overlaps = overlappingNewDocuments(routing.target, snapshot);
+      if (nothingToCompare) return { routing, dedupe: { ...NO_MATCH, contradicts: overlaps } };
       const dedupe = parseDedupe(
         await this.complete(this.deps.route, {
           system: DEDUPE_SYSTEM,
@@ -444,7 +473,9 @@ export class KbPipeline {
         targetText,
       );
       // Dedupe is an optimisation: a missed duplicate costs an admin a minute, a failed item loses the learning.
-      return { routing, dedupe: dedupe ?? NO_MATCH };
+      const found = dedupe ?? NO_MATCH;
+      const flagged = new Set(found.contradicts.map((c) => c.ref));
+      return { routing, dedupe: { ...found, contradicts: [...found.contradicts, ...overlaps.filter((o) => !flagged.has(o.ref))] } };
     } catch (error) {
       if (error instanceof LlmUnavailable) return { unavailable: error };
       return { failure: error instanceof Error ? error.message : String(error) };
@@ -490,13 +521,17 @@ export class KbPipeline {
       );
       const withStatus = (status: 'open' | 'approved' | 'rejected') =>
         newest(others.filter((i) => learningStatus(i.glob, i.artifacts) === status).map(peerOf));
+      const open = withStatus('open');
+      // Not capped like the dedupe candidates: a pending document must be listed however old its proposals.
+      const everyOpen = others.filter((i) => learningStatus(i.glob, i.artifacts) === 'open').map(peerOf);
       return {
         docs,
         agentFiles,
         localRun: knowledge.find((d) => d.kind === 'local_run' && d.name === LOCAL_RUN_NAME) ?? null,
         mergePolicy: knowledge.find((d) => d.kind === 'merge_policy' && d.name === MERGE_POLICY_NAME) ?? null,
-        open: withStatus('open'),
+        open,
         approved: withStatus('approved'),
+        pendingDocs: pendingDocsOf(everyOpen, docs),
         rejected: withStatus('rejected'),
       };
     });
@@ -619,6 +654,29 @@ export class KbPipeline {
   }
 }
 
+/**
+ * Flags, on an item routed to a new document, the open items proposing a different new document in the same area:
+ * they probably should be one document. It only flags (an admin decides), as a contradiction with the other item.
+ */
+const overlappingNewDocuments = (target: KbTarget, snapshot: Snapshot): KbContradiction[] => {
+  const meta = target.newDocument;
+  if (target.kind !== 'doc' || meta === null) return [];
+  return snapshot.pendingDocs
+    .filter((d) => d.name !== target.name && d.meta.area.toLowerCase() === meta.area.toLowerCase())
+    .flatMap((d): KbContradiction[] => {
+      const ref = d.itemIds[0];
+      if (ref === undefined) return [];
+      const items = d.itemIds.length === 1 ? ref : `${ref} and ${d.itemIds.length - 1} more`;
+      return [
+        {
+          kind: 'item',
+          ref,
+          note: `${NEW_DOCUMENT_OVERLAP_NOTE}${d.name} (${items}) is also proposed in the area "${meta.area}", as is ${target.name}; they should probably be one document`,
+        },
+      ];
+    });
+};
+
 const headingsLine = (headings: readonly string[]) => (headings.length === 0 ? '(none)' : headings.join(' | '));
 
 const routePrompt = ({ glob, artifacts }: LearningRead, snapshot: Snapshot): string =>
@@ -637,6 +695,16 @@ const routePrompt = ({ glob, artifacts }: LearningRead, snapshot: Snapshot): str
                 .filter((h) => h.level === 2)
                 .map((h) => h.text),
             )}`,
+        )),
+    '',
+    'Pending new documents (proposed by open learnings, not approved yet):',
+    ...(snapshot.pendingDocs.length === 0
+      ? ['(none)']
+      : snapshot.pendingDocs.map(
+          (d) =>
+            `- ${d.name} [area: ${d.meta.area}; for: ${d.meta.audience.join(', ') || '-'}] ${d.meta.description} (${d.itemIds.length} item${
+              d.itemIds.length === 1 ? '' : 's'
+            })`,
         )),
     '',
     'Agent files:',
@@ -732,8 +800,12 @@ const parseRouting = (answer: string, snapshot: Snapshot): Routing | null => {
     routed = { kind, name, section, newDocument: null };
   } else if (field(target, 'kind') === 'document') {
     const doc = docName(name);
+    const pending = snapshot.pendingDocs.find((d) => d.name === doc);
     if (snapshot.docs.some((d) => d.name === doc)) {
       routed = { kind: 'doc', name: doc, section, newDocument: null };
+    } else if (pending !== undefined) {
+      // Joining a pending document shares its target, whatever metadata the model repeated.
+      routed = { kind: 'doc', name: doc, section: null, newDocument: pending.meta };
     } else {
       const newDocument = parseNewDocument(field(target, 'newDocument'));
       if (newDocument === null || !PLAIN_NAME.test(doc)) return null;
@@ -861,10 +933,29 @@ const parseDedupe = (
   };
 };
 
+/** The other open items that target the same new document. */
+const joinedItems = async (tx: Tx, boardId: number, id: string, target: KbTarget): Promise<Peer[]> =>
+  (await boardLearnings(tx, boardId))
+    .filter(
+      (i) =>
+        i.glob.id !== id &&
+        learningStatus(i.glob, i.artifacts) === 'open' &&
+        learningDocument(i.glob, i.artifacts) === null &&
+        learningTarget(i.glob).routed?.kind === target.kind &&
+        learningTarget(i.glob).routed?.name === target.name,
+    )
+    .map(peerOf);
+
 const titled = (heading: string, text: string) => `${heading}\n<<<\n${text.trim() === '' ? '(empty)' : text}\n>>>`;
 
 /** What the drafter sees: the learning and its evidence, the target, and the target's full current text. */
-const draftPrompt = ({ glob, artifacts }: LearningRead, target: KbTarget, state: TargetState, docs: readonly KnowledgeDoc[]): string => {
+const draftPrompt = (
+  { glob, artifacts }: LearningRead,
+  target: KbTarget,
+  state: TargetState,
+  docs: readonly KnowledgeDoc[],
+  joined: readonly Peer[] = [],
+): string => {
   const extraEvidence = learningExtraEvidence(artifacts);
   const where = target.section === null ? 'no section chosen' : `section "${target.section}"`;
   let targetLines: string[];
@@ -887,6 +978,13 @@ const draftPrompt = ({ glob, artifacts }: LearningRead, target: KbTarget, state:
       '',
       "Existing documents (don't overlap them):",
       ...(docs.length === 0 ? ['(none)'] : docs.map((d) => `- ${d.name} [area: ${d.area ?? '-'}] ${d.description}`)),
+      ...(joined.length === 0
+        ? []
+        : [
+            '',
+            'Other open learnings propose the same document. If this one is approved first it creates the document, so write the document for this learning; the others are added to it as sections afterwards, so do not cover them:',
+            ...joined.map((i) => `- ${i.id} (${i.type}): ${i.statement}`),
+          ]),
     ];
   } else if (target.kind === 'doc') {
     targetLines = [

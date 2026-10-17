@@ -629,6 +629,49 @@ describe('KB pipeline: drafting and approving drafts', () => {
     expect(await item(second)).toMatchObject({ processing: 'routed' });
   });
 
+  it('drafts a second item against a pending new document, then redrafts it as a section once the first is approved (s15b174)', async () => {
+    const pending = {
+      kind: 'doc' as const,
+      name: 'infrastructure_and_environments',
+      section: null,
+      newDocument: {
+        area: 'infrastructure',
+        audience: ['implementer'],
+        description: 'Infrastructure and environments',
+      },
+    };
+    const first = await drafted(
+      pending,
+      draftAnswer(null, '# Infrastructure\n\n## Deploys\n\nOne.'),
+      {
+        statement: 'Deploys run from main',
+      },
+    );
+    const second = await targeted(pending, { statement: 'Stack parameters live in stacks/' });
+    drafter.answer(draftAnswer(null, '## Stack parameters\n\nTwo.'));
+    expect(await queue.process(second)).toBe(true);
+    // The drafter is told the others join the same document.
+    expect(drafter.calls.at(-1)?.prompt).toContain(
+      'Other open learnings propose the same document',
+    );
+    expect(drafter.calls.at(-1)?.prompt).toContain(`- ${first} (gotcha): Deploys run from main`);
+    expect(await item(second)).toMatchObject({ processing: 'drafted', draftedAgainstVersion: 0 });
+
+    unwrap(await approveDraft(first));
+    expect(await doc('infrastructure_and_environments')).toContain('## Deploys');
+    // The document exists now: the second item is drafted again, against it.
+    expect(await item(second)).toMatchObject({ status: 'open', processing: 'routed', draft: null });
+    drafter.answer(draftAnswer('Stack parameters', '## Stack parameters\n\nTwo.'));
+    expect(await queue.processNext()).toBe(second);
+    expect(await item(second)).toMatchObject({
+      processing: 'drafted',
+      draftedAgainstVersion: 1,
+      target: { name: 'infrastructure_and_environments', newDocument: null },
+    });
+    unwrap(await approveDraft(second));
+    expect(await doc('infrastructure_and_environments')).toContain('## Stack parameters\n\nTwo.');
+  });
+
   it('releases a draft whose target changed during the Sonnet call, to draft it again', async () => {
     const id = await targeted({ kind: 'doc', name: 'build_test_lint', section: 'Test' });
     drafter.answer(async () => {

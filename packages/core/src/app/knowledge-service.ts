@@ -4,7 +4,7 @@ import { formatId } from '../domain/ids.js';
 import { composeAgentSet, contextDiff, overlayProblem } from '../domain/agent-set.js';
 import { agentSetCommitEffect, knowledgePageEffect } from '../domain/events.js';
 import type { AgentSetEntry, AgentSetEntryStatus, ComposedAgentSet } from '../domain/agent-set.js';
-import { byEvidence, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE } from '../domain/kb.js';
+import { blockingContradictions, byEvidence, isLearningType, KB_HISTORY_MAX, KB_HISTORY_PAGE } from '../domain/kb.js';
 import type {
   DraftPreview,
   LearningWirePage,
@@ -282,7 +282,7 @@ const keptForPeople = (learning: LearningRead, setting: AgentKbApproval): string
   const wider = setting === 'docs_and_agent_files';
   const target = learningTarget(learning.glob).routed;
   if (learningDocument(learning.glob, learning.artifacts) !== null) return 'proposes a whole document';
-  if (!wider && learningLinks(learning.glob).contradicts.length > 0) return 'is flagged as contradicting existing knowledge';
+  if (!wider && blockingContradictions(learningLinks(learning.glob).contradicts).length > 0) return 'is flagged as contradicting existing knowledge';
   if (target?.kind === 'local_run') return "changes the local-run spec, which sstor runs on developers' machines";
   if (target?.kind === 'merge_policy') return 'changes the merge policy, which decides which globs wait for each other';
   if (!wider && target !== null && isAgentSetKind(target.kind)) return `changes an agent-set file (${target.kind} ${target.name}), which changes how agents behave`;
@@ -1142,7 +1142,7 @@ export class KnowledgeService {
         if (board === null) return notFound(`No board ${boardId}`);
         const kept = keptForPeople(learning, board.agentKbApproval);
         if (kept !== null) return forbidden(`${id} ${kept}: approve it on the Knowledge page, or reject it here`);
-        const contradicting = learningLinks(learning.glob).contradicts.length > 0;
+        const contradicting = blockingContradictions(learningLinks(learning.glob).contradicts).length > 0;
         if (contradicting && reason === '') {
           return invalidInput(`${id} contradicts existing knowledge: give a reason (why the contradiction is intended or resolved)`);
         }
