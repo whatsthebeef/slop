@@ -73,7 +73,7 @@ const holdsRules = (g: PresentableGlob, extra: Partial<PresentationFacts> = {}) 
     expect(p.primary).toBeNull();
     expect(p.cardPrimary).toBeNull();
     expect(p.notice).toBeNull();
-    expect(p.status?.icon).toBe('machine-spinning');
+    expect(p.status?.icon).toBe(p.pending.kind === 'pick_up' || p.pending.kind === 'take_over' ? 'human-spinning' : 'machine-spinning');
   }
   // The PR line never says ready for review beside a conflict or failed head checks.
   const prLine = p.activity.find((e) => e.id.startsWith('pr:') && !e.id.endsWith(':merged'));
