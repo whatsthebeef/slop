@@ -297,7 +297,7 @@ export const TypeChip = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActi
   );
 
 /**
- * Beside the action row (under it on narrow widths): the Arm system label and the open step's title, or the branch when there is no
+ * Beside the action row (under it on narrow widths): the Arm system label (no step title), or the branch when there is no
  * such step, one quiet mono line.
  * Human work has no branch or deploy.
  */
@@ -313,12 +313,7 @@ const ActionLineInfo = ({ ctx, line }: { ctx: GlobViewContext; line: NonNullable
   return (
     <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="action-line-info">
       {arming !== null && (
-        <>
-          <ArmSystemLabel label={arming} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
-          <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="arm-step-title">
-            {arming.tip}
-          </span>
-        </>
+        <ArmSystemLabel label={{ ...arming, tip: 'A person has a step at release. Opens Human steps' }} onOpen={() => findSection(document, 'human-steps')?.scrollIntoView({ block: 'start' })} />
       )}
       {arming === null && (
         <span className={`${META} min-w-0 truncate text-muted-foreground`} data-testid="glob-branch" title="The glob's branch">
@@ -519,11 +514,13 @@ export const GlobActions = ({
   const main = lead === null ? state.main : null;
   // Only the glob-wide escape stays while a block holds the glob: the quiet ⋯.
   const escapes = blocking === null ? [] : actions.filter((a) => a === 'take_over');
-  const moreActions = actions.filter((a) => a !== main && a !== 'decide' && tiers.get(a) !== 'destructive');
+  // A block that leaves an override as the primary (Merge anyway) keeps the rest of the row as quiet as any other block.
+  const moreActions =
+    blocking === null ? actions.filter((a) => a !== main && a !== 'decide' && tiers.get(a) !== 'destructive') : [];
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
   const hasMain = main !== null || lead !== null;
-  const hasMenu = hasMain && moves.menu.length + moreActions.length + disabled.length > 0;
+  const hasMenu = hasMain && blocking === null && moves.menu.length + moreActions.length + disabled.length > 0;
   // A glob waiting in the merge line has no main button (its card shows only the status), but Cancel merge must stay reachable: a lone ▾.
   const lineMenu = !hasMain && blocking === null && glob.status === 'merging' && moreActions.includes('cancel_merge');
   const menuItems = (

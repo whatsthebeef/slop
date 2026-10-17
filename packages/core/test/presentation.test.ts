@@ -646,6 +646,39 @@ describe('questions and decisions', () => {
   });
 });
 
+describe('a question holding the merge', () => {
+  const mergeQuestion = ([
+    {
+      id: 'q1',
+      text: 'Keep the old column?',
+      raisedBy: { kind: 'agent', actor: null },
+      source: 'raise_question',
+      blocking: 'merge',
+      raisedAt: NOW,
+    },
+  ] as unknown) as PresentableGlob['questions'];
+
+  it('says question, not ready to merge, and leads with Merge anyway', () => {
+    const p = holdsRules(
+      prOpen({ questions: mergeQuestion, allowedActions: ['merge_anyway'] }),
+    );
+    expect(p.status).toMatchObject({ kind: 'question', icon: 'human' });
+    expect(p.blocking).toEqual({ kind: 'question', id: 'q1' });
+    expect(p.primary).toBe('merge_anyway');
+    expect(p.cardPrimary).toBeNull();
+  });
+
+  it('shows the run as in progress once the answer queued one', () => {
+    const p = present(
+      prOpen({
+        allowedActions: [],
+        pendingAction: { kind: 'retrigger', at: ago(1000), by: 'dev@example.com', runId: 'r2' },
+      }),
+    );
+    expect(p.status).toMatchObject({ kind: 'pending', icon: 'machine-spinning' });
+  });
+});
+
 describe('the card in Planning', () => {
   const planning = (patch: Partial<PresentableGlob> = {}) =>
     view({ status: 'planning', list: 'planning', pr: null, ...patch });

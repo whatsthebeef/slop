@@ -12,6 +12,7 @@ import type { GlobTarget } from './glob-sections.js';
 import { onStandby, positionOf } from './position.js';
 import {
   heldByQuestion,
+  holdingQuestionsOf,
   openQuestionsOf,
   questionChipTip,
   questionText,
@@ -405,6 +406,10 @@ export const cornerStatus = (
   // A start question holds the glob in Planning: that is the reason it waits, ahead of any relation hold. Built from the glob's
   // questions (the single glob read has no `move`, and `holding` lists relations only).
   if (heldByQuestion(glob)) return questionStatus(glob, make);
+  // A merge question that holds the glob outranks "ready to merge": the merge waits for the answer (Merge anyway overrides it).
+  if (status !== null && status.kind === 'ready' && holdingQuestionsOf(glob).length > 0) {
+    return questionStatus(glob, make);
+  }
   if (status !== null && status.kind === 'ready') {
     return make('ready', 'human', status.text, status.tone, yourTurnClick(status), [status.tip]);
   }
