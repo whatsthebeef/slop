@@ -101,7 +101,7 @@ describe('the agent set commit job in Postgres', () => {
 
 describe('the commit_agent_set executor', () => {
   const board = { id: 15, repo: 'acme/app', baseBranch: 'main' } as unknown as Board;
-  const glob = { id: 's15t9', status: 'in_progress', pr: { number: 4, state: 'draft', headSha: 'a' } } as unknown as Glob;
+  const glob = { id: 's15t9', status: 'in_progress', runs: [], labels: {}, checklists: {}, prs: [], pr: { number: 4, state: 'draft', headSha: 'a' } } as unknown as Glob;
   const files = [...managedRepoFiles([{ path: 'agents/a.md', content: 'A\n' }, { path: 'hooks/h.sh', content: 'h\n' }])];
   const ready = (version: number): AgentSetPrepared => ({
     kind: 'ready',
@@ -114,6 +114,7 @@ describe('the commit_agent_set executor', () => {
   /** A host holding a branch: its manifest is the one committed last (or `previous`). */
   const setup = (prepared: AgentSetPrepared, previous: string | null, current: Glob | null = glob) => {
     const readied: string[] = [];
+    const order: string[] = [];
     const commits: { branch: string; files: readonly BranchFile[]; deletions: readonly string[]; message: string }[] = [];
     let manifest = previous;
     const host = fakeCodeHost({
@@ -124,9 +125,21 @@ describe('the commit_agent_set executor', () => {
         return Promise.resolve({ sha: 'c1', changed: true });
       },
     });
-    const run = agentSetExecutors({ prepare: () => Promise.resolve(prepared) }, host, () => Promise.resolve(current), (id) => Promise.resolve(readied.push(id))).commit_agent_set;
+    const run = agentSetExecutors({ prepare: () => Promise.resolve(prepared) }, host, () => Promise.resolve(current), (id) => {
+      order.push('ready');
+      return Promise.resolve(readied.push(id));
+    }).commit_agent_set;
     if (run === undefined) throw new Error('no executor');
-    return { commits, readied, run: () => run(agentSetCommitEffect(15), null, { globs: undefined as never }) };
+    const recorded: { id: string; sha: string | undefined }[] = [];
+    const globs = {
+      applyEvent: (id: string, fn: (g: Glob, ctx: never) => { ok: boolean; value?: { glob?: Glob } }) => {
+        order.push('head');
+        const result = fn(current ?? glob, { now: NOW } as never);
+        recorded.push({ id, sha: result.value?.glob?.pr?.headSha ?? undefined });
+        return Promise.resolve(result);
+      },
+    };
+    return { commits, readied, recorded, order, run: () => run(agentSetCommitEffect(15), null, { globs: globs as never }) };
   };
 
   it('commits the files and the manifest to the glob branch, removes what the old manifest listed, and ends with the trailer', async () => {
@@ -155,6 +168,13 @@ describe('the commit_agent_set executor', () => {
     const open = setup(ready(42), null, { ...glob, pr: { number: 4, state: 'ready', headSha: 'a' } });
     await open.run();
     expect(open.readied).toEqual([]);
+  });
+
+  it('records the commit as the PR head before it asks for ready', async () => {
+    const { recorded, order, run } = setup(ready(42), null);
+    await run();
+    expect(recorded).toEqual([{ id: 's15t9', sha: 'c1' }]);
+    expect(order).toEqual(['head', 'ready']);
   });
 
   it('does nothing the second time: the branch manifest already says the version', async () => {

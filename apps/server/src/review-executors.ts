@@ -1,3 +1,4 @@
+import { isAgentSetGlob } from '@slop/core';
 import type { Board, EffectKind, Glob } from '@slop/core';
 import type { Executor } from './jobs/outbox.js';
 import type { CodeHost } from './codehost.js';
@@ -40,6 +41,8 @@ export const reviewExecutors = (
     const resolved = await resolveReviewTarget(host, repo, glob);
     if (resolved.outcome === 'undecided') throw new Error('The host has not computed the test merge yet');
     if (resolved.outcome !== 'ready' || (!onDemand && resolved.stage !== effect.stage)) return 'dropped';
+    // An agent-set PR with nothing but the start commit has nothing to review: the commit's own head queues the review.
+    if (resolved.stage === 'pre_merge' && isAgentSetGlob(glob) && resolved.diff.diff.trim() === '') return 'dropped';
     await run(glob, resolved);
     return 'done';
   },
