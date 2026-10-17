@@ -313,7 +313,16 @@ export const actionPresentation = (
         placement: 'main',
       };
     case 'reopen':
-      return { label: 'Reopen', icon: null, tip: 'Reopens the decision', placement: 'more' };
+      return {
+        label: 'Reopen',
+        icon: null,
+        // A decision has no PR: its Reopen is the plain one; a merged glob starts its next generation.
+        tip:
+          decision || glob.pr === null
+            ? 'Reopens the decision'
+            : 'Sends the merged glob back to Doing as a new generation, with a reason; approvals are cleared',
+        placement: 'more',
+      };
     case 'complete_action':
       return {
         label: 'Done',

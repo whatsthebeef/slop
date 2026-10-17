@@ -30,6 +30,7 @@ export const NEW_USAGE =
 export const READY_USAGE = 'ready [<id>] [--json]';
 export const DELETE_USAGE = 'delete <id> [--reason <text>] [--yes] [--json]';
 export const MERGE_USAGE = 'merge [<id>] [--continue] [--json]';
+export const REOPEN_USAGE = 'reopen <id> --reason <text> [--json]';
 
 /** How long pick-up waits for the glob's branch. */
 export const PROVISION_TIMEOUT_MS = 60_000;
@@ -711,4 +712,23 @@ export async function deleteCommand(args: readonly string[], deps: GlobDeps): Pr
   });
   if (flags.has('--json')) printJson(deps, { deleted: id });
   else deps.stdout(`${id}: deleted\n`);
+}
+
+/**
+ * `slop reopen <id> --reason <text>`: send a merged glob in Reviewing back to Doing as a new generation, like the glob view's
+ * Reopen. The reason is required: the next run reads it as feedback. slop enforces where it applies.
+ */
+export async function reopenCommand(args: readonly string[], deps: GlobDeps): Promise<void> {
+  const { flags, values, positionals } = parseArgs(args, ['--json'], REOPEN_USAGE, ['--reason']);
+  const [id] = positionals;
+  const reason = values.get('--reason');
+  if (id === undefined || positionals.length !== 1 || reason === undefined || reason.trim() === '')
+    throw new UsageError(`usage: slop ${REOPEN_USAGE}`);
+  const glob = await getGlob(deps, requireGlobId(id, REOPEN_USAGE));
+  const reopened = parseGlob(await deps.client.call('reopen_glob', { id, version: glob.version, reason }), 'reopen_glob');
+  if (flags.has('--json')) {
+    printJson(deps, globJson(reopened));
+    return;
+  }
+  deps.stdout(`${id}: ${reopened.status} (reopened as a new generation; approvals are cleared)\n`);
 }

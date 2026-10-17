@@ -122,6 +122,8 @@ export const DOMAIN_EVENT_TYPES = [
   'HumanStepChanged',
   /** A rollout step failed after the merge: the glob's next generation starts on a fresh branch (data: the step, its title, the new generation). */
   'RolloutStepFailed',
+  /** A person sent a merged glob in Reviewing back to Doing as a new generation (data: the masked reason, the new generation). */
+  'GlobReopened',
   /** The last work step holding back sign-off was done (or dismissed), so the glob moved on. */
   'RolloutDone',
   /** A person merged a glob although `merge` relations held it (data: `for`, the globs it waited on, and the `reason`). Not `HoldOverridden`: Start-now learning reads that. */

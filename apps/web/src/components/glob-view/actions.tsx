@@ -121,6 +121,8 @@ export const useGlobActions = ({
   const [finishing, setFinishing] = useState<'complete_action' | 'dismiss_action' | 'fail_action' | null>(null);
   // Start now, Merge anyway and Sign off anyway override what holds the glob back: they say what it is and ask why first.
   const [confirmingAnyway, setConfirmingAnyway] = useState<AnywayAction | null>(null);
+  // Reopen sends a merged glob back to Doing as a new generation: it says what follows and asks why first.
+  const [confirmingReopen, setConfirmingReopen] = useState(false);
   // "Why you're needed": what the confirmations of Pick up and Start say.
   const brief = handoverToShow(glob);
   useEffect(() => {
@@ -130,6 +132,7 @@ export const useGlobActions = ({
     setConfirmingOversized(null);
     setFinishing(null);
     setConfirmingAnyway(null);
+    setConfirmingReopen(false);
   }, [glob.id]);
 
   // deescalate and make_super are reached through the type popover.
@@ -185,6 +188,11 @@ export const useGlobActions = ({
       setConfirmingAgain(true);
       return;
     }
+    // A decision's Reopen takes it back to choose again and asks nothing.
+    if (action === 'reopen' && !decision) {
+      setConfirmingReopen(true);
+      return;
+    }
     if (action === 'take_over') {
       setConfirmingTakeOver(true);
       return;
@@ -219,11 +227,20 @@ export const useGlobActions = ({
       if (ok) setConfirmingAnyway(null);
     });
 
+  /** Runs Reopen with the reason typed in its confirmation. */
+  const confirmReopen = (reason: string) =>
+    act('reopen', undefined, reason).then((ok) => {
+      if (ok) setConfirmingReopen(false);
+    });
+
   return {
     decision,
     human,
     presentation,
     act,
+    confirmingReopen,
+    setConfirmingReopen,
+    confirmReopen,
     confirmingAnyway,
     setConfirmingAnyway,
     confirmAnyway,
@@ -492,6 +509,43 @@ const AnywayConfirmation = ({ ctx, state }: { ctx: GlobViewContext; state: GlobA
   );
 };
 
+/** Reopen on a merged glob: what follows, and why (required: the next run reads it as feedback). */
+const ReopenConfirmation = ({ ctx, state }: { ctx: GlobViewContext; state: GlobActionsState }) => {
+  const [text, setText] = useState('');
+  const open = state.confirmingReopen;
+  useEffect(() => setText(''), [open, ctx.glob.id]);
+  if (!open) return null;
+  return (
+    <div
+      role="alertdialog"
+      aria-label="Reopen"
+      className="grid gap-2 rounded border border-amber/60 bg-amber/10 p-2 text-xs"
+      data-testid="reopen-confirmation"
+    >
+      <p data-testid="reopen-says">
+        {ctx.glob.id} goes back to Doing as a new generation on a fresh branch. Approvals are cleared, so it is reviewed and signed off again.
+      </p>
+      <label className="grid gap-1">
+        <span>Why is it reopened? (required) The next run reads this.</span>
+        <Input value={text} autoFocus maxLength={2000} data-testid="reopen-reason" onChange={(e) => setText(e.target.value)} />
+      </label>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => state.setConfirmingReopen(false)}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={state.busy || text.trim() === ''}
+          data-testid="confirm-reopen"
+          onClick={() => void state.confirmReopen(text.trim())}
+        >
+          Reopen
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 /** The `actions` section's content: the handover box, the main button, More ▾ and the confirmations. */
 export const GlobActions = ({
   ctx,
@@ -699,6 +753,7 @@ export const GlobActions = ({
           </div>
           <FinishAction ctx={ctx} state={state} />
           <AnywayConfirmation ctx={ctx} state={state} />
+          <ReopenConfirmation ctx={ctx} state={state} />
           {state.confirmingReady && (
             <div
               role="alert"

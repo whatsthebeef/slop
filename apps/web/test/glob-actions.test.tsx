@@ -1350,3 +1350,56 @@ describe('glob view: Start now, Merge anyway and Sign off anyway', () => {
     expect(cb.onAction).toHaveBeenCalledWith('start_anyway');
   });
 });
+
+describe('Reopen on a merged glob', () => {
+  const merged = (allowedActions: Action[]) =>
+    view({ status: 'reviewing', list: 'reviewing', pr: { number: 7, state: 'merged', headSha: 'aaa' }, allowedActions });
+
+  it('is in the ▾ menu in Reviewing, never the main button', async () => {
+    const user = userEvent.setup();
+    renderGlob(merged(['review_now', 'reopen', 'delete']));
+    expect(mainButton()?.textContent).not.toContain('Reopen');
+    await user.click(screen.getByTestId('more-actions'));
+    expect((await screen.findByTestId('more-reopen')).textContent).toContain('Reopen');
+  });
+
+  it('is not offered where the server does not allow it (Signed off, Doing)', () => {
+    renderGlob(view({ status: 'signed_off', list: 'signed_off', pr: { number: 7, state: 'merged', headSha: 'aaa' }, allowedActions: ['review_now', 'delete'] }));
+    expect(screen.queryByTestId('more-reopen')).toBeNull();
+    cleanup();
+    renderGlob(view({ status: 'in_progress', list: 'doing', allowedActions: ['review_now', 'start_again', 'delete'] }));
+    expect(screen.queryByTestId('more-reopen')).toBeNull();
+  });
+
+  it('asks for a reason first: the confirm stays off while it is empty, then one request carries it', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(merged(['review_now', 'reopen', 'delete']));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-reopen'));
+    expect(cb.onAction).not.toHaveBeenCalled();
+    const dialog = screen.getByTestId('reopen-confirmation');
+    expect(within(dialog).getByTestId('reopen-says').textContent).toContain('Approvals are cleared');
+    expect(within(dialog).getByTestId('reopen-says').textContent).toContain('new generation');
+    const confirm = within(dialog).getByTestId<HTMLButtonElement>('confirm-reopen');
+    expect(confirm.disabled).toBe(true);
+    await user.type(within(dialog).getByTestId('reopen-reason'), '   ');
+    expect(confirm.disabled).toBe(true);
+    await user.clear(within(dialog).getByTestId('reopen-reason'));
+    await user.type(within(dialog).getByTestId('reopen-reason'), 'The migration missed a column');
+    expect(confirm.disabled).toBe(false);
+    await user.click(confirm);
+    expect(cb.onAction).toHaveBeenCalledTimes(1);
+    expect(cb.onAction).toHaveBeenCalledWith('reopen', undefined, 'The migration missed a column');
+    await waitFor(() => expect(screen.queryByTestId('reopen-confirmation')).toBeNull());
+  });
+
+  it('Cancel closes the dialog without a request', async () => {
+    const user = userEvent.setup();
+    const cb = renderGlob(merged(['review_now', 'reopen', 'delete']));
+    await user.click(screen.getByTestId('more-actions'));
+    await user.click(await screen.findByTestId('more-reopen'));
+    await user.click(within(screen.getByTestId('reopen-confirmation')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('reopen-confirmation')).toBeNull();
+    expect(cb.onAction).not.toHaveBeenCalled();
+  });
+});

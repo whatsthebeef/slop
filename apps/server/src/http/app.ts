@@ -756,7 +756,11 @@ export const createApp = (deps: AppDeps) => {
     'resolve-conflict': (email: string, id: string, b: ActionBody) => globs.resolveConflict(email, id, b.version),
     // Decision globs (the outcome has its own route: POST /api/globs/:id/decision).
     'sign-off': (email: string, id: string, b: ActionBody) => globs.signOffDecision(email, id, b.version),
-    reopen: (email: string, id: string, b: ActionBody) => (deps.decisions ?? { reopen: (e: string, i: string, v: number) => globs.reopenDecision(e, i, v) }).reopen(email, id, b.version),
+    // A decision goes back to Doing to choose again; a merged work glob in Reviewing starts its next generation, with a reason.
+    reopen: async (email: string, id: string, b: ActionBody) =>
+      (await globs.categoryOf(id)) === 'decision'
+        ? (deps.decisions ?? { reopen: (e: string, i: string, v: number) => globs.reopenDecision(e, i, v) }).reopen(email, id, b.version)
+        : globs.reopen(email, id, b.reason ?? '', b.version),
     // Action globs: a person did it (optional note), or it is not needed (reason required).
     done: (email: string, id: string, b: ActionBody) => globs.completeAction(email, id, b.version, b.note),
     dismiss: (email: string, id: string, b: ActionBody) => globs.dismissAction(email, id, b.version, b.reason ?? ''),
@@ -806,6 +810,7 @@ export const createApp = (deps: AppDeps) => {
     'pick-up',
     'take-over',
     'start-again',
+    'reopen',
     // A prepared action's round provisions its branch and fires a routine; Done queues the merge of its record.
     'prepare',
     'fail',
@@ -823,6 +828,7 @@ export const createApp = (deps: AppDeps) => {
     'retry-autofix': 'retry_autofix',
     'resolve-conflict': 'resolve_conflict',
     'start-again': 'start_again',
+    reopen: 'reopen',
     merge: 'merge',
     'merge-anyway': 'merge_anyway',
     'merge-continue': 'merge_continue',
@@ -832,7 +838,10 @@ export const createApp = (deps: AppDeps) => {
     prepare: 'prepare_action',
   } as const satisfies { readonly [route: string]: machine.Action };
   // Of those, the ones that queue a routine run: the pending click then names it, and ends with it.
-  const RUN_ACTIONS: ReadonlySet<string> = new Set(['start', 'start-anyway', 'investigate', 'retrigger', 'retry-autofix', 'resolve-conflict', 'start-again']);
+  const RUN_ACTIONS: ReadonlySet<string> = new Set(['start', 'start-anyway', 'investigate', 'retrigger', 'retry-autofix', 'resolve-conflict', 'start-again', 'reopen']);
+  // Clicks that queue a run only sometimes: with none queued (a person's glob goes straight to Doing, a decision to choose again) the
+  // glob already shows the effect, so a pending click would never see a later change and time out as "had no effect".
+  const PENDING_ONLY_WITH_RUN: ReadonlySet<string> = new Set(['reopen']);
   // Refusals worth keeping on the glob: a stale version or a missing glob says nothing about the glob itself.
   const KEPT_REFUSALS: ReadonlySet<string> = new Set(['invalid_transition', 'run_active', 'invalid_input', 'forbidden']);
 
@@ -843,15 +852,19 @@ export const createApp = (deps: AppDeps) => {
     if (body instanceof Response) return body;
     const email = c.get('email');
     const result = await actions[action.data](email, c.req.param('id'), body);
-    const kind = (PENDING_ACTIONS as { readonly [route: string]: machine.Action | undefined })[action.data];
+    // A decision's Reopen applies in the request and keeps no pending click or refusal, as before work globs had one.
+    const kind =
+      action.data === 'reopen' && (await globs.categoryOf(c.req.param('id'))) === 'decision'
+        ? undefined
+        : (PENDING_ACTIONS as { readonly [route: string]: machine.Action | undefined })[action.data];
     {
       // Recording never fails the click: a stale version (a webhook moved the glob first) or a store error just leaves it unrecorded.
       try {
-        if (result.ok && kind === undefined) {
+        const run = result.ok ? machine.currentRun(result.value) : null;
+        if (result.ok && (kind === undefined || (PENDING_ONLY_WITH_RUN.has(action.data) && run?.state !== 'queued'))) {
           // Not a click with an effect to wait for, but still the next click: the last outcome's notice goes away.
           await globs.clearOutcome(email, result.value.id, result.value.version);
         } else if (result.ok && kind !== undefined) {
-          const run = machine.currentRun(result.value);
           const runId = RUN_ACTIONS.has(action.data) && run?.state === 'queued' ? run.id : undefined;
           // Before the drain: a job that settles the glob right away must find the click already pending, not set it afterwards.
           await globs.recordRequested(email, result.value.id, kind, result.value.version, runId);
