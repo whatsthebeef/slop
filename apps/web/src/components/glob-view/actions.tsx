@@ -515,14 +515,19 @@ export const GlobActions = ({
   // Only the glob-wide escape stays while a block holds the glob: the quiet ⋯.
   const escapes = blocking === null ? [] : actions.filter((a) => a === 'take_over');
   // A block that leaves an override as the primary (Merge anyway) keeps the rest of the row as quiet as any other block.
-  const moreActions =
+  const menuCandidates =
     blocking === null ? actions.filter((a) => a !== main && a !== 'decide' && tiers.get(a) !== 'destructive') : [];
+  // With no primary the row still shows a button: the first glob-wide action as an outline, never a bare ▾ (Cancel merge while merging).
+  const promoted =
+    main === null && lead === null && blocking === null && state.presentation.pending === null && !busy
+      ? (['cancel_merge', 'review_now', 'take_over', 'pick_up'] as const).find((a) => menuCandidates.includes(a)) ?? menuCandidates[0] ?? null
+      : null;
+  const moreActions = menuCandidates.filter((a) => a !== promoted);
   const { confirmingOversized } = state;
   // The ▾ only ever joins a main button: with none (no allowed action to promote) the row shows nothing.
-  const hasMain = main !== null || lead !== null;
+  const hasMain = main !== null || lead !== null || promoted !== null;
   const hasMenu = hasMain && blocking === null && moves.menu.length + moreActions.length + disabled.length > 0;
-  // A glob waiting in the merge line has no main button (its card shows only the status), but Cancel merge must stay reachable: a lone ▾.
-  const lineMenu = !hasMain && blocking === null && glob.status === 'merging' && moreActions.includes('cancel_merge');
+  // Destructive actions never lead and have their own visible danger buttons below, so a menu of only them never shows.
   const menuItems = (
     <>
       {moves.menu.map((move) => (
@@ -567,15 +572,15 @@ export const GlobActions = ({
       ))}
     </>
   );
-  const menu = hasMenu || lineMenu ? (
+  const menu = hasMenu ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          variant={lineMenu ? 'outline' : state.variant}
+          variant={promoted !== null ? 'outline' : state.variant}
           className={
-            lineMenu
-              ? 'px-1.5'
+            promoted !== null
+              ? 'rounded-l-none -ml-px px-1.5'
               : state.variant === 'outline'
                 ? 'rounded-l-none -ml-px px-1.5'
                 : 'rounded-l-none border-l-primary-foreground/40 px-1.5'
@@ -597,7 +602,7 @@ export const GlobActions = ({
   const notice = state.presentation.notice;
   return (
     <>
-      {(hasMain || lineMenu || escapes.length > 0 || info !== null || notice !== null) && (
+      {(hasMain || escapes.length > 0 || info !== null || notice !== null) && (
         <div className="grid gap-1">
           <Notice ctx={ctx} notice={notice} />
           <div className="flex flex-wrap items-center gap-2" data-testid="glob-actions">
@@ -672,7 +677,24 @@ export const GlobActions = ({
                 {menu}
               </div>
             )}
-            {lineMenu && menu}
+            {promoted !== null && (
+              <div className="inline-flex" data-testid="split-button">
+                <Tip text={tipOf(promoted, glob, state.viewer?.email)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={hasMenu ? 'rounded-r-none' : undefined}
+                    disabled={busy}
+                    data-testid="main-action"
+                    data-variant="outline"
+                    onClick={() => state.begin(promoted)}
+                  >
+                    <ActionContent action={promoted} ctx={ctx} state={state} />
+                  </Button>
+                </Tip>
+                {menu}
+              </div>
+            )}
             {info}
           </div>
           <FinishAction ctx={ctx} state={state} />
