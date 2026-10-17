@@ -695,18 +695,18 @@ export const chainTip = (glob: PresentableGlob): string =>
     .join(', ');
 
 export interface HoldLine {
-  /** The holder's ID ("s15f145", "decision s15k123"), or "merge held · s15f145" / "sign-off held · s15f145" for a later gate; the other holds are in the tip. */
+  /** Only the first holder's ID ("s15f145"), at every gate and for every kind of holder; the gate, the kind and the other holds are in the tip. */
   readonly text: string;
   /** One line per hold: what it waits for, where that stands and why. */
   readonly tip: string;
-  /** A person must decide when the first hold is a decision glob, or acts once an action is free; otherwise the hourglass. */
-  readonly icon: 'human' | 'hourglass';
+  /** Always the hourglass: the glob waits, whoever the holder is. */
+  readonly icon: 'hourglass';
 }
 
 const GATE_WORDS = {
-  start: { head: 'waiting', tip: 'Waits for' },
-  merge: { head: 'merge held', tip: 'Merge waits for' },
-  sign_off: { head: 'sign-off held', tip: 'Sign-off waits for' },
+  start: { tip: 'Waits for' },
+  merge: { tip: 'Merge waits for' },
+  sign_off: { tip: 'Sign-off waits for' },
 } as const;
 
 /**
@@ -730,7 +730,7 @@ export const holdLine = (glob: PresentableGlob): HoldLine | null => {
   const [first] = held;
   if (first === undefined) return null;
   return {
-    text: first.gate === 'start' ? named(first) : `${GATE_WORDS[first.gate].head} · ${named(first)}`,
+    text: first.external?.hidden === true ? OTHER_BOARD_GLOB : first.to,
     tip: held
       .map(
         (h) =>
@@ -738,11 +738,7 @@ export const holdLine = (glob: PresentableGlob): HoldLine | null => {
           `${GATE_WORDS[h.gate].tip} ${waitsForWords(h)}${h.external?.hidden === true ? '' : ` (${holdState(h.state)})`}${reasonTail(h)}`,
       )
       .join('\n'),
-    // A person will do an action once it is free, so it reads as theirs even while it waits.
-    icon:
-      first.toIsDecision || first.toIsAction === true || glob.category === 'action'
-        ? 'human'
-        : 'hourglass',
+    icon: 'hourglass',
   };
 };
 

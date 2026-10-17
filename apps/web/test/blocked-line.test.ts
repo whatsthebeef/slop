@@ -46,13 +46,13 @@ describe('holdLine', () => {
     expect(holdLine(view({ status: 'in_progress', holding: [hold('s1t1')] }))).toBeNull();
   });
 
-  it('says a start hold by a glob, a decision and a merge gate in the gate\'s words', () => {
+  it('says a start hold by a glob, a decision and a merge gate as only the holder\'s ID', () => {
     expect(holdLine(view({ status: 'planning', holding: [hold('s1t1')] }))).toMatchObject({ text: 's1t1', icon: 'hourglass' });
     expect(holdLine(view({ status: 'planning', holding: [hold('s1k1', { toIsDecision: true, until: 'decided' })] }))).toMatchObject({
-      text: 'decision s1k1',
-      icon: 'human',
+      text: 's1k1',
+      icon: 'hourglass',
     });
-    expect(holdLine(prOpen({ holding: [hold('s1k1', { toIsDecision: true, gate: 'merge' })] }))?.text).toBe('merge held · decision s1k1');
+    expect(holdLine(prOpen({ holding: [hold('s1k1', { toIsDecision: true, gate: 'merge' })] }))?.text).toBe('s1k1');
   });
 
   it('names the first of several and counts the others, and the tip lists each with its reason', () => {
