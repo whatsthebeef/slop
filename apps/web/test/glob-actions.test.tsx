@@ -491,7 +491,7 @@ describe('glob view: Reset', () => {
     await user.click(within(area).getByTestId('reset-start_again'));
     expect(cb.onAction).not.toHaveBeenCalled();
     expect(screen.getByTestId('start-again-says').textContent).toBe(
-      startAgainConfirmation(glob, board.baseBranch),
+      startAgainConfirmation(glob),
     );
     await user.click(within(area).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('start-again-says')).toBeNull();

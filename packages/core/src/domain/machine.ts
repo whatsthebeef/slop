@@ -1489,7 +1489,10 @@ export const resolveConflict = (glob: Glob, ctx: Context): Result<Transition> =>
     .done();
 };
 
-/** Row 23: return the glob to its starting status with a fresh branch and PR. */
+/**
+ * Row 23: Discard and back to Planning. The PR is closed, the branch deleted and the run superseded; the glob returns to
+ * Planning for every type and nothing starts. A sub then starts like any sub in Planning (its Start, or its release rules).
+ */
 export const startAgain = (
   glob: Glob,
   ctx: Context,
@@ -1497,17 +1500,17 @@ export const startAgain = (
 ): Result<Transition> => {
   const actor = requireActor(ctx);
   if (glob.status === 'reviewing' || glob.status === 'signed_off') {
-    return invalidTransition(glob, actor, 'A merged glob cannot be started again');
+    return invalidTransition(glob, actor, 'A merged glob cannot be discarded');
   }
   if (restrictedFrom(actor, glob)) {
-    return forbidden(`QA and PO members cannot start ${glob.type}s again`);
+    return forbidden(`QA and PO members cannot discard ${glob.type}s`);
   }
   const b = new Builder(glob, ctx)
     .endRun('superseded', null, { cause: 'start_again' })
     .bumpGeneration();
   const generation = b.current.generation;
   b.set({
-    implementer: glob.type === 'super' ? glob.creator : null,
+    implementer: null,
     failure: null,
     pr: null,
     mergeMode: null,
@@ -1517,24 +1520,14 @@ export const startAgain = (
   });
   leavesLine(b, glob)
     .effect({ kind: 'close_pr', globId: glob.id, generation, prNumber: glob.pr?.number ?? null })
-    .effect({ kind: 'delete_branch', globId: glob.id, generation });
-  // A sub that waits for an unmerged glob goes back to Planning, held, instead of starting again.
+    .effect({ kind: 'delete_branch', globId: glob.id, generation })
+    .event('DiscardedToPlanning', { from: glob.implementer });
+  // A sub that waits for an unmerged glob is held in Planning, as it would be after Start was refused.
   const awaited = glob.type === 'sub' ? startHoldsOf(glob, relations) : [];
   if (awaited.length > 0) {
-    b.set({ waiting: { since: ctx.now } })
-      .status('planning')
-      .event('Waiting', { for: awaitedNames(awaited), note: waitSummary(awaited) });
-    return b.done();
+    b.set({ waiting: { since: ctx.now } }).event('Waiting', { for: awaitedNames(awaited), note: waitSummary(awaited) });
   }
-  // A person's same with nothing built yet goes back to Planning with nothing lost but the empty draft.
-  if (glob.type === 'same' && glob.status === 'in_progress' && !hasLiveRun(glob) && (glob.pr === null || !prHasWork(glob.pr))) {
-    b.event('MovedBackToPlanning', { from: glob.implementer });
-  }
-  b.status(initialStatus(glob.type));
-  // A sub or super starts again in Doing with a fresh branch; a same waits for its next start.
-  if (listOf(initialStatus(glob.type)) === 'doing') b.ensureProvisioned();
-  if (glob.type === 'sub') b.queueRun(actor.email);
-  return b.done();
+  return b.status('planning').done();
 };
 
 /** Why a sub that gained rollout steps became a same (criterion `risk_path`). */
@@ -2675,7 +2668,7 @@ const queuedAtText = (at: string): string =>
 export const SESSION_NEVER_REACHED_SLOP_MINUTES = 5;
 
 const SESSION_NEVER_REACHED_SLOP =
-  "The run's session never reached slop (the Slop connector may not have attached). Discard & restart.";
+  "The run's session never reached slop (the Slop connector may not have attached). Discard and back to Planning.";
 
 /** How long a live run on a failed glob may go without progress before the run watch ends it. */
 export const FAILED_RUN_QUIET_MINUTES = 30;

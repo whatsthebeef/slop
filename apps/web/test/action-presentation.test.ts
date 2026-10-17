@@ -149,37 +149,22 @@ describe('actionPresentation', () => {
     expect(presentedActions(['take_over'] as Action[])).toEqual(['take_over']);
   });
 
-  it('names Discard by glob type', () => {
-    const sub = actionPresentation('start_again', view({ type: 'sub', pr }));
-    expect(sub).toMatchObject({ label: 'Discard & restart', icon: 'machine', placement: 'reset' });
-    expect(sub.tip).toBe(
-      'Closes PR #63 and deletes the branch, then a new machine run starts from the base branch',
+  it('names Discard the same way for every type', () => {
+    for (const type of ['sub', 'same', 'super'] as const) {
+      expect(actionPresentation('start_again', view({ type, status: 'pr_open', pr }))).toMatchObject({
+        label: 'Discard and back to Planning',
+        icon: null,
+        placement: 'reset',
+      });
+    }
+    expect(actionPresentation('start_again', view({ type: 'sub', pr })).tip).toBe(
+      'Closes PR #63 and deletes the branch; the glob goes back to Planning and nothing starts',
     );
-    expect(
-      actionPresentation('start_again', view({ type: 'same', status: 'pr_open', pr })),
-    ).toMatchObject({ label: 'Discard & back to Planning', icon: null });
-    expect(actionPresentation('start_again', view({ type: 'super', pr }))).toMatchObject({
-      label: 'Discard & start over',
-      icon: 'human',
-    });
     expect(actionPresentation('start_again', view({ type: 'same', pr: null })).tip).toBe(
-      'Deletes the branch',
+      'Deletes the branch; the glob goes back to Planning and nothing starts',
     );
   });
 
-  it('does not say back to Planning for a same already in Planning', () => {
-    expect(
-      actionPresentation('start_again', view({ type: 'same', status: 'planning', pr })),
-    ).toMatchObject({
-      label: 'Discard & start over',
-      icon: null,
-      tip: 'Closes PR #63 and deletes the branch',
-      placement: 'reset',
-    });
-  });
-});
-
-describe('actor icons', () => {
   it('labels the machine and human icons, and hides them where text says it', () => {
     expect(renderToStaticMarkup(createElement(ActorIcon, { actor: 'machine' }))).toContain(
       'aria-label="machine"',
