@@ -585,10 +585,11 @@ Main can move again between the pre-push merge and `mark_ready`. In s15f102, the
 
 In s15f88, main reformatted or restructured `apps/web/src/components/glob-dialog.tsx` in three merges (cc0a3e3, c461c49, 45d347b). The hunk-by-hunk zdiff3 output for the first was over 30 KB of conflict text. Each time, taking main's file and re-applying the branch's ~35-line diff by script was clean on the first try (web vitest 282, 304 and 319 passing).
 
-**Migrations.** When `<base>` and your branch both added a migration with the same number, the drizzle journal and snapshot conflict (the snapshot as add/add). Don't merge those files by hand, and don't rename by hand:
+**Migrations.** When `<base>` and your branch both added a migration with the same number, the drizzle journal and snapshot conflict (the snapshot as add/add). Don't merge those files by hand, and don't rename by hand unless the script can't (step 2):
 
 1. Take `<base>`'s versions: `git checkout origin/<base> -- apps/server/drizzle/meta/_journal.json apps/server/drizzle/meta/<NNNN>_snapshot.json`. This also clears conflict markers; a snapshot left with markers makes the script's drift check fail with `Unexpected token '<', "<<<<<<< HE"... is not valid JSON`.
 2. Run `scripts/dev.sh renumber-migrations origin/<base>`. It renames your migration to follow `<base>`'s latest and rebuilds the journal and snapshot. Its drift check should end with "drizzle-kit reports no schema changes".
+   - *The script stops with "Main has no meta/NNNN_snapshot.json":* `<base>`'s latest migration has no snapshot (e.g. `0086_drop_default_project`). Renumber by hand: take `<base>`'s `_journal.json`, `git mv` your SQL and snapshot to the next number, add your journal entry with a `when` above `<base>`'s latest, keep your snapshot's `prevId` at the latest journaled snapshot's id, then run `npx drizzle-kit check`.
 3. If the drift check still fails:
    - *The renumbered snapshot lacks `<base>`'s schema changes:* rebuild it from `<base>`'s latest snapshot plus your own schema change. Keep the snapshot's own `id` and set `prevId` to `<base>`'s latest snapshot id.
    - *The script says "nothing to renumber":* your snapshot was committed under a number `<base>` later used. Restore all of `<base>`'s snapshot files under `apps/server/drizzle/meta/` byte for byte (`git checkout origin/<base> -- <files>`), number your snapshot after `<base>`'s latest, and make `_journal.json` match.
@@ -596,7 +597,7 @@ In s15f88, main reformatted or restructured `apps/web/src/components/glob-dialog
 
    Then re-run `drizzle-kit generate` until it prints "No schema changes".
 
-Board 15 hit each case: s15f28 (`0033_size_check` against main's `0033_board_sessions`, renumbered cleanly), s15t42 (conflict markers left in `0032_snapshot.json`), s15f53 (the renumbered `0044_snapshot.json` lacked main's size tables; rebuilt in 444e7d8), s15f36 (three merges colliding on 0042 and 0045; "nothing to renumber") and s15f23 (regenerated as 0031).
+Board 15 hit each case: s15f28 (`0033_size_check` against main's `0033_board_sessions`, renumbered cleanly), s15t42 (conflict markers left in `0032_snapshot.json`), s15f53 (the renumbered `0044_snapshot.json` lacked main's size tables; rebuilt in 444e7d8), s15f36 (three merges colliding on 0042 and 0045; "nothing to renumber"), s15f23 (regenerated as 0031) and s15t255 (merge with main at 747cf21: main's latest, `0086_drop_default_project`, had no snapshot, so the script aborted; renumbered by hand as `0087_merge_line_head`, `drizzle-kit check` clean).
 
 **Long globs: merge `<base>` again after the review rounds.** `<base>` can move more than once while a glob is in review. After the last review round, and before the Phase 6 full checks, fetch and merge `origin/<base>` again. If `<base>` changed the same rules your change touches, re-check your logic against `<base>`'s version, not only the conflict markers. In s15f50, a split-rule change (s15f47) overlapped the same flag code, and the second merge collided on migration 0042.
 
@@ -804,3 +805,15 @@ From 2026-09-16 to 2026-10-14, 9 of 45 routine runs (20%) ended with "Run timed 
 
   A command that hangs or is killed by its timeout is a blocker. Don't wait it out or retry it in a loop.
 - **Fail before the clock does.** If the run can't go on, call `report_failure` with the phase, the blocker and what you tried. Don't let the run time out: a timeout tells the next person nothing.
+
+### Unbuilt plan tasks and rollout command lines
+
+**Every plan.md task is built or asked about.** A task line in plan.md that the run doesn't build is not an Open item, and not a deviation to note and move on from. Build it, or raise a question (or a decision glob) before marking ready. The same goes for wording or links plan.md specifies: follow them, or ask.
+
+**Each rollout command gets its own `Run:` label.** Write `Run: <command>` once per command. A bare `Run:` followed by unlabelled command lines is parsed into the field before it (`Permissions:`), and the stored step gets `commands: []`.
+
+    Run: aws sso login --profile <profile>
+    Run: export AWS_PROFILE=<profile>
+    Run: scripts/rollout/host-deploy.sh --check
+
+In s15t273, generation 1 (run 3d119903) put plan v2's "readiness reports the missing permission" under Open items. It also linked the notice and deploy row to CodeBuild instead of the attachment v2 asked for, and kept retry_autofix's "Fix checks" wording where v2 said Retry. The person answered "Re-run" to q1, and generation 2 (f8cfc50b) built those gaps. The same record's `## Rollout` put `aws sso login`, `export` and `host-deploy.sh` on bare lines under one `Run:`, and the stored step had them in `permissions` with `commands: []`.
