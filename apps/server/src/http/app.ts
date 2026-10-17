@@ -842,9 +842,8 @@ export const createApp = (deps: AppDeps) => {
   } as const satisfies { readonly [route: string]: machine.Action };
   // Of those, the ones that queue a routine run: the pending click then names it, and ends with it.
   const RUN_ACTIONS: ReadonlySet<string> = new Set(['start', 'start-anyway', 'investigate', 'retrigger', 'retry-autofix', 'resolve-conflict', 'start-again', 'reopen']);
-  // Clicks that queue a run only sometimes: with none queued (a person's glob goes straight to Doing, a decision to choose again) the
-  // glob already shows the effect, so a pending click would never see a later change and time out as "had no effect".
-  const PENDING_ONLY_WITH_RUN: ReadonlySet<string> = new Set(['reopen']);
+  // Discard and reopen clicks: pending only when they queued a run.
+  const DISCARD_ACTIONS: ReadonlySet<string> = new Set(['start-again', 'discard-to-planning', 'reopen']);
   // Refusals worth keeping on the glob: a stale version or a missing glob says nothing about the glob itself.
   const KEPT_REFUSALS: ReadonlySet<string> = new Set(['invalid_transition', 'run_active', 'invalid_input', 'forbidden']);
 
@@ -864,7 +863,10 @@ export const createApp = (deps: AppDeps) => {
       // Recording never fails the click: a stale version (a webhook moved the glob first) or a store error just leaves it unrecorded.
       try {
         const run = result.ok ? machine.currentRun(result.value) : null;
-        if (result.ok && (kind === undefined || (PENDING_ONLY_WITH_RUN.has(action.data) && run?.state !== 'queued'))) {
+        // Discard applies in the request unless it queued a run (a sub restarting): a same, a super or a sub held in Planning has
+        // already moved, so a pending click recorded now would never see a later change and would time out as "had no effect".
+        const appliedInRequest = DISCARD_ACTIONS.has(action.data) && run?.state !== 'queued';
+        if (result.ok && (kind === undefined || appliedInRequest)) {
           // Not a click with an effect to wait for, but still the next click: the last outcome's notice goes away.
           await globs.clearOutcome(email, result.value.id, result.value.version);
         } else if (result.ok && kind !== undefined) {

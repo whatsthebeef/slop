@@ -246,4 +246,43 @@ describe('action outcomes (REST)', () => {
       expect((await current(g.id)).status).toBe('reviewing');
     });
   });
+
+
+  it('Discard on a same applies in the request: no pending action, and no timed-out outcome afterwards', async () => {
+    const g = await create();
+    await put(g.id, {
+      status: 'implementing',
+      provisioning: 'ok',
+      implementer: DEV,
+      pr: { number: 11, state: 'draft', headSha: HEAD },
+    });
+    const done = await post(g.id, '/actions/discard-to-planning', {
+      version: (await current(g.id)).version,
+    });
+    expect(done.status).toBe(200);
+    const view = await viewOf(g.id);
+    expect(view.pendingAction ?? null).toBeNull();
+    expect(view.lastOutcome ?? null).toBeNull();
+    expect((await current(g.id)).status).toBe('planning');
+  });
+
+  it('Discard on a sub that queued a run still records a pending click tied to that run', async () => {
+    const g = await create({ type: 'sub' });
+    await put(g.id, {
+      status: 'implementing',
+      provisioning: 'ok',
+      pr: { number: 12, state: 'draft', headSha: HEAD },
+    });
+    const done = await post(g.id, '/actions/start-again', {
+      version: (await current(g.id)).version,
+    });
+    expect(done.status).toBe(200);
+    const view = (await done.json()) as {
+      pendingAction?: { kind: string; runId?: string } | null;
+      currentRun: { id: string; state: string } | null;
+    };
+    if (view.currentRun?.state === 'queued')
+      expect(view.pendingAction).toMatchObject({ kind: 'start_again', runId: view.currentRun.id });
+    else expect(view.pendingAction ?? null).toBeNull();
+  });
 });
